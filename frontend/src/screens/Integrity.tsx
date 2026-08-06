@@ -5,7 +5,8 @@ import { Button, Card } from "../components/ui";
 import { color, font, radius } from "../theme";
 import type { IntegrityIssue, IntegrityStat } from "../types";
 import { useIntegrity } from "../lib/queries";
-import { useAppLocale } from "../store";
+import { useAppLocale, useUI } from "../store";
+import { SCREENS } from "./config";
 import { useT } from "../i18n";
 
 const GRID = "26px 1.7fr 90px 1fr 110px";
@@ -28,6 +29,7 @@ export default function IntegrityScreen() {
   const navigate = useNavigate();
   const t = useT();
   const locale = useAppLocale();
+  const extractMode = useUI((s) => s.extractMode);
   const { data, isPending } = useIntegrity(locale);
 
   if (isPending || !data) {
@@ -188,7 +190,11 @@ export default function IntegrityScreen() {
         <Button variant="secondary" onClick={() => navigate("/upload")}>
           ← {t("i.back")}
         </Button>
-        <Button onClick={() => navigate("/scope")}>{t("i.detect")} →</Button>
+        {extractMode === "auto" ? (
+          <Button onClick={() => navigate(SCREENS.workspace.path)}>{t("i.extractNow")} →</Button>
+        ) : (
+          <Button onClick={() => navigate(SCREENS.scope.path)}>{t("i.detect")} →</Button>
+        )}
       </div>
     </div>
   );

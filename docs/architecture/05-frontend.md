@@ -44,6 +44,17 @@ Confidence shown as colorblind-safe color + badge with a low-confidence filter/s
 mode. Units/currency switching is a **display-time transform only** — formulas operate
 on stored source-unit numbers.
 
+## Extraction mode — auto vs. confirm page scope
+
+Chosen on the Upload screen (`extractMode` in the Zustand store, default **auto**).
+In **auto** mode the pipeline detects statement pages and extracts in one pass: the
+Integrity screen's forward action becomes **Extract now** → Workspace, and the top
+stepper collapses to Upload → Integrity → Extract → Review → Export (the Page Scope
+step is dropped). In **confirm** mode the Integrity action is **Detect statement
+pages** → the Page Scope screen, where the user reviews/adjusts detected pages before
+extraction. The choice is sent to the backend as `confirm_scope` on the extraction
+run and persisted in the run's options.
+
 ## Other screens
 
 Integrity report (routing gate before review), review queue (expected-vs-actual,

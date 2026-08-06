@@ -25,6 +25,9 @@ class ExtractionOptions(BaseModel):
     basis: list[str] = []
     target_currency: str | None = None
     target_units: int | None = None
+    # Whether the user asked to review/adjust detected page scope before
+    # extraction. Defaults to auto (False): detect pages and extract in one pass.
+    confirm_scope: bool = False
 
 
 @router.post("/documents/{document_id}/extractions", status_code=202)

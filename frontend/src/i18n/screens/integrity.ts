@@ -11,6 +11,7 @@ export const integrity: Record<Locale, Record<string, string>> = {
     "i.col.status": "STATUS",
     "i.back": "Back",
     "i.detect": "Detect statement pages",
+    "i.extractNow": "Extract now",
   },
   zh: {
     "i.title": "文档完整性",
@@ -22,6 +23,7 @@ export const integrity: Record<Locale, Record<string, string>> = {
     "i.col.status": "状态",
     "i.back": "返回",
     "i.detect": "检测报表页面",
+    "i.extractNow": "立即提取",
   },
   ar: {
     "i.title": "سلامة المستند",
@@ -33,6 +35,7 @@ export const integrity: Record<Locale, Record<string, string>> = {
     "i.col.status": "الحالة",
     "i.back": "رجوع",
     "i.detect": "اكتشاف صفحات القوائم",
+    "i.extractNow": "استخرج الآن",
   },
   fr: {
     "i.title": "Intégrité du document",
@@ -44,5 +47,6 @@ export const integrity: Record<Locale, Record<string, string>> = {
     "i.col.status": "STATUT",
     "i.back": "Retour",
     "i.detect": "Détecter les pages d'états",
+    "i.extractNow": "Extraire maintenant",
   },
 };

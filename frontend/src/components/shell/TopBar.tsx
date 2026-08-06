@@ -3,6 +3,7 @@
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useProject } from "../../lib/queries";
+import { useUI } from "../../store";
 import { color } from "../../theme";
 import { useT } from "../../i18n";
 import { STEPPER, screenIdForPath } from "../../screens/config";
@@ -14,8 +15,12 @@ export function TopBar() {
   const loc = useLocation();
   const { data } = useProject();
   const t = useT();
+  const extractMode = useUI((s) => s.extractMode);
+  // In auto mode the pipeline skips the manual Page Scope confirmation, so the
+  // stepper collapses to Upload → Integrity → Extract → Review → Export.
+  const steps = extractMode === "auto" ? STEPPER.filter((s) => s.id !== "scope") : STEPPER;
   const activeId = screenIdForPath(loc.pathname);
-  const curIdx = STEPPER.findIndex((s) => s.id === activeId);
+  const curIdx = steps.findIndex((s) => s.id === activeId);
 
   return (
     <div
@@ -63,7 +68,7 @@ export function TopBar() {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto" }}>
-        {STEPPER.map((s, i) => {
+        {steps.map((s, i) => {
           const active = s.id === activeId;
           const done = curIdx !== -1 && i < curIdx;
           return (
@@ -94,7 +99,7 @@ export function TopBar() {
                   color: active || done ? "#fff" : color.muted,
                 }}
               >
-                {done ? "✓" : s.step}
+                {done ? "✓" : i + 1}
               </span>
               <span
                 style={{

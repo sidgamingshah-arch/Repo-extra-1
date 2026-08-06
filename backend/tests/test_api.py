@@ -67,3 +67,29 @@ def test_ontology_rejects_unknown_template(client):
     ontology = {"ontology_key": "orphan", "target_template_key": "nope", "mappings": []}
     r = client.post("/api/v1/ontologies", json={"definition": ontology}, headers={"X-Role": "admin"})
     assert r.status_code == 422
+
+
+def test_extraction_confirm_scope_defaults_to_auto(client):
+    """confirm_scope defaults to False (auto mode) and round-trips when set."""
+    pdf_bytes = make_native_pdf()
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("bs.pdf", pdf_bytes, "application/pdf")}
+    ).json()["id"]
+
+    # Default: no confirm_scope in body → auto mode (False).
+    r = client.post(f"/api/v1/documents/{doc_id}/extractions", json={})
+    assert r.status_code == 202, r.text
+    run_id = r.json()["run_id"]
+    from app.db.base import SessionLocal
+    from app.db.models import ExtractionRun
+
+    with SessionLocal() as s:
+        assert s.get(ExtractionRun, run_id).options["confirm_scope"] is False
+
+    # Explicit confirm mode round-trips.
+    r = client.post(
+        f"/api/v1/documents/{doc_id}/extractions", json={"confirm_scope": True}
+    )
+    assert r.status_code == 202, r.text
+    with SessionLocal() as s:
+        assert s.get(ExtractionRun, r.json()["run_id"]).options["confirm_scope"] is True

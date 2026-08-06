@@ -4,8 +4,9 @@ import { useNavigate } from "react-router-dom";
 
 import { Button, Card } from "../components/ui";
 import { color, font, radius } from "../theme";
-import type { SourceDoc } from "../types";
+import type { ExtractMode, SourceDoc } from "../types";
 import { useProject } from "../lib/queries";
+import { useUI } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
 import { SCREENS } from "./config";
@@ -75,11 +76,98 @@ function DocRow({ doc }: { doc: SourceDoc }) {
   );
 }
 
+/** One selectable extraction-mode tile (radio semantics). */
+function ModeOption({
+  value,
+  selected,
+  onSelect,
+  glyph,
+  title,
+  desc,
+  badge,
+}: {
+  value: ExtractMode;
+  selected: boolean;
+  onSelect: (v: ExtractMode) => void;
+  glyph: string;
+  title: string;
+  desc: string;
+  badge?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={() => onSelect(value)}
+      style={{
+        flex: 1,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 11,
+        textAlign: "start",
+        padding: 13,
+        borderRadius: 10,
+        cursor: "pointer",
+        fontFamily: font.sans,
+        background: selected ? color.indigoTint : "#fff",
+        border: `1.5px solid ${selected ? color.indigo : color.hairline3}`,
+      }}
+    >
+      {/* radio dot */}
+      <span
+        aria-hidden
+        style={{
+          marginTop: 2,
+          width: 16,
+          height: 16,
+          borderRadius: "50%",
+          flex: "0 0 auto",
+          border: `1.5px solid ${selected ? color.indigo : color.controlBorder}`,
+          background: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {selected && (
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: color.indigo }} />
+        )}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600 }}>
+            <span style={{ color: color.faint, marginInlineEnd: 6 }}>{glyph}</span>
+            {title}
+          </span>
+          {badge && (
+            <span
+              style={{
+                fontSize: 9.5,
+                fontWeight: 600,
+                padding: "2px 7px",
+                borderRadius: radius.pill,
+                background: color.greenBg2,
+                color: color.greenFg,
+              }}
+            >
+              {badge}
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: 11.5, color: color.sec2, lineHeight: 1.45 }}>{desc}</div>
+      </div>
+    </button>
+  );
+}
+
 export default function UploadScreen() {
   const navigate = useNavigate();
   const t = useT();
   const canTemplate = useCan("config:template");
   const canOntology = useCan("config:ontology");
+  const extractMode = useUI((s) => s.extractMode);
+  const setExtractMode = useUI((s) => s.setExtractMode);
   const { data, isPending } = useProject();
 
   if (isPending || !data) {
@@ -259,6 +347,33 @@ export default function UploadScreen() {
           </Card>
         </div>
       </div>
+
+      {/* 4 · Extraction mode — auto (default) vs confirm page scope */}
+      <Card style={{ marginTop: 18 }}>
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 3 }}>{t("u.mode")}</div>
+        <p style={{ margin: "0 0 12px", fontSize: 11.5, color: color.sec2, lineHeight: 1.5 }}>
+          {t("u.modeHint")}
+        </p>
+        <div role="radiogroup" aria-label={t("u.mode")} style={{ display: "flex", gap: 12 }}>
+          <ModeOption
+            value="auto"
+            selected={extractMode === "auto"}
+            onSelect={setExtractMode}
+            glyph="⚡"
+            title={t("u.autoTitle")}
+            desc={t("u.autoDesc")}
+            badge={t("u.autoRec")}
+          />
+          <ModeOption
+            value="confirm"
+            selected={extractMode === "confirm"}
+            onSelect={setExtractMode}
+            glyph="▦"
+            title={t("u.confirmTitle")}
+            desc={t("u.confirmDesc")}
+          />
+        </div>
+      </Card>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
         <Button variant="secondary" style={{ padding: "10px 18px" }}>

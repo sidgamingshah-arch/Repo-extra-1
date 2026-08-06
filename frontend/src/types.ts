@@ -4,6 +4,11 @@ import type { ConfCat } from "./theme";
 export type Locale = "en" | "zh" | "ar" | "fr";
 export type Role = "admin" | "reviewer" | "analyst";
 export type Basis = "consolidated" | "standalone";
+/** How the pipeline proceeds after the integrity check:
+ *  - `auto`    — detect statement pages and extract in one pass (default).
+ *  - `confirm` — pause on the Page Scope screen so the user reviews/adjusts
+ *                the detected pages before extraction. */
+export type ExtractMode = "auto" | "confirm";
 
 export interface Me {
   authenticated: boolean;
