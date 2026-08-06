@@ -4,10 +4,14 @@ this router serves the reviewed Ind-AS sample project end-to-end.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from copy import deepcopy
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from app.sample.demo import CONF_PCT, DEMO, localize_label
+from app.sample.i18n_data import tr
+from app.security import Permission, require
 from app.services import checks as checks_engine
 from app.services.export import build_json, build_xlsx
 
@@ -47,14 +51,33 @@ def get_project(project_id: str) -> dict:
 
 
 @router.get("/{project_id}/integrity")
-def get_integrity(project_id: str) -> dict:
-    return DEMO["integrity"]
+def get_integrity(project_id: str, locale: str = Query("en")) -> dict:
+    data = deepcopy(DEMO["integrity"])
+    if locale != "en":
+        data["grade"] = tr(data["grade"], locale)
+        data["summary"] = tr(data["summary"], locale)
+        for s in data["stats"]:
+            s["label"] = tr(s["label"], locale)
+            s["sub"] = tr(s["sub"], locale)
+        for i in data["issues"]:
+            i["title"] = tr(i["title"], locale)
+            i["detail"] = tr(i["detail"], locale)
+            i["note"] = tr(i["note"], locale)
+            i["status"] = tr(i["status"], locale)
+    return data
 
 
 @router.get("/{project_id}/pages")
-def get_pages(project_id: str) -> dict:
-    return {"pages": DEMO["pages"], "filters": DEMO["page_filters"],
-            "focused": 14, "total": 84, "skipped": 70}
+def get_pages(project_id: str, locale: str = Query("en")) -> dict:
+    pages = deepcopy(DEMO["pages"])
+    filters = deepcopy(DEMO["page_filters"])
+    if locale != "en":
+        for p in pages:
+            p["cls"] = tr(p["cls"], locale)
+            p["sub"] = tr(p["sub"], locale)
+        for f in filters:
+            f["label"] = tr(f["label"], locale)
+    return {"pages": pages, "filters": filters, "focused": 14, "total": 84, "skipped": 70}
 
 
 def _scale(v, basis: str):
@@ -97,11 +120,15 @@ def get_statement(project_id: str, statement: str,
         row["v1"] = v1
         row["v2"] = v2
         rows.append(row)
+    viewer = deepcopy(_VIEWER.get(statement, _VIEWER["balance_sheet"]))
+    if locale != "en":
+        viewer["subtitle"] = tr(viewer["subtitle"], locale)
+        viewer["callout"] = tr(viewer["callout"], locale)
     return {
         "statement": statement, "label": localize_label(st["label"], locale), "basis": basis,
         "periods": proj["periods"], "currency": proj["currency"],
         "currency_symbol": proj["currency_symbol"], "units": proj["units"],
-        "rows": rows, "viewer": _VIEWER.get(statement, _VIEWER["balance_sheet"]),
+        "rows": rows, "viewer": viewer,
     }
 
 
@@ -110,49 +137,103 @@ class EditBody(BaseModel):
     formula: str | None = None
 
 
-@router.patch("/{project_id}/line-items/{item_id}")
+@router.patch("/{project_id}/line-items/{item_id}",
+              dependencies=[Depends(require(Permission.EXTRACTION_EDIT))])
 def edit_line_item(project_id: str, item_id: str, body: EditBody) -> dict:
     value = None if body.value is None else round(body.value)
     _OVERRIDES[item_id] = {"value": value, "formula": body.formula or ""}
     return {"id": item_id, "value": value, "formula": body.formula or "", "status": "edited"}
 
 
-@router.delete("/{project_id}/line-items/{item_id}")
+@router.delete("/{project_id}/line-items/{item_id}",
+               dependencies=[Depends(require(Permission.EXTRACTION_EDIT))])
 def revert_line_item(project_id: str, item_id: str) -> dict:
     _OVERRIDES.pop(item_id, None)
     return {"id": item_id, "reverted": True}
 
 
 @router.get("/{project_id}/notes")
-def get_notes(project_id: str) -> dict:
-    return {"notes": DEMO["notes_index"], "count": 48, "linked": 96}
+def get_notes(project_id: str, locale: str = Query("en")) -> dict:
+    notes = deepcopy(DEMO["notes_index"])
+    if locale != "en":
+        for n in notes:
+            n["title"] = tr(n["title"], locale)
+    return {"notes": notes, "count": 48, "linked": 96}
 
 
 @router.get("/{project_id}/notes/{note_no}")
-def get_note(project_id: str, note_no: int) -> dict:
+def get_note(project_id: str, note_no: int, locale: str = Query("en")) -> dict:
     detail = DEMO["note_detail"].get(note_no)
     if detail is None:
         idx = next((n for n in DEMO["notes_index"] if n["no"] == note_no), None)
         if idx is None:
             raise HTTPException(404, "Unknown note")
-        return {"no": note_no, "title": idx["title"], "rows": [], "reconciliation": None}
+        return {"no": note_no, "title": tr(idx["title"], locale), "rows": [], "reconciliation": None}
+    detail = deepcopy(detail)
+    if locale != "en":
+        detail["title"] = tr(detail["title"], locale)
+        detail["linked_label"] = tr(detail["linked_label"], locale)
+        detail["reconciliation"] = tr(detail["reconciliation"], locale)
+        for r in detail["rows"]:
+            r["label"] = tr(r["label"], locale)
     return detail
 
 
 @router.get("/{project_id}/review")
-def get_review(project_id: str) -> dict:
-    return {"checks": DEMO["review"], "tabs": DEMO["review_tabs"], "summary": DEMO["review_summary"]}
+def get_review(project_id: str, locale: str = Query("en")) -> dict:
+    checks = deepcopy(DEMO["review"])
+    tabs = deepcopy(DEMO["review_tabs"])
+    if locale != "en":
+        for c in checks:
+            c["title"] = tr(c["title"], locale)
+            c["where"] = tr(c["where"], locale)
+            c["severity"] = tr(c["severity"], locale)
+            c["fix"] = tr(c["fix"], locale)
+            c["calc"] = [[tr(row[0], locale), tr(row[1], locale), row[2]] for row in c["calc"]]
+        for t in tabs:
+            t["label"] = tr(t["label"], locale)
+    return {"checks": checks, "tabs": tabs, "summary": DEMO["review_summary"]}
 
 
-@router.get("/{project_id}/template")
-def get_template_tree(project_id: str) -> dict:
-    return {"tree": DEMO["template_tree"], "node_config": DEMO["node_config"],
-            "template": DEMO["project"]["template"]}
+@router.get("/{project_id}/template",
+            dependencies=[Depends(require(Permission.CONFIG_TEMPLATE))])
+def get_template_tree(project_id: str, locale: str = Query("en")) -> dict:
+    tree = deepcopy(DEMO["template_tree"])
+    node_config = deepcopy(DEMO["node_config"])
+    if locale != "en":
+        for node in tree:
+            node["label"] = localize_label(node["label"], locale)
+        for cfg in node_config.values():
+            cfg["breadcrumb"] = tr(cfg["breadcrumb"], locale)
+            cfg["label"] = localize_label(cfg["label"], locale)
+            cfg["value_type"] = tr(cfg["value_type"], locale)
+            cfg["aggregation"] = tr(cfg["aggregation"], locale)
+            if "netting" in cfg:
+                cfg["netting"]["explain"] = tr(cfg["netting"]["explain"], locale)
+    return {"tree": tree, "node_config": node_config, "template": DEMO["project"]["template"]}
 
 
 @router.get("/{project_id}/export-options")
 def get_export_options(project_id: str) -> dict:
     return {"options": DEMO["export_options"]}
+
+
+@router.get("/{project_id}/commentary",
+            dependencies=[Depends(require(Permission.COMMENTARY_VIEW))])
+def get_commentary(project_id: str, locale: str = Query("en")) -> dict:
+    from app.services.commentary import build_commentary
+
+    c = build_commentary(open_review_items=DEMO["review_summary"]["open"])
+    if locale != "en":
+        c["headline"] = tr(c["headline"], locale)
+        c["assessment"] = tr(c["assessment"], locale)
+        c["data_quality"] = tr(c["data_quality"], locale)
+        c["basis"] = tr(c["basis"], locale)
+        c["strengths"] = [tr(s, locale) for s in c["strengths"]]
+        c["weaknesses"] = [tr(w, locale) for w in c["weaknesses"]]
+        for mtr in c["metrics"]:
+            mtr["label"] = tr(mtr["label"], locale)
+    return c
 
 
 class ExportBody(BaseModel):
@@ -163,7 +244,7 @@ class ExportBody(BaseModel):
     include: dict = {}
 
 
-@router.post("/{project_id}/export")
+@router.post("/{project_id}/export", dependencies=[Depends(require(Permission.EXPORT_RUN))])
 def export_project(project_id: str, body: ExportBody) -> Response:
     statements = DEMO["statements"]
     notes_index = DEMO["notes_index"]

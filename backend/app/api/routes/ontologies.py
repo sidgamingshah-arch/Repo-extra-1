@@ -12,6 +12,7 @@ from app.schemas.loader import (
     load_template,
     validate_ontology_against_template,
 )
+from app.security import Permission, require
 
 router = APIRouter(prefix="/ontologies", tags=["ontologies"])
 
@@ -20,7 +21,7 @@ class OntologyCreate(BaseModel):
     definition: dict
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[Depends(require(Permission.CONFIG_ONTOLOGY))])
 def create_ontology(body: OntologyCreate, session: Session = Depends(db)) -> dict:
     from app.db.models import OntologyVersion, TemplateVersion
 

@@ -39,7 +39,8 @@ def test_template_and_ontology_create_and_language_parity(client):
             }],
         }],
     }
-    r = client.post("/api/v1/templates", json={"definition": template})
+    admin = {"X-Role": "admin"}
+    r = client.post("/api/v1/templates", json={"definition": template}, headers=admin)
     assert r.status_code == 201, r.text
     tpl_id = r.json()["id"]
 
@@ -52,7 +53,7 @@ def test_template_and_ontology_create_and_language_parity(client):
             "aliases_i18n": {"en": ["Cash"], "zh": ["现金"], "ar": ["النقد"], "fr": ["Trésorerie"]},
         }],
     }
-    r = client.post("/api/v1/ontologies", json={"definition": ontology})
+    r = client.post("/api/v1/ontologies", json={"definition": ontology}, headers=admin)
     assert r.status_code == 201, r.text
     ont_id = r.json()["id"]
 
@@ -64,5 +65,5 @@ def test_template_and_ontology_create_and_language_parity(client):
 
 def test_ontology_rejects_unknown_template(client):
     ontology = {"ontology_key": "orphan", "target_template_key": "nope", "mappings": []}
-    r = client.post("/api/v1/ontologies", json={"definition": ontology})
+    r = client.post("/api/v1/ontologies", json={"definition": ontology}, headers={"X-Role": "admin"})
     assert r.status_code == 422

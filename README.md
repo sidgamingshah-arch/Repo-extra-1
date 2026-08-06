@@ -46,13 +46,23 @@ Optional backend engines install behind extras so the core stays light:
 `pip install -e ".[ocr]"` (PaddleOCR), `.[llm]` (Anthropic), `.[embeddings]`,
 `.[pdf]`, `.[lang]`.
 
-## The 8 screens
+## The screens
 
 Upload → Integrity → Page Scope → **Workspace** (side-by-side source ↔ template, inline
 edit + formulas, confidence scores) → Review Queue (balance/subtotal/sign/note-recon
-checks) → All Notes (note-to-face reconciliation) → Template & Ontology (incl. the
-note-netting rule) → Export (Excel/JSON). Upload/integrity/scope use the real pipeline;
-the workspace/review/notes/export views render the backend's seeded demo project.
+checks) → All Notes (note-to-face reconciliation) → **Analysis** (one-page financial
+commentary — ratios + strengths/risks) → Template & Ontology (incl. the note-netting
+rule) → Export (Excel/JSON). Upload/integrity/scope use the real pipeline; the other
+views render the backend's seeded demo project.
+
+## Access control & languages
+
+- **RBAC** — three roles (admin / reviewer / analyst). Configuration (templates,
+  ontology, page scope, export inclusions) is admin-controlled; the analyst gets a
+  simple flow. Server-side enforced (403) and reflected in the nav; switch role from the
+  top bar. See [`docs/architecture/07-rbac-and-commentary.md`](docs/architecture/07-rbac-and-commentary.md).
+- **Multilingual** — English, Chinese, Arabic (RTL) and French, input = output parity;
+  switch language from the top bar. See [`docs/architecture/04-multilingual.md`](docs/architecture/04-multilingual.md).
 
 ## Capabilities & where they live
 

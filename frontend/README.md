@@ -39,8 +39,18 @@ reverse proxy that forwards `/api` to the backend.
 | `/workspace` | `Workspace.tsx` | Side-by-side source ↔ template, edit + formulas |
 | `/review` | `Review.tsx` | Checks-and-balances review queue |
 | `/notes` | `Notes.tsx` | All extracted notes + note-to-face reconciliation |
+| `/commentary` | `Commentary.tsx` | One-page financial analysis (ratios + strengths/risks) |
 | `/template` | `Template.tsx` | Template tree + ontology rules (incl. netting rule) |
 | `/export` | `Export.tsx` | Excel / JSON export with live preview |
 
 Data is served by the backend's seeded demo project (Reliance Ind-AS FY24-25); uploaded
 documents run through the real integrity/scope pipeline. See `docs/architecture/`.
+
+## Access control & i18n
+
+- **Roles** (top-bar switcher → `X-Role`): admin / reviewer / analyst. The nav is filtered
+  by `GET /me`, routes are guarded (`RequireScreen`), and admin-only config controls are
+  gated with `useCan(permission)` (`src/lib/rbac.ts`). Server-side enforced.
+- **Languages** (top-bar switcher): en/zh/ar/fr; Arabic flips to RTL. UI chrome via
+  `src/i18n.ts` (+ per-screen dicts in `src/i18n/screens/`); financial data localized by
+  the backend `locale` param.

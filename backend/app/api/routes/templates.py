@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db
 from app.schemas.loader import load_template, validate_template
+from app.security import Permission, require
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
@@ -16,7 +17,7 @@ class TemplateCreate(BaseModel):
     definition: dict
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[Depends(require(Permission.CONFIG_TEMPLATE))])
 def create_template(body: TemplateCreate, session: Session = Depends(db)) -> dict:
     from app.db.models import TemplateVersion
 

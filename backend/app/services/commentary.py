@@ -1,0 +1,152 @@
+"""Financial-analysis commentary — a one-pager derived from the extracted context.
+
+Computes standard ratios from the extracted statements and selects strengths /
+weaknesses from a fixed, localizable catalog by threshold — so the commentary is
+genuinely data-driven (not free-form prose) and every emitted string exists in the
+i18n table (``i18n_data.TR``) for translation. It is an automated analytical summary,
+not investment advice; it also surfaces that figures are provisional while review
+items are open.
+"""
+from __future__ import annotations
+
+from app.sample.demo import BALANCE_SHEET, CASH_FLOW, PROFIT_AND_LOSS
+
+# Canonical English strings (all present in i18n_data.TR for zh/ar/fr).
+METRIC_LABELS = {
+    "current_ratio": "Current ratio",
+    "debt_to_equity": "Debt-to-equity",
+    "equity_ratio": "Equity ratio",
+    "interest_coverage": "Interest coverage",
+    "net_margin": "Net margin (PBT)",
+    "revenue_growth": "Revenue growth (YoY)",
+    "cash_ratio": "Cash ratio",
+    "asset_turnover": "Asset turnover",
+}
+
+HEADLINES = {
+    "strong": "Well-capitalised balance sheet with low leverage; profitability is improving.",
+    "mixed": "Sound fundamentals overall, with near-term liquidity and open review items to watch.",
+    "weak": "Elevated risks — leverage and/or liquidity warrant close attention.",
+}
+ASSESSMENT = ("The entity shows a well-capitalised balance sheet with comfortably low leverage "
+              "and improving revenues, and earnings that comfortably service finance costs. The "
+              "main watch items are near-term liquidity and unresolved review flags that affect "
+              "some reported figures.")
+
+STRENGTHS = {
+    "growth": "Revenue grew year-on-year, indicating healthy topline momentum.",
+    "leverage": "Low debt-to-equity — the balance sheet is conservatively financed.",
+    "coverage": "Strong interest coverage; earnings comfortably service finance costs.",
+    "equity": "Equity funds a large share of assets, providing a solid capital cushion.",
+    "current_ratio": "Current ratio above 1.5 — the working-capital position is adequate.",
+    "margin": "Healthy pre-tax margin relative to total income.",
+}
+WEAKNESSES = {
+    "cash": "Low cash ratio — immediate liquidity is thin relative to current liabilities.",
+    "working_capital": "Negative working-capital movement weighed on operating cash flow.",
+    "goodwill": "Goodwill on the balance sheet carries impairment risk if performance weakens.",
+    "review": ("Open review items — including a balance-sheet discrepancy and a finance-cost "
+               "sign anomaly — mean some reported figures are provisional pending sign-off."),
+    "receivables": "Trade receivables are a large share of current assets; monitor collection risk.",
+}
+DATA_QUALITY = ("This summary is generated from extracted figures with checks still open in the "
+                "review queue; confirm flagged items before relying on the numbers.")
+
+
+def _val(rows: list[dict], item_id: str, period: str = "v1") -> float:
+    r = next((x for x in rows if x["id"] == item_id), None)
+    return float(r.get(period) or 0) if r else 0.0
+
+
+def _safe(n: float, d: float) -> float:
+    return n / d if d else 0.0
+
+
+def build_commentary(open_review_items: int = 12) -> dict:
+    bs, pl, cf = BALANCE_SHEET, PROFIT_AND_LOSS, CASH_FLOW
+
+    current_assets = _val(bs, "sub_ca")
+    current_liabs = _val(bs, "c_borrow") + _val(bs, "payables") + _val(bs, "ofl") + _val(bs, "prov_c")
+    equity = _val(bs, "esc") + _val(bs, "oe")
+    total_assets = _val(bs, "tot_assets")
+    debt = _val(bs, "nc_borrow") + _val(bs, "c_borrow")
+    cash = _val(bs, "cce")
+    goodwill = _val(bs, "goodwill")
+    receivables = _val(bs, "trade_recv")
+
+    revenue = _val(pl, "rev")
+    revenue_prev = _val(pl, "rev", "v2")
+    total_income = _val(pl, "tot_inc")
+    pbt = _val(pl, "pbt")
+    finance_costs = _val(pl, "fin")
+    wc_change = _val(cf, "cf_wc")
+
+    m = {
+        "current_ratio": round(_safe(current_assets, current_liabs), 2),
+        "debt_to_equity": round(_safe(debt, equity), 2),
+        "equity_ratio": round(_safe(equity, total_assets), 2),
+        "interest_coverage": round(_safe(pbt + finance_costs, finance_costs), 1),
+        "net_margin": round(_safe(pbt, total_income) * 100, 1),
+        "revenue_growth": round(_safe(revenue - revenue_prev, revenue_prev) * 100, 1),
+        "cash_ratio": round(_safe(cash, current_liabs), 2),
+        "asset_turnover": round(_safe(revenue, total_assets), 2),
+    }
+
+    # Metric tones for the UI (good / warn / bad).
+    def tone(key: str) -> str:
+        v = m[key]
+        if key == "current_ratio":
+            return "good" if v >= 1.5 else "warn" if v >= 1.0 else "bad"
+        if key == "debt_to_equity":
+            return "good" if v <= 0.5 else "warn" if v <= 1.0 else "bad"
+        if key == "equity_ratio":
+            return "good" if v >= 0.4 else "warn"
+        if key == "interest_coverage":
+            return "good" if v >= 4 else "warn" if v >= 2 else "bad"
+        if key == "net_margin":
+            return "good" if v >= 10 else "warn"
+        if key == "revenue_growth":
+            return "good" if v > 0 else "bad"
+        if key == "cash_ratio":
+            return "good" if v >= 0.3 else "warn"
+        return "good" if v >= 0.5 else "warn"
+
+    metrics = [{"key": k, "label": METRIC_LABELS[k], "value": m[k], "tone": tone(k)} for k in METRIC_LABELS]
+
+    strengths, weaknesses = [], []
+    if m["revenue_growth"] > 0:
+        strengths.append(STRENGTHS["growth"])
+    if m["debt_to_equity"] <= 0.5:
+        strengths.append(STRENGTHS["leverage"])
+    if m["interest_coverage"] >= 4:
+        strengths.append(STRENGTHS["coverage"])
+    if m["equity_ratio"] >= 0.4:
+        strengths.append(STRENGTHS["equity"])
+    if m["current_ratio"] >= 1.5:
+        strengths.append(STRENGTHS["current_ratio"])
+    if m["net_margin"] >= 10:
+        strengths.append(STRENGTHS["margin"])
+
+    if m["cash_ratio"] < 0.3:
+        weaknesses.append(WEAKNESSES["cash"])
+    if wc_change < 0:
+        weaknesses.append(WEAKNESSES["working_capital"])
+    if goodwill > 0:
+        weaknesses.append(WEAKNESSES["goodwill"])
+    if open_review_items > 0:
+        weaknesses.append(WEAKNESSES["review"])
+    if _safe(receivables, current_assets) > 0.25:
+        weaknesses.append(WEAKNESSES["receivables"])
+
+    score = len(strengths) - len(weaknesses)
+    headline = HEADLINES["strong"] if score >= 3 else HEADLINES["mixed"] if score >= 0 else HEADLINES["weak"]
+
+    return {
+        "headline": headline,
+        "assessment": ASSESSMENT,
+        "metrics": metrics,
+        "strengths": strengths,
+        "weaknesses": weaknesses,
+        "data_quality": DATA_QUALITY,
+        "basis": "consolidated · FY25 vs FY24 · ₹ crore",
+    }

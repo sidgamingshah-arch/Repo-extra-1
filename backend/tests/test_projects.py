@@ -58,6 +58,16 @@ def test_edit_override_roundtrip(client):
     assert ppe["v1"] == 423180
 
 
+def test_localized_dynamic_content(client):
+    # Review checks, integrity issues, and note detail localize with ?locale.
+    zh_review = client.get("/api/v1/projects/demo/review?locale=zh").json()
+    assert zh_review["checks"][0]["title"] == "资产负债表不平衡"
+    fr_integ = client.get("/api/v1/projects/demo/integrity?locale=fr").json()
+    assert any(i["title"] == "Pages pivotées" for i in fr_integ["issues"])
+    ar_note = client.get("/api/v1/projects/demo/notes/12?locale=ar").json()
+    assert ar_note["reconciliation"] and "الإيضاح" in ar_note["reconciliation"]
+
+
 def test_review_notes_endpoints(client):
     review = client.get("/api/v1/projects/demo/review").json()
     assert len(review["checks"]) == 4

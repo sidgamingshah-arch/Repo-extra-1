@@ -12,7 +12,8 @@ Design & architecture for the financial-statement extraction platform.
 4. [Note→face reconciliation](03-reconciliation.md) — the highest-value rule (§20).
 5. [Multilingual parity](04-multilingual.md) — input = output for en/zh/ar/fr.
 6. [Frontend](05-frontend.md) — side-by-side viewer, editable grid, review queue.
-7. [Testing & roadmap](06-testing-and-roadmap.md).
+7. [RBAC & commentary](07-rbac-and-commentary.md) — roles/permissions and the analysis tab.
+8. [Testing & roadmap](06-testing-and-roadmap.md).
 
 ## Decisions (fixed with the user)
 
