@@ -26,6 +26,13 @@ def register_builtins() -> None:
     registry.register("llm", "stub", StubLlmProvider)
     registry.register("embedding", "stub", StubEmbeddingProvider)
 
+    # Real Claude adapter — registered under its own id so it's available when
+    # llm.provider = "anthropic". The class is imported lazily and constructs its
+    # SDK client only on first use, so registering it needs neither the SDK nor a key.
+    from .anthropic_llm import AnthropicLlmProvider
+
+    registry.register("llm", "anthropic", AnthropicLlmProvider)
+
     registry.register(
         "object_store", "local",
         lambda: LocalObjectStore(settings.object_store_root),

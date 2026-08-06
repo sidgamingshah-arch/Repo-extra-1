@@ -60,7 +60,7 @@ class LlmSettings(BaseModel):
     """Configuration for the selected LLM adapter (used for mapping disambiguation)."""
 
     provider: str = "stub"            # anthropic | openai | local | stub
-    model: str = "claude-sonnet-4-5"
+    model: str = "claude-opus-4-8"
     temperature: float = 0.0
     max_tokens: int = 4096
     timeout_seconds: int = 60

@@ -1,0 +1,31 @@
+{
+  "_note": "APPROXIMATE, publicly-reported figures for Infosys Ltd consolidated (Ind-AS), FY ended 31-Mar-2024 vs 31-Mar-2023, in INR crore. Provided as a realistic INPUT for the live LLM extraction demo — in the real pipeline these values are replaced by figures extracted from the uploaded filing. Verify against the official annual report before relying on any number.",
+  "entity": "Infosys Limited",
+  "basis": "consolidated",
+  "standard": "Ind-AS",
+  "currency": "INR",
+  "units": "crore",
+  "period": "FY2024",
+  "prior_period": "FY2023",
+  "line_items": [
+    {"raw_label": "Revenue from operations", "statement_hint": "profit_and_loss", "v1": 153670, "v2": 146767},
+    {"raw_label": "Other income, net", "statement_hint": "profit_and_loss", "v1": 3619, "v2": 2701},
+    {"raw_label": "Employee benefit expenses", "statement_hint": "profit_and_loss", "v1": 82442, "v2": 78393},
+    {"raw_label": "Cost of technical sub-contractors", "statement_hint": "profit_and_loss", "v1": 11948, "v2": 14584},
+    {"raw_label": "Depreciation and amortisation expense", "statement_hint": "profit_and_loss", "v1": 4678, "v2": 4225},
+    {"raw_label": "Finance cost", "statement_hint": "profit_and_loss", "v1": 470, "v2": 284},
+    {"raw_label": "Other expenses", "statement_hint": "profit_and_loss", "v1": 22904, "v2": 20841},
+    {"raw_label": "Profit before tax", "statement_hint": "profit_and_loss", "v1": 34847, "v2": 31841},
+    {"raw_label": "Profit for the year", "statement_hint": "profit_and_loss", "v1": 26233, "v2": 24108},
+    {"raw_label": "Property, plant and equipment", "statement_hint": "balance_sheet", "v1": 12370, "v2": 13141},
+    {"raw_label": "Goodwill", "statement_hint": "balance_sheet", "v1": 7303, "v2": 7248},
+    {"raw_label": "Trade receivables", "statement_hint": "balance_sheet", "v1": 30193, "v2": 25424},
+    {"raw_label": "Cash and cash equivalents", "statement_hint": "balance_sheet", "v1": 14786, "v2": 12173},
+    {"raw_label": "Current investments", "statement_hint": "balance_sheet", "v1": 12915, "v2": 6909},
+    {"raw_label": "Total current assets", "statement_hint": "balance_sheet", "v1": 74653, "v2": 61990},
+    {"raw_label": "Total current liabilities", "statement_hint": "balance_sheet", "v1": 42032, "v2": 37008},
+    {"raw_label": "Total equity attributable to owners of the Company", "statement_hint": "balance_sheet", "v1": 86853, "v2": 73338},
+    {"raw_label": "Total assets", "statement_hint": "balance_sheet", "v1": 133032, "v2": 116705},
+    {"raw_label": "Lease liabilities (non-current)", "statement_hint": "balance_sheet", "v1": 6400, "v2": 6853}
+  ]
+}
