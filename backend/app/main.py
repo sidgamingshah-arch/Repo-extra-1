@@ -6,6 +6,7 @@ Run locally with: ``uvicorn app.main:app --reload`` (from the ``backend`` dir).
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 import app.adapters  # noqa: F401 - registers built-in adapters on import
 from app.api.routes import (
@@ -13,6 +14,7 @@ from app.api.routes import (
     extractions,
     languages,
     ontologies,
+    projects,
     review,
     templates,
 )
@@ -23,6 +25,14 @@ from app.db.base import init_db
 def create_app() -> FastAPI:
     settings = get_settings()
     application = FastAPI(title=settings.app_name, version="0.1.0")
+
+    # Permit the Vite dev server (and same-origin prod builds) to call the API.
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @application.on_event("startup")
     def _startup() -> None:  # pragma: no cover - trivial
@@ -39,6 +49,7 @@ def create_app() -> FastAPI:
     application.include_router(ontologies.router, prefix=prefix)
     application.include_router(languages.router, prefix=prefix)
     application.include_router(review.router, prefix=prefix)
+    application.include_router(projects.router, prefix=prefix)
     return application
 
 

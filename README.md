@@ -14,34 +14,45 @@ a balance check slips through silently.
 
 ## Status
 
-This repository currently contains the **backend foundation** (requirement-driven,
-runnable, and tested) plus the full architecture design under
-[`docs/architecture/`](docs/architecture/). The React/TypeScript frontend and the
-heavier extraction engines (OCR, LLM) are scaffolded behind swappable adapters and
-land in subsequent phases — see the roadmap in the docs.
+An **end-to-end integrated product**: a FastAPI backend (extraction pipeline + a
+seeded Ind-AS demo project served over real endpoints) and a React/TypeScript
+frontend implementing the 8-screen FinExtract design handoff, wired to the backend.
+The heavier extraction engines (OCR, LLM) are scaffolded behind swappable adapters
+and land in subsequent phases — see [`docs/architecture/`](docs/architecture/).
 
 ## Monorepo layout
 
 ```
 repo-extra-1/
-  backend/            FastAPI app + extraction pipeline (Python 3.11+)   ← implemented
-  frontend/           React + TypeScript SPA                             (planned)
-  packages/contract/  Shared JSON schemas + type defs                    (planned)
+  backend/            FastAPI app + extraction pipeline (Python 3.11+)
+  frontend/           React + TypeScript SPA (Vite) — the 8-screen workspace
   docs/architecture/  Design & architecture documents
 ```
 
-## Quickstart (backend)
+## Quickstart
 
 ```bash
-cd backend
-pip install -e ".[dev]"          # core + dev deps (no heavy ML)
-pytest -q                        # 32 tests, all green
-uvicorn app.main:app --reload    # serves http://127.0.0.1:8000  (/docs for OpenAPI)
+# backend  (terminal 1)
+cd backend && pip install -e ".[dev]"
+pytest -q                                 # backend tests
+uvicorn app.main:app --port 8000          # API at http://127.0.0.1:8000  (/docs for OpenAPI)
+
+# frontend (terminal 2)
+cd frontend && pnpm install
+pnpm dev                                  # app at http://localhost:5173 (proxies /api → backend)
 ```
 
-Optional engines install behind extras so the core stays light:
+Optional backend engines install behind extras so the core stays light:
 `pip install -e ".[ocr]"` (PaddleOCR), `.[llm]` (Anthropic), `.[embeddings]`,
 `.[pdf]`, `.[lang]`.
+
+## The 8 screens
+
+Upload → Integrity → Page Scope → **Workspace** (side-by-side source ↔ template, inline
+edit + formulas, confidence scores) → Review Queue (balance/subtotal/sign/note-recon
+checks) → All Notes (note-to-face reconciliation) → Template & Ontology (incl. the
+note-netting rule) → Export (Excel/JSON). Upload/integrity/scope use the real pipeline;
+the workspace/review/notes/export views render the backend's seeded demo project.
 
 ## Capabilities & where they live
 
