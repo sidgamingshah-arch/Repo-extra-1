@@ -185,14 +185,14 @@ class OntologyMatcher:
         margin = top.score - runner
 
         # LLM disambiguation only for the ambiguous residual (narrow margin or low top).
-        if (margin < s.mapping_margin or top.score < s.fuzzy_accept) and self.llm_provider:
+        if (margin < s.extraction.mapping_margin or top.score < s.extraction.fuzzy_accept) and self.llm_provider:
             llm = self._llm(raw_label, ranked[:5], context)
             if llm is not None:
                 return MappingResult(llm.canonical_key, llm.method, llm.score,
                                      ranked[:5], llm.score < 0.85,
                                      {**scores, "llm": llm.score})
 
-        accept = top.score >= s.fuzzy_accept and margin >= s.mapping_margin
+        accept = top.score >= s.extraction.fuzzy_accept and margin >= s.extraction.mapping_margin
         needs_review = not accept
         return MappingResult(
             canonical_key=top.canonical_key,

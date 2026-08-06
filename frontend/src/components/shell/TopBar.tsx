@@ -3,11 +3,11 @@
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useProject } from "../../lib/queries";
-import { color, font } from "../../theme";
+import { color } from "../../theme";
 import { useT } from "../../i18n";
 import { STEPPER, screenIdForPath } from "../../screens/config";
 import { LanguageSwitcher } from "./LanguageSwitcher";
-import { RoleSwitcher } from "./RoleSwitcher";
+import { UserMenu } from "./UserMenu";
 
 export function TopBar() {
   const nav = useNavigate();
@@ -111,26 +111,9 @@ export function TopBar() {
       </div>
 
       <div style={{ width: 1, height: 22, background: color.divider }} />
-      <RoleSwitcher />
       <LanguageSwitcher />
       <div style={{ width: 1, height: 22, background: color.divider }} />
-      <div
-        style={{
-          width: 30,
-          height: 30,
-          flex: "0 0 30px",
-          borderRadius: "50%",
-          background: color.indigo,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontWeight: 600,
-          fontSize: 12,
-          fontFamily: font.sans,
-        }}
-      >
-        AM
-      </div>
+      <UserMenu />
     </div>
   );
 }

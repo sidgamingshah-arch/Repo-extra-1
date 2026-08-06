@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Button, Toggle } from "../components/ui";
 import { SCREENS } from "./config";
 import { usePages } from "../lib/queries";
-import { useUI } from "../store";
+import { useAppLocale } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
 import { color, confStyle, font, layout, radius } from "../theme";
@@ -94,7 +94,7 @@ function PageCardTile({ p, t, canScope }: { p: PageCard; t: (key: string) => str
 export default function ScopeScreen() {
   const nav = useNavigate();
   const t = useT();
-  const locale = useUI((s) => s.locale);
+  const locale = useAppLocale();
   const canScope = useCan("config:scope");
   const { data, isPending } = usePages(locale);
 

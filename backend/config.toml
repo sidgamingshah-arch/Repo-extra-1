@@ -1,0 +1,89 @@
+# FinExtract configuration.
+#
+# This file holds non-secret, deployment-tunable settings. It is read at startup by
+# app/config.py (via pydantic-settings). Precedence, highest first:
+#
+#   1. Environment variables (prefix FINEX_, nested with "__", e.g. FINEX_LLM__MODEL)
+#   2. .env file
+#   3. THIS file (config.toml)
+#   4. Built-in defaults in app/config.py
+#
+# NEVER put secrets (API keys, DB passwords) here. Keys are read from environment
+# variables named by *_api_key_env below, so this file can live safely in git.
+
+[app]
+name = "FinExtract Extraction API"
+api_prefix = "/api/v1"
+
+# ---------------------------------------------------------------------------
+# Authentication / session
+# ---------------------------------------------------------------------------
+[auth]
+# Accept the X-Role request header as a dev/service credential (bypasses login).
+# Convenient for local dev, tests, and machine-to-machine calls. SET TO false IN
+# PRODUCTION so the only way in is a real session token.
+allow_role_header = true
+
+# Passwordless quick-login for the seeded demo users (the "Sign in as …" buttons on
+# the login screen). SET TO false IN PRODUCTION — real users must supply a password.
+demo_mode = true
+
+# Session lifetime, in minutes, before a token must be re-issued.
+session_ttl_minutes = 480
+
+# ---------------------------------------------------------------------------
+# Feature flags (admin-configurable)
+# ---------------------------------------------------------------------------
+[features]
+# Localize the ENTIRE interface (nav, screens, prose), not just the extracted
+# financial output. Off by default: by default only statement line items and notes
+# follow the chosen output language; the rest of the app stays English. An admin can
+# flip this at runtime from the Settings screen (PATCH /settings) — this value is the
+# startup default.
+ui_localization = false
+
+# Default output language for extracted financial data, and the set of languages the
+# app offers. Adding a language is a data/asset change, not a code change.
+default_output_locale = "en"
+supported_locales = ["en", "zh", "ar", "fr"]
+
+# ---------------------------------------------------------------------------
+# LLM (used for extraction disambiguation + could back the analysis commentary).
+# The adapter is selected by the top-level llm_provider registry id; this section
+# configures whichever adapter is selected.
+# ---------------------------------------------------------------------------
+[llm]
+provider = "anthropic"          # anthropic | openai | local | stub
+model = "claude-sonnet-4-5"     # default model id for the selected provider
+temperature = 0.0               # deterministic output for structured extraction
+max_tokens = 4096
+timeout_seconds = 60
+base_url = ""                   # override for a self-hosted / gateway endpoint; empty = provider default
+api_key_env = "ANTHROPIC_API_KEY"   # env var the key is read from (the key itself is NOT stored here)
+
+# ---------------------------------------------------------------------------
+# OCR (scanned-page recognition)
+# ---------------------------------------------------------------------------
+[ocr]
+engine = "paddleocr"            # paddleocr | tesseract | stub
+languages = ["en", "ch", "ar", "fr"]   # OCR language packs to load
+dpi = 300                       # rasterization DPI for scanned pages
+
+# ---------------------------------------------------------------------------
+# Embeddings (semantic alias matching in the mapping ensemble)
+# ---------------------------------------------------------------------------
+[embeddings]
+provider = "sentence-transformers"     # sentence-transformers | openai | stub
+model = "paraphrase-multilingual-MiniLM-L12-v2"
+
+# ---------------------------------------------------------------------------
+# Extraction / reconciliation tuning
+# ---------------------------------------------------------------------------
+[extraction]
+fuzzy_accept = 0.90             # rapidfuzz score to auto-accept a fuzzy alias match
+fuzzy_candidate = 0.60          # minimum score to keep a fuzzy match as a candidate
+embedding_accept = 0.82         # cosine similarity to accept a semantic match
+mapping_margin = 0.08           # winner must beat the runner-up by this margin, else review
+auto_accept_confidence = 0.80   # combined confidence at/above which a line auto-accepts
+recon_abs_tolerance = 1.0       # absolute tolerance (in base units) for reconciliation ties
+recon_rel_tolerance = 0.005     # relative tolerance (fraction of the face value)

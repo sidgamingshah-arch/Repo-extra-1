@@ -103,7 +103,7 @@ class IngestStage:
                 pass
             image_cov = min(image_area / page_area, 1.0)
 
-            if char_count > s.native_min_chars and text_cov > s.native_min_text_coverage:
+            if char_count > s.extraction.native_min_chars and text_cov > s.extraction.native_min_text_coverage:
                 src = PageSourceKind.MIXED if image_cov > 0.5 else PageSourceKind.NATIVE
             elif image_cov > 0.5:
                 src = PageSourceKind.SCANNED

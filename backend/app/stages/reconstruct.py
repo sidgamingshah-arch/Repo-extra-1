@@ -22,7 +22,7 @@ class ReconstructStage:
         ctx.log(f"reconstruct:target_pages={len(target)}")
         for p in target:
             if p.source_kind == PageSourceKind.SCANNED:
-                # TODO: ocr = ctx.registry.get("ocr", ctx.settings.ocr_provider)
+                # TODO: ocr = ctx.registry.get("ocr", ctx.settings.ocr.engine)
                 #       tables = ctx.registry.get("table", ...).extract_tables(...)
                 ctx.log(f"reconstruct:page={p.index}:needs_ocr")
             else:

@@ -18,6 +18,7 @@ export const SCREENS: Record<string, ScreenDef> = {
   review: { id: "review", path: "/review", label: "Review Queue", icon: "✓", step: 5, badge: { count: 12, tone: "review" } },
   commentary: { id: "commentary", path: "/commentary", label: "Analysis", icon: "✦" },
   template: { id: "template", path: "/template", label: "Template & Ontology", icon: "◆" },
+  settings: { id: "settings", path: "/settings", label: "Settings", icon: "⚙" },
   export: { id: "export", path: "/export", label: "Export", icon: "⬎", step: 6 },
 };
 
@@ -38,7 +39,7 @@ export const NAV_GROUPS: { group: string; items: string[] }[] = [
   { group: "EXTRACT", items: ["workspace", "notes"] },
   { group: "QUALITY", items: ["review"] },
   { group: "ANALYSIS", items: ["commentary"] },
-  { group: "CONFIGURE", items: ["template"] },
+  { group: "CONFIGURE", items: ["template", "settings"] },
   { group: "DELIVER", items: ["export"] },
 ];
 

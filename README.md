@@ -42,6 +42,13 @@ cd frontend && pnpm install
 pnpm dev                                  # app at http://localhost:5173 (proxies /api → backend)
 ```
 
+Then **sign in**. The app opens on a login screen; in demo mode use the one-click
+"Sign in as …" buttons for the seeded users — **admin** (Priya Nair), **reviewer**
+(Rahul Mehta), or **analyst** (Ana Ferreira) — or type the username with a matching
+password. Non-secret configuration (LLM/OCR/extraction engines, feature flags) lives in
+[`backend/config.toml`](backend/config.toml) and is surfaced read-only on the admin
+**Settings** screen.
+
 Optional backend engines install behind extras so the core stays light:
 `pip install -e ".[ocr]"` (PaddleOCR), `.[llm]` (Anthropic), `.[embeddings]`,
 `.[pdf]`, `.[lang]`.
@@ -51,18 +58,27 @@ Optional backend engines install behind extras so the core stays light:
 Upload → Integrity → Page Scope → **Workspace** (side-by-side source ↔ template, inline
 edit + formulas, confidence scores) → Review Queue (balance/subtotal/sign/note-recon
 checks) → All Notes (note-to-face reconciliation) → **Analysis** (one-page financial
-commentary — ratios + strengths/risks) → Template & Ontology (incl. the note-netting
-rule) → Export (Excel/JSON). Upload/integrity/scope use the real pipeline; the other
-views render the backend's seeded demo project.
+commentary — ratios, **year-on-year trends**, strengths/risks) → Template & Ontology
+(incl. the note-netting rule) → **Settings** (admin) → Export (Excel/JSON).
+Upload/integrity/scope use the real pipeline; the other views render the backend's
+seeded demo project.
 
-## Access control & languages
+## Access control, config & languages
 
+- **Login / session** — a bearer-token session (`POST /auth/login`) with seeded demo
+  users. `GET /me` drives the nav and route guards; sign out from the top bar. Identity
+  swaps to a real IdP without changing the permission model.
 - **RBAC** — three roles (admin / reviewer / analyst). Configuration (templates,
-  ontology, page scope, export inclusions) is admin-controlled; the analyst gets a
-  simple flow. Server-side enforced (403) and reflected in the nav; switch role from the
-  top bar. See [`docs/architecture/07-rbac-and-commentary.md`](docs/architecture/07-rbac-and-commentary.md).
-- **Multilingual** — English, Chinese, Arabic (RTL) and French, input = output parity;
-  switch language from the top bar. See [`docs/architecture/04-multilingual.md`](docs/architecture/04-multilingual.md).
+  ontology, page scope, export inclusions, settings) is admin-controlled; the analyst
+  gets a simple flow. Server-side enforced (401/403) and reflected in the nav. See
+  [`docs/architecture/07-rbac-and-commentary.md`](docs/architecture/07-rbac-and-commentary.md).
+- **Configuration** — `backend/config.toml` (LLM, OCR, embeddings, extraction
+  thresholds, auth, feature flags), env-overridable, surfaced on the admin Settings
+  screen. See [`docs/architecture/08-configuration-and-auth.md`](docs/architecture/08-configuration-and-auth.md).
+- **Multilingual** — English, Chinese, Arabic (RTL) and French. By default the language
+  picker localizes **only the extracted financial output and line items**; localizing the
+  whole interface is an admin toggle. See
+  [`docs/architecture/04-multilingual.md`](docs/architecture/04-multilingual.md).
 
 ## Capabilities & where they live
 

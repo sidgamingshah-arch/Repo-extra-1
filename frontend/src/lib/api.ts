@@ -1,31 +1,53 @@
 /** Thin fetch client. All calls go to /api/v1 (proxied to FastAPI in dev). */
 const BASE = "/api/v1";
 const PROJECT = "demo";
+const TOKEN_KEY = "finex-token";
 
-function roleHeader(): Record<string, string> {
-  if (typeof localStorage === "undefined") return {};
-  const r = localStorage.getItem("finex-role");
-  return r ? { "X-Role": r } : {};
+export function getToken(): string | null {
+  if (typeof localStorage === "undefined") return null;
+  return localStorage.getItem(TOKEN_KEY);
+}
+export function setStoredToken(token: string | null): void {
+  if (typeof localStorage === "undefined") return;
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+/** Error carrying the HTTP status so callers (e.g. auth gating) can special-case 401. */
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function authHeader(): Record<string, string> {
+  const t = getToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...roleHeader(), ...(init?.headers ?? {}) },
+    headers: { "Content-Type": "application/json", ...authHeader(), ...(init?.headers ?? {}) },
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText} — ${text}`);
+    throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`);
   }
   return res.json() as Promise<T>;
 }
 
 import type {
+  AppSettings,
   Basis,
   Commentary,
+  DemoUser,
   ExportFmt,
   IntegrityResponse,
   Locale,
+  LoginResponse,
   Me,
   NoteDetail,
   NotesResponse,
@@ -40,7 +62,19 @@ import type {
 } from "../types";
 
 export const api = {
+  // --- auth / identity ---
+  login: (username: string, password?: string) =>
+    req<LoginResponse>(`/auth/login`, {
+      method: "POST",
+      body: JSON.stringify({ username, password: password ?? null }),
+    }),
+  logout: () => req<{ ok: boolean }>(`/auth/logout`, { method: "POST" }),
+  demoUsers: () => req<{ users: DemoUser[]; demo_mode: boolean }>(`/auth/demo-users`),
   me: () => req<Me>(`/me`),
+  // --- settings ---
+  settings: () => req<AppSettings>(`/settings`),
+  patchSettings: (body: { ui_localization?: boolean }) =>
+    req<AppSettings>(`/settings`, { method: "PATCH", body: JSON.stringify(body) }),
   commentary: (locale: Locale = "en") =>
     req<Commentary>(`/projects/${PROJECT}/commentary?locale=${locale}`),
   project: () => req<{ project: Project; documents: SourceDoc[] }>(`/projects/${PROJECT}`),
@@ -80,7 +114,7 @@ export async function downloadExport(body: {
 }): Promise<void> {
   const res = await fetch(api.exportUrl(), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeader() },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Export failed: ${res.status}`);

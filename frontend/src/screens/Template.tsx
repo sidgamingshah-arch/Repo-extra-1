@@ -2,7 +2,7 @@
 import type { CSSProperties } from "react";
 
 import { Card } from "../components/ui";
-import { useUI } from "../store";
+import { useAppLocale, useUI } from "../store";
 import { color, font, radius } from "../theme";
 import type { NodeConfig } from "../types";
 import { useTemplate } from "../lib/queries";
@@ -80,7 +80,7 @@ function NettingExpr({ expr }: { expr: string }) {
 }
 
 export default function TemplateScreen() {
-  const locale = useUI((s) => s.locale);
+  const locale = useAppLocale();
   const t = useT();
   const { data } = useTemplate(locale);
   const tplSel = useUI((s) => s.tplSel);

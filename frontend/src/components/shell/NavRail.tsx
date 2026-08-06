@@ -2,7 +2,6 @@
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useMe, useProject } from "../../lib/queries";
-import { useUI } from "../../store";
 import { color } from "../../theme";
 import { useT } from "../../i18n";
 import { NAV_GROUPS, SCREENS, screenIdForPath } from "../../screens/config";
@@ -11,8 +10,7 @@ export function NavRail() {
   const nav = useNavigate();
   const loc = useLocation();
   const t = useT();
-  const role = useUI((s) => s.role);
-  const { data: me } = useMe(role);
+  const { data: me } = useMe();
   const activeId = screenIdForPath(loc.pathname);
   const { data } = useProject();
   const prog = data?.project.progress;

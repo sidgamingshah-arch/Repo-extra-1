@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "../components/ui";
 import { useReview } from "../lib/queries";
 import { SCREENS } from "./config";
-import { useUI } from "../store";
+import { useAppLocale, useUI } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
 import { color, font } from "../theme";
@@ -20,7 +20,7 @@ function toneColors(tone: ReviewCheck["tone"]): { ac: string; ib: string } {
 
 export default function ReviewScreen() {
   const t = useT();
-  const locale = useUI((s) => s.locale);
+  const locale = useAppLocale();
   const canResolve = useCan("review:resolve");
   const { data, isPending } = useReview(locale);
   const openCheck = useUI((s) => s.openCheck);

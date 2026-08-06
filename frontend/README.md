@@ -39,18 +39,28 @@ reverse proxy that forwards `/api` to the backend.
 | `/workspace` | `Workspace.tsx` | Side-by-side source ↔ template, edit + formulas |
 | `/review` | `Review.tsx` | Checks-and-balances review queue |
 | `/notes` | `Notes.tsx` | All extracted notes + note-to-face reconciliation |
-| `/commentary` | `Commentary.tsx` | One-page financial analysis (ratios + strengths/risks) |
+| `/commentary` | `Commentary.tsx` | One-page financial analysis (ratios, YoY trends, strengths/risks) |
 | `/template` | `Template.tsx` | Template tree + ontology rules (incl. netting rule) |
+| `/settings` | `Settings.tsx` | Admin: config (LLM/OCR/extraction) + interface-localization toggle |
 | `/export` | `Export.tsx` | Excel / JSON export with live preview |
+
+Sign-in is handled by `Login.tsx` (shown until a session exists); the top-bar user menu
+(`UserMenu.tsx`) signs out.
 
 Data is served by the backend's seeded demo project (Reliance Ind-AS FY24-25); uploaded
 documents run through the real integrity/scope pipeline. See `docs/architecture/`.
 
 ## Access control & i18n
 
-- **Roles** (top-bar switcher → `X-Role`): admin / reviewer / analyst. The nav is filtered
-  by `GET /me`, routes are guarded (`RequireScreen`), and admin-only config controls are
-  gated with `useCan(permission)` (`src/lib/rbac.ts`). Server-side enforced.
-- **Languages** (top-bar switcher): en/zh/ar/fr; Arabic flips to RTL. UI chrome via
-  `src/i18n.ts` (+ per-screen dicts in `src/i18n/screens/`); financial data localized by
-  the backend `locale` param.
+- **Session** — a bearer token from `POST /auth/login` (stored in localStorage, sent as
+  `Authorization: Bearer`). `App.tsx` shows `Login` until a session exists; `GET /me`
+  drives everything after.
+- **Roles** — admin / reviewer / analyst, taken from the authenticated session. The nav is
+  filtered by `me.screens`, routes are guarded (`RequireScreen`), and admin-only config
+  controls are gated with `useCan(permission)` (`src/lib/rbac.ts`). Server-side enforced.
+- **Languages** (top-bar output-language switcher): en/zh/ar/fr. By default the picker
+  localizes only the **financial output** (statement line items + notes) via the backend
+  `locale` param; the rest of the UI stays English. An admin can enable whole-interface
+  localization on the Settings screen — then chrome (via `src/i18n.ts` + per-screen dicts
+  in `src/i18n/screens/`) localizes too and Arabic flips to RTL. See `useAppLocale` in
+  `src/store.ts`.

@@ -3,9 +3,9 @@
 import { Card, ScreenHeader } from "../components/ui";
 import { useT } from "../i18n";
 import { useCommentary } from "../lib/queries";
-import { useUI } from "../store";
-import { color, font } from "../theme";
-import type { CommentaryMetric } from "../types";
+import { useAppLocale } from "../store";
+import { color, fmtIN, font } from "../theme";
+import type { CommentaryMetric, CommentaryTrend } from "../types";
 
 function toneColors(tone: CommentaryMetric["tone"]): { fg: string; bg: string } {
   if (tone === "good") return { fg: color.greenFg, bg: color.greenBg };
@@ -22,6 +22,45 @@ function MetricTile({ m }: { m: CommentaryMetric }) {
       </div>
       <div style={{ fontSize: 20, fontWeight: 600, fontFamily: font.mono, color: c.fg }}>{m.value}</div>
       <div style={{ marginTop: 6, height: 4, borderRadius: 3, background: c.bg }} />
+    </div>
+  );
+}
+
+/** Format a trend value / delta by kind (amount → grouped crore + YoY %; percent →
+ * percentage points; ratio → absolute change). */
+function trendValue(kind: CommentaryTrend["kind"], v: number): string {
+  if (kind === "amount") return fmtIN(v);
+  if (kind === "percent") return `${v}%`;
+  return v.toFixed(2);
+}
+function trendDelta(t: CommentaryTrend): string {
+  const sign = t.delta > 0 ? "+" : "";
+  if (t.kind === "amount") return `${sign}${t.delta}%`;
+  if (t.kind === "percent") return `${sign}${t.delta} pp`;
+  return `${sign}${t.delta}`;
+}
+
+function TrendTile({ t, vs }: { t: CommentaryTrend; vs: string }) {
+  const c = t.tone === "good" ? { fg: color.greenFg, bg: color.greenBg }
+    : t.tone === "bad" ? { fg: color.redFg, bg: color.redBg }
+    : { fg: color.amberFg, bg: color.amberBg };
+  const arrow = t.direction === "up" ? "▲" : t.direction === "down" ? "▼" : "▬";
+  return (
+    <div style={{ background: color.surface, border: `1px solid ${color.cardBorder}`, borderRadius: 11, padding: "12px 14px" }}>
+      <div style={{ fontSize: 11, color: color.muted, marginBottom: 7, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {t.label}
+      </div>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ fontSize: 17, fontWeight: 600, fontFamily: font.mono, color: color.ink }}>
+          {trendValue(t.kind, t.current)}
+        </span>
+        <span style={{ fontSize: 11.5, fontWeight: 600, fontFamily: font.mono, color: c.fg, whiteSpace: "nowrap" }}>
+          {arrow} {trendDelta(t)}
+        </span>
+      </div>
+      <div style={{ fontSize: 10.5, color: color.muted2, fontFamily: font.mono, marginTop: 5 }}>
+        {trendValue(t.kind, t.prior)} <span style={{ color: color.faint }}>{vs}</span> {trendValue(t.kind, t.current)}
+      </div>
     </div>
   );
 }
@@ -44,7 +83,7 @@ function PointList({ title, points, accent }: { title: string; points: string[];
 
 export default function CommentaryScreen() {
   const t = useT();
-  const locale = useUI((s) => s.locale);
+  const locale = useAppLocale();
   const { data, isPending } = useCommentary(locale);
 
   if (isPending || !data) {
@@ -85,6 +124,20 @@ export default function CommentaryScreen() {
           <MetricTile key={m.key} m={m} />
         ))}
       </div>
+
+      {/* Year-on-year trends */}
+      {data.trends?.length > 0 && (
+        <>
+          <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, color: color.muted, margin: "4px 2px 10px" }}>
+            {t("cm.trends").toUpperCase()}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 18 }}>
+            {data.trends.map((tr) => (
+              <TrendTile key={tr.key} t={tr} vs={t("cm.trendVs")} />
+            ))}
+          </div>
+        </>
+      )}
 
       {/* Strengths / weaknesses */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>

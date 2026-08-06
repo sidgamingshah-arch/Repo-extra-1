@@ -3,7 +3,8 @@
  * data prose is localized server-side (backend locale param). Seed languages:
  * English, Chinese, Arabic (RTL), French — the set /languages reports as supported. */
 import type { Locale } from "./types";
-import { useUI } from "./store";
+import { useAppLocale } from "./store";
+import { settings as settingsScreen } from "./i18n/screens/settings";
 import { upload } from "./i18n/screens/upload";
 import { integrity } from "./i18n/screens/integrity";
 import { scope } from "./i18n/screens/scope";
@@ -64,11 +65,15 @@ const core: LocaleDicts = {
     "common.download": "Download",
     "common.both": "Both",
     "nav.commentary": "Analysis",
+    "nav.settings": "Settings",
     "group.ANALYSIS": "ANALYSIS",
     "role.label": "Role",
     "role.admin": "Admin",
     "role.reviewer": "Reviewer",
     "role.analyst": "Analyst",
+    "um.signedIn": "Signed in",
+    "um.logout": "Sign out",
+    "lang.output": "Output language",
   },
   zh: {
     "group.SETUP": "设置",
@@ -109,11 +114,15 @@ const core: LocaleDicts = {
     "common.download": "下载",
     "common.both": "两者",
     "nav.commentary": "分析",
+    "nav.settings": "设置",
     "group.ANALYSIS": "分析",
     "role.label": "角色",
     "role.admin": "管理员",
     "role.reviewer": "审核员",
     "role.analyst": "分析师",
+    "um.signedIn": "已登录",
+    "um.logout": "退出登录",
+    "lang.output": "输出语言",
   },
   ar: {
     "group.SETUP": "الإعداد",
@@ -154,11 +163,15 @@ const core: LocaleDicts = {
     "common.download": "تنزيل",
     "common.both": "كلاهما",
     "nav.commentary": "التحليل",
+    "nav.settings": "الإعدادات",
     "group.ANALYSIS": "التحليل",
     "role.label": "الدور",
     "role.admin": "مسؤول",
     "role.reviewer": "مراجع",
     "role.analyst": "محلل",
+    "um.signedIn": "تم تسجيل الدخول",
+    "um.logout": "تسجيل الخروج",
+    "lang.output": "لغة المخرجات",
   },
   fr: {
     "group.SETUP": "CONFIGURATION",
@@ -199,15 +212,19 @@ const core: LocaleDicts = {
     "common.download": "Télécharger",
     "common.both": "Les deux",
     "nav.commentary": "Analyse",
+    "nav.settings": "Paramètres",
     "group.ANALYSIS": "ANALYSE",
     "role.label": "Rôle",
     "role.admin": "Administrateur",
     "role.reviewer": "Réviseur",
     "role.analyst": "Analyste",
+    "um.signedIn": "Connecté",
+    "um.logout": "Se déconnecter",
+    "lang.output": "Langue de sortie",
   },
 };
 
-const SCREEN_DICTS: LocaleDicts[] = [upload, integrity, scope, review, notes, template, exportScreen, commentary];
+const SCREEN_DICTS: LocaleDicts[] = [upload, integrity, scope, review, notes, template, exportScreen, commentary, settingsScreen];
 
 const DICT: LocaleDicts = { en: {}, zh: {}, ar: {}, fr: {} };
 (Object.keys(DICT) as Locale[]).forEach((loc) => {
@@ -218,8 +235,9 @@ export function translate(locale: Locale, key: string): string {
   return DICT[locale]?.[key] ?? DICT.en[key] ?? key;
 }
 
-/** Hook returning a translator bound to the current locale. */
+/** Hook returning a translator bound to the effective interface locale (English
+ * unless an admin has enabled whole-interface localization). */
 export function useT(): (key: string) => string {
-  const locale = useUI((s) => s.locale);
-  return (key: string) => translate(locale, key);
+  const appLocale = useAppLocale();
+  return (key: string) => translate(appLocale, key);
 }

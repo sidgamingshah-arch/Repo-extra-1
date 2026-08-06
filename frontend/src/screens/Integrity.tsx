@@ -5,7 +5,7 @@ import { Button, Card } from "../components/ui";
 import { color, font, radius } from "../theme";
 import type { IntegrityIssue, IntegrityStat } from "../types";
 import { useIntegrity } from "../lib/queries";
-import { useUI } from "../store";
+import { useAppLocale } from "../store";
 import { useT } from "../i18n";
 
 const GRID = "26px 1.7fr 90px 1fr 110px";
@@ -27,7 +27,7 @@ function sevStyle(sev: IntegrityIssue["severity"]): { dot: string; bg: string; f
 export default function IntegrityScreen() {
   const navigate = useNavigate();
   const t = useT();
-  const locale = useUI((s) => s.locale);
+  const locale = useAppLocale();
   const { data, isPending } = useIntegrity(locale);
 
   if (isPending || !data) {

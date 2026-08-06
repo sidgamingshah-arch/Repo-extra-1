@@ -11,8 +11,16 @@ os.environ.setdefault("FINEX_DATABASE_URL", f"sqlite:///{_tmp}/test.db")
 os.environ.setdefault("FINEX_OBJECT_STORE_ROOT", f"{_tmp}/objects")
 
 
+def _login_token(c, username: str) -> str:
+    """Log in a seeded demo user (passwordless in demo mode) and return the token."""
+    r = c.post("/api/v1/auth/login", json={"username": username})
+    assert r.status_code == 200, r.text
+    return r.json()["token"]
+
+
 @pytest.fixture(scope="session")
-def client():
+def anon_client():
+    """Unauthenticated client — for login flows and 401 assertions."""
     from fastapi.testclient import TestClient
 
     from app.db.base import init_db
@@ -21,3 +29,33 @@ def client():
     init_db()
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture(scope="session")
+def client(anon_client):
+    """Authenticated client (admin session) — the default for most endpoint tests.
+
+    Individual tests can still pass an explicit ``X-Role`` header to act as another
+    role; that header takes precedence over this default admin token.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    token = _login_token(anon_client, "admin")
+    with TestClient(app, headers={"Authorization": f"Bearer {token}"}) as c:
+        yield c
+
+
+@pytest.fixture
+def auth():
+    """Return a helper that yields bearer-auth headers for a seeded demo user."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    def _headers(username: str) -> dict:
+        with TestClient(app) as c:
+            return {"Authorization": f"Bearer {_login_token(c, username)}"}
+
+    return _headers

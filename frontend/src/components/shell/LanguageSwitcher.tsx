@@ -1,7 +1,7 @@
 /** Language switcher — offers the locales the backend reports as FULLY supported
  * (input = output parity), driven by GET /languages. Selecting a locale sets the UI
  * language, localizes server-side output labels, and flips the layout to RTL for Arabic. */
-import { NATIVE_NAME } from "../../i18n";
+import { NATIVE_NAME, useT } from "../../i18n";
 import { useLanguages } from "../../lib/queries";
 import { useUI } from "../../store";
 import { color } from "../../theme";
@@ -12,16 +12,22 @@ const FALLBACK: Locale[] = ["en", "zh", "ar", "fr"];
 export function LanguageSwitcher() {
   const locale = useUI((s) => s.locale);
   const setLocale = useUI((s) => s.setLocale);
+  const uiLocalization = useUI((s) => s.uiLocalization);
   const { data } = useLanguages();
+  const t = useT();
 
   const supported = (data?.fully_supported?.length
     ? (data.fully_supported as Locale[])
     : FALLBACK
   ).filter((l) => l in NATIVE_NAME);
 
+  // Communicate scope: the picker localizes the financial output; when an admin has
+  // turned on whole-interface localization it drives the UI language too.
+  const title = uiLocalization ? `${t("lang.output")} + ${t("nav.settings")}` : t("lang.output");
+
   return (
     <label
-      title="Language"
+      title={title}
       style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}
     >
       <span aria-hidden style={{ fontSize: 13, color: "#aeb6c1" }}>◐</span>

@@ -2,10 +2,63 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { Basis, Locale, StatementKey } from "../types";
+import { useUI } from "../store";
 import { api } from "./api";
 
-export const useMe = (role: string) =>
-  useQuery({ queryKey: ["me", role], queryFn: api.me });
+// --- auth / identity ---
+/** Current principal — enabled only once a session token exists; no retry so a 401
+ * surfaces immediately as "logged out". */
+export const useMe = () => {
+  const token = useUI((s) => s.token);
+  return useQuery({ queryKey: ["me", token], queryFn: api.me, enabled: !!token, retry: false });
+};
+export const useDemoUsers = () =>
+  useQuery({ queryKey: ["demo-users"], queryFn: api.demoUsers });
+
+export function useLogin() {
+  const qc = useQueryClient();
+  const setToken = useUI((s) => s.setToken);
+  return useMutation({
+    mutationFn: (vars: { username: string; password?: string }) =>
+      api.login(vars.username, vars.password),
+    onSuccess: (res) => {
+      setToken(res.token);
+      qc.invalidateQueries();
+    },
+  });
+}
+
+export function useLogout() {
+  const qc = useQueryClient();
+  const setToken = useUI((s) => s.setToken);
+  return useMutation({
+    mutationFn: () => api.logout().catch(() => ({ ok: true })),
+    onSuccess: () => {
+      setToken(null);
+      qc.clear();
+    },
+  });
+}
+
+// --- settings ---
+export const useSettings = () => {
+  const token = useUI((s) => s.token);
+  return useQuery({ queryKey: ["settings"], queryFn: api.settings, enabled: !!token });
+};
+
+export function usePatchSettings() {
+  const qc = useQueryClient();
+  const setUiLocalization = useUI((s) => s.setUiLocalization);
+  return useMutation({
+    mutationFn: (body: { ui_localization?: boolean }) => api.patchSettings(body),
+    onSuccess: (res) => {
+      setUiLocalization(res.features.ui_localization);
+      qc.setQueryData(["settings"], res);
+    },
+  });
+}
+
+// --- project data ---
 export const useCommentary = (locale: Locale = "en") =>
   useQuery({ queryKey: ["commentary", locale], queryFn: () => api.commentary(locale) });
 export const useProject = () => useQuery({ queryKey: ["project"], queryFn: api.project });

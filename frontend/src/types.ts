@@ -6,10 +6,26 @@ export type Role = "admin" | "reviewer" | "analyst";
 export type Basis = "consolidated" | "standalone";
 
 export interface Me {
+  authenticated: boolean;
+  username: string;
+  name: string;
+  via: "session" | "role-header";
   role: Role;
   roles: Role[];
   permissions: string[];
   screens: string[];
+}
+
+export interface DemoUser {
+  username: string;
+  name: string;
+  role: Role;
+}
+export interface LoginResponse {
+  token: string;
+  token_type: string;
+  expires_in: number;
+  user: { username: string; name: string; role: Role };
 }
 
 export interface CommentaryMetric {
@@ -18,14 +34,57 @@ export interface CommentaryMetric {
   value: number;
   tone: "good" | "warn" | "bad";
 }
+export type TrendKind = "amount" | "ratio" | "percent";
+export interface CommentaryTrend {
+  key: string;
+  label: string;
+  kind: TrendKind;
+  current: number;
+  prior: number;
+  delta: number;
+  direction: "up" | "down" | "flat";
+  favorable: boolean;
+  tone: "good" | "warn" | "bad";
+}
 export interface Commentary {
   headline: string;
   assessment: string;
   metrics: CommentaryMetric[];
+  trends: CommentaryTrend[];
   strengths: string[];
   weaknesses: string[];
   data_quality: string;
   basis: string;
+}
+
+export interface AppSettings {
+  features: {
+    ui_localization: boolean;
+    default_output_locale: string;
+    supported_locales: string[];
+  };
+  llm: {
+    provider: string;
+    model: string;
+    temperature: number;
+    max_tokens: number;
+    timeout_seconds: number;
+    base_url: string;
+    api_key_env: string;
+    key_configured: boolean;
+  };
+  ocr: { engine: string; languages: string[]; dpi: number };
+  embeddings: { provider: string; model: string };
+  extraction: {
+    fuzzy_accept: number;
+    fuzzy_candidate: number;
+    embedding_accept: number;
+    mapping_margin: number;
+    auto_accept_confidence: number;
+    recon_abs_tolerance: number;
+    recon_rel_tolerance: number;
+  };
+  auth: { allow_role_header: boolean; demo_mode: boolean; session_ttl_minutes: number };
 }
 export type StatementKey = "balance_sheet" | "profit_and_loss" | "cash_flow";
 export type RowKind = "section" | "subhead" | "item" | "subtotal" | "total";

@@ -11,11 +11,14 @@ from pydantic import BaseModel
 
 from app.sample.demo import CONF_PCT, DEMO, localize_label
 from app.sample.i18n_data import tr
-from app.security import Permission, require
+from app.security import Permission, current_principal, require
 from app.services import checks as checks_engine
 from app.services.export import build_json, build_xlsx
 
-router = APIRouter(prefix="/projects", tags=["projects"])
+# Every project endpoint requires an authenticated caller (session token, or the
+# X-Role dev header when enabled). Per-action permissions are enforced with require().
+router = APIRouter(prefix="/projects", tags=["projects"],
+                   dependencies=[Depends(current_principal)])
 
 # In-memory edit overrides: {line_item_id: {"value": int, "formula": str}}.
 _OVERRIDES: dict[str, dict] = {}
@@ -233,6 +236,8 @@ def get_commentary(project_id: str, locale: str = Query("en")) -> dict:
         c["weaknesses"] = [tr(w, locale) for w in c["weaknesses"]]
         for mtr in c["metrics"]:
             mtr["label"] = tr(mtr["label"], locale)
+        for tnd in c.get("trends", []):
+            tnd["label"] = tr(tnd["label"], locale)
     return c
 
 

@@ -1,19 +1,24 @@
 /** Ephemeral UI state (Zustand) — mirrors the wireframe's state model. Durable data
- * lives in React Query; this holds transient selection / toggles / edit-mode. */
+ * lives in React Query; this holds transient selection / toggles / edit-mode, plus the
+ * session token and the two locale concerns:
+ *
+ *  - `locale`        — the OUTPUT language for extracted financial data (statements,
+ *                      line items, notes). Always applied.
+ *  - `uiLocalization`— admin flag (synced from GET /settings): when true the whole
+ *                      interface is localized too; when false the UI stays English and
+ *                      only financial output follows `locale`.
+ *
+ * `appLocale` (see useAppLocale) is the effective locale for interface chrome. */
 import { create } from "zustand";
 
-import type { Basis, ExportFmt, Locale, Role, StatementKey } from "./types";
-
-const ROLE_KEY = "finex-role";
-export function storedRole(): Role {
-  if (typeof localStorage === "undefined") return "analyst";
-  const r = localStorage.getItem(ROLE_KEY);
-  return r === "admin" || r === "reviewer" || r === "analyst" ? r : "analyst";
-}
+import { getToken, setStoredToken } from "./lib/api";
+import type { Basis, ExportFmt, Locale, StatementKey } from "./types";
 
 interface UIState {
-  locale: Locale;
-  role: Role;
+  locale: Locale; // output/data language
+  uiLocalization: boolean; // admin flag: localize whole UI (from /settings)
+  token: string | null; // session token
+
   dataset: Basis;
   statement: StatementKey;
   sel: string; // selected line-item id in the workspace
@@ -24,7 +29,8 @@ interface UIState {
   exportFmt: ExportFmt;
 
   setLocale: (l: Locale) => void;
-  setRole: (r: Role) => void;
+  setUiLocalization: (v: boolean) => void;
+  setToken: (t: string | null) => void;
   setDataset: (b: Basis) => void;
   setStatement: (s: StatementKey) => void;
   selRow: (id: string) => void;
@@ -40,7 +46,8 @@ interface UIState {
 
 export const useUI = create<UIState>((set) => ({
   locale: "en",
-  role: storedRole(),
+  uiLocalization: false,
+  token: getToken(),
   dataset: "consolidated",
   statement: "balance_sheet",
   sel: "trade_recv",
@@ -50,16 +57,11 @@ export const useUI = create<UIState>((set) => ({
   tplSel: "trade_recv",
   exportFmt: "excel",
 
-  setLocale: (locale) => {
-    if (typeof document !== "undefined") {
-      document.documentElement.dir = locale === "ar" ? "rtl" : "ltr";
-      document.documentElement.lang = locale;
-    }
-    set({ locale });
-  },
-  setRole: (role) => {
-    if (typeof localStorage !== "undefined") localStorage.setItem(ROLE_KEY, role);
-    set({ role });
+  setLocale: (locale) => set({ locale }),
+  setUiLocalization: (uiLocalization) => set({ uiLocalization }),
+  setToken: (token) => {
+    setStoredToken(token);
+    set({ token });
   },
   setDataset: (dataset) => set({ dataset }),
   setStatement: (statement) => set({ statement, sel: "" }),
@@ -73,3 +75,10 @@ export const useUI = create<UIState>((set) => ({
   setTpl: (tplSel) => set({ tplSel }),
   setFmt: (exportFmt) => set({ exportFmt }),
 }));
+
+/** Effective locale for interface chrome: the chosen language only when an admin has
+ * enabled whole-interface localization; otherwise English (financial output still
+ * localizes via `locale`). */
+export function useAppLocale(): Locale {
+  return useUI((s) => (s.uiLocalization ? s.locale : "en"));
+}

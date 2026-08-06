@@ -249,6 +249,23 @@ TR: dict[str, dict[str, str]] = {
     "consolidated · FY25 vs FY24 · ₹ crore": {
         "zh": "合并 · FY25 对 FY24 · ₹ 千万", "ar": "موحّد · FY25 مقابل FY24 · ₹ كرور", "fr": "consolidé · FY25 vs FY24 · ₹ crore",
     },
+    # ---- Commentary: year-on-year trend labels ----
+    "Revenue": {"zh": "营业收入", "ar": "الإيرادات", "fr": "Chiffre d'affaires"},
+    "Profit before tax": {"zh": "税前利润", "ar": "الربح قبل الضريبة", "fr": "Résultat avant impôt"},
+    "Net margin": {"zh": "净利率", "ar": "صافي الهامش", "fr": "Marge nette"},
+    "Operating cash flow": {"zh": "经营现金流", "ar": "التدفق النقدي التشغيلي", "fr": "Flux de trésorerie d'exploitation"},
+    "Equity": {"zh": "权益", "ar": "حقوق الملكية", "fr": "Capitaux propres"},
+    # ---- Commentary: trend-derived strengths ----
+    "Leverage reduced year-on-year, further strengthening an already conservative balance sheet.": {
+        "zh": "杠杆同比下降，进一步巩固了本已稳健的资产负债表。",
+        "ar": "انخفضت الرافعة المالية سنويًا، مما عزّز ميزانية متحفّظة أصلًا.",
+        "fr": "Le levier a diminué d'une année sur l'autre, renforçant un bilan déjà prudent.",
+    },
+    "Margins expanded year-on-year, with pre-tax profit growing faster than revenue.": {
+        "zh": "利润率同比扩大，税前利润增速快于收入。",
+        "ar": "اتسعت الهوامش سنويًا، مع نمو الربح قبل الضريبة أسرع من الإيرادات.",
+        "fr": "Les marges se sont élargies sur un an, le résultat avant impôt progressant plus vite que le chiffre d'affaires.",
+    },
 }
 
 
