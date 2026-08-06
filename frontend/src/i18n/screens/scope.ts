@@ -1,0 +1,52 @@
+import type { Locale } from "../../types";
+
+export const scope: Record<Locale, Record<string, string>> = {
+  en: {
+    "sc.title": "Statement page detection",
+    "sc.subhead":
+      "The classifier isolates the pages carrying the face of the financial statements and their notes, so extraction runs only where it matters.",
+    "sc.focused": "Focused",
+    "sc.pages": "pages",
+    "sc.pagesSkipped": "pages skipped",
+    "sc.scan": "SCAN",
+    "sc.native": "NATIVE",
+    "sc.back": "Back",
+    "sc.extract": "Extract",
+  },
+  zh: {
+    "sc.title": "报表页面检测",
+    "sc.subhead":
+      "分类器识别出承载财务报表主表及其附注的页面，使提取仅在关键页面上运行。",
+    "sc.focused": "聚焦",
+    "sc.pages": "页",
+    "sc.pagesSkipped": "页已跳过",
+    "sc.scan": "扫描",
+    "sc.native": "原生",
+    "sc.back": "返回",
+    "sc.extract": "提取",
+  },
+  ar: {
+    "sc.title": "كشف صفحات القوائم المالية",
+    "sc.subhead":
+      "يعزل المصنّف الصفحات التي تحمل صلب القوائم المالية وإيضاحاتها، بحيث يقتصر الاستخراج على الصفحات المهمة فقط.",
+    "sc.focused": "مُركّز على",
+    "sc.pages": "صفحة",
+    "sc.pagesSkipped": "صفحة متخطّاة",
+    "sc.scan": "ممسوحة",
+    "sc.native": "أصلية",
+    "sc.back": "رجوع",
+    "sc.extract": "استخراج",
+  },
+  fr: {
+    "sc.title": "Détection des pages d'états financiers",
+    "sc.subhead":
+      "Le classifieur isole les pages portant le corps des états financiers et leurs notes, afin que l'extraction ne s'exécute que là où elle compte.",
+    "sc.focused": "Ciblé",
+    "sc.pages": "pages",
+    "sc.pagesSkipped": "pages ignorées",
+    "sc.scan": "SCAN",
+    "sc.native": "NATIF",
+    "sc.back": "Retour",
+    "sc.extract": "Extraire",
+  },
+};

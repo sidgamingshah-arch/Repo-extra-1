@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import { Card } from "../components/ui";
 import { SCREENS } from "./config";
+import { useT } from "../i18n";
 import { useNote, useNotes } from "../lib/queries";
 import { useUI } from "../store";
 import { color, confStyle, fmtIN, font, radius } from "../theme";
@@ -66,16 +67,17 @@ function DetailRow({ row }: { row: NoteDetailRow }) {
 
 function Detail({ detail }: { detail: NoteDetail }) {
   const navigate = useNavigate();
+  const t = useT();
   return (
     <div style={{ maxWidth: 760 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
         <span style={{ fontFamily: font.mono, fontSize: 13, fontWeight: 600, color: color.indigo }}>
-          Note {detail.no}
+          {t("n.note")} {detail.no}
         </span>
         <h1 style={{ fontSize: 19, fontWeight: 600, margin: 0 }}>{detail.title}</h1>
       </div>
       <div style={{ fontSize: 12, color: color.muted, marginBottom: 18 }}>
-        Extracted from p.{detail.page} · linked to{" "}
+        {t("n.extractedFrom")}{detail.page} {t("n.linked")}{" "}
         <a
           href="#"
           onClick={(e) => {
@@ -86,7 +88,7 @@ function Detail({ detail }: { detail: NoteDetail }) {
         >
           {detail.linked_label}
         </a>{" "}
-        on the face of the Balance Sheet
+        {t("n.onFace")}
       </div>
       <Card pad={0} style={{ overflow: "hidden" }}>
         <div
@@ -101,10 +103,10 @@ function Detail({ detail }: { detail: NoteDetail }) {
             color: color.muted,
           }}
         >
-          <span>PARTICULARS</span>
+          <span>{t("n.particulars")}</span>
           <span style={{ textAlign: "right" }}>FY25</span>
           <span style={{ textAlign: "right" }}>FY24</span>
-          <span style={{ textAlign: "right" }}>CONF.</span>
+          <span style={{ textAlign: "right" }}>{t("n.conf")}</span>
         </div>
         {detail.rows.map((r, i) => (
           <DetailRow key={i} row={r} />
@@ -123,7 +125,7 @@ function Detail({ detail }: { detail: NoteDetail }) {
             lineHeight: 1.55,
           }}
         >
-          <b>Note-to-face reconciliation.</b> {detail.reconciliation}
+          <b>{t("n.reconciliation")}</b> {detail.reconciliation}
         </div>
       )}
     </div>
@@ -131,9 +133,11 @@ function Detail({ detail }: { detail: NoteDetail }) {
 }
 
 export default function NotesScreen() {
-  const { data: notes } = useNotes();
+  const t = useT();
+  const locale = useUI((s) => s.locale);
+  const { data: notes } = useNotes(locale);
   const { note, setNote } = useUI();
-  const { data: detail } = useNote(note);
+  const { data: detail } = useNote(note, locale);
 
   if (!notes) return <Loading />;
 
@@ -151,9 +155,9 @@ export default function NotesScreen() {
         }}
       >
         <div style={{ padding: "16px 16px 11px", flex: "0 0 auto" }}>
-          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 3px" }}>Extracted notes</h2>
+          <h2 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 3px" }}>{t("n.heading")}</h2>
           <div style={{ fontSize: 11.5, color: color.muted }}>
-            {notes.count} notes · linked to {notes.linked} line items
+            {notes.count} {t("n.notes")} · {t("n.linkedTo")} {notes.linked} {t("n.lineItems")}
           </div>
           <div
             style={{
@@ -167,7 +171,7 @@ export default function NotesScreen() {
             }}
           >
             <span style={{ color: color.faint }}>⌕</span>
-            <span style={{ fontSize: 12, color: color.faint }}>Search notes…</span>
+            <span style={{ fontSize: 12, color: color.faint }}>{t("n.search")}</span>
           </div>
         </div>
         <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 8px 12px" }}>

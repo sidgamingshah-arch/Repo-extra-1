@@ -5,6 +5,8 @@ import { Button, Card } from "../components/ui";
 import { color, font, radius } from "../theme";
 import type { IntegrityIssue, IntegrityStat } from "../types";
 import { useIntegrity } from "../lib/queries";
+import { useUI } from "../store";
+import { useT } from "../i18n";
 
 const GRID = "26px 1.7fr 90px 1fr 110px";
 
@@ -24,7 +26,9 @@ function sevStyle(sev: IntegrityIssue["severity"]): { dot: string; bg: string; f
 
 export default function IntegrityScreen() {
   const navigate = useNavigate();
-  const { data, isPending } = useIntegrity();
+  const t = useT();
+  const locale = useUI((s) => s.locale);
+  const { data, isPending } = useIntegrity(locale);
 
   if (isPending || !data) {
     return (
@@ -44,11 +48,8 @@ export default function IntegrityScreen() {
         }}
       >
         <div>
-          <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>Document integrity</h1>
-          <p style={{ margin: 0, color: color.sec2 }}>
-            Pre-flight scan run before extraction. Resolve blocking issues; warnings are logged
-            against affected pages.
-          </p>
+          <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>{t("i.title")}</h1>
+          <p style={{ margin: 0, color: color.sec2 }}>{t("i.subhead")}</p>
         </div>
         <div
           style={{
@@ -134,10 +135,10 @@ export default function IntegrityScreen() {
           }}
         >
           <span></span>
-          <span>ISSUE</span>
-          <span>PAGES</span>
-          <span>DETAIL</span>
-          <span>STATUS</span>
+          <span>{t("i.col.issue")}</span>
+          <span>{t("i.col.pages")}</span>
+          <span>{t("i.col.detail")}</span>
+          <span>{t("i.col.status")}</span>
         </div>
         {data.issues.map((i, idx) => {
           const sev = sevStyle(i.severity);
@@ -185,9 +186,9 @@ export default function IntegrityScreen() {
       {/* Footer */}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
         <Button variant="secondary" onClick={() => navigate("/upload")}>
-          ← Back
+          ← {t("i.back")}
         </Button>
-        <Button onClick={() => navigate("/scope")}>Detect statement pages →</Button>
+        <Button onClick={() => navigate("/scope")}>{t("i.detect")} →</Button>
       </div>
     </div>
   );

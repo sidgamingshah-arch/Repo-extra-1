@@ -6,6 +6,8 @@ import { Button, Card } from "../components/ui";
 import { color, font, radius } from "../theme";
 import type { SourceDoc } from "../types";
 import { useProject } from "../lib/queries";
+import { useT } from "../i18n";
+import { useCan } from "../lib/rbac";
 import { SCREENS } from "./config";
 
 /** Extension chip color pairs (PDF → red, XLS → green). */
@@ -75,6 +77,9 @@ function DocRow({ doc }: { doc: SourceDoc }) {
 
 export default function UploadScreen() {
   const navigate = useNavigate();
+  const t = useT();
+  const canTemplate = useCan("config:template");
+  const canOntology = useCan("config:ontology");
   const { data, isPending } = useProject();
 
   if (isPending || !data) {
@@ -89,11 +94,8 @@ export default function UploadScreen() {
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto", padding: "26px 30px 60px" }}>
       <div style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>New extraction project</h1>
-        <p style={{ margin: 0, color: color.sec2 }}>
-          Add source documents, choose the output template, and attach the ontology that governs
-          how line items are extracted and classified.
-        </p>
+        <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>{t("u.title")}</h1>
+        <p style={{ margin: 0, color: color.sec2 }}>{t("u.subhead")}</p>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1.55fr 1fr", gap: 18 }}>
@@ -107,8 +109,8 @@ export default function UploadScreen() {
               marginBottom: 12,
             }}
           >
-            <span style={{ fontWeight: 600, fontSize: 14 }}>1 · Source documents</span>
-            <span style={{ fontSize: 11, color: color.sec2 }}>PDF · Excel · scanned images</span>
+            <span style={{ fontWeight: 600, fontSize: 14 }}>{t("u.srcDocs")}</span>
+            <span style={{ fontSize: 11, color: color.sec2 }}>{t("u.srcTypes")}</span>
           </div>
           <div
             style={{
@@ -122,11 +124,9 @@ export default function UploadScreen() {
           >
             <div style={{ fontSize: 26, color: color.faint, marginBottom: 6 }}>⬍</div>
             <div style={{ fontWeight: 600, marginBottom: 3 }}>
-              Drop files here or <span style={{ color: color.indigo }}>browse</span>
+              {t("u.dropHere")} <span style={{ color: color.indigo }}>{t("u.browse")}</span>
             </div>
-            <div style={{ fontSize: 11.5, color: color.muted }}>
-              Mixed scanned + native PDFs supported · up to 300 MB
-            </div>
+            <div style={{ fontSize: 11.5, color: color.muted }}>{t("u.dropHint")}</div>
           </div>
           {documents.map((d) => (
             <DocRow key={d.name} doc={d} />
@@ -136,7 +136,7 @@ export default function UploadScreen() {
         {/* RIGHT — Template + Ontology */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           <Card>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 11 }}>2 · Output template</div>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 11 }}>{t("u.outputTemplate")}</div>
             <div
               style={{
                 display: "flex",
@@ -167,31 +167,32 @@ export default function UploadScreen() {
               </span>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12.5, fontWeight: 600 }}>{tpl.name}</div>
-                <div style={{ fontSize: 11, color: color.sec2 }}>312 line items · BS · P&amp;L · CF</div>
+                <div style={{ fontSize: 11, color: color.sec2 }}>{t("u.templateMeta")}</div>
               </div>
-              <span style={{ fontSize: 11, color: color.indigo, fontWeight: 600 }}>Selected</span>
+              <span style={{ fontSize: 11, color: color.indigo, fontWeight: 600 }}>{t("u.selected")}</span>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <Button
-                variant="secondary"
-                style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
-              >
-                Choose another
-              </Button>
-              <Button
-                variant="ghost"
-                style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
-              >
-                + New template
-              </Button>
-            </div>
+            {canTemplate && (
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button
+                  variant="secondary"
+                  style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
+                >
+                  {t("u.chooseAnother")}
+                </Button>
+                <Button
+                  variant="ghost"
+                  style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
+                >
+                  {t("u.newTemplate")}
+                </Button>
+              </div>
+            )}
           </Card>
 
           <Card>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 5 }}>3 · Ontology</div>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 5 }}>{t("u.ontology")}</div>
             <p style={{ margin: "0 0 11px", fontSize: 11.5, color: color.sec2, lineHeight: 1.5 }}>
-              Maps descriptions, aliases and note references to template line items — drives
-              classification, sign and note-vs-face netting.
+              {t("u.ontologyExplainer")}
             </p>
             <div
               style={{
@@ -234,35 +235,37 @@ export default function UploadScreen() {
                   color: color.greenFg,
                 }}
               >
-                Valid
+                {t("u.valid")}
               </span>
             </div>
-            <button
-              style={{
-                width: "100%",
-                fontSize: 11.5,
-                fontWeight: 600,
-                color: color.ink2,
-                background: "#fff",
-                border: `1px dashed ${color.dashed}`,
-                borderRadius: radius.control,
-                padding: 9,
-                cursor: "pointer",
-                fontFamily: font.sans,
-              }}
-            >
-              Replace ontology file
-            </button>
+            {canOntology && (
+              <button
+                style={{
+                  width: "100%",
+                  fontSize: 11.5,
+                  fontWeight: 600,
+                  color: color.ink2,
+                  background: "#fff",
+                  border: `1px dashed ${color.dashed}`,
+                  borderRadius: radius.control,
+                  padding: 9,
+                  cursor: "pointer",
+                  fontFamily: font.sans,
+                }}
+              >
+                {t("u.replaceOntology")}
+              </button>
+            )}
           </Card>
         </div>
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
         <Button variant="secondary" style={{ padding: "10px 18px" }}>
-          Save draft
+          {t("u.saveDraft")}
         </Button>
         <Button style={{ padding: "10px 22px" }} onClick={() => navigate(SCREENS.integrity.path)}>
-          Run integrity check →
+          {t("u.runIntegrity")} →
         </Button>
       </div>
     </div>

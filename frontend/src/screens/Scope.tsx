@@ -4,10 +4,13 @@ import { useNavigate } from "react-router-dom";
 import { Button, Toggle } from "../components/ui";
 import { SCREENS } from "./config";
 import { usePages } from "../lib/queries";
+import { useUI } from "../store";
+import { useT } from "../i18n";
+import { useCan } from "../lib/rbac";
 import { color, confStyle, font, layout, radius } from "../theme";
 import type { PageCard } from "../types";
 
-function PageCardTile({ p }: { p: PageCard }) {
+function PageCardTile({ p, t, canScope }: { p: PageCard; t: (key: string) => string; canScope: boolean }) {
   const cc = confStyle(p.conf);
   const scanned = p.scan === "scanned";
   return (
@@ -47,7 +50,7 @@ function PageCardTile({ p }: { p: PageCard }) {
             color: scanned ? color.redFg : color.greenFg,
           }}
         >
-          {scanned ? "SCAN" : "NATIVE"}
+          {scanned ? t("sc.scan") : t("sc.native")}
         </span>
         <span
           style={{
@@ -79,7 +82,9 @@ function PageCardTile({ p }: { p: PageCard }) {
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 10.5, color: color.muted2 }}>{p.sub}</span>
-          <Toggle on={p.included} />
+          <span style={canScope ? undefined : { pointerEvents: "none", opacity: 0.5 }}>
+            <Toggle on={p.included} />
+          </span>
         </div>
       </div>
     </div>
@@ -88,7 +93,10 @@ function PageCardTile({ p }: { p: PageCard }) {
 
 export default function ScopeScreen() {
   const nav = useNavigate();
-  const { data, isPending } = usePages();
+  const t = useT();
+  const locale = useUI((s) => s.locale);
+  const canScope = useCan("config:scope");
+  const { data, isPending } = usePages(locale);
 
   if (isPending || !data) {
     return (
@@ -108,17 +116,14 @@ export default function ScopeScreen() {
         }}
       >
         <div>
-          <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>Statement page detection</h1>
-          <p style={{ margin: 0, color: color.sec2 }}>
-            The classifier isolates the pages carrying the face of the financial statements and their
-            notes, so extraction runs only where it matters.
-          </p>
+          <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>{t("sc.title")}</h1>
+          <p style={{ margin: 0, color: color.sec2 }}>{t("sc.subhead")}</p>
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 12.5, fontWeight: 600 }}>
-            Focused <span style={{ color: color.indigo }}>{data.focused} of {data.total}</span> pages
+            {t("sc.focused")} <span style={{ color: color.indigo }}>{data.focused} of {data.total}</span> {t("sc.pages")}
           </div>
-          <div style={{ fontSize: 11, color: color.muted }}>{data.skipped} pages skipped</div>
+          <div style={{ fontSize: 11, color: color.muted }}>{data.skipped} {t("sc.pagesSkipped")}</div>
         </div>
       </div>
 
@@ -155,16 +160,18 @@ export default function ScopeScreen() {
         }}
       >
         {data.pages.map((p) => (
-          <PageCardTile key={p.no} p={p} />
+          <PageCardTile key={p.no} p={p} t={t} canScope={canScope} />
         ))}
       </div>
 
       {/* Footer */}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 22 }}>
         <Button variant="secondary" onClick={() => nav(SCREENS.integrity.path)}>
-          ← Back
+          ← {t("sc.back")}
         </Button>
-        <Button onClick={() => nav(SCREENS.workspace.path)}>Extract {data.focused} pages →</Button>
+        <Button onClick={() => nav(SCREENS.workspace.path)}>
+          {t("sc.extract")} {data.focused} {t("sc.pages")} →
+        </Button>
       </div>
     </div>
   );

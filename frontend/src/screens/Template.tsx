@@ -6,11 +6,12 @@ import { useUI } from "../store";
 import { color, font, radius } from "../theme";
 import type { NodeConfig } from "../types";
 import { useTemplate } from "../lib/queries";
+import { useT } from "../i18n";
 
-const SIGN_OPTIONS: { key: string; label: string }[] = [
-  { key: "as_reported", label: "As reported (positive)" },
-  { key: "expense_contra", label: "Expense / contra — negative" },
-  { key: "auto", label: "Auto-detect from context" },
+const SIGN_OPTIONS: { key: string; labelKey: string }[] = [
+  { key: "as_reported", labelKey: "tp.sign.asReported" },
+  { key: "expense_contra", labelKey: "tp.sign.expenseContra" },
+  { key: "auto", labelKey: "tp.sign.auto" },
 ];
 
 function Radio({ on }: { on: boolean }) {
@@ -79,7 +80,9 @@ function NettingExpr({ expr }: { expr: string }) {
 }
 
 export default function TemplateScreen() {
-  const { data } = useTemplate();
+  const locale = useUI((s) => s.locale);
+  const t = useT();
+  const { data } = useTemplate(locale);
   const tplSel = useUI((s) => s.tplSel);
   const setTpl = useUI((s) => s.setTpl);
 
@@ -109,9 +112,9 @@ export default function TemplateScreen() {
         }}
       >
         <div style={{ padding: 16, flex: "0 0 auto", borderBottom: `1px solid ${color.hairline3}` }}>
-          <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 3 }}>Template structure</h2>
+          <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 3 }}>{t("tp.structure")}</h2>
           <div style={{ fontSize: 11.5, color: color.muted }}>
-            {template.name} · {template.line_items} line items
+            {template.name} · {template.line_items} {t("tp.lineItems")}
           </div>
         </div>
 
@@ -178,7 +181,7 @@ export default function TemplateScreen() {
               cursor: "pointer",
             }}
           >
-            + Add line item
+            {t("tp.addLineItem")}
           </button>
         </div>
       </div>
@@ -189,13 +192,12 @@ export default function TemplateScreen() {
           <div style={{ fontSize: 11, color: color.muted, marginBottom: 3 }}>{cfg.breadcrumb}</div>
           <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 3 }}>{cfg.label}</h1>
           <p style={{ margin: "0 0 20px", color: color.sec2, fontSize: 12.5 }}>
-            Ontology rules that tell the extractor which source descriptions map here, how to treat the sign,
-            and how to net note detail against the face value.
+            {t("tp.editorSubhead")}
           </p>
 
           {/* Description aliases */}
           <Card style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>Description aliases</div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("tp.aliases")}</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
               {cfg.aliases.map((a) => (
                 <span
@@ -222,7 +224,7 @@ export default function TemplateScreen() {
                   cursor: "pointer",
                 }}
               >
-                + add alias
+                {t("tp.addAlias")}
               </span>
             </div>
           </Card>
@@ -230,25 +232,25 @@ export default function TemplateScreen() {
           {/* Sign convention + Data type */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
             <Card>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>Sign convention</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("tp.signConvention")}</div>
               {SIGN_OPTIONS.map((opt) => {
                 const on = opt.key === cfg.sign;
                 return (
                   <div key={opt.key} style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 0" }}>
                     <Radio on={on} />
                     <span style={{ fontSize: 12, color: on ? color.ink : color.sec2, fontWeight: on ? 600 : 400 }}>
-                      {opt.label}
+                      {t(opt.labelKey)}
                     </span>
                   </div>
                 );
               })}
             </Card>
             <Card>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>Data type &amp; units</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("tp.dataTypeUnits")}</div>
               <div style={{ marginBottom: 11 }}>
-                <FieldMock label="Value type" value={cfg.value_type} />
+                <FieldMock label={t("tp.valueType")} value={cfg.value_type} />
               </div>
-              <FieldMock label="Aggregation" value={cfg.aggregation} />
+              <FieldMock label={t("tp.aggregation")} value={cfg.aggregation} />
             </Card>
           </div>
 
@@ -263,7 +265,7 @@ export default function TemplateScreen() {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>Note-to-face netting rule</span>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{t("tp.nettingRule")}</span>
               <span
                 style={{
                   fontSize: 10,
@@ -274,7 +276,7 @@ export default function TemplateScreen() {
                   color: color.indigo,
                 }}
               >
-                KEY
+                {t("tp.key")}
               </span>
             </div>
             <p style={{ margin: "0 0 12px", fontSize: 12, color: color.sec, lineHeight: 1.55 }}>

@@ -2,6 +2,8 @@
 import { useExportOptions } from "../lib/queries";
 import { downloadExport } from "../lib/api";
 import { useUI } from "../store";
+import { useT } from "../i18n";
+import { useCan } from "../lib/rbac";
 import { color, font, radius } from "../theme";
 import { Card } from "../components/ui";
 
@@ -84,7 +86,6 @@ function PresField({ label, value }: { label: string; value: string }) {
   );
 }
 
-const EXCEL_HEAD = ["", "Line item", "FY25", "Note", "Conf."];
 const EXCEL_ROWS: string[][] = [
   ["1", "Property, plant and equipment", "4,23,180", "N3", "96%"],
   ["2", "Trade receivables", "84,500", "N12", "78%"],
@@ -113,6 +114,8 @@ const JSON_TEXT = `{
 }`;
 
 function ExcelPreview() {
+  const t = useT();
+  const head = ["", t("e.col.lineitem"), "FY25", t("e.col.note"), t("e.col.conf")];
   return (
     <div style={{ fontFamily: font.mono, fontSize: 11 }}>
       <div
@@ -124,7 +127,7 @@ function ExcelPreview() {
           fontWeight: 600,
         }}
       >
-        {EXCEL_HEAD.map((h, i) => (
+        {head.map((h, i) => (
           <div
             key={i}
             style={{
@@ -189,6 +192,8 @@ function JsonPreview() {
 }
 
 export default function ExportScreen() {
+  const t = useT();
+  const canConfig = useCan("config:export");
   const { data, isPending } = useExportOptions();
   const exportFmt = useUI((s) => s.exportFmt);
   const setFmt = useUI((s) => s.setFmt);
@@ -203,30 +208,27 @@ export default function ExportScreen() {
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto", padding: "26px 30px 60px" }}>
       <div style={{ marginBottom: 18 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>Export</h1>
-        <p style={{ margin: 0, color: color.sec2 }}>
-          Deliver the extracted, reviewed and reconciled dataset. 12 items still open in
-          review — they will be flagged in the output.
-        </p>
+        <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>{t("e.title")}</h1>
+        <p style={{ margin: 0, color: color.sec2 }}>{t("e.subhead")}</p>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1.25fr", gap: 18 }}>
         {/* LEFT */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <Card>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>Format</div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>{t("e.format")}</div>
             <div style={{ display: "flex", gap: 11 }}>
               <FormatCard
                 glyph="▦"
-                label="Excel"
-                sub="formatted .xlsx"
+                label={t("e.excel")}
+                sub={t("e.excelSub")}
                 selected={isExcel}
                 onClick={() => setFmt("excel")}
               />
               <FormatCard
                 glyph="{ }"
-                label="JSON"
-                sub="structured tree"
+                label={t("e.json")}
+                sub={t("e.jsonSub")}
                 selected={!isExcel}
                 onClick={() => setFmt("json")}
               />
@@ -234,18 +236,27 @@ export default function ExportScreen() {
           </Card>
 
           <Card>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>Include</div>
-            {data.options.map((o) => (
-              <IncludeRow key={o.key} label={o.label} on={o.on} />
-            ))}
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
+            <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
+              {data.options.map((o) => (
+                <IncludeRow key={o.key} label={t(`e.opt.${o.key}`)} on={o.on} />
+              ))}
+            </div>
           </Card>
 
           <Card>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>Presentation</div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <PresField label="Dataset" value="Both ▾" />
-              <PresField label="Currency" value="INR ₹ ▾" />
-              <PresField label="Units" value="Crore ▾" />
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.presentation")}</div>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                opacity: canConfig ? 1 : 0.55,
+                pointerEvents: canConfig ? "auto" : "none",
+              }}
+            >
+              <PresField label={t("e.dataset")} value={`${t("e.both")} ▾`} />
+              <PresField label={t("e.currency")} value="INR ₹ ▾" />
+              <PresField label={t("e.units")} value="Crore ▾" />
             </div>
           </Card>
         </div>
@@ -262,9 +273,9 @@ export default function ExportScreen() {
             }}
           >
             <span style={{ fontSize: 12.5, fontWeight: 600 }}>
-              Preview — {isExcel ? "spread.xlsx" : "extract.json"}
+              {t("e.preview")} {isExcel ? "spread.xlsx" : "extract.json"}
             </span>
-            <span style={{ fontSize: 11, color: color.muted }}>Consolidated · ₹ Crore</span>
+            <span style={{ fontSize: 11, color: color.muted }}>{t("e.previewMeta")}</span>
           </div>
           <div style={{ flex: 1, overflow: "auto", background: isExcel ? "#fff" : "#fbfcfd" }}>
             {isExcel ? <ExcelPreview /> : <JsonPreview />}
@@ -279,7 +290,7 @@ export default function ExportScreen() {
             }}
           >
             <span style={{ fontSize: 11.5, color: color.muted }}>
-              148 line items · 48 notes · 12 flagged
+              148 {t("e.footer.lineitems")} · 48 {t("e.footer.notes")} · 12 {t("e.footer.flagged")}
             </span>
             <button
               onClick={() =>
@@ -302,7 +313,7 @@ export default function ExportScreen() {
                 cursor: "pointer",
               }}
             >
-              Download {isExcel ? ".xlsx" : ".json"}
+              {t("e.download")} {isExcel ? ".xlsx" : ".json"}
             </button>
           </div>
         </Card>

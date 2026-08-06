@@ -7,6 +7,7 @@ import { color, font } from "../../theme";
 import { useT } from "../../i18n";
 import { STEPPER, screenIdForPath } from "../../screens/config";
 import { LanguageSwitcher } from "./LanguageSwitcher";
+import { RoleSwitcher } from "./RoleSwitcher";
 
 export function TopBar() {
   const nav = useNavigate();
@@ -110,6 +111,7 @@ export function TopBar() {
       </div>
 
       <div style={{ width: 1, height: 22, background: color.divider }} />
+      <RoleSwitcher />
       <LanguageSwitcher />
       <div style={{ width: 1, height: 22, background: color.divider }} />
       <div

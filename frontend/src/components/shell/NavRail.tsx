@@ -1,7 +1,8 @@
 /** Left navigation rail: grouped screen links + an extraction-progress card. */
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { useProject } from "../../lib/queries";
+import { useMe, useProject } from "../../lib/queries";
+import { useUI } from "../../store";
 import { color } from "../../theme";
 import { useT } from "../../i18n";
 import { NAV_GROUPS, SCREENS, screenIdForPath } from "../../screens/config";
@@ -10,9 +11,16 @@ export function NavRail() {
   const nav = useNavigate();
   const loc = useLocation();
   const t = useT();
+  const role = useUI((s) => s.role);
+  const { data: me } = useMe(role);
   const activeId = screenIdForPath(loc.pathname);
   const { data } = useProject();
   const prog = data?.project.progress;
+
+  // Role-gated nav: show a screen only if the caller's role may see it.
+  const canSee = (id: string) => !me || me.screens.includes(id);
+  const groups = NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter(canSee) }))
+    .filter((g) => g.items.length > 0);
 
   return (
     <div
@@ -25,7 +33,7 @@ export function NavRail() {
         overflowY: "auto",
       }}
     >
-      {NAV_GROUPS.map(({ group, items }) => (
+      {groups.map(({ group, items }) => (
         <div key={group}>
           <div style={{ padding: "12px 16px 5px" }}>
             <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: ".7px", color: color.muted2 }}>

@@ -2,7 +2,31 @@
 import type { ConfCat } from "./theme";
 
 export type Locale = "en" | "zh" | "ar" | "fr";
+export type Role = "admin" | "reviewer" | "analyst";
 export type Basis = "consolidated" | "standalone";
+
+export interface Me {
+  role: Role;
+  roles: Role[];
+  permissions: string[];
+  screens: string[];
+}
+
+export interface CommentaryMetric {
+  key: string;
+  label: string;
+  value: number;
+  tone: "good" | "warn" | "bad";
+}
+export interface Commentary {
+  headline: string;
+  assessment: string;
+  metrics: CommentaryMetric[];
+  strengths: string[];
+  weaknesses: string[];
+  data_quality: string;
+  basis: string;
+}
 export type StatementKey = "balance_sheet" | "profit_and_loss" | "cash_flow";
 export type RowKind = "section" | "subhead" | "item" | "subtotal" | "total";
 export type ExportFmt = "excel" | "json";

@@ -2,10 +2,16 @@
 const BASE = "/api/v1";
 const PROJECT = "demo";
 
+function roleHeader(): Record<string, string> {
+  if (typeof localStorage === "undefined") return {};
+  const r = localStorage.getItem("finex-role");
+  return r ? { "X-Role": r } : {};
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers: { "Content-Type": "application/json", ...roleHeader(), ...(init?.headers ?? {}) },
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -16,9 +22,11 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 import type {
   Basis,
+  Commentary,
   ExportFmt,
   IntegrityResponse,
   Locale,
+  Me,
   NoteDetail,
   NotesResponse,
   PagesResponse,
@@ -32,9 +40,14 @@ import type {
 } from "../types";
 
 export const api = {
+  me: () => req<Me>(`/me`),
+  commentary: (locale: Locale = "en") =>
+    req<Commentary>(`/projects/${PROJECT}/commentary?locale=${locale}`),
   project: () => req<{ project: Project; documents: SourceDoc[] }>(`/projects/${PROJECT}`),
-  integrity: () => req<IntegrityResponse>(`/projects/${PROJECT}/integrity`),
-  pages: () => req<PagesResponse>(`/projects/${PROJECT}/pages`),
+  integrity: (locale: Locale = "en") =>
+    req<IntegrityResponse>(`/projects/${PROJECT}/integrity?locale=${locale}`),
+  pages: (locale: Locale = "en") =>
+    req<PagesResponse>(`/projects/${PROJECT}/pages?locale=${locale}`),
   statement: (statement: StatementKey, basis: Basis, locale: Locale = "en") =>
     req<StatementResponse>(`/projects/${PROJECT}/statements/${statement}?basis=${basis}&locale=${locale}`),
   editLineItem: (id: string, value: number | null, formula: string) =>
@@ -44,10 +57,11 @@ export const api = {
     ),
   revertLineItem: (id: string) =>
     req<{ id: string }>(`/projects/${PROJECT}/line-items/${id}`, { method: "DELETE" }),
-  notes: () => req<NotesResponse>(`/projects/${PROJECT}/notes`),
-  note: (no: number) => req<NoteDetail>(`/projects/${PROJECT}/notes/${no}`),
-  review: () => req<ReviewResponse>(`/projects/${PROJECT}/review`),
-  template: () => req<TemplateResponse>(`/projects/${PROJECT}/template`),
+  notes: (locale: Locale = "en") => req<NotesResponse>(`/projects/${PROJECT}/notes?locale=${locale}`),
+  note: (no: number, locale: Locale = "en") =>
+    req<NoteDetail>(`/projects/${PROJECT}/notes/${no}?locale=${locale}`),
+  review: (locale: Locale = "en") => req<ReviewResponse>(`/projects/${PROJECT}/review?locale=${locale}`),
+  template: (locale: Locale = "en") => req<TemplateResponse>(`/projects/${PROJECT}/template?locale=${locale}`),
   exportOptions: () => req<{ options: ExportOption[] }>(`/projects/${PROJECT}/export-options`),
   exportUrl: () => `${BASE}/projects/${PROJECT}/export`,
   languages: () =>

@@ -6,6 +6,8 @@ import { Button } from "../components/ui";
 import { useReview } from "../lib/queries";
 import { SCREENS } from "./config";
 import { useUI } from "../store";
+import { useT } from "../i18n";
+import { useCan } from "../lib/rbac";
 import { color, font } from "../theme";
 import type { ReviewCheck } from "../types";
 
@@ -17,7 +19,10 @@ function toneColors(tone: ReviewCheck["tone"]): { ac: string; ib: string } {
 }
 
 export default function ReviewScreen() {
-  const { data, isPending } = useReview();
+  const t = useT();
+  const locale = useUI((s) => s.locale);
+  const canResolve = useCan("review:resolve");
+  const { data, isPending } = useReview(locale);
   const openCheck = useUI((s) => s.openCheck);
   const toggleCheck = useUI((s) => s.toggleCheck);
   const navigate = useNavigate();
@@ -44,15 +49,12 @@ export default function ReviewScreen() {
         }}
       >
         <div>
-          <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>Review queue</h1>
-          <p style={{ margin: 0, color: color.sec2 }}>
-            Items where automated checks — balance-sheet equality, section subtotals, sign logic
-            and note reconciliation — did not pass. Resolve each before export.
-          </p>
+          <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>{t("r.title")}</h1>
+          <p style={{ margin: 0, color: color.sec2 }}>{t("r.subhead")}</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <Counter value={summary.open} label="open" fg={color.redFg} />
-          <Counter value={summary.passed} label="passed" fg={color.greenFg} />
+          <Counter value={summary.open} label={t("r.open")} fg={color.redFg} />
+          <Counter value={summary.passed} label={t("r.passed")} fg={color.greenFg} />
         </div>
       </div>
 
@@ -174,7 +176,7 @@ export default function ReviewScreen() {
                         marginBottom: 8,
                       }}
                     >
-                      RECONCILIATION
+                      {t("r.reconciliation")}
                     </div>
                     {c.calc.map(([label, value, hl], idx) => (
                       <div
@@ -220,7 +222,7 @@ export default function ReviewScreen() {
                         marginBottom: 8,
                       }}
                     >
-                      SUGGESTED FIX
+                      {t("r.suggestedFix")}
                     </div>
                     <div
                       style={{
@@ -240,28 +242,32 @@ export default function ReviewScreen() {
 
                 {/* Actions */}
                 <div style={{ display: "flex", gap: 9 }}>
-                  <Button variant="primary" style={{ fontSize: 12, padding: "8px 15px", borderRadius: 8 }}>
-                    Apply fix
-                  </Button>
+                  {canResolve && (
+                    <Button variant="primary" style={{ fontSize: 12, padding: "8px 15px", borderRadius: 8 }}>
+                      {t("r.applyFix")}
+                    </Button>
+                  )}
                   <Button
                     variant="secondary"
                     onClick={() => navigate(SCREENS.workspace.path)}
                     style={{ fontSize: 12, padding: "8px 15px", borderRadius: 8 }}
                   >
-                    Open in workspace
+                    {t("r.openInWorkspace")}
                   </Button>
-                  <Button
-                    variant="secondary"
-                    style={{
-                      fontSize: 12,
-                      padding: "8px 15px",
-                      borderRadius: 8,
-                      color: color.sec2,
-                      border: `1px solid ${color.cardBorder}`,
-                    }}
-                  >
-                    Accept as-is
-                  </Button>
+                  {canResolve && (
+                    <Button
+                      variant="secondary"
+                      style={{
+                        fontSize: 12,
+                        padding: "8px 15px",
+                        borderRadius: 8,
+                        color: color.sec2,
+                        border: `1px solid ${color.cardBorder}`,
+                      }}
+                    >
+                      {t("r.acceptAsIs")}
+                    </Button>
+                  )}
                 </div>
               </div>
             )}

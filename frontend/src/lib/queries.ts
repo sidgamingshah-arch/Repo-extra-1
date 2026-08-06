@@ -4,14 +4,23 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Basis, Locale, StatementKey } from "../types";
 import { api } from "./api";
 
+export const useMe = (role: string) =>
+  useQuery({ queryKey: ["me", role], queryFn: api.me });
+export const useCommentary = (locale: Locale = "en") =>
+  useQuery({ queryKey: ["commentary", locale], queryFn: () => api.commentary(locale) });
 export const useProject = () => useQuery({ queryKey: ["project"], queryFn: api.project });
-export const useIntegrity = () => useQuery({ queryKey: ["integrity"], queryFn: api.integrity });
-export const usePages = () => useQuery({ queryKey: ["pages"], queryFn: api.pages });
-export const useReview = () => useQuery({ queryKey: ["review"], queryFn: api.review });
-export const useNotes = () => useQuery({ queryKey: ["notes"], queryFn: api.notes });
-export const useNote = (no: number) =>
-  useQuery({ queryKey: ["note", no], queryFn: () => api.note(no) });
-export const useTemplate = () => useQuery({ queryKey: ["template"], queryFn: api.template });
+export const useIntegrity = (locale: Locale = "en") =>
+  useQuery({ queryKey: ["integrity", locale], queryFn: () => api.integrity(locale) });
+export const usePages = (locale: Locale = "en") =>
+  useQuery({ queryKey: ["pages", locale], queryFn: () => api.pages(locale) });
+export const useReview = (locale: Locale = "en") =>
+  useQuery({ queryKey: ["review", locale], queryFn: () => api.review(locale) });
+export const useNotes = (locale: Locale = "en") =>
+  useQuery({ queryKey: ["notes", locale], queryFn: () => api.notes(locale) });
+export const useNote = (no: number, locale: Locale = "en") =>
+  useQuery({ queryKey: ["note", no, locale], queryFn: () => api.note(no, locale) });
+export const useTemplate = (locale: Locale = "en") =>
+  useQuery({ queryKey: ["template", locale], queryFn: () => api.template(locale) });
 export const useExportOptions = () =>
   useQuery({ queryKey: ["export-options"], queryFn: api.exportOptions });
 export const useLanguages = () => useQuery({ queryKey: ["languages"], queryFn: api.languages });
