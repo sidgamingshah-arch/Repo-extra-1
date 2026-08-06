@@ -1,0 +1,50 @@
+"""Document analysis + extraction orchestration helpers used by the API.
+
+``analyze_document`` runs the upfront portion of the pipeline (ingest → integrity →
+language → classify) so the frontend can show the integrity report and page map
+before committing to a full extraction. ``run_extraction`` runs the whole pipeline.
+Both run synchronously here; a background worker (arq/RQ/Celery) is the infra-time
+swap and does not change these signatures.
+"""
+from __future__ import annotations
+
+import hashlib
+
+from app.core.models import DocumentModel
+from app.core.pipeline import Pipeline, default_pipeline
+from app.core.stage import PipelineContext
+from app.stages.classify import ClassifyStage
+from app.stages.ingest import IngestStage
+from app.stages.integrity import IntegrityStage
+from app.stages.language import LanguageDetectStage
+
+
+def content_hash(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _context(data: bytes, object_store=None, ontology=None,
+             progress_cb=None) -> PipelineContext:
+    ctx = PipelineContext(raw_bytes=data, object_store=object_store,
+                          progress_cb=progress_cb)
+    if ontology is not None:
+        ctx.ontology = ontology  # attribute read by MapOntologyStage
+    return ctx
+
+
+def analyze_document(data: bytes, filename: str = "") -> tuple[DocumentModel, PipelineContext]:
+    doc = DocumentModel(filename=filename, content_hash=content_hash(data))
+    ctx = _context(data)
+    pipe = Pipeline(stages=[
+        IngestStage(), IntegrityStage(), LanguageDetectStage(), ClassifyStage(),
+    ])
+    doc = pipe.run(doc, ctx)
+    return doc, ctx
+
+
+def run_extraction(data: bytes, filename: str = "", ontology=None,
+                   progress_cb=None) -> tuple[DocumentModel, PipelineContext]:
+    doc = DocumentModel(filename=filename, content_hash=content_hash(data))
+    ctx = _context(data, ontology=ontology, progress_cb=progress_cb)
+    doc = default_pipeline().run(doc, ctx)
+    return doc, ctx

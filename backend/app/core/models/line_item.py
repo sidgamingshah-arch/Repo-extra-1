@@ -1,0 +1,135 @@
+"""Line items, extracted values, notes, and the face↔note link.
+
+A ``LineItem`` holds a *dict of values keyed by (basis, period)* rather than a
+single value, so consolidated and standalone (each with current + prior year) are
+represented uniformly and reconciliation/validation operate per basket.
+"""
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, Field
+
+from .confidence import ConfidenceVector
+from .enums import (
+    Basis,
+    LineRole,
+    LinkRelationship,
+    ReconciliationRole,
+    SignConvention,
+    ValueSource,
+)
+from .geometry import Provenance
+
+
+class UnitContext(BaseModel):
+    """Detected scale + currency for a value, at its most-specific scope."""
+
+    currency: str = "INR"
+    scale_factor: Decimal = Decimal(1)   # lakh=1e5, crore=1e7, thousand=1e3, million=1e6
+    units_label: str | None = None
+    source_bbox_page: int | None = None
+
+
+class NoteRef(BaseModel):
+    raw: str
+    numbers: list[str] = Field(default_factory=list)   # "5", ranges expanded
+    subrefs: list[str] = Field(default_factory=list)    # "12(a)"
+
+
+class ValueKey(BaseModel, frozen=True):
+    basis: Basis
+    period_end: date | None = None
+    period_label: str | None = None
+
+
+class ExtractedValue(BaseModel):
+    value_raw: Decimal | None = None      # exactly as printed (paren-negatives applied)
+    value: Decimal | None = None          # sign-normalized (units NOT applied)
+    reconciled: Decimal | None = None     # after §20 subtraction; always derived from raw
+    basis: Basis
+    period_end: date | None = None
+    period_label: str | None = None
+    unit_ctx: UnitContext = Field(default_factory=UnitContext)
+    provenance: Provenance | None = None
+    confidence: ConfidenceVector = Field(default_factory=ConfidenceVector)
+
+    @property
+    def key(self) -> ValueKey:
+        return ValueKey(basis=self.basis, period_end=self.period_end, period_label=self.period_label)
+
+
+class LineItem(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    statement_id: UUID | None = None
+    parent_id: UUID | None = None
+
+    source_label: str = ""                # text exactly as printed
+    display_label: str | None = None      # canonical label (locale-resolved)
+    canonical_key: str | None = None
+    template_node_id: str | None = None
+    ordinal: int = 0
+    role: LineRole = LineRole.LINE
+
+    values: dict[str, ExtractedValue] = Field(default_factory=dict)  # keyed by ValueKey json
+    sign_convention: SignConvention = SignConvention.NATURAL
+    note_refs: list[NoteRef] = Field(default_factory=list)
+    note_number: str | None = None        # set when this item lives inside a note
+    reconciliation_role: ReconciliationRole = ReconciliationRole.NONE
+
+    formula: dict | None = None
+    is_computed: bool = False
+    source: ValueSource = ValueSource.MACHINE
+    confidence: ConfidenceVector = Field(default_factory=ConfidenceVector)
+
+    def set_value(self, ev: ExtractedValue) -> None:
+        self.values[ev.key.model_dump_json()] = ev
+
+    def get_value(self, basis: Basis, period_end: date | None = None,
+                  period_label: str | None = None) -> ExtractedValue | None:
+        key = ValueKey(basis=basis, period_end=period_end, period_label=period_label)
+        return self.values.get(key.model_dump_json())
+
+
+class NoteItem(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    notes_table_id: UUID | None = None
+    parent_id: UUID | None = None
+    raw_label: str = ""
+    canonical_key: str | None = None
+    values: dict[str, ExtractedValue] = Field(default_factory=dict)
+    ordinal: int = 0
+    role: LineRole = LineRole.LINE
+    provenance: Provenance | None = None
+    confidence: ConfidenceVector = Field(default_factory=ConfidenceVector)
+
+    def set_value(self, ev: ExtractedValue) -> None:
+        self.values[ev.key.model_dump_json()] = ev
+
+
+class NotesTable(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    note_number: str
+    title: str = ""
+    basis: Basis | None = None
+    source_pages: list[int] = Field(default_factory=list)
+    items: list[NoteItem] = Field(default_factory=list)
+
+
+class FaceNoteLink(BaseModel):
+    """Link between a face line item and the note detail it decomposes into.
+
+    The backbone of Requirement 20 (note→face subtraction reconciliation).
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    face_item_id: UUID
+    notes_table_id: UUID
+    note_number: str
+    note_detail_item_ids: list[UUID] = Field(default_factory=list)
+    relationship: LinkRelationship = LinkRelationship.ONE_TO_ONE
+    coverage: Decimal = Decimal(1)        # fraction of the note total consumed by this link
+    link_type: str = "explicit_note_ref"  # explicit_note_ref | inferred | manual
+    confidence: float = 1.0

@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+import pytest
+
+from tests.fixtures.generate import make_native_pdf
+
+pytest.importorskip("fitz")
+
+
+def test_health(client):
+    r = client.get("/health")
+    assert r.status_code == 200 and r.json()["status"] == "ok"
+
+
+def test_upload_document_returns_integrity_and_pages(client):
+    pdf_bytes = make_native_pdf()  # reuse identical bytes so dedup can trigger
+    r = client.post("/api/v1/documents", files={"file": ("bs.pdf", pdf_bytes, "application/pdf")})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["format"] == "pdf"
+    assert body["page_count"] == 1
+    assert body["integrity_report"] is not None
+    assert body["locale"] == "en"
+
+    # Re-upload the SAME bytes → dedup by content hash.
+    r2 = client.post("/api/v1/documents", files={"file": ("bs.pdf", pdf_bytes, "application/pdf")})
+    assert r2.json()["duplicate_of"] is not None
+
+
+def test_template_and_ontology_create_and_language_parity(client):
+    template = {
+        "template_key": "api_tpl",
+        "name": "API Template",
+        "statements": [{
+            "type": "balance_sheet",
+            "sections": [{
+                "node_id": "cash", "canonical_key": "cash", "label": "Cash", "role": "line",
+                "label_i18n": {"en": "Cash", "zh": "现金", "ar": "النقد", "fr": "Trésorerie"},
+            }],
+        }],
+    }
+    r = client.post("/api/v1/templates", json={"definition": template})
+    assert r.status_code == 201, r.text
+    tpl_id = r.json()["id"]
+
+    ontology = {
+        "ontology_key": "api_ont",
+        "target_template_key": "api_tpl",
+        "number_format_by_locale": {loc: {} for loc in ("en", "zh", "ar", "fr")},
+        "mappings": [{
+            "canonical_key": "cash",
+            "aliases_i18n": {"en": ["Cash"], "zh": ["现金"], "ar": ["النقد"], "fr": ["Trésorerie"]},
+        }],
+    }
+    r = client.post("/api/v1/ontologies", json={"definition": ontology})
+    assert r.status_code == 201, r.text
+    ont_id = r.json()["id"]
+
+    r = client.get(f"/api/v1/languages?template_version_id={tpl_id}&ontology_version_id={ont_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body["fully_supported"]) == {"en", "zh", "ar", "fr"}
+
+
+def test_ontology_rejects_unknown_template(client):
+    ontology = {"ontology_key": "orphan", "target_template_key": "nope", "mappings": []}
+    r = client.post("/api/v1/ontologies", json={"definition": ontology})
+    assert r.status_code == 422
