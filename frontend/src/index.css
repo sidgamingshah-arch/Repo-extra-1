@@ -1,0 +1,56 @@
+:root {
+  --page-bg: #f5f6f8;
+  --ink: #1e2530;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+body {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--page-bg);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: #2743c4;
+  text-decoration: none;
+}
+a:hover {
+  color: #1a2f9c;
+}
+button {
+  font-family: inherit;
+}
+h1,
+h2,
+h3 {
+  margin: 0;
+}
+input {
+  font-family: inherit;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cfd4dc;
+  border-radius: 8px;
+  border: 2px solid #f5f6f8;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* RTL support for the multilingual requirement (Arabic). */
+[dir="rtl"] .flip-on-rtl {
+  transform: scaleX(-1);
+}

@@ -1,6 +1,11 @@
-# Frontend (React 18 + TypeScript, Vite) — planned
+# Frontend (React 18 + TypeScript, Vite) — implemented
 
-Not yet implemented; this is the design the backend contracts are built to serve.
+Implemented in `frontend/` per the FinExtract design handoff (8 screens). Run with
+`cd frontend && pnpm install && pnpm dev` alongside the backend; the Vite dev server
+proxies `/api` to FastAPI. See `frontend/README.md` for the file map. The notes below
+describe the architecture; a few advanced pieces (PDF.js bbox overlay, HyperFormula
+worker) are represented by their design-equivalent here (a rendered "paper" source
+view and a stored formula string) and deepen as the live extraction pipeline lands.
 
 ## State & libraries
 
