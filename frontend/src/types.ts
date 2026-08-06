@@ -1,6 +1,7 @@
 /** Types mirroring the backend API responses (see backend/app/api/routes). */
 import type { ConfCat } from "./theme";
 
+export type Locale = "en" | "zh" | "ar" | "fr";
 export type Basis = "consolidated" | "standalone";
 export type StatementKey = "balance_sheet" | "profit_and_loss" | "cash_flow";
 export type RowKind = "section" | "subhead" | "item" | "subtotal" | "total";
@@ -22,6 +23,7 @@ export interface Inspector {
 export interface StatementRow {
   id: string;
   label: string;
+  source_label?: string; // original-language label for the source "paper"
   kind: RowKind;
   level?: number;
   note?: string | null;

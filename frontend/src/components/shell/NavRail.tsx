@@ -3,11 +3,13 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { useProject } from "../../lib/queries";
 import { color } from "../../theme";
+import { useT } from "../../i18n";
 import { NAV_GROUPS, SCREENS, screenIdForPath } from "../../screens/config";
 
 export function NavRail() {
   const nav = useNavigate();
   const loc = useLocation();
+  const t = useT();
   const activeId = screenIdForPath(loc.pathname);
   const { data } = useProject();
   const prog = data?.project.progress;
@@ -26,7 +28,9 @@ export function NavRail() {
       {NAV_GROUPS.map(({ group, items }) => (
         <div key={group}>
           <div style={{ padding: "12px 16px 5px" }}>
-            <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: ".7px", color: color.muted2 }}>{group}</span>
+            <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: ".7px", color: color.muted2 }}>
+              {t(`group.${group}`)}
+            </span>
           </div>
           {items.map((id) => {
             const s = SCREENS[id];
@@ -60,7 +64,7 @@ export function NavRail() {
                   {s.icon}
                 </span>
                 <span style={{ fontSize: 12.5, fontWeight: active ? 600 : 500, color: active ? color.indigo : color.sec, flex: 1 }}>
-                  {s.label}
+                  {t(`nav.${s.id}`)}
                 </span>
                 {s.badge && (
                   <span
@@ -97,7 +101,7 @@ export function NavRail() {
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: color.sec2, marginBottom: 6 }}>
-          <span>Extraction progress</span>
+          <span>{t("progress.title")}</span>
           <span style={{ fontWeight: 600, color: color.ink }}>{prog?.pct ?? 0}%</span>
         </div>
         <div style={{ height: 6, borderRadius: 4, background: color.trackBg, overflow: "hidden" }}>

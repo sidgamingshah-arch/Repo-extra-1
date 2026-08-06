@@ -18,6 +18,7 @@ import type {
   Basis,
   ExportFmt,
   IntegrityResponse,
+  Locale,
   NoteDetail,
   NotesResponse,
   PagesResponse,
@@ -34,8 +35,8 @@ export const api = {
   project: () => req<{ project: Project; documents: SourceDoc[] }>(`/projects/${PROJECT}`),
   integrity: () => req<IntegrityResponse>(`/projects/${PROJECT}/integrity`),
   pages: () => req<PagesResponse>(`/projects/${PROJECT}/pages`),
-  statement: (statement: StatementKey, basis: Basis) =>
-    req<StatementResponse>(`/projects/${PROJECT}/statements/${statement}?basis=${basis}`),
+  statement: (statement: StatementKey, basis: Basis, locale: Locale = "en") =>
+    req<StatementResponse>(`/projects/${PROJECT}/statements/${statement}?basis=${basis}&locale=${locale}`),
   editLineItem: (id: string, value: number | null, formula: string) =>
     req<{ id: string; value: number | null; formula: string }>(
       `/projects/${PROJECT}/line-items/${id}`,

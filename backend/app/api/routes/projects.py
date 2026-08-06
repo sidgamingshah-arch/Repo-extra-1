@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 
-from app.sample.demo import CONF_PCT, DEMO
+from app.sample.demo import CONF_PCT, DEMO, localize_label
 from app.services import checks as checks_engine
 from app.services.export import build_json, build_xlsx
 
@@ -65,7 +65,8 @@ def _scale(v, basis: str):
 
 @router.get("/{project_id}/statements/{statement}")
 def get_statement(project_id: str, statement: str,
-                  basis: str = Query("consolidated")) -> dict:
+                  basis: str = Query("consolidated"),
+                  locale: str = Query("en")) -> dict:
     st = DEMO["statements"].get(statement)
     if st is None:
         raise HTTPException(404, f"Unknown statement {statement!r}")
@@ -73,7 +74,9 @@ def get_statement(project_id: str, statement: str,
     rows = []
     for r in st["rows"]:
         kind = r.get("kind", "item")
-        row = {"id": r["id"], "label": r["label"], "kind": kind}
+        # label = localized output; source_label = original (English) for the source view
+        row = {"id": r["id"], "label": localize_label(r["label"], locale),
+               "source_label": r["label"], "kind": kind}
         if kind == "item":
             row["level"] = 1
             row["note"] = r.get("note")
@@ -95,7 +98,7 @@ def get_statement(project_id: str, statement: str,
         row["v2"] = v2
         rows.append(row)
     return {
-        "statement": statement, "label": st["label"], "basis": basis,
+        "statement": statement, "label": localize_label(st["label"], locale), "basis": basis,
         "periods": proj["periods"], "currency": proj["currency"],
         "currency_symbol": proj["currency_symbol"], "units": proj["units"],
         "rows": rows, "viewer": _VIEWER.get(statement, _VIEWER["balance_sheet"]),

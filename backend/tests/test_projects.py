@@ -19,6 +19,23 @@ def test_project_and_statement(client):
     assert ppe["note"] == "3"
 
 
+def test_localized_statement_labels(client):
+    # Chinese output labels; source_label stays English (input→output parity).
+    zh = client.get("/api/v1/projects/demo/statements/balance_sheet?locale=zh").json()
+    ppe = next(x for x in zh["rows"] if x["id"] == "ppe")
+    assert ppe["label"] == "物业、厂房及设备"
+    assert ppe["source_label"] == "Property, plant and equipment"
+    assert zh["label"] == "资产负债表"  # statement name localized too
+
+    # Arabic + French resolve; unknown locale falls back to English.
+    ar = client.get("/api/v1/projects/demo/statements/balance_sheet?locale=ar").json()
+    assert next(x for x in ar["rows"] if x["id"] == "tot_assets")["label"] == "إجمالي الأصول"
+    fr = client.get("/api/v1/projects/demo/statements/balance_sheet?locale=fr").json()
+    assert next(x for x in fr["rows"] if x["id"] == "trade_recv")["label"] == "Créances clients"
+    en = client.get("/api/v1/projects/demo/statements/balance_sheet?locale=en").json()
+    assert next(x for x in en["rows"] if x["id"] == "ppe")["label"] == "Property, plant and equipment"
+
+
 def test_standalone_scaling():
     from app.api.routes.projects import _scale
     assert _scale(423180, "standalone") == round(423180 * 0.88)

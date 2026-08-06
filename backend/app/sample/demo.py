@@ -15,6 +15,79 @@ def conf(cat: str) -> dict:
     return {"cat": cat, "pct": CONF_PCT.get(cat, 0)}
 
 
+# --- Localized output labels (multilingual parity, keyed by English label) --------
+# Standard IFRS / Ind-AS statement captions translated for the seed languages
+# (en/zh/ar/fr). Illustrative professional terminology — review by a native financial
+# reviewer before production. The statement endpoint resolves each row's display label
+# via this table by the requested locale, falling back to the English label; the
+# left-hand source "paper" keeps the original (English) label to reinforce that
+# extraction maps a source in one language to output in the chosen language.
+LABELS_I18N: dict[str, dict[str, str]] = {
+    # Statement names
+    "Balance Sheet": {"zh": "资产负债表", "ar": "الميزانية العمومية", "fr": "Bilan"},
+    "Statement of P&L": {"zh": "利润表", "ar": "قائمة الأرباح والخسائر", "fr": "Compte de résultat"},
+    "Cash Flow": {"zh": "现金流量表", "ar": "قائمة التدفقات النقدية", "fr": "Tableau des flux de trésorerie"},
+    # Balance sheet
+    "ASSETS": {"zh": "资产", "ar": "الأصول", "fr": "ACTIF"},
+    "Non-current assets": {"zh": "非流动资产", "ar": "الأصول غير المتداولة", "fr": "Actifs non courants"},
+    "Property, plant and equipment": {"zh": "物业、厂房及设备", "ar": "الممتلكات والآلات والمعدات", "fr": "Immobilisations corporelles"},
+    "Capital work-in-progress": {"zh": "在建工程", "ar": "أعمال رأسمالية قيد التنفيذ", "fr": "Immobilisations en cours"},
+    "Goodwill": {"zh": "商誉", "ar": "الشهرة", "fr": "Écart d'acquisition"},
+    "Other intangible assets": {"zh": "其他无形资产", "ar": "أصول غير ملموسة أخرى", "fr": "Autres immobilisations incorporelles"},
+    "Investments": {"zh": "投资", "ar": "استثمارات", "fr": "Placements"},
+    "Loans": {"zh": "贷款", "ar": "قروض", "fr": "Prêts"},
+    "Deferred tax assets (net)": {"zh": "递延所得税资产（净额）", "ar": "أصول ضريبية مؤجلة (صافي)", "fr": "Actifs d'impôt différé (net)"},
+    "Total non-current assets": {"zh": "非流动资产合计", "ar": "إجمالي الأصول غير المتداولة", "fr": "Total des actifs non courants"},
+    "Current assets": {"zh": "流动资产", "ar": "الأصول المتداولة", "fr": "Actifs courants"},
+    "Inventories": {"zh": "存货", "ar": "المخزون", "fr": "Stocks"},
+    "Trade receivables": {"zh": "应收账款", "ar": "الذمم المدينة التجارية", "fr": "Créances clients"},
+    "Cash and cash equivalents": {"zh": "现金及现金等价物", "ar": "النقد وما في حكمه", "fr": "Trésorerie et équivalents de trésorerie"},
+    "Bank balances other than above": {"zh": "上述以外的银行存款", "ar": "أرصدة بنكية أخرى", "fr": "Autres soldes bancaires"},
+    "Other current assets": {"zh": "其他流动资产", "ar": "أصول متداولة أخرى", "fr": "Autres actifs courants"},
+    "Total current assets": {"zh": "流动资产合计", "ar": "إجمالي الأصول المتداولة", "fr": "Total des actifs courants"},
+    "TOTAL ASSETS": {"zh": "资产总计", "ar": "إجمالي الأصول", "fr": "TOTAL DE L'ACTIF"},
+    "EQUITY AND LIABILITIES": {"zh": "权益及负债", "ar": "حقوق الملكية والالتزامات", "fr": "CAPITAUX PROPRES ET PASSIF"},
+    "Equity": {"zh": "权益", "ar": "حقوق الملكية", "fr": "Capitaux propres"},
+    "Equity share capital": {"zh": "股本", "ar": "رأس المال", "fr": "Capital social"},
+    "Other equity": {"zh": "其他权益", "ar": "حقوق ملكية أخرى", "fr": "Autres capitaux propres"},
+    "Non-current liabilities": {"zh": "非流动负债", "ar": "الالتزامات غير المتداولة", "fr": "Passifs non courants"},
+    "Borrowings": {"zh": "借款", "ar": "القروض", "fr": "Emprunts"},
+    "Provisions": {"zh": "拨备", "ar": "المخصصات", "fr": "Provisions"},
+    "Current liabilities": {"zh": "流动负债", "ar": "الالتزامات المتداولة", "fr": "Passifs courants"},
+    "Trade payables": {"zh": "应付账款", "ar": "الذمم الدائنة التجارية", "fr": "Dettes fournisseurs"},
+    "Other financial liabilities": {"zh": "其他金融负债", "ar": "التزامات مالية أخرى", "fr": "Autres passifs financiers"},
+    "TOTAL EQUITY AND LIABILITIES": {"zh": "权益及负债总计", "ar": "إجمالي حقوق الملكية والالتزامات", "fr": "TOTAL DES CAPITAUX PROPRES ET DU PASSIF"},
+    # P&L
+    "INCOME": {"zh": "收入", "ar": "الدخل", "fr": "PRODUITS"},
+    "Revenue from operations": {"zh": "营业收入", "ar": "إيرادات التشغيل", "fr": "Chiffre d'affaires"},
+    "Other income": {"zh": "其他收入", "ar": "إيرادات أخرى", "fr": "Autres produits"},
+    "Total income": {"zh": "收入合计", "ar": "إجمالي الدخل", "fr": "Total des produits"},
+    "EXPENSES": {"zh": "费用", "ar": "المصروفات", "fr": "CHARGES"},
+    "Cost of materials consumed": {"zh": "材料消耗成本", "ar": "تكلفة المواد المستهلكة", "fr": "Coût des matières consommées"},
+    "Employee benefits expense": {"zh": "员工福利费用", "ar": "مصروف منافع الموظفين", "fr": "Charges de personnel"},
+    "Finance costs": {"zh": "财务费用", "ar": "تكاليف التمويل", "fr": "Charges financières"},
+    "Depreciation and amortisation": {"zh": "折旧及摊销", "ar": "الإهلاك والاستهلاك", "fr": "Amortissements et dépréciations"},
+    "Other expenses": {"zh": "其他费用", "ar": "مصروفات أخرى", "fr": "Autres charges"},
+    "Total expenses": {"zh": "费用合计", "ar": "إجمالي المصروفات", "fr": "Total des charges"},
+    "Profit before tax": {"zh": "税前利润", "ar": "الربح قبل الضريبة", "fr": "Résultat avant impôt"},
+    # Cash flow
+    "CASH FLOW FROM OPERATING ACTIVITIES": {"zh": "经营活动现金流量", "ar": "التدفقات النقدية من الأنشطة التشغيلية", "fr": "FLUX DE TRÉSORERIE LIÉS À L'EXPLOITATION"},
+    "Adjustment: depreciation": {"zh": "调整：折旧", "ar": "تعديل: الإهلاك", "fr": "Retraitement : amortissements"},
+    "Working capital changes": {"zh": "营运资本变动", "ar": "التغير في رأس المال العامل", "fr": "Variation du besoin en fonds de roulement"},
+    "Net cash from operating activities": {"zh": "经营活动产生的现金净额", "ar": "صافي النقد من الأنشطة التشغيلية", "fr": "Flux net de trésorerie d'exploitation"},
+    "CASH FLOW FROM INVESTING ACTIVITIES": {"zh": "投资活动现金流量", "ar": "التدفقات النقدية من الأنشطة الاستثمارية", "fr": "FLUX DE TRÉSORERIE LIÉS À L'INVESTISSEMENT"},
+    "Purchase of PPE / CWIP": {"zh": "购建固定资产及在建工程", "ar": "شراء ممتلكات وآلات ومعدات", "fr": "Acquisitions d'immobilisations"},
+    "Net cash used in investing activities": {"zh": "投资活动使用的现金净额", "ar": "صافي النقد المستخدم في الأنشطة الاستثمارية", "fr": "Flux net de trésorerie d'investissement"},
+    "Cash and cash equivalents at year end": {"zh": "期末现金及现金等价物", "ar": "النقد وما في حكمه في نهاية السنة", "fr": "Trésorerie à la clôture"},
+}
+
+
+def localize_label(english_label: str, locale: str) -> str:
+    if locale == "en" or not locale:
+        return english_label
+    return LABELS_I18N.get(english_label, {}).get(locale, english_label)
+
+
 # --- Project meta -----------------------------------------------------------
 
 PROJECT = {

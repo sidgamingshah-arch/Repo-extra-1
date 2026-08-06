@@ -2,9 +2,10 @@
  * lives in React Query; this holds transient selection / toggles / edit-mode. */
 import { create } from "zustand";
 
-import type { Basis, ExportFmt, StatementKey } from "./types";
+import type { Basis, ExportFmt, Locale, StatementKey } from "./types";
 
 interface UIState {
+  locale: Locale;
   dataset: Basis;
   statement: StatementKey;
   sel: string; // selected line-item id in the workspace
@@ -14,6 +15,7 @@ interface UIState {
   tplSel: string; // selected template node
   exportFmt: ExportFmt;
 
+  setLocale: (l: Locale) => void;
   setDataset: (b: Basis) => void;
   setStatement: (s: StatementKey) => void;
   selRow: (id: string) => void;
@@ -28,6 +30,7 @@ interface UIState {
 }
 
 export const useUI = create<UIState>((set) => ({
+  locale: "en",
   dataset: "consolidated",
   statement: "balance_sheet",
   sel: "trade_recv",
@@ -37,6 +40,13 @@ export const useUI = create<UIState>((set) => ({
   tplSel: "trade_recv",
   exportFmt: "excel",
 
+  setLocale: (locale) => {
+    if (typeof document !== "undefined") {
+      document.documentElement.dir = locale === "ar" ? "rtl" : "ltr";
+      document.documentElement.lang = locale;
+    }
+    set({ locale });
+  },
   setDataset: (dataset) => set({ dataset }),
   setStatement: (statement) => set({ statement, sel: "" }),
   selRow: (sel) => set({ sel, editing: false }),

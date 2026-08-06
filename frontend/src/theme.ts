@@ -100,6 +100,38 @@ export function confStyle(cat: ConfCat): { bg: string; fg: string; pct: string }
   return { bg: color.redBg, fg: color.redFg, pct: "54%" };
 }
 
-/** Indian-grouping number formatter (e.g. 12,68,100). */
-export const fmtIN = (n: number | null | undefined): string =>
+/** Indian-grouping accounting formatter: negatives in parentheses, e.g. 12,68,100
+ * and (1,210). Used for read-only monetary display (statement conventions). */
+export const fmtIN = (n: number | null | undefined): string => {
+  if (n == null) return "";
+  const s = Math.abs(n).toLocaleString("en-IN");
+  return n < 0 ? `(${s})` : s;
+};
+
+/** Plain signed formatter (e.g. -1,210) for editable inputs where a raw value is
+ * expected. Pairs with parseAccounting() on save. */
+export const fmtPlain = (n: number | null | undefined): string =>
   n == null ? "" : n.toLocaleString("en-IN");
+
+/** Parse a user-entered value: strips grouping/currency and reads parentheses or a
+ * leading minus as negative. Returns null for empty/unparseable. */
+export const parseAccounting = (raw: string): number | null => {
+  if (raw == null) return null;
+  let s = raw.trim();
+  if (!s) return null;
+  let negative = false;
+  const paren = s.match(/^\((.*)\)$/);
+  if (paren) {
+    negative = true;
+    s = paren[1];
+  }
+  s = s.replace(/[,₹\s]/g, "").replace(/[−–]/g, "-");
+  if (s.startsWith("-")) {
+    negative = true;
+    s = s.slice(1);
+  }
+  if (s === "") return null;
+  const num = Number(s);
+  if (Number.isNaN(num)) return null;
+  return negative ? -num : num;
+};

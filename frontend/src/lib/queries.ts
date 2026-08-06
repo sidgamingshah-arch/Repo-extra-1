@@ -1,7 +1,7 @@
 /** React Query hooks — the data layer each screen consumes. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { Basis, StatementKey } from "../types";
+import type { Basis, Locale, StatementKey } from "../types";
 import { api } from "./api";
 
 export const useProject = () => useQuery({ queryKey: ["project"], queryFn: api.project });
@@ -16,10 +16,10 @@ export const useExportOptions = () =>
   useQuery({ queryKey: ["export-options"], queryFn: api.exportOptions });
 export const useLanguages = () => useQuery({ queryKey: ["languages"], queryFn: api.languages });
 
-export const useStatement = (statement: StatementKey, basis: Basis) =>
+export const useStatement = (statement: StatementKey, basis: Basis, locale: Locale = "en") =>
   useQuery({
-    queryKey: ["statement", statement, basis],
-    queryFn: () => api.statement(statement, basis),
+    queryKey: ["statement", statement, basis, locale],
+    queryFn: () => api.statement(statement, basis, locale),
   });
 
 export function useEditLineItem() {

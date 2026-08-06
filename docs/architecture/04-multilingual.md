@@ -43,3 +43,22 @@ language = supplying those five artifacts (data/assets), not an engineering chan
 Verified by `tests/test_schemas.py::test_language_parity_full_for_seed_set` and
 `tests/test_api.py` (all four seed languages report `supported` given a fully
 localized template + ontology; Arabic reports `rtl=True`).
+
+## Frontend (implemented)
+
+The React app surfaces the parity directly:
+- A **language switcher** in the top bar, populated from `GET /languages`
+  (`frontend/src/components/shell/LanguageSwitcher.tsx`) — only fully-supported
+  locales are offered, so the input and output language sets are identical.
+- **i18n chrome** (`frontend/src/i18n.ts`) for the nav rail, pipeline stepper, and
+  workspace toolbar/column headers in en/zh/ar/fr.
+- **RTL** — selecting Arabic sets `dir="rtl"` on the document root, mirroring the
+  whole layout (nav rail, source viewer, grid).
+- **Localized output labels** — the workspace fetches statements with a `locale`
+  param so line-item labels render in the chosen language, while the left source
+  "paper" keeps the original (English) label — a direct visual demonstration of
+  input→output parity. Verified by screenshotting all four locales
+  (`test_localized_statement_labels` covers the backend resolution).
+
+Statement-caption translations are standard IFRS/Ind-AS terminology for
+demonstration; a native financial-language review is recommended before production.

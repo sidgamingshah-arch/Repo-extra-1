@@ -5,10 +5,11 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/ui";
-import { color, confStyle, font, layout, radius, shadow, fmtIN } from "../theme";
+import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
 import type { Basis, StatementResponse, StatementRow } from "../types";
 import { useStatement, useEditLineItem } from "../lib/queries";
 import { useUI } from "../store";
+import { useT } from "../i18n";
 import { SCREENS } from "./config";
 
 /* ---- toolbar labelled field chip (matches wireframe inline chip) ---- */
@@ -70,7 +71,9 @@ function PaperRow({ row, selected }: { row: StatementRow; selected: boolean }) {
           }}
         />
       )}
-      <span style={{ fontWeight: wt, color: fg, paddingLeft: k === "item" ? 14 : 0 }}>{row.label}</span>
+      <span style={{ fontWeight: wt, color: fg, paddingLeft: k === "item" ? 14 : 0 }}>
+        {row.source_label ?? row.label}
+      </span>
       <span style={{ textAlign: "right", fontFamily: font.mono, fontWeight: wt, color: fg }}>{v1}</span>
       <span style={{ textAlign: "right", fontFamily: font.mono, color: "#888" }}>{v2}</span>
     </div>
@@ -190,17 +193,15 @@ function InspectorEditor({
 }) {
   const initFormula = row.formula ?? row.inspector?.formula ?? "";
   const [formula, setFormula] = useState(initFormula);
-  const [value, setValue] = useState(fmtIN(row.v1));
+  const [value, setValue] = useState(fmtPlain(row.v1));
 
   useEffect(() => {
     setFormula(row.formula ?? row.inspector?.formula ?? "");
-    setValue(fmtIN(row.v1));
+    setValue(fmtPlain(row.v1));
   }, [row.id, row.formula, row.v1, row.inspector]);
 
   const commit = () => {
-    const cleaned = value.replace(/[,₹\s]/g, "");
-    const num = cleaned === "" ? null : Number(cleaned);
-    onSave(num == null || Number.isNaN(num) ? null : num, formula);
+    onSave(parseAccounting(value), formula);
   };
 
   return (
@@ -290,9 +291,10 @@ function InspectorEditor({
 
 export default function WorkspaceScreen() {
   const navigate = useNavigate();
-  const { dataset, setDataset, statement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing } =
+  const t = useT();
+  const { locale, dataset, setDataset, statement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing } =
     useUI();
-  const { data, isPending } = useStatement(statement, dataset);
+  const { data, isPending } = useStatement(statement, dataset, locale);
   const editMut = useEditLineItem();
 
   if (isPending || !data) {
@@ -321,15 +323,15 @@ export default function WorkspaceScreen() {
       >
         <Segmented<Basis>
           options={[
-            { value: "consolidated", label: "Consolidated" },
-            { value: "standalone", label: "Standalone" },
+            { value: "consolidated", label: t("ws.consolidated") },
+            { value: "standalone", label: t("ws.standalone") },
           ]}
           value={dataset}
           onChange={setDataset}
         />
-        <ToolChip label="Statement" value={d.label} />
-        <ToolChip label="Currency" value={`${d.currency} ${d.currency_symbol}`} />
-        <ToolChip label="Units" value={d.units} />
+        <ToolChip label={t("ws.statement")} value={d.label} />
+        <ToolChip label={t("ws.currency")} value={`${d.currency} ${d.currency_symbol}`} />
+        <ToolChip label={t("ws.units")} value={d.units} />
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9 }}>
           <span
             style={{
@@ -342,7 +344,7 @@ export default function WorkspaceScreen() {
               cursor: "pointer",
             }}
           >
-            3 low-confidence
+            3 {t("ws.lowconf")}
           </span>
           <span
             style={{
@@ -355,7 +357,7 @@ export default function WorkspaceScreen() {
               cursor: "pointer",
             }}
           >
-            2 unreconciled
+            2 {t("ws.unreconciled")}
           </span>
           <button
             onClick={() => navigate(SCREENS.export.path)}
@@ -370,7 +372,7 @@ export default function WorkspaceScreen() {
               cursor: "pointer",
             }}
           >
-            Export
+            {t("ws.export")}
           </button>
         </div>
       </div>
@@ -513,12 +515,12 @@ export default function WorkspaceScreen() {
               flex: "0 0 auto",
             }}
           >
-            <span>LINE ITEM</span>
-            <span style={{ textAlign: "center" }}>NOTE</span>
-            <span style={{ textAlign: "right" }}>FY25</span>
-            <span style={{ textAlign: "center" }}>NOTE</span>
-            <span style={{ textAlign: "right" }}>FY24</span>
-            <span style={{ textAlign: "right" }}>CONF.</span>
+            <span>{t("col.lineitem")}</span>
+            <span style={{ textAlign: "center" }}>{t("col.note")}</span>
+            <span style={{ textAlign: "right" }}>{d.periods[0]}</span>
+            <span style={{ textAlign: "center" }}>{t("col.note")}</span>
+            <span style={{ textAlign: "right" }}>{d.periods[1]}</span>
+            <span style={{ textAlign: "right" }}>{t("col.conf")}</span>
           </div>
 
           {/* scroll body */}

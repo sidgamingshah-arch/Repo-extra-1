@@ -4,12 +4,15 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { useProject } from "../../lib/queries";
 import { color, font } from "../../theme";
+import { useT } from "../../i18n";
 import { STEPPER, screenIdForPath } from "../../screens/config";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 
 export function TopBar() {
   const nav = useNavigate();
   const loc = useLocation();
   const { data } = useProject();
+  const t = useT();
   const activeId = screenIdForPath(loc.pathname);
   const curIdx = STEPPER.findIndex((s) => s.id === activeId);
 
@@ -99,13 +102,15 @@ export function TopBar() {
                   color: active ? "#fff" : done ? "#aeb6c1" : color.muted,
                 }}
               >
-                {s.label}
+                {t(`step.${s.id}`)}
               </span>
             </div>
           );
         })}
       </div>
 
+      <div style={{ width: 1, height: 22, background: color.divider }} />
+      <LanguageSwitcher />
       <div style={{ width: 1, height: 22, background: color.divider }} />
       <div
         style={{
