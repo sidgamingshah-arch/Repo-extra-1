@@ -55,16 +55,19 @@ end-to-end with no external infrastructure:
   **bearer token**; the token maps to an in-memory session with a TTL.
 - `POST /auth/logout` invalidates the token. `GET /auth/demo-users` lists the seeded
   users (no secrets) for the login screen.
-- `current_principal` resolves the caller from `Authorization: Bearer …`, or — only when
-  `auth.allow_role_header` is on — from an `X-Role` dev/service header, and 401s
-  otherwise. `current_role` derives the role from the principal, and `require(permission)`
-  builds on it.
+- `current_principal` checks the `Authorization: Bearer …` session **first and treats it
+  as authoritative** — a valid session's role can never be overridden by a header. Only
+  when there is no valid session does it consider an `X-Role` dev/service header, and even
+  then solely when `auth.allow_role_header` is enabled. That flag is **off by default**
+  (secure by default: a real session is the only way in); enable it explicitly for local
+  dev / CI. It 401s when neither yields a principal. `current_role` derives the role from
+  the principal, and `require(permission)` builds on it.
 
-**Production hardening** (documented, out of scope for the demo): set
-`auth.allow_role_header=false` and `auth.demo_mode=false`; replace the in-memory session
-store with a shared, persistent one (Redis / signed JWT); back the seeded users with a
-real user store or an IdP (OIDC/SAML). None of this changes the permission matrix or the
-API contract.
+**Production hardening** (documented, out of scope for the demo): keep
+`auth.allow_role_header=false` (the default) and set `auth.demo_mode=false`; replace the
+in-memory session store with a shared, persistent one (Redis / signed JWT); back the
+seeded users with a real user store or an IdP (OIDC/SAML). None of this changes the
+permission matrix or the API contract.
 
 ## Frontend flow
 

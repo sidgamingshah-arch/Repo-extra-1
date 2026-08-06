@@ -47,15 +47,14 @@ def client(anon_client):
         yield c
 
 
-@pytest.fixture
-def auth():
-    """Return a helper that yields bearer-auth headers for a seeded demo user."""
-    from fastapi.testclient import TestClient
-
-    from app.main import app
+@pytest.fixture(scope="session")
+def auth(anon_client):
+    """Return a helper yielding bearer-auth headers for a seeded demo user (cached)."""
+    cache: dict[str, str] = {}
 
     def _headers(username: str) -> dict:
-        with TestClient(app) as c:
-            return {"Authorization": f"Bearer {_login_token(c, username)}"}
+        if username not in cache:
+            cache[username] = _login_token(anon_client, username)
+        return {"Authorization": f"Bearer {cache[username]}"}
 
     return _headers

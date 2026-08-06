@@ -192,7 +192,12 @@ class OntologyMatcher:
                                      ranked[:5], llm.score < 0.85,
                                      {**scores, "llm": llm.score})
 
-        accept = top.score >= s.extraction.fuzzy_accept and margin >= s.extraction.mapping_margin
+        # Auto-accept requires a strong match (fuzzy_accept), a clear margin over the
+        # runner-up, and a combined confidence at/above auto_accept_confidence; anything
+        # short of all three is routed to the review queue.
+        accept = (top.score >= s.extraction.fuzzy_accept
+                  and margin >= s.extraction.mapping_margin
+                  and top.score >= s.extraction.auto_accept_confidence)
         needs_review = not accept
         return MappingResult(
             canonical_key=top.canonical_key,

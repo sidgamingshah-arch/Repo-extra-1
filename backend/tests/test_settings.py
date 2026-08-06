@@ -16,32 +16,31 @@ def test_settings_requires_auth(anon_client):
     assert anon_client.get("/api/v1/settings").status_code == 401
 
 
-def test_settings_snapshot_exposes_config_without_secrets(client):
-    body = client.get("/api/v1/settings", headers={"X-Role": "analyst"}).json()
+def test_settings_snapshot_exposes_config_without_secrets(anon_client, auth):
+    body = anon_client.get("/api/v1/settings", headers=auth("analyst")).json()
     # LLM / OCR / extraction config from config.toml is surfaced for the frontend.
     assert body["llm"]["provider"] and body["llm"]["model"]
     assert "api_key_env" in body["llm"] and "key_configured" in body["llm"]
-    assert "provider" not in str(body["llm"].get("api_key", ""))  # no raw key present
+    assert "api_key" not in body["llm"]  # no raw key present
     assert body["ocr"]["engine"] and body["embeddings"]["model"]
     assert "fuzzy_accept" in body["extraction"]
     assert body["features"]["supported_locales"] == ["en", "zh", "ar", "fr"]
 
 
-def test_ui_localization_toggle_is_admin_only(client):
+def test_ui_localization_toggle_is_admin_only(anon_client, auth):
     # Non-admins cannot change settings.
-    assert client.patch("/api/v1/settings", json={"ui_localization": True},
-                        headers={"X-Role": "analyst"}).status_code == 403
-    assert client.patch("/api/v1/settings", json={"ui_localization": True},
-                        headers={"X-Role": "reviewer"}).status_code == 403
+    assert anon_client.patch("/api/v1/settings", json={"ui_localization": True},
+                             headers=auth("analyst")).status_code == 403
+    assert anon_client.patch("/api/v1/settings", json={"ui_localization": True},
+                             headers=auth("reviewer")).status_code == 403
 
     # Admin flips the interface-localization flag; the snapshot reflects it.
-    r = client.patch("/api/v1/settings", json={"ui_localization": True},
-                     headers={"X-Role": "admin"})
+    r = anon_client.patch("/api/v1/settings", json={"ui_localization": True}, headers=auth("admin"))
     assert r.status_code == 200 and r.json()["features"]["ui_localization"] is True
-    assert client.get("/api/v1/settings",
-                      headers={"X-Role": "analyst"}).json()["features"]["ui_localization"] is True
+    assert anon_client.get("/api/v1/settings",
+                           headers=auth("analyst")).json()["features"]["ui_localization"] is True
 
     # And back off.
-    client.patch("/api/v1/settings", json={"ui_localization": False}, headers={"X-Role": "admin"})
-    assert client.get("/api/v1/settings",
-                      headers={"X-Role": "admin"}).json()["features"]["ui_localization"] is False
+    anon_client.patch("/api/v1/settings", json={"ui_localization": False}, headers=auth("admin"))
+    assert anon_client.get("/api/v1/settings",
+                           headers=auth("admin")).json()["features"]["ui_localization"] is False

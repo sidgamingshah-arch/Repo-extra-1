@@ -19,10 +19,11 @@ api_prefix = "/api/v1"
 # Authentication / session
 # ---------------------------------------------------------------------------
 [auth]
-# Accept the X-Role request header as a dev/service credential (bypasses login).
-# Convenient for local dev, tests, and machine-to-machine calls. SET TO false IN
-# PRODUCTION so the only way in is a real session token.
-allow_role_header = true
+# Accept the X-Role request header as a dev/service credential, but ONLY when the
+# request has no valid session token (a real session always wins, so this can never
+# escalate or downgrade a logged-in user). OFF by default — turn it on explicitly for
+# local dev / CI / machine-to-machine calls; leave it off in production.
+allow_role_header = false
 
 # Passwordless quick-login for the seeded demo users (the "Sign in as …" buttons on
 # the login screen). SET TO false IN PRODUCTION — real users must supply a password.

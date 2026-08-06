@@ -24,11 +24,13 @@ settings PATCH, …) returning **403** when the role lacks the permission. The w
 **Identity — session login.** Identity is a **session bearer token** issued by
 `POST /auth/login` (see `backend/app/security/session.py` and
 [08-configuration-and-auth.md](08-configuration-and-auth.md)). `current_principal`
-resolves the caller from `Authorization: Bearer …` (or, only when
-`auth.allow_role_header` is enabled, from an `X-Role` dev/service header) and raises
-**401** when neither yields a principal. The permission model and its server-side
-enforcement are real; swapping the in-memory session store for a real IdP (OIDC/SAML)
-does not change the matrix.
+resolves the `Authorization: Bearer …` session **first and treats it as authoritative**
+(so a header can never escalate or downgrade a logged-in user), falling back to an
+`X-Role` dev/service header only when there is no valid session **and** only when
+`auth.allow_role_header` is enabled — which is **off by default**. It raises **401**
+when neither yields a principal. The permission model and its server-side enforcement
+are real; swapping the in-memory session store for a real IdP (OIDC/SAML) does not
+change the matrix.
 
 **Frontend** — the app renders a **login screen** until a session exists; `GET /me`
 drives everything after. The nav rail filters to `me.screens`; routes are guarded

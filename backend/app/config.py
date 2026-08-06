@@ -36,9 +36,10 @@ _CONFIG_TOML = Path(__file__).resolve().parent.parent / "config.toml"
 class AuthSettings(BaseModel):
     """Authentication / session behaviour."""
 
-    # Accept the X-Role header as a dev/service credential (bypasses login). Set False
-    # in production so a real session token is the only way in.
-    allow_role_header: bool = True
+    # Accept the X-Role header as a dev/service credential when there is no session.
+    # OFF by default (a real session token is the only way in); enable explicitly for
+    # local dev / CI only. A valid session always takes precedence over this header.
+    allow_role_header: bool = False
     # Passwordless quick-login for the seeded demo users. Set False in production.
     demo_mode: bool = True
     # Session token lifetime in minutes.

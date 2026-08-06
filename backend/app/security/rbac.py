@@ -99,9 +99,12 @@ def current_principal(
 ) -> Principal:
     """Resolve the caller from a session token, or the X-Role dev header if allowed.
 
-    Order: an explicit ``X-Role`` header wins (when ``auth.allow_role_header`` is on) so
-    tooling/tests can act as any role; otherwise a valid ``Authorization: Bearer`` token
-    is resolved to its session user. Raises 401 when neither yields a principal.
+    A valid ``Authorization: Bearer`` **session token is authoritative** and is checked
+    first, so a real session's role can never be downgraded or escalated by a header.
+    Only when there is no valid session is the ``X-Role`` header considered, and even
+    then solely as a dev/service credential when ``auth.allow_role_header`` is enabled
+    (it is **off by default** — turn it on explicitly for local dev / CI). Raises 401
+    when neither yields a principal.
     """
     from app.config import get_settings
 
@@ -109,11 +112,7 @@ def current_principal(
 
     settings = get_settings()
 
-    if x_role and settings.auth.allow_role_header:
-        role = parse_role(x_role)
-        return Principal(role=role, username=f"{role.value}@service",
-                         name=f"{role.value.title()} (service)", via="role-header")
-
+    # 1. Session token is authoritative.
     if authorization:
         scheme, _, token = authorization.partition(" ")
         if scheme.lower() == "bearer" and token.strip():
@@ -121,6 +120,12 @@ def current_principal(
             if sess is not None:
                 return Principal(role=sess.user.role, username=sess.user.username,
                                  name=sess.user.name, via="session")
+
+    # 2. Dev/service fallback — only when there is no valid session and it is enabled.
+    if x_role and settings.auth.allow_role_header:
+        role = parse_role(x_role)
+        return Principal(role=role, username=f"{role.value}@service",
+                         name=f"{role.value.title()} (service)", via="role-header")
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 

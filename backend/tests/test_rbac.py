@@ -34,15 +34,15 @@ def test_logout_invalidates_token(anon_client):
     assert anon_client.get("/api/v1/me", headers=hdr).status_code == 401
 
 
-def test_me_admin_sees_config(client):
-    me = client.get("/api/v1/me", headers={"X-Role": "admin"}).json()
+def test_me_admin_sees_config(auth, anon_client):
+    me = anon_client.get("/api/v1/me", headers=auth("admin")).json()
     assert me["role"] == "admin"
     assert "template" in me["screens"] and "settings" in me["screens"]
     assert "config:template" in me["permissions"] and "config:settings" in me["permissions"]
 
 
-def test_reviewer_scope_but_not_template(client):
-    me = client.get("/api/v1/me", headers={"X-Role": "reviewer"}).json()
+def test_reviewer_scope_but_not_template(auth, anon_client):
+    me = anon_client.get("/api/v1/me", headers=auth("reviewer")).json()
     assert "review" in me["screens"] and "template" not in me["screens"]
     assert "config:scope" in me["permissions"]
     assert "config:template" not in me["permissions"]
@@ -55,30 +55,40 @@ def test_demo_users_listed_without_secrets(anon_client):
     assert all("password" not in u for u in body["users"])
 
 
-def test_template_config_requires_admin(client, anon_client):
+def test_template_config_requires_admin(auth, anon_client):
     # Unauthenticated → 401; reviewer → 403; admin → 200.
     assert anon_client.get("/api/v1/projects/demo/template").status_code == 401
-    assert client.get("/api/v1/projects/demo/template", headers={"X-Role": "reviewer"}).status_code == 403
-    assert client.get("/api/v1/projects/demo/template", headers={"X-Role": "admin"}).status_code == 200
+    assert anon_client.get("/api/v1/projects/demo/template", headers=auth("reviewer")).status_code == 403
+    assert anon_client.get("/api/v1/projects/demo/template", headers=auth("admin")).status_code == 200
 
     tpl = {"template_key": "rbac_t", "name": "T", "statements": []}
     assert anon_client.post("/api/v1/templates", json={"definition": tpl}).status_code == 401
-    assert client.post("/api/v1/templates", json={"definition": tpl},
-                       headers={"X-Role": "admin"}).status_code == 201
+    assert anon_client.post("/api/v1/templates", json={"definition": tpl},
+                            headers=auth("admin")).status_code == 201
 
 
-def test_edit_allowed_for_working_roles(client):
+def test_edit_allowed_for_working_roles(auth, anon_client):
     # analyst may edit values (simple flow); the mutation is permitted.
-    r = client.patch("/api/v1/projects/demo/line-items/ppe",
-                     json={"value": 423180, "formula": ""}, headers={"X-Role": "analyst"})
+    r = anon_client.patch("/api/v1/projects/demo/line-items/ppe",
+                          json={"value": 423180, "formula": ""}, headers=auth("analyst"))
     assert r.status_code == 200
-    client.delete("/api/v1/projects/demo/line-items/ppe", headers={"X-Role": "analyst"})
+    anon_client.delete("/api/v1/projects/demo/line-items/ppe", headers=auth("analyst"))
 
 
-def test_role_header_ignored_when_disabled(anon_client, monkeypatch):
-    # With allow_role_header off, the X-Role dev header is not accepted → 401.
+def test_role_header_ignored_by_default(anon_client):
+    # allow_role_header is OFF by default → the X-Role dev header is not accepted (401).
+    assert anon_client.get("/api/v1/me", headers={"X-Role": "admin"}).status_code == 401
+
+
+def test_session_is_authoritative_over_role_header(auth, anon_client, monkeypatch):
+    # Even with the dev header enabled, a valid session cannot be escalated by X-Role:
+    # the analyst's bearer token wins over "X-Role: admin".
     from app.config import get_settings
 
-    s = get_settings()
-    monkeypatch.setattr(s.auth, "allow_role_header", False)
-    assert anon_client.get("/api/v1/me", headers={"X-Role": "admin"}).status_code == 401
+    monkeypatch.setattr(get_settings().auth, "allow_role_header", True)
+    hdr = {**auth("analyst"), "X-Role": "admin"}
+    me = anon_client.get("/api/v1/me", headers=hdr).json()
+    assert me["role"] == "analyst" and me["via"] == "session"
+    # The header only acts as a fallback when there is NO session.
+    me2 = anon_client.get("/api/v1/me", headers={"X-Role": "admin"}).json()
+    assert me2["role"] == "admin" and me2["via"] == "role-header"

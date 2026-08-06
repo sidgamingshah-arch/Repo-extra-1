@@ -5,7 +5,6 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { NavRail } from "./components/shell/NavRail";
 import { TopBar } from "./components/shell/TopBar";
 import Login from "./screens/Login";
-import { ApiError } from "./lib/api";
 import { useMe, useSettings } from "./lib/queries";
 import { SCREENS } from "./screens/config";
 import { useAppLocale, useUI } from "./store";
@@ -65,16 +64,9 @@ function Shell() {
 
 export default function App() {
   const token = useUI((s) => s.token);
-  const setToken = useUI((s) => s.setToken);
   const setUiLocalization = useUI((s) => s.setUiLocalization);
   const appLocale = useAppLocale();
-  const { data: me, isError, error } = useMe();
   const { data: settings } = useSettings();
-
-  // A rejected session (stale/expired token → 401) cleanly returns the user to login.
-  useEffect(() => {
-    if (error instanceof ApiError && error.status === 401) setToken(null);
-  }, [error, setToken]);
 
   // Keep the admin interface-localization flag in sync with the server.
   useEffect(() => {
@@ -89,9 +81,9 @@ export default function App() {
     document.documentElement.lang = appLocale;
   }, [appLocale]);
 
-  // Not logged in (no token, or the session was rejected) → show the login screen.
-  if (!token || isError || (token && me && !me.authenticated)) {
-    return <Login />;
-  }
+  // No session → login. A 401 from any query clears the token (see main.tsx's
+  // QueryCache handler), so an expired/rejected session lands here too. Transient
+  // non-401 errors keep the shell rather than bouncing an authenticated user out.
+  if (!token) return <Login />;
   return <Shell />;
 }
