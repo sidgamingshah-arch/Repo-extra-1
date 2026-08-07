@@ -86,11 +86,13 @@ function OutputRow({
   sel,
   onSelect,
   onEdit,
+  onOpenNote,
 }: {
   row: StatementRow;
   sel: string;
   onSelect: (id: string) => void;
   onEdit: (id: string) => void;
+  onOpenNote: (ref: string) => void;
 }) {
   const k = row.kind;
   const isSection = k === "section";
@@ -147,7 +149,11 @@ function OutputRow({
         </span>
         <StatusIcon status={row.status} />
       </div>
-      <div style={{ textAlign: "center" }}>{row.note ? <NoteChip>{row.note}</NoteChip> : null}</div>
+      <div style={{ textAlign: "center" }}>
+        {row.note ? (
+          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(row.note!); }}>{row.note}</NoteChip>
+        ) : null}
+      </div>
       {isItem ? (
         <span
           onClick={(e) => {
@@ -172,7 +178,11 @@ function OutputRow({
           {v1}
         </span>
       )}
-      <div style={{ textAlign: "center" }}>{note2 ? <NoteChip>{note2}</NoteChip> : null}</div>
+      <div style={{ textAlign: "center" }}>
+        {note2 ? (
+          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(note2!); }}>{note2}</NoteChip>
+        ) : null}
+      </div>
       <span style={{ textAlign: "right", fontFamily: font.mono, fontSize: 12, color: color.muted }}>{v2}</span>
       <div style={{ textAlign: "right" }}>
         {row.confidence ? <ConfidencePill cat={row.confidence.cat} /> : null}
@@ -292,8 +302,16 @@ function InspectorEditor({
 export default function WorkspaceScreen() {
   const navigate = useNavigate();
   const t = useT();
-  const { locale, dataset, setDataset, statement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing } =
+  const { locale, dataset, setDataset, statement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing, setNote } =
     useUI();
+  // Open a note reference: select it and jump to the All Notes screen.
+  const openNote = (ref: string) => {
+    const n = parseInt(ref, 10);
+    if (!Number.isNaN(n)) {
+      setNote(n);
+      navigate(SCREENS.notes.path);
+    }
+  };
   const { data, isPending } = useStatement(statement, dataset, locale);
   const editMut = useEditLineItem();
 
@@ -526,7 +544,7 @@ export default function WorkspaceScreen() {
           {/* scroll body */}
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {d.rows.map((r) => (
-              <OutputRow key={r.id} row={r} sel={sel} onSelect={selRow} onEdit={selForEdit} />
+              <OutputRow key={r.id} row={r} sel={sel} onSelect={selRow} onEdit={selForEdit} onOpenNote={openNote} />
             ))}
           </div>
 

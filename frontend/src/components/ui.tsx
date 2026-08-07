@@ -1,6 +1,6 @@
 /** Shared UI primitives. Screens compose these; they encode the handoff's exact
  * chrome (pills, confidence badges, chips, segmented toggles, cards, buttons). */
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, MouseEvent, ReactNode } from "react";
 
 import { color, confStyle, font, radius, shadow, type ConfCat } from "../theme";
 
@@ -81,11 +81,17 @@ export function ConfidencePill({ cat, label }: { cat: ConfCat; label?: string })
   );
 }
 
-/** Small indigo note-reference chip. */
-export function NoteChip({ children, onClick }: { children: ReactNode; onClick?: () => void }) {
+/** Small indigo note-reference chip. When given an onClick it renders as a hyperlink to
+ * the note (underlined, keyboard-activatable). */
+export function NoteChip({ children, onClick }: { children: ReactNode; onClick?: (e?: MouseEvent) => void }) {
+  const link = !!onClick;
   return (
     <span
       onClick={onClick}
+      role={link ? "link" : undefined}
+      tabIndex={link ? 0 : undefined}
+      title={link ? "Open note" : undefined}
+      onKeyDown={link ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick?.(); } } : undefined}
       style={{
         fontSize: 10,
         fontWeight: 600,
@@ -93,7 +99,9 @@ export function NoteChip({ children, onClick }: { children: ReactNode; onClick?:
         borderRadius: radius.chip,
         background: color.indigoTint2,
         color: color.indigo,
-        cursor: onClick ? "pointer" : "default",
+        cursor: link ? "pointer" : "default",
+        textDecoration: link ? "underline" : "none",
+        textUnderlineOffset: 2,
       }}
     >
       {children}
