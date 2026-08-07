@@ -164,7 +164,8 @@ function ModeOption({
 export default function UploadScreen() {
   const navigate = useNavigate();
   const t = useT();
-  const canTemplate = useCan("config:template");
+  const canTemplate = useCan("config:template"); // author/edit templates (admin)
+  const canSelectTemplate = useCan("template:select"); // choose an existing one (analyst)
   const canOntology = useCan("config:ontology");
   const extractMode = useUI((s) => s.extractMode);
   const setExtractMode = useUI((s) => s.setExtractMode);
@@ -259,20 +260,24 @@ export default function UploadScreen() {
               </div>
               <span style={{ fontSize: 11, color: color.indigo, fontWeight: 600 }}>{t("u.selected")}</span>
             </div>
-            {canTemplate && (
+            {(canSelectTemplate || canTemplate) && (
               <div style={{ display: "flex", gap: 8 }}>
+                {/* Analysts may choose an existing template… */}
                 <Button
                   variant="secondary"
                   style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
                 >
                   {t("u.chooseAnother")}
                 </Button>
-                <Button
-                  variant="ghost"
-                  style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
-                >
-                  {t("u.newTemplate")}
-                </Button>
+                {/* …but authoring a new template is an admin configuration action. */}
+                {canTemplate && (
+                  <Button
+                    variant="ghost"
+                    style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
+                  >
+                    {t("u.newTemplate")}
+                  </Button>
+                )}
               </div>
             )}
           </Card>

@@ -52,6 +52,11 @@ class FeatureSettings(BaseModel):
     # Localize the whole UI (not just extracted financial output). Startup default;
     # an admin can flip it at runtime from the Settings screen.
     ui_localization: bool = False
+    # Require a second-person reviewer SIGN-OFF on the analyst's output. When False the
+    # workflow closes at the analyst (they finalize & export directly). This governs the
+    # sign-off/hand-off only — the human-in-the-loop Review Queue (checks + low-confidence
+    # QA) stays available to the analyst either way. Admin-flippable at runtime.
+    review_required: bool = True
     default_output_locale: str = "en"
     supported_locales: list[str] = Field(default_factory=lambda: ["en", "zh", "ar", "fr"])
 

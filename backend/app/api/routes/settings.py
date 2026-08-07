@@ -18,7 +18,13 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.security import Permission, current_principal, require
-from app.services.settings_state import get_ui_localization, set_ui_localization
+from app.services.settings_state import (
+    get_review_required,
+    get_ui_localization,
+    set_llm_config,
+    set_review_required,
+    set_ui_localization,
+)
 
 router = APIRouter(tags=["settings"])
 
@@ -28,6 +34,7 @@ def _snapshot() -> dict:
     return {
         "features": {
             "ui_localization": get_ui_localization(),
+            "review_required": get_review_required(),
             "default_output_locale": s.features.default_output_locale,
             "supported_locales": s.features.supported_locales,
         },
@@ -37,7 +44,7 @@ def _snapshot() -> dict:
             "temperature": s.llm.temperature,
             "max_tokens": s.llm.max_tokens,
             "timeout_seconds": s.llm.timeout_seconds,
-            "base_url": s.llm.base_url or "(provider default)",
+            "base_url": s.llm.base_url,
             "api_key_env": s.llm.api_key_env,
             "key_configured": bool(os.environ.get(s.llm.api_key_env)),
         },
@@ -65,13 +72,31 @@ def get_settings_snapshot() -> dict:
     return _snapshot()
 
 
+class LlmConfigPatch(BaseModel):
+    # Non-secret LLM configuration. The API key is NEVER accepted here — only the name
+    # of the env var it is read from (api_key_env). Any extra fields are ignored.
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    timeout_seconds: int | None = None
+    api_key_env: str | None = None
+
+
 class SettingsPatch(BaseModel):
-    # Only runtime-mutable flags are accepted; the rest are config.toml / env driven.
+    # Runtime-mutable settings; the rest are config.toml / env driven.
     ui_localization: bool | None = None
+    review_required: bool | None = None
+    llm: LlmConfigPatch | None = None
 
 
 @router.patch("/settings", dependencies=[Depends(require(Permission.CONFIG_SETTINGS))])
 def update_settings(body: SettingsPatch) -> dict:
     if body.ui_localization is not None:
         set_ui_localization(body.ui_localization)
+    if body.review_required is not None:
+        set_review_required(body.review_required)
+    if body.llm is not None:
+        set_llm_config(**body.llm.model_dump(exclude_none=True))
     return _snapshot()

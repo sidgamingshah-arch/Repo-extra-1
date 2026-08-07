@@ -1,7 +1,7 @@
 /** React Query hooks — the data layer each screen consumes. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { Basis, Locale, StatementKey } from "../types";
+import type { Basis, Locale, SettingsPatch, StatementKey } from "../types";
 import { useUI } from "../store";
 import { api } from "./api";
 
@@ -50,11 +50,22 @@ export function usePatchSettings() {
   const qc = useQueryClient();
   const setUiLocalization = useUI((s) => s.setUiLocalization);
   return useMutation({
-    mutationFn: (body: { ui_localization?: boolean }) => api.patchSettings(body),
+    mutationFn: (body: SettingsPatch) => api.patchSettings(body),
     onSuccess: (res) => {
       setUiLocalization(res.features.ui_localization);
       qc.setQueryData(["settings"], res);
+      // Role gating (/me) depends on review_required; refresh it.
+      qc.invalidateQueries({ queryKey: ["me"] });
     },
+  });
+}
+
+/** Analyst hands the final output to the reviewer; refreshes the audit log. */
+export function useSubmitForReview() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.submitForReview(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["audit"] }),
   });
 }
 

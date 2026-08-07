@@ -66,7 +66,7 @@ export interface Commentary {
 export interface AuditEntry {
   run_id: string;
   entity: string;
-  action: "analysis" | "extraction";
+  action: "analysis" | "extraction" | "submit_review" | string;
   provider: string;
   model: string;
   input_tokens: number | null;
@@ -79,9 +79,27 @@ export interface AuditResponse {
   entries: AuditEntry[];
 }
 
+/** Editable (non-secret) LLM configuration fields — the API key is never sent. */
+export interface LlmConfigPatch {
+  provider?: string;
+  model?: string;
+  base_url?: string;
+  temperature?: number;
+  max_tokens?: number;
+  timeout_seconds?: number;
+  api_key_env?: string;
+}
+/** Runtime-mutable settings an admin can PATCH. */
+export interface SettingsPatch {
+  ui_localization?: boolean;
+  review_required?: boolean;
+  llm?: LlmConfigPatch;
+}
+
 export interface AppSettings {
   features: {
     ui_localization: boolean;
+    review_required: boolean;
     default_output_locale: string;
     supported_locales: string[];
   };

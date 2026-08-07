@@ -14,7 +14,6 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.security import (
-    SCREENS_BY_ROLE,
     Principal,
     Role,
     authenticate,
@@ -22,7 +21,8 @@ from app.security import (
     current_principal,
     demo_users,
     destroy_session,
-    permissions_for,
+    effective_permissions,
+    screens_for,
 )
 
 router = APIRouter(tags=["auth"])
@@ -78,6 +78,6 @@ def me(principal: Principal = Depends(current_principal)) -> dict:
         "via": principal.via,
         "role": role.value,
         "roles": [r.value for r in Role],
-        "permissions": sorted(p.value for p in permissions_for(role)),
-        "screens": SCREENS_BY_ROLE.get(role, []),
+        "permissions": sorted(p.value for p in effective_permissions(role)),
+        "screens": screens_for(role),
     }

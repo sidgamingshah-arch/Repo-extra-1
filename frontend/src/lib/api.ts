@@ -56,6 +56,7 @@ import type {
   PagesResponse,
   Project,
   ReviewResponse,
+  SettingsPatch,
   SourceDoc,
   StatementKey,
   StatementResponse,
@@ -75,8 +76,10 @@ export const api = {
   me: () => req<Me>(`/me`),
   // --- settings ---
   settings: () => req<AppSettings>(`/settings`),
-  patchSettings: (body: { ui_localization?: boolean }) =>
+  patchSettings: (body: SettingsPatch) =>
     req<AppSettings>(`/settings`, { method: "PATCH", body: JSON.stringify(body) }),
+  submitForReview: () =>
+    req<{ ok: boolean; entry: AuditEntry }>(`/projects/${PROJECT}/submit-review`, { method: "POST" }),
   commentary: (locale: Locale = "en") =>
     req<Commentary>(`/projects/${PROJECT}/commentary?locale=${locale}`),
   audit: () => req<AuditResponse>(`/projects/${PROJECT}/audit`),

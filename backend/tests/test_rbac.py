@@ -41,11 +41,27 @@ def test_me_admin_sees_config(auth, anon_client):
     assert "config:template" in me["permissions"] and "config:settings" in me["permissions"]
 
 
-def test_reviewer_scope_but_not_template(auth, anon_client):
+def test_reviewer_finalizes_but_does_not_configure(auth, anon_client):
     me = anon_client.get("/api/v1/me", headers=auth("reviewer")).json()
     assert "review" in me["screens"] and "template" not in me["screens"]
-    assert "config:scope" in me["permissions"]
+    # Reviewer reviews & finalizes and can deliver, but does no configuration.
+    assert "review:finalize" in me["permissions"]
+    assert "export:run" in me["permissions"]
     assert "config:template" not in me["permissions"]
+    assert "config:scope" not in me["permissions"]
+    assert "documents:manage" not in me["permissions"]
+
+
+def test_analyst_runs_pipeline_and_submits(auth, anon_client):
+    me = anon_client.get("/api/v1/me", headers=auth("analyst")).json()
+    for p in ("documents:manage", "template:select", "pipeline:run", "review:submit"):
+        assert p in me["permissions"], p
+    # The human-in-the-loop Review Queue (QA checks + low-confidence) stays available to
+    # the analyst regardless of the reviewer sign-off flag.
+    for scr in ("upload", "scope", "workspace", "review", "export"):
+        assert scr in me["screens"], scr
+    # With review required (default), the analyst submits for review — cannot deliver.
+    assert "export:run" not in me["permissions"]
 
 
 def test_demo_users_listed_without_secrets(anon_client):

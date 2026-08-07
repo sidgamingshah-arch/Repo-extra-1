@@ -296,6 +296,23 @@ def run_project_analysis(project_id: str) -> dict:
     return {"entry": entry.to_dict(), "result": result.model_dump(mode="json")}
 
 
+@router.post("/{project_id}/submit-review",
+             dependencies=[Depends(require(Permission.REVIEW_SUBMIT))])
+def submit_for_review(project_id: str) -> dict:
+    """Analyst hands the final output to the reviewer. Recorded to the audit log.
+
+    The REVIEW_SUBMIT permission is only granted to the analyst while the review step
+    is enabled (see security.effective_permissions), so this 403s once review is off."""
+    from app.services import audit as audit_svc
+
+    entity = DEMO["project"]["entity"]
+    entry = audit_svc.record(project_id, audit_svc.AuditEntry(
+        run_id=audit_svc.make_run_id(entity), entity=entity, action="submit_review",
+        provider="—", model="—", input_tokens=None, output_tokens=None, status="succeeded",
+    ))
+    return {"ok": True, "entry": entry.to_dict()}
+
+
 class ExportBody(BaseModel):
     format: str = "excel"
     basis: str = "consolidated"

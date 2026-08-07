@@ -43,6 +43,12 @@ session_ttl_minutes = 480
 # startup default.
 ui_localization = false
 
+# Require a second-person reviewer sign-off on the analyst's output. When false the
+# workflow closes at the analyst level (they finalize & export directly). This governs
+# the sign-off/hand-off only — the human-in-the-loop Review Queue (checks + low-confidence
+# QA) stays available to the analyst regardless. Startup default; admin-flippable.
+review_required = true
+
 # Default output language for extracted financial data, and the set of languages the
 # app offers. Adding a language is a data/asset change, not a code change.
 default_output_locale = "en"

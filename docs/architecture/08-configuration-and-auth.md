@@ -85,6 +85,14 @@ in the system prompt, Pydantic-validated — shared in `adapters/_structured.py`
 input/output token usage in `LlmMeta` for the audit log. Keys are read from the environment
 at call time, never from `config.toml`.
 
+**Editable at runtime.** An admin can change the LLM configuration (provider, model,
+base_url, temperature, max_tokens, timeout, and the *name* of the key's env var) live from
+the Settings screen — `PATCH /settings {"llm": {…}}`. `settings_state.set_llm_config`
+applies the edit onto the process-wide `Settings.llm` so the provider registry and adapters
+pick it up immediately (in-memory, per-process; resets on restart). The **API key itself is
+never accepted from the UI** — only `api_key_env` is editable; the snapshot reports whether
+that env var is currently populated (`key_configured`).
+
 ## Frontend flow
 
 `frontend/src/lib/api.ts` sends the stored bearer token on every request and exposes

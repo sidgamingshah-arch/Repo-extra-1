@@ -31,6 +31,9 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.footer.notes": "notes",
     "e.footer.flagged": "flagged",
     "e.download": "Download",
+    "e.sendForReview": "Send for review",
+    "e.sending": "Sending…",
+    "e.submitted": "Sent for review",
   },
   zh: {
     "e.title": "导出",
@@ -62,6 +65,9 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.footer.notes": "条附注",
     "e.footer.flagged": "项标记",
     "e.download": "下载",
+    "e.sendForReview": "提交审核",
+    "e.sending": "提交中…",
+    "e.submitted": "已提交审核",
   },
   ar: {
     "e.title": "تصدير",
@@ -93,6 +99,9 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.footer.notes": "إيضاح",
     "e.footer.flagged": "موسوم",
     "e.download": "تنزيل",
+    "e.sendForReview": "إرسال للمراجعة",
+    "e.sending": "جارٍ الإرسال…",
+    "e.submitted": "أُرسل للمراجعة",
   },
   fr: {
     "e.title": "Exporter",
@@ -124,5 +133,8 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.footer.notes": "notes",
     "e.footer.flagged": "signalés",
     "e.download": "Télécharger",
+    "e.sendForReview": "Envoyer en revue",
+    "e.sending": "Envoi…",
+    "e.submitted": "Envoyé en revue",
   },
 };
