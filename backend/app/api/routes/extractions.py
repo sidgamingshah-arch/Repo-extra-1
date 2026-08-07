@@ -16,10 +16,46 @@ from app.api.deps import db, object_store, settings as get_settings_dep
 from app.config import Settings
 from app.ports.object_store import LocalObjectStore
 from app.schemas.loader import load_ontology
+from app.security import Permission, require
 from app.services import audit as audit_svc
 from app.services.documents import run_extraction
 
 router = APIRouter(tags=["extractions"])
+
+
+def _serialize_rows(doc_model) -> list[dict]:
+    """Extracted line items in a view-friendly shape, each value with its provenance
+    (sheet+cell for Excel, page+bbox for PDF) so the UI can show click-to-source."""
+    rows = []
+    for li in doc_model.line_items:
+        values = []
+        for ev in li.values.values():
+            p = ev.provenance
+            prov = None
+            if p is not None:
+                prov = {
+                    "source_kind": p.source_kind,
+                    "page_index": p.page_index,
+                    "sheet": p.sheet, "cell": p.cell, "label_cell": p.label_cell,
+                    "bbox": (p.bbox.model_dump() if p.bbox is not None else None),
+                    "text_snippet": p.text_snippet,
+                }
+            values.append({
+                "period_label": ev.period_label,
+                "value": (str(ev.value) if ev.value is not None else None),
+                "provenance": prov,
+            })
+        rows.append({
+            "source_label": li.source_label,
+            "canonical_key": li.canonical_key,
+            "note": li.note_number,
+            "role": li.role.value,
+            "mapping_method": li.confidence.method,
+            "mapping_confidence": li.confidence.mapping,
+            "flags": list(li.confidence.flags),
+            "values": values,
+        })
+    return rows
 
 
 class ExtractionOptions(BaseModel):
@@ -36,7 +72,8 @@ class ExtractionOptions(BaseModel):
     entity: str | None = None
 
 
-@router.post("/documents/{document_id}/extractions", status_code=202)
+@router.post("/documents/{document_id}/extractions", status_code=202,
+             dependencies=[Depends(require(Permission.PIPELINE_RUN))])
 def start_extraction(
     document_id: str,
     body: ExtractionOptions,
@@ -61,6 +98,7 @@ def start_extraction(
 
     entity = body.entity or Path(doc.filename or "").stem or "document"
     run_id = audit_svc.make_run_id(entity)
+    rows = _serialize_rows(doc_model)
 
     run = ExtractionRun(
         id=run_id,
@@ -73,9 +111,11 @@ def start_extraction(
         result={
             "locale": doc_model.locale,
             "format": doc_model.fmt.value,
+            "filename": doc.filename,
             "pages": [p.model_dump(mode="json") for p in doc_model.pages],
-            "line_items": len(doc_model.line_items),
+            "line_item_count": len(doc_model.line_items),
             "notes": len(doc_model.notes),
+            "rows": rows,
         },
         logs="\n".join(ctx.logs),
     )
@@ -94,7 +134,7 @@ def start_extraction(
         status="succeeded",
     ))
 
-    return {"run_id": run.id, "status": run.status,
+    return {"run_id": run.id, "status": run.status, "result": run.result,
             "stream_url": f"/api/v1/extractions/{run.id}/stream"}
 
 

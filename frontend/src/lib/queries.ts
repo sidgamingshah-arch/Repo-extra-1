@@ -88,6 +88,17 @@ export const useProject = () => useQuery({ queryKey: ["project"], queryFn: api.p
 export const useProjectLoaded = () => useProject().data?.loaded ?? false;
 export const useDocuments = () => useQuery({ queryKey: ["documents"], queryFn: api.documents });
 
+/** Run (and fetch) the extraction for one uploaded document — its real line items with
+ * provenance. POSTs once per document and caches the result. */
+export const useExtraction = (documentId: string | undefined) =>
+  useQuery({
+    queryKey: ["extraction", documentId],
+    queryFn: () => api.runExtraction(documentId as string),
+    enabled: !!documentId,
+    staleTime: Infinity,
+    retry: false,
+  });
+
 /** Upload a source document; refreshes the documents list and project. */
 export function useUploadDocument() {
   const qc = useQueryClient();

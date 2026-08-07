@@ -38,10 +38,18 @@ test("note references are hyperlinks to the All Notes screen", async ({ page }) 
   await expect(page).toHaveURL(/\/notes/);
 });
 
-test("analyst can upload a document via browse", async ({ page }) => {
+test("analyst uploads a document and views its extracted data with provenance", async ({ page }) => {
   await loginAs(page, "analyst");
   await page.goto("/upload", DCL);
   // The dropzone's hidden file input is real (browse is clickable).
   await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.pdf");
   await expect(page.getByText("sample.pdf")).toBeVisible({ timeout: 15_000 });
+
+  // Open the real extraction view for the uploaded document.
+  await page.getByRole("button", { name: "View →" }).first().click();
+  await expect(page).toHaveURL(/\/documents\//);
+  await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
+  // Real extracted line item + click-to-source provenance from the native PDF.
+  await expect(page.getByText("Trade receivables").first()).toBeVisible();
+  await expect(page.getByText(/^p\.1/).first()).toBeVisible();
 });

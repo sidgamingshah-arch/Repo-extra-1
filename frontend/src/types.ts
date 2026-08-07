@@ -211,6 +211,45 @@ export interface ProjectResponse {
   loaded: boolean;
 }
 
+/** Provenance of an extracted value — sheet+cell (Excel) or page+bbox (PDF). */
+export interface ExtractionProvenance {
+  source_kind: string;
+  page_index: number;
+  sheet: string | null;
+  cell: string | null;
+  label_cell: string | null;
+  bbox: { x0: number; y0: number; x1: number; y1: number } | null;
+  text_snippet: string | null;
+}
+export interface ExtractionValue {
+  period_label: string;
+  value: string | null;
+  provenance: ExtractionProvenance | null;
+}
+export interface ExtractionRow {
+  source_label: string;
+  canonical_key: string | null;
+  note: string | null;
+  role: string;
+  mapping_method: string | null;
+  mapping_confidence: number | null;
+  flags: string[];
+  values: ExtractionValue[];
+}
+export interface ExtractionResult {
+  locale: string;
+  format: string;
+  filename: string;
+  line_item_count: number;
+  notes: number;
+  rows: ExtractionRow[];
+}
+export interface ExtractionRunResponse {
+  run_id: string;
+  status: string;
+  result: ExtractionResult;
+}
+
 export interface IntegrityStat {
   label: string;
   value: string;

@@ -27,6 +27,21 @@ def test_native_pdf_extracts_values_with_bbox_provenance():
     assert tr.note_number == "15"                           # "Note 15" captured, not a value
 
 
+def test_extraction_api_returns_rows_with_provenance(client):
+    """Upload → run extraction → the run result carries view-ready rows + provenance."""
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}
+    ).json()["id"]
+    r = client.post(f"/api/v1/documents/{doc_id}/extractions", json={})
+    assert r.status_code == 202, r.text
+    rows = r.json()["result"]["rows"]
+    assert rows and any(row["values"] for row in rows)
+    tr = next(row for row in rows if "Trade receivables" in row["source_label"])
+    prov = tr["values"][0]["provenance"]
+    assert prov["source_kind"] == "native" and prov["page_index"] == 0 and prov["bbox"]
+    assert tr["note"] == "15"
+
+
 def test_scanned_page_routes_through_ocr_port():
     """A scanned page is rasterized and sent to the configured OCR provider; its words
     (already normalized) reconstruct into line items with source_kind 'ocr'."""

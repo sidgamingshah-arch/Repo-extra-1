@@ -25,7 +25,7 @@ function tagColors(tag: SourceDoc["tag"]): { bg: string; fg: string } {
   return { bg: color.indigoTint2, fg: color.indigo };
 }
 
-function DocRow({ doc }: { doc: SourceDoc }) {
+function DocRow({ doc, onView }: { doc: SourceDoc; onView?: () => void }) {
   const ext = extColors(doc.ext);
   const tag = tagColors(doc.tag);
   return (
@@ -73,6 +73,17 @@ function DocRow({ doc }: { doc: SourceDoc }) {
       >
         {doc.tag}
       </span>
+      {onView && (
+        <button
+          onClick={onView}
+          style={{
+            fontSize: 11, fontWeight: 600, color: color.indigo, background: "none",
+            border: "none", cursor: "pointer", whiteSpace: "nowrap", padding: 0,
+          }}
+        >
+          View →
+        </button>
+      )}
     </div>
   );
 }
@@ -271,7 +282,11 @@ export default function UploadScreen() {
             )}
           </div>
           {documents.map((d) => (
-            <DocRow key={d.name} doc={d} />
+            <DocRow
+              key={d.id ?? d.name}
+              doc={d}
+              onView={d.id ? () => navigate(`/documents/${d.id}`) : undefined}
+            />
           ))}
         </Card>
 

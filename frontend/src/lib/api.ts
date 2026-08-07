@@ -46,6 +46,7 @@ import type {
   Basis,
   Commentary,
   DemoUser,
+  ExtractionRunResponse,
   ExportFmt,
   IntegrityResponse,
   Locale,
@@ -87,6 +88,11 @@ export const api = {
     req<{ entry: AuditEntry; result: unknown }>(`/projects/${PROJECT}/analysis`, { method: "POST" }),
   project: () => req<ProjectResponse>(`/projects/${PROJECT}`),
   documents: () => req<{ documents: SourceDoc[] }>(`/documents`),
+  runExtraction: (documentId: string) =>
+    req<ExtractionRunResponse>(`/documents/${documentId}/extractions`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
   uploadDocument: async (file: File): Promise<{ id: string; page_count: number; integrity_report: unknown }> => {
     const fd = new FormData();
     fd.append("file", file);
