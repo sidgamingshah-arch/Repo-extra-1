@@ -32,17 +32,41 @@ class MapOntologyStage:
 
         matcher = OntologyMatcher(ontology, locale=doc.locale, settings=ctx.settings,
                                   llm_provider=llm_provider)
-        ctx.log(f"map_ontology:strategy={'llm_description' if matcher.llm_enabled else 'deterministic'}")
-        mapped = 0
-        for li in doc.line_items:
-            result = matcher.match(li.source_label)
-            if result.canonical_key:
+        scope = ctx.settings.extraction.mapping_scope
+        ctx.log(f"map_ontology:strategy={'llm_description' if matcher.llm_enabled else 'deterministic'}"
+                f" scope={scope}")
+
+        def _apply(li, result) -> bool:
+            if result and result.canonical_key:
                 li.canonical_key = result.canonical_key
                 li.confidence.mapping = result.confidence
                 li.confidence.method = result.method.value
+                if result.allocation_status:
+                    li.confidence.flags.append(f"alloc:{result.allocation_status}")
                 if result.needs_review:
                     li.confidence.flags.append("low_mapping_confidence")
-                mapped += 1
+                return True
+            return False
+
+        mapped = 0
+        if scope == "per_statement":
+            # One grounded LLM call per statement — grouped by source sheet/page so
+            # cross-line context (containment, residual, "Others") is available.
+            by_group: dict[int, list] = {}
+            for li in doc.line_items:
+                pg = next((ev.provenance.page_index for ev in li.values.values()
+                           if ev.provenance is not None), 0)
+                by_group.setdefault(pg, []).append(li)
+            by_id = {str(li.id): li for li in doc.line_items}
+            for group in by_group.values():
+                results = matcher.match_batch([(str(li.id), li.source_label) for li in group])
+                for iid, res in results.items():
+                    if _apply(by_id[iid], res):
+                        mapped += 1
+        else:
+            for li in doc.line_items:
+                if _apply(li, matcher.match(li.source_label)):
+                    mapped += 1
 
         # Roll the mapper's LLM usage up onto the context for the audit log.
         ctx.llm_input_tokens += matcher.usage["input_tokens"]

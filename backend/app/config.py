@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from pydantic_settings import (
@@ -109,6 +110,11 @@ class ExtractionSettings(BaseModel):
     # candidates. Set false to force the deterministic ensemble even with an LLM present.
     llm_mapping: bool = True
     llm_candidate_cap: int = 40   # max candidate concepts shown to the LLM per line
+    # Mapping granularity. "per_statement" (default, most accurate) maps all of a
+    # statement's lines in ONE LLM call so cross-line judgements — parent/child
+    # containment, residualisation, "Others" handling — have full context. "per_line"
+    # maps each line independently (cheaper, less context-aware).
+    mapping_scope: Literal["per_statement", "per_line"] = "per_statement"
 
 
 class Settings(BaseSettings):

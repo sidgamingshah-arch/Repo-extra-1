@@ -53,15 +53,26 @@ class Transform(BaseModel):
 
 
 class Provenance(BaseModel):
-    """Where an extracted value came from — page + normalized bbox."""
+    """Where an extracted value came from.
+
+    Paginated sources (PDF/scans) anchor on ``page_index`` + a normalized ``bbox``.
+    Spreadsheet sources (Excel) have no pixel geometry, so ``bbox`` is omitted and the
+    exact origin is the ``sheet`` + ``cell`` reference (e.g. sheet "P&L", cell "C14").
+    Either way the value is anchored to a precise, verifiable source location — which is
+    what lets the LLM *reference* facts by id while the value + provenance stay
+    deterministic (see docs/architecture: grounded extraction)."""
 
     document_id: str | None = None
     page_index: int
-    bbox: BBox
+    bbox: BBox | None = None
     label_bbox: BBox | None = None
     value_bbox: BBox | None = None
+    # Spreadsheet-cell provenance (non-paginated sources).
+    sheet: str | None = None
+    cell: str | None = None          # A1-style value cell, e.g. "C14"
+    label_cell: str | None = None    # A1-style cell of the row label
     text_snippet: str | None = None
-    source_kind: str = "native"      # native | ocr
+    source_kind: str = "native"      # native | ocr | spreadsheet
     producer: str | None = None      # "<stage>:<adapter>@<version>"
     transforms: list[Transform] = Field(default_factory=list)
 
@@ -71,8 +82,10 @@ class Provenance(BaseModel):
         Keeps this provenance's page/bbox as the anchor and widens the bbox to cover
         all contributing regions on the same page.
         """
+        if self.bbox is None:
+            return self
         box = self.bbox
         for o in others:
-            if o.page_index == self.page_index:
+            if o.page_index == self.page_index and o.bbox is not None:
                 box = box.union(o.bbox)
         return self.model_copy(update={"bbox": box})

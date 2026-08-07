@@ -50,6 +50,20 @@ class LlmMappingDecision(BaseModel):
     reason: str = Field(default="", description="brief justification grounded in meaning/criteria")
 
 
+class LlmBatchItem(BaseModel):
+    item_id: str
+    canonical_key: str = Field(description="chosen key, or \"\" if none fits")
+    confidence: float = Field(ge=0, le=1)
+    allocation_status: str = ""
+
+
+class LlmBatchDecision(BaseModel):
+    """Per-statement decision over many captions at once, so cross-line judgements
+    (parent/child containment, residualisation, 'Others') have full context."""
+
+    mappings: list[LlmBatchItem] = Field(default_factory=list)
+
+
 _LLM_SYSTEM = (
     "You map a single raw line-item caption from a financial statement to ONE canonical "
     "concept, by MEANING. You are given the caption (with any context) and candidate "
@@ -364,3 +378,58 @@ class OntologyMatcher:
             candidates=ranked[:5], needs_review=not accept, scores=scores,
             allocation_status="direct_exclusive" if accept else "unmapped_review",
         )
+
+    def match_batch(self, items: list[tuple[str, str]]) -> dict[str, MappingResult]:
+        """Per-statement mapping: decide ALL captions in one grounded LLM call so
+        cross-line judgements (containment, residual, 'Others') have full context. The
+        model references the provided item_ids and candidate keys — it never invents a
+        value; values/provenance stay on the deterministic LineItems. Falls back to
+        per-line matching for anything the batch call can't resolve, or entirely when no
+        LLM is configured.
+
+        ``items`` is a list of (item_id, source_label)."""
+        if not self.llm_enabled or not items:
+            return {iid: self.match(label) for iid, label in items}
+
+        candidates = self._concept_payload(self._extractable_keys())
+        user = json.dumps({
+            "instruction": "Map each source_item to exactly one candidate canonical_key by "
+                           "meaning, applying the policies. Reference item_id and canonical_key; "
+                           "do not output values.",
+            "source_items": [{"item_id": iid, "caption": label} for iid, label in items],
+            "candidates": candidates,
+        }, ensure_ascii=False, indent=2)
+        try:
+            decision, meta = self.llm_provider.complete_structured(
+                system=self._system,
+                messages=[{"role": "user", "content": user}],
+                response_schema=LlmBatchDecision,
+                max_tokens=4096,
+            )
+        except Exception:
+            return {iid: self.match(label) for iid, label in items}
+        self.usage["calls"] += 1
+        self.usage["input_tokens"] += int(meta.get("input_tokens") or 0)
+        self.usage["output_tokens"] += int(meta.get("output_tokens") or 0)
+        self.usage["model"] = meta.get("model", self.usage["model"])
+
+        acc = self.settings.extraction.auto_accept_confidence
+        out: dict[str, MappingResult] = {}
+        for d in decision.mappings:
+            key = (d.canonical_key or "").strip()
+            if not key or key not in self._by_key:
+                continue
+            conf = max(0.0, min(1.0, d.confidence))
+            alloc = (d.allocation_status or "").strip() or (
+                "direct_exclusive" if self._by_key[key].value_scope == "exclusive_leaf" else None)
+            out[d.item_id] = MappingResult(
+                canonical_key=key, method=MappingMethod.LLM, confidence=conf,
+                candidates=[Candidate(key, MappingMethod.LLM, conf)],
+                needs_review=conf < acc, scores={"llm": conf},
+                allocation_status=alloc, agreement=["llm"],
+            )
+        # Per-line fallback for any items the batch omitted.
+        for iid, label in items:
+            if iid not in out:
+                out[iid] = self.match(label)
+        return out

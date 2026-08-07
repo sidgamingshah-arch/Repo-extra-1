@@ -70,6 +70,28 @@ extraction run's audit-log entry. Winning method, confidence and per-strategy sc
 stored on the confidence vector; anything short of a confident, corroborated decision goes
 to review, not a guess.
 
+## Values & provenance — grounded extraction (LLM references, never transcribes)
+
+Value-level provenance (click-to-source) is kept trustworthy **even with the LLM at the
+centre** by a simple rule: **the LLM references facts, it never emits values.**
+
+1. The source is parsed deterministically into atomic facts, each with its exact origin.
+   Excel (`services/excel_extract.py`, `stages/extract.py`) reads every numeric row into a
+   `LineItem` whose `ExtractedValue.provenance` points at the precise **sheet + cell**
+   (e.g. `P&L!C14`) — no OCR, no LLM. (Native/scanned PDF fills the same model with
+   page + normalized bbox.)
+2. Mapping then decides *which canonical concept* each fact is, by meaning. In
+   `per_statement` mode (`extraction.mapping_scope`, the default) the LLM sees the whole
+   statement's captions **by `item_id`** plus the candidate concepts + policies, and
+   returns `{item_id → canonical_key, allocation_status, confidence}`. It references ids
+   and keys; the **numbers and their sheet/cell (or page/bbox) come from step 1**, so a
+   value can always be traced back and verified. `per_line` maps each caption
+   independently (less context, cheaper).
+
+This is how accuracy (full-statement LLM context for containment/residual/"Others") and
+hard value-level provenance coexist: the model does the semantics, the deterministic layer
+owns the numbers and their location.
+
 ## Adapter ports
 
 `ports/`: `OcrProvider`, `TableStructureProvider`, `LlmProvider` (structured JSON,

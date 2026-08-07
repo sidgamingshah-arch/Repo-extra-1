@@ -6,7 +6,9 @@ import json
 from app.config import get_settings
 from app.core.models.enums import MappingMethod
 from app.schemas.ontology import OntologyDefinition, OntologyMapping
-from app.services.mapping import LlmMappingDecision, OntologyMatcher
+from app.services.mapping import (
+    LlmBatchDecision, LlmBatchItem, LlmMappingDecision, OntologyMatcher,
+)
 
 
 def _ontology() -> OntologyDefinition:
@@ -120,3 +122,29 @@ def test_llm_abstains_falls_back_to_deterministic():
     res2 = m.match("Cash & cash equivalents")
     assert res.canonical_key == "cash_and_equivalents"
     assert res2.canonical_key == "cash_and_equivalents"  # fuzzy fallback still works
+
+
+def test_per_statement_batch_maps_all_lines_in_one_call():
+    """per_statement mapping decides many captions in ONE grounded call; the LLM
+    references item_ids/keys (never values), and unlisted items fall back per-line."""
+    calls = {"n": 0}
+
+    class _BatchLlm:
+        id = "fake"
+
+        def complete_structured(self, *, system, messages, response_schema, temperature=0.0, max_tokens=2048):
+            calls["n"] += 1
+            return LlmBatchDecision(mappings=[
+                LlmBatchItem(item_id="a", canonical_key="trade_receivables", confidence=0.9),
+                LlmBatchItem(item_id="b", canonical_key="cash_and_equivalents", confidence=0.95),
+            ]), {"model": "fake-llm", "input_tokens": 300, "output_tokens": 40}
+
+    m = OntologyMatcher(_ontology(), settings=get_settings(), llm_provider=_BatchLlm())
+    res = m.match_batch([("a", "Amounts due from customers"),
+                         ("b", "Cash at bank and in hand"),
+                         ("c", "Trade receivables")])   # exact alias → per-line fallback
+    assert calls["n"] == 1                               # ONE call for the whole statement
+    assert res["a"].canonical_key == "trade_receivables"
+    assert res["b"].canonical_key == "cash_and_equivalents"
+    assert res["c"].canonical_key == "trade_receivables"
+    assert m.usage["input_tokens"] == 300
