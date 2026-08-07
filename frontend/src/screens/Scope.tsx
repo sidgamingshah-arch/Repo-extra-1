@@ -2,8 +2,9 @@
 import { useNavigate } from "react-router-dom";
 
 import { Button, Toggle } from "../components/ui";
+import { EmptyState } from "../components/EmptyState";
 import { SCREENS } from "./config";
-import { usePages } from "../lib/queries";
+import { usePages, useProjectLoaded } from "../lib/queries";
 import { useAppLocale } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
@@ -96,8 +97,10 @@ export default function ScopeScreen() {
   const t = useT();
   const locale = useAppLocale();
   const canScope = useCan("config:scope");
+  const loaded = useProjectLoaded();
   const { data, isPending } = usePages(locale);
 
+  if (!loaded) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>

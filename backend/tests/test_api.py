@@ -27,6 +27,23 @@ def test_upload_document_returns_integrity_and_pages(client):
     assert r2.json()["duplicate_of"] is not None
 
 
+def test_documents_upload_gated_and_listed(anon_client, auth):
+    pdf_bytes = make_native_pdf()
+    # Analyst may upload (documents:manage) …
+    r = anon_client.post("/api/v1/documents", files={"file": ("g.pdf", pdf_bytes, "application/pdf")},
+                         headers=auth("analyst"))
+    assert r.status_code == 201, r.text
+    # … but a reviewer may not.
+    r2 = anon_client.post("/api/v1/documents", files={"file": ("g2.pdf", pdf_bytes, "application/pdf")},
+                          headers=auth("reviewer"))
+    assert r2.status_code == 403
+    # The uploaded document shows up in the real documents list.
+    listed = anon_client.get("/api/v1/documents", headers=auth("analyst")).json()["documents"]
+    assert any(d["name"] == "g.pdf" and d["ext"] == "PDF" for d in listed)
+    # Listing requires a session.
+    assert anon_client.get("/api/v1/documents").status_code == 401
+
+
 def test_template_and_ontology_create_and_language_parity(client):
     template = {
         "template_key": "api_tpl",

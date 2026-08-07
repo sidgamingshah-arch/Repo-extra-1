@@ -72,3 +72,34 @@ def test_admin_edits_llm_config_key_never_accepted(client):
 def test_llm_config_edit_requires_admin(auth, anon_client):
     r = anon_client.patch("/api/v1/settings", json={"llm": {"model": "x"}}, headers=auth("analyst"))
     assert r.status_code == 403
+
+
+_SEED_RUN_ID = "reliance-industries-ltd-20250731-094212"  # a seeded audit entry
+
+
+def test_greenfield_empty_until_sample_loaded(client, auth, anon_client):
+    """Default is greenfield: the project reports loaded=false and screens get empty data.
+    An admin loading the sample repopulates everything."""
+    from app.services import settings_state
+
+    try:
+        settings_state.set_seed_demo(False)
+        hdr = auth("admin")
+        proj = anon_client.get("/api/v1/projects/demo", headers=hdr).json()
+        assert proj["loaded"] is False
+        assert proj["project"]["title"] == "No project yet" and proj["documents"] == []
+        assert anon_client.get("/api/v1/projects/demo/statements/balance_sheet", headers=hdr).json()["rows"] == []
+        assert anon_client.get("/api/v1/projects/demo/notes", headers=hdr).json()["notes"] == []
+        green_audit = anon_client.get("/api/v1/projects/demo/audit", headers=hdr).json()["entries"]
+        assert all(e["run_id"] != _SEED_RUN_ID for e in green_audit)  # no seeded rows
+
+        # Admin loads the sample project at runtime.
+        r = client.patch("/api/v1/settings", json={"seed_demo": True})
+        assert r.status_code == 200 and r.json()["features"]["seed_demo"] is True
+        proj2 = anon_client.get("/api/v1/projects/demo", headers=hdr).json()
+        assert proj2["loaded"] is True and proj2["project"]["title"]
+        assert len(anon_client.get("/api/v1/projects/demo/statements/balance_sheet", headers=hdr).json()["rows"]) > 0
+        loaded_audit = anon_client.get("/api/v1/projects/demo/audit", headers=hdr).json()["entries"]
+        assert any(e["run_id"] == _SEED_RUN_ID for e in loaded_audit)
+    finally:
+        settings_state.set_seed_demo(True)

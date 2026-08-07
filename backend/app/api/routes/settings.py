@@ -20,9 +20,11 @@ from app.config import get_settings
 from app.security import Permission, current_principal, require
 from app.services.settings_state import (
     get_review_required,
+    get_seed_demo,
     get_ui_localization,
     set_llm_config,
     set_review_required,
+    set_seed_demo,
     set_ui_localization,
 )
 
@@ -35,6 +37,7 @@ def _snapshot() -> dict:
         "features": {
             "ui_localization": get_ui_localization(),
             "review_required": get_review_required(),
+            "seed_demo": get_seed_demo(),
             "default_output_locale": s.features.default_output_locale,
             "supported_locales": s.features.supported_locales,
         },
@@ -88,6 +91,7 @@ class SettingsPatch(BaseModel):
     # Runtime-mutable settings; the rest are config.toml / env driven.
     ui_localization: bool | None = None
     review_required: bool | None = None
+    seed_demo: bool | None = None  # load (true) / clear (false) the sample project
     llm: LlmConfigPatch | None = None
 
 
@@ -97,6 +101,8 @@ def update_settings(body: SettingsPatch) -> dict:
         set_ui_localization(body.ui_localization)
     if body.review_required is not None:
         set_review_required(body.review_required)
+    if body.seed_demo is not None:
+        set_seed_demo(body.seed_demo)
     if body.llm is not None:
         set_llm_config(**body.llm.model_dump(exclude_none=True))
     return _snapshot()

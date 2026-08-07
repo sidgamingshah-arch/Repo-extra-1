@@ -2,9 +2,10 @@
 import { useNavigate } from "react-router-dom";
 
 import { Button, Card } from "../components/ui";
+import { EmptyState } from "../components/EmptyState";
 import { color, font, radius } from "../theme";
 import type { IntegrityIssue, IntegrityStat } from "../types";
-import { useIntegrity } from "../lib/queries";
+import { useIntegrity, useProjectLoaded } from "../lib/queries";
 import { useAppLocale, useUI } from "../store";
 import { SCREENS } from "./config";
 import { useT } from "../i18n";
@@ -30,8 +31,10 @@ export default function IntegrityScreen() {
   const t = useT();
   const locale = useAppLocale();
   const extractMode = useUI((s) => s.extractMode);
+  const loaded = useProjectLoaded();
   const { data, isPending } = useIntegrity(locale);
 
+  if (!loaded) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>

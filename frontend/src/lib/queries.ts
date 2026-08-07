@@ -84,6 +84,21 @@ export function useRunAnalysis() {
   });
 }
 export const useProject = () => useQuery({ queryKey: ["project"], queryFn: api.project });
+/** Whether a project's data is loaded (false in greenfield until a sample/real run exists). */
+export const useProjectLoaded = () => useProject().data?.loaded ?? false;
+export const useDocuments = () => useQuery({ queryKey: ["documents"], queryFn: api.documents });
+
+/** Upload a source document; refreshes the documents list and project. */
+export function useUploadDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => api.uploadDocument(file),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: ["project"] });
+    },
+  });
+}
 export const useIntegrity = (locale: Locale = "en") =>
   useQuery({ queryKey: ["integrity", locale], queryFn: () => api.integrity(locale) });
 export const usePages = (locale: Locale = "en") =>

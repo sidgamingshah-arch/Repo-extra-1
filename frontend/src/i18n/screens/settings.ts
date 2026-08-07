@@ -34,6 +34,9 @@ export const settings: Record<Locale, Record<string, string>> = {
     "st.reviewRequired": "Require reviewer sign-off",
     "st.reviewRequiredHelp":
       "On (default): the analyst submits the final output for a reviewer to review & finalize. Off: the workflow closes at the analyst, who finalizes and exports directly. Either way the analyst keeps the human-in-the-loop Review Queue (checks & low-confidence items) for quality control.",
+    "st.seedDemo": "Load sample project",
+    "st.seedDemoHelp":
+      "Off (default): the app starts greenfield — empty until you upload and process a document. On: loads a seeded sample project so you can explore every screen with data. Does not affect uploaded documents.",
     "st.ocr": "OCR",
     "st.engine": "Engine",
     "st.languages": "Languages",
@@ -86,6 +89,9 @@ export const settings: Record<Locale, Record<string, string>> = {
     "st.reviewRequired": "需要审核人签核",
     "st.reviewRequiredHelp":
       "开启（默认）：分析师将最终输出提交给审核人进行审核与定稿。关闭：工作流在分析师处结束，由其直接定稿并导出。无论哪种方式，分析师都保留人机协同的审核队列（检查与低置信项）以进行质量控制。",
+    "st.seedDemo": "加载示例项目",
+    "st.seedDemoHelp":
+      "关闭（默认）：应用以空白状态启动——在你上传并处理文档之前保持为空。开启：加载预置的示例项目，便于你在各界面查看数据。不影响已上传的文档。",
     "st.ocr": "OCR",
     "st.engine": "引擎",
     "st.languages": "语言",
@@ -138,6 +144,9 @@ export const settings: Record<Locale, Record<string, string>> = {
     "st.reviewRequired": "اشتراط اعتماد المراجع",
     "st.reviewRequiredHelp":
       "مُفعّل (افتراضي): يُرسل المحلّل الناتج النهائي لمراجع كي يراجعه ويعتمده. مُعطّل: ينتهي سير العمل عند المحلّل الذي يعتمد ويصدّر مباشرة. في كلتا الحالتين يحتفظ المحلّل بقائمة المراجعة التفاعلية (الفحوصات والبنود منخفضة الثقة) لضبط الجودة.",
+    "st.seedDemo": "تحميل مشروع عيّنة",
+    "st.seedDemoHelp":
+      "مُعطّل (افتراضي): يبدأ التطبيق فارغًا — إلى أن ترفع مستندًا وتعالجه. مُفعّل: يُحمّل مشروع عيّنة مُهيّأً لاستكشاف كل الشاشات ببيانات. لا يؤثّر على المستندات المرفوعة.",
     "st.ocr": "التعرّف الضوئي",
     "st.engine": "المحرّك",
     "st.languages": "اللغات",
@@ -190,6 +199,9 @@ export const settings: Record<Locale, Record<string, string>> = {
     "st.reviewRequired": "Exiger la validation d'un réviseur",
     "st.reviewRequiredHelp":
       "Activé (par défaut) : l'analyste soumet le résultat final à un réviseur qui le vérifie et le finalise. Désactivé : le flux se termine chez l'analyste, qui finalise et exporte directement. Dans les deux cas, l'analyste conserve la file de revue (contrôles et éléments à faible confiance) pour le contrôle qualité.",
+    "st.seedDemo": "Charger le projet d'exemple",
+    "st.seedDemoHelp":
+      "Désactivé (par défaut) : l'application démarre vierge — vide jusqu'à ce que vous téléversiez et traitiez un document. Activé : charge un projet d'exemple pour explorer tous les écrans avec des données. N'affecte pas les documents téléversés.",
     "st.ocr": "OCR",
     "st.engine": "Moteur",
     "st.languages": "Langues",

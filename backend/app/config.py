@@ -57,6 +57,9 @@ class FeatureSettings(BaseModel):
     # sign-off/hand-off only — the human-in-the-loop Review Queue (checks + low-confidence
     # QA) stays available to the analyst either way. Admin-flippable at runtime.
     review_required: bool = True
+    # Load the seeded sample project at startup. Off by default → the app starts
+    # greenfield (empty); an admin can load/clear the sample at runtime from Settings.
+    seed_demo: bool = False
     default_output_locale: str = "en"
     supported_locales: list[str] = Field(default_factory=lambda: ["en", "zh", "ar", "fr"])
 

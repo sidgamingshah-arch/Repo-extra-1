@@ -93,6 +93,7 @@ export interface LlmConfigPatch {
 export interface SettingsPatch {
   ui_localization?: boolean;
   review_required?: boolean;
+  seed_demo?: boolean;
   llm?: LlmConfigPatch;
 }
 
@@ -100,6 +101,7 @@ export interface AppSettings {
   features: {
     ui_localization: boolean;
     review_required: boolean;
+    seed_demo: boolean;
     default_output_locale: string;
     supported_locales: string[];
   };
@@ -197,10 +199,16 @@ export interface Project {
 }
 
 export interface SourceDoc {
+  id?: string;
   name: string;
   ext: string;
   meta: string;
   tag: "Mixed" | "Native" | "Scanned";
+}
+export interface ProjectResponse {
+  project: Project;
+  documents: SourceDoc[];
+  loaded: boolean;
 }
 
 export interface IntegrityStat {

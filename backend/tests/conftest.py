@@ -11,6 +11,17 @@ os.environ.setdefault("FINEX_DATABASE_URL", f"sqlite:///{_tmp}/test.db")
 os.environ.setdefault("FINEX_OBJECT_STORE_ROOT", f"{_tmp}/objects")
 
 
+@pytest.fixture(autouse=True)
+def _sample_loaded():
+    """Most tests assert against the seeded sample project. The app now defaults to
+    greenfield (seed_demo=false), so load the sample before each test; greenfield-specific
+    tests toggle it off within the test."""
+    from app.services import settings_state
+
+    settings_state.set_seed_demo(True)
+    yield
+
+
 def _login_token(c, username: str) -> str:
     """Log in a seeded demo user (passwordless in demo mode) and return the token."""
     r = c.post("/api/v1/auth/login", json={"username": username})

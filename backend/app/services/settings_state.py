@@ -33,9 +33,22 @@ def _seed() -> None:
     feats = get_settings().features
     _RUNTIME.setdefault("ui_localization", feats.ui_localization)
     _RUNTIME.setdefault("review_required", feats.review_required)
+    _RUNTIME.setdefault("seed_demo", feats.seed_demo)
     if _LLM_DEFAULTS is None:
         llm = get_settings().llm
         _LLM_DEFAULTS = {k: getattr(llm, k) for k in LLM_EDITABLE}
+
+
+def get_seed_demo() -> bool:
+    """Whether the seeded sample project is currently loaded. Off = greenfield/empty."""
+    _seed()
+    return bool(_RUNTIME["seed_demo"])
+
+
+def set_seed_demo(value: bool) -> bool:
+    _seed()
+    _RUNTIME["seed_demo"] = bool(value)
+    return _RUNTIME["seed_demo"]
 
 
 def get_ui_localization() -> bool:

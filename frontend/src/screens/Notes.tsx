@@ -5,7 +5,8 @@ import { useNavigate } from "react-router-dom";
 import { Card } from "../components/ui";
 import { SCREENS } from "./config";
 import { useT } from "../i18n";
-import { useNote, useNotes } from "../lib/queries";
+import { useNote, useNotes, useProjectLoaded } from "../lib/queries";
+import { EmptyState } from "../components/EmptyState";
 import { useUI } from "../store";
 import { color, confStyle, fmtIN, font, radius } from "../theme";
 import type { NoteDetail, NoteDetailRow } from "../types";
@@ -135,10 +136,12 @@ function Detail({ detail }: { detail: NoteDetail }) {
 export default function NotesScreen() {
   const t = useT();
   const locale = useUI((s) => s.locale);
+  const loaded = useProjectLoaded();
   const { data: notes } = useNotes(locale);
   const { note, setNote } = useUI();
   const { data: detail } = useNote(note, locale);
 
+  if (!loaded) return <EmptyState />;
   if (!notes) return <Loading />;
 
   return (

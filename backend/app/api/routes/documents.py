@@ -7,12 +7,43 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db, object_store
 from app.ports.object_store import LocalObjectStore
+from app.security import Permission, current_principal, require
 from app.services.documents import analyze_document, content_hash
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
-@router.post("", status_code=201)
+def _tag_for(fmt: str) -> str:
+    return {"image": "Scanned", "pdf": "Native", "xlsx": "Native"}.get(fmt, "Native")
+
+
+def _human_size(n: int) -> str:
+    return f"{n / 1_048_576:.1f} MB" if n >= 1_048_576 else f"{max(1, n // 1024)} KB"
+
+
+def _to_source_doc(row) -> dict:
+    """Map a stored Document to the frontend SourceDoc shape used by the Upload list."""
+    name = row.filename or "document"
+    ext = (name.rsplit(".", 1)[-1] if "." in name else row.fmt or "").upper()[:4]
+    return {
+        "id": row.id,
+        "name": name,
+        "ext": ext or "DOC",
+        "meta": f"{row.page_count} pages · {_human_size(row.byte_size)}",
+        "tag": _tag_for(row.fmt),
+    }
+
+
+@router.get("", dependencies=[Depends(current_principal)])
+def list_documents(session: Session = Depends(db)) -> dict:
+    """Real uploaded documents, most recent first (Upload screen list)."""
+    from app.db.models import Document
+
+    rows = session.execute(select(Document).order_by(Document.created_at.desc())).scalars().all()
+    return {"documents": [_to_source_doc(r) for r in rows]}
+
+
+@router.post("", status_code=201, dependencies=[Depends(require(Permission.DOCUMENTS_MANAGE))])
 async def upload_document(
     file: UploadFile = File(...),
     session: Session = Depends(db),

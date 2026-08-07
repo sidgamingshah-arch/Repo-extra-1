@@ -5,9 +5,10 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/ui";
+import { EmptyState } from "../components/EmptyState";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
 import type { Basis, StatementResponse, StatementRow } from "../types";
-import { useStatement, useEditLineItem } from "../lib/queries";
+import { useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
 import { SCREENS } from "./config";
@@ -312,9 +313,11 @@ export default function WorkspaceScreen() {
       navigate(SCREENS.notes.path);
     }
   };
+  const loaded = useProjectLoaded();
   const { data, isPending } = useStatement(statement, dataset, locale);
   const editMut = useEditLineItem();
 
+  if (!loaded) return <EmptyState />;
   if (isPending || !data) {
     return <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>;
   }

@@ -2,7 +2,8 @@
  * headline + assessment, key ratios (tone-coded), and selected strengths / risks. */
 import { Card, ScreenHeader } from "../components/ui";
 import { useT } from "../i18n";
-import { useAudit, useCommentary, useRunAnalysis } from "../lib/queries";
+import { useAudit, useCommentary, useProjectLoaded, useRunAnalysis } from "../lib/queries";
+import { EmptyState } from "../components/EmptyState";
 import { useCan } from "../lib/rbac";
 import { useAppLocale } from "../store";
 import { color, fmtIN, font, radius } from "../theme";
@@ -164,10 +165,12 @@ function AuditLog({ t }: { t: (k: string) => string }) {
 export default function CommentaryScreen() {
   const t = useT();
   const locale = useAppLocale();
+  const loaded = useProjectLoaded();
   const { data, isPending } = useCommentary(locale);
   const canGenerate = useCan("analysis:run");
   const runAnalysis = useRunAnalysis();
 
+  if (!loaded) return <EmptyState />;
   if (isPending || !data) {
     return <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>;
   }

@@ -3,7 +3,8 @@
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "../components/ui";
-import { useReview } from "../lib/queries";
+import { useReview, useProjectLoaded } from "../lib/queries";
+import { EmptyState } from "../components/EmptyState";
 import { SCREENS } from "./config";
 import { useAppLocale, useUI } from "../store";
 import { useT } from "../i18n";
@@ -22,11 +23,13 @@ export default function ReviewScreen() {
   const t = useT();
   const locale = useAppLocale();
   const canResolve = useCan("review:resolve");
+  const loaded = useProjectLoaded();
   const { data, isPending } = useReview(locale);
   const openCheck = useUI((s) => s.openCheck);
   const toggleCheck = useUI((s) => s.toggleCheck);
   const navigate = useNavigate();
 
+  if (!loaded) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 60, textAlign: "center", color: color.muted, fontSize: 13 }}>

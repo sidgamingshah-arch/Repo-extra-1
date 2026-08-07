@@ -217,6 +217,14 @@ export default function SettingsScreen() {
           title={t("st.reviewRequired")}
           help={t("st.reviewRequiredHelp")}
         />
+        <ToggleRow
+          on={s.features.seed_demo}
+          onToggle={() => patch.mutate({ seed_demo: !s.features.seed_demo })}
+          canEdit={canEdit}
+          saving={patch.isPending}
+          title={t("st.seedDemo")}
+          help={t("st.seedDemoHelp")}
+        />
         {!canEdit && <div style={{ fontSize: 11, color: color.muted, marginTop: 4 }}>{t("st.adminOnly")}</div>}
         <div style={{ marginTop: 12 }}>
           <Row label={t("st.supportedLangs")} value={s.features.supported_locales.join(" · ")} />

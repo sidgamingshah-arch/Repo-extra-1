@@ -74,6 +74,11 @@ const core: LocaleDicts = {
     "um.signedIn": "Signed in",
     "um.logout": "Sign out",
     "lang.output": "Output language",
+    "empty.title": "No project yet",
+    "empty.body": "Upload a source document on the Documents screen to start an extraction. This workspace stays empty until a document is processed.",
+    "empty.goUpload": "Go to Documents",
+    "empty.loadSample": "Load sample data",
+    "empty.loading": "Loading…",
   },
   zh: {
     "group.SETUP": "设置",
@@ -123,6 +128,11 @@ const core: LocaleDicts = {
     "um.signedIn": "已登录",
     "um.logout": "退出登录",
     "lang.output": "输出语言",
+    "empty.title": "尚无项目",
+    "empty.body": "请在“文档”界面上传源文档以开始提取。在文档处理完成之前，此工作区将保持为空。",
+    "empty.goUpload": "前往文档",
+    "empty.loadSample": "加载示例数据",
+    "empty.loading": "加载中…",
   },
   ar: {
     "group.SETUP": "الإعداد",
@@ -172,6 +182,11 @@ const core: LocaleDicts = {
     "um.signedIn": "تم تسجيل الدخول",
     "um.logout": "تسجيل الخروج",
     "lang.output": "لغة المخرجات",
+    "empty.title": "لا يوجد مشروع بعد",
+    "empty.body": "ارفع مستندًا مصدرًا من شاشة المستندات لبدء الاستخراج. تبقى مساحة العمل فارغة حتى تتم معالجة مستند.",
+    "empty.goUpload": "الذهاب إلى المستندات",
+    "empty.loadSample": "تحميل بيانات العينة",
+    "empty.loading": "جارٍ التحميل…",
   },
   fr: {
     "group.SETUP": "CONFIGURATION",
@@ -221,6 +236,11 @@ const core: LocaleDicts = {
     "um.signedIn": "Connecté",
     "um.logout": "Se déconnecter",
     "lang.output": "Langue de sortie",
+    "empty.title": "Aucun projet pour l'instant",
+    "empty.body": "Téléversez un document source depuis l'écran Documents pour lancer une extraction. Cet espace reste vide tant qu'aucun document n'est traité.",
+    "empty.goUpload": "Aller aux Documents",
+    "empty.loadSample": "Charger des données d'exemple",
+    "empty.loading": "Chargement…",
   },
 };
 

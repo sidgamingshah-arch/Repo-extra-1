@@ -45,13 +45,27 @@ pnpm dev                                  # app at http://localhost:5173 (proxie
 Then **sign in**. The app opens on a login screen; in demo mode use the one-click
 "Sign in as …" buttons for the seeded users — **admin** (Priya Nair), **reviewer**
 (Rahul Mehta), or **analyst** (Ana Ferreira) — or type the username with a matching
-password. Non-secret configuration (LLM/OCR/extraction engines, feature flags) lives in
-[`backend/config.toml`](backend/config.toml) and is surfaced read-only on the admin
-**Settings** screen.
+password.
+
+The app starts **greenfield** (empty): upload a source document on the **Documents**
+screen to begin. To explore every screen with data, an admin can flip **Load sample
+project** on the **Settings** screen (or the "Load sample data" button on any empty
+screen); set `[features].seed_demo = true` in `backend/config.toml` to load it at
+startup instead. LLM configuration (provider/model/endpoint) is admin-editable on
+Settings — the API key stays in the environment, never the UI.
 
 Optional backend engines install behind extras so the core stays light:
 `pip install -e ".[ocr]"` (PaddleOCR), `.[llm]` (Anthropic), `.[embeddings]`,
 `.[pdf]`, `.[lang]`.
+
+### Frontend regression (Playwright)
+
+```bash
+cd frontend && pnpm e2e     # boots backend + Vite, drives the UI in Chromium
+```
+
+A smoke suite (`frontend/e2e/`) covers the greenfield empty state, loading the sample,
+note-reference hyperlinks, and uploading a document as an analyst.
 
 ## The screens
 

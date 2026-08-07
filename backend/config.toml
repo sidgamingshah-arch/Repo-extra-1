@@ -49,6 +49,10 @@ ui_localization = false
 # QA) stays available to the analyst regardless. Startup default; admin-flippable.
 review_required = true
 
+# Load the seeded sample project at startup. False → the app starts greenfield
+# (empty); an admin can load or clear the sample at runtime from the Settings screen.
+seed_demo = false
+
 # Default output language for extracted financial data, and the set of languages the
 # app offers. Adding a language is a data/asset change, not a code change.
 default_output_locale = "en"

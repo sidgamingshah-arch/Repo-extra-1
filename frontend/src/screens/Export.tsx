@@ -1,5 +1,6 @@
 /** Screen 8: Export — deliver the extracted, reviewed and reconciled dataset. */
-import { useExportOptions, useSubmitForReview } from "../lib/queries";
+import { useExportOptions, useProjectLoaded, useSubmitForReview } from "../lib/queries";
+import { EmptyState } from "../components/EmptyState";
 import { downloadExport } from "../lib/api";
 import { useUI } from "../store";
 import { useT } from "../i18n";
@@ -197,11 +198,13 @@ export default function ExportScreen() {
   const canExport = useCan("export:run");
   const canSubmit = useCan("review:submit");
   const submitReview = useSubmitForReview();
+  const loaded = useProjectLoaded();
   const { data, isPending } = useExportOptions();
   const exportFmt = useUI((s) => s.exportFmt);
   const setFmt = useUI((s) => s.setFmt);
   const isExcel = exportFmt === "excel";
 
+  if (!loaded) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 40, textAlign: "center", color: color.muted }}>Loading…</div>

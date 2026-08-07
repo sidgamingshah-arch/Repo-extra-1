@@ -54,7 +54,7 @@ import type {
   NoteDetail,
   NotesResponse,
   PagesResponse,
-  Project,
+  ProjectResponse,
   ReviewResponse,
   SettingsPatch,
   SourceDoc,
@@ -85,7 +85,19 @@ export const api = {
   audit: () => req<AuditResponse>(`/projects/${PROJECT}/audit`),
   runAnalysis: () =>
     req<{ entry: AuditEntry; result: unknown }>(`/projects/${PROJECT}/analysis`, { method: "POST" }),
-  project: () => req<{ project: Project; documents: SourceDoc[] }>(`/projects/${PROJECT}`),
+  project: () => req<ProjectResponse>(`/projects/${PROJECT}`),
+  documents: () => req<{ documents: SourceDoc[] }>(`/documents`),
+  uploadDocument: async (file: File): Promise<{ id: string; page_count: number; integrity_report: unknown }> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    // No JSON Content-Type — let the browser set the multipart boundary.
+    const res = await fetch(`${BASE}/documents`, { method: "POST", headers: { ...authHeader() }, body: fd });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`);
+    }
+    return res.json();
+  },
   integrity: (locale: Locale = "en") =>
     req<IntegrityResponse>(`/projects/${PROJECT}/integrity?locale=${locale}`),
   pages: (locale: Locale = "en") =>
