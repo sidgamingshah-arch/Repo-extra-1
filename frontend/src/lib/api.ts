@@ -41,6 +41,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 import type {
   AppSettings,
+  AuditEntry,
+  AuditResponse,
   Basis,
   Commentary,
   DemoUser,
@@ -77,6 +79,9 @@ export const api = {
     req<AppSettings>(`/settings`, { method: "PATCH", body: JSON.stringify(body) }),
   commentary: (locale: Locale = "en") =>
     req<Commentary>(`/projects/${PROJECT}/commentary?locale=${locale}`),
+  audit: () => req<AuditResponse>(`/projects/${PROJECT}/audit`),
+  runAnalysis: () =>
+    req<{ entry: AuditEntry; result: unknown }>(`/projects/${PROJECT}/analysis`, { method: "POST" }),
   project: () => req<{ project: Project; documents: SourceDoc[] }>(`/projects/${PROJECT}`),
   integrity: (locale: Locale = "en") =>
     req<IntegrityResponse>(`/projects/${PROJECT}/integrity?locale=${locale}`),

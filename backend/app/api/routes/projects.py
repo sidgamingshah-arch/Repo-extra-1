@@ -9,6 +9,7 @@ from copy import deepcopy
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
+from app.config import get_settings
 from app.sample.demo import CONF_PCT, DEMO, localize_label
 from app.sample.i18n_data import tr
 from app.security import Permission, current_principal, require
@@ -239,6 +240,60 @@ def get_commentary(project_id: str, locale: str = Query("en")) -> dict:
         for tnd in c.get("trends", []):
             tnd["label"] = tr(tnd["label"], locale)
     return c
+
+
+@router.get("/{project_id}/audit",
+            dependencies=[Depends(require(Permission.COMMENTARY_VIEW))])
+def get_audit(project_id: str) -> dict:
+    """Audit trail of LLM/extraction runs for the project, with per-run token usage."""
+    from app.services import audit as audit_svc
+
+    seeded = deepcopy(DEMO["audit"]) if project_id == "demo" else []
+    live = [e.to_dict() for e in audit_svc.recorded(project_id)]
+    entries = live + seeded
+    entries.sort(key=lambda e: e.get("created_at", ""), reverse=True)
+    return {"entries": entries}
+
+
+@router.post("/{project_id}/analysis",
+             dependencies=[Depends(require(Permission.CONFIG_SETTINGS))])
+def run_project_analysis(project_id: str) -> dict:
+    """Run a live LLM financial analysis via the configured provider and record it to
+    the audit log with the model's input/output token usage. The run id is derived from
+    the entity name + timestamp."""
+    from app.ports.registry import registry as reg
+    from app.services import audit as audit_svc
+    from app.services.analysis_llm import build_demo_payload, run_analysis
+
+    settings = get_settings()
+    entity = DEMO["project"]["entity"]
+    run_id = audit_svc.make_run_id(entity)
+    provider_id = settings.llm.provider
+
+    def _fail(detail: str):
+        audit_svc.record(project_id, audit_svc.AuditEntry(
+            run_id=run_id, entity=entity, action="analysis", provider=provider_id,
+            model=settings.llm.model, input_tokens=None, output_tokens=None, status="failed",
+        ))
+        raise HTTPException(status_code=502, detail=detail)
+
+    try:
+        provider = reg.get("llm", provider_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        result, meta = run_analysis(provider, build_demo_payload(), max_tokens=settings.llm.max_tokens)
+    except Exception as exc:  # provider not configured / unreachable / bad response
+        _fail(f"LLM analysis failed: {exc}")
+
+    entry = audit_svc.record(project_id, audit_svc.AuditEntry(
+        run_id=run_id, entity=entity, action="analysis", provider=provider_id,
+        model=meta.get("model", settings.llm.model),
+        input_tokens=meta.get("input_tokens"), output_tokens=meta.get("output_tokens"),
+        status="succeeded",
+    ))
+    return {"entry": entry.to_dict(), "result": result.model_dump(mode="json")}
 
 
 class ExportBody(BaseModel):

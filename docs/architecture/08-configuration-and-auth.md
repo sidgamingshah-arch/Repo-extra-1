@@ -69,6 +69,22 @@ in-memory session store with a shared, persistent one (Redis / signed JWT); back
 seeded users with a real user store or an IdP (OIDC/SAML). None of this changes the
 permission matrix or the API contract.
 
+## LLM provider selection
+
+`config.toml [llm].provider` chooses the adapter the registry hands out (`app/adapters`):
+
+- **`anthropic`** — Anthropic Messages API via the official SDK (`anthropic_llm.py`).
+- **`openai` / `openai_compatible`** — the OpenAI **Chat Completions** wire format
+  (`openai_llm.py`, via `httpx`), so any compatible gateway works — OpenAI, TokenRouter,
+  OpenRouter, a self-hosted vLLM — with a `vendor/model` id (e.g. `moonshotai/kimi-k3-free`).
+  Set `base_url` to the gateway (ending in `/v1`) and point `api_key_env` at the key's env var.
+- **`stub` / `local`** — offline / no-op.
+
+Both real adapters get structured output the same model-agnostic way (JSON Schema embedded
+in the system prompt, Pydantic-validated — shared in `adapters/_structured.py`) and return
+input/output token usage in `LlmMeta` for the audit log. Keys are read from the environment
+at call time, never from `config.toml`.
+
 ## Frontend flow
 
 `frontend/src/lib/api.ts` sends the stored bearer token on every request and exposes

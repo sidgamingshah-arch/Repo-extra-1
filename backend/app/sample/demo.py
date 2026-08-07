@@ -354,6 +354,26 @@ EXPORT_OPTIONS = [
     {"key": "hyperlinks", "label": "Source page hyperlinks", "on": False},
 ]
 
+# Illustrative audit trail for the seeded project — two prior LLM analysis runs plus
+# the extraction run, showing per-run token usage (input/output separately). Real runs
+# triggered via POST /projects/demo/analysis are appended on top of these at runtime.
+AUDIT = [
+    {
+        "run_id": "reliance-industries-ltd-20250731-094212",
+        "entity": "Reliance Industries Ltd", "action": "analysis",
+        "provider": "anthropic", "model": "claude-opus-4-8",
+        "input_tokens": 4820, "output_tokens": 1136, "total_tokens": 5956,
+        "status": "succeeded", "created_at": "2025-07-31T09:42:12+00:00",
+    },
+    {
+        "run_id": "reliance-industries-ltd-20250731-093004",
+        "entity": "Reliance Industries Ltd", "action": "extraction",
+        "provider": "anthropic", "model": "claude-opus-4-8",
+        "input_tokens": 61240, "output_tokens": 8402, "total_tokens": 69642,
+        "status": "succeeded", "created_at": "2025-07-31T09:30:04+00:00",
+    },
+]
+
 DEMO = {
     "project": PROJECT, "documents": DOCUMENTS, "integrity": INTEGRITY,
     "pages": PAGES, "page_filters": PAGE_FILTERS, "statements": STATEMENTS,
@@ -361,7 +381,7 @@ DEMO = {
     "review": REVIEW, "review_tabs": REVIEW_TABS, "review_summary": REVIEW_SUMMARY,
     "notes_index": NOTES_INDEX, "note_detail": NOTE_DETAIL,
     "template_tree": TEMPLATE_TREE, "node_config": NODE_CONFIG,
-    "export_options": EXPORT_OPTIONS,
+    "export_options": EXPORT_OPTIONS, "audit": AUDIT,
 }
 
 

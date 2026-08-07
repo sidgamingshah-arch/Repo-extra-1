@@ -67,3 +67,16 @@ A one-page, data-driven commentary derived from the *extracted* statements
 The frontend renders it as a printable one-pager (`frontend/src/screens/Commentary.tsx`):
 headline + assessment, a tone-coded metric grid, a **year-on-year trends grid**, and
 strengths/risks columns.
+
+## Audit log & LLM runs
+
+The Analysis screen also carries an **audit log** (`GET /projects/{id}/audit`) — a table of
+LLM/extraction runs showing **input and output token usage separately** (plus the total),
+the model, action and timestamp. Each run's id combines the **entity name + date/time**
+(`services/audit.make_run_id`, e.g. `reliance-industries-ltd-20260807-021455`), which is also
+the `ExtractionRun` primary key.
+
+Admins (`config:settings`) can trigger a live **`POST /projects/{id}/analysis`** run: it calls
+the configured LLM provider on the project's figures (`services/analysis_llm.py`) and records a
+real audit entry with the provider's token usage. Viewing the log needs only `commentary:view`.
+Runs against an unconfigured/unreachable provider are recorded as `failed` (tokens shown as "—").

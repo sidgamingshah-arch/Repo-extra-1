@@ -54,7 +54,11 @@ supported_locales = ["en", "zh", "ar", "fr"]
 # configures whichever adapter is selected.
 # ---------------------------------------------------------------------------
 [llm]
-provider = "anthropic"          # anthropic | openai | local | stub
+# anthropic          → Anthropic Messages API (SDK)
+# openai / openai_compatible → OpenAI Chat Completions wire format (OpenAI, TokenRouter,
+#                      OpenRouter, vLLM, …); set base_url + a vendor/model id below
+# local | stub       → offline / no-op
+provider = "anthropic"
 model = "claude-opus-4-8"       # default model id for the selected provider
 temperature = 0.0               # deterministic output for structured extraction
 max_tokens = 4096

@@ -61,6 +61,17 @@ export function usePatchSettings() {
 // --- project data ---
 export const useCommentary = (locale: Locale = "en") =>
   useQuery({ queryKey: ["commentary", locale], queryFn: () => api.commentary(locale) });
+export const useAudit = () =>
+  useQuery({ queryKey: ["audit"], queryFn: api.audit });
+
+/** Trigger a live LLM analysis run; refreshes the audit log on completion. */
+export function useRunAnalysis() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.runAnalysis(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["audit"] }),
+  });
+}
 export const useProject = () => useQuery({ queryKey: ["project"], queryFn: api.project });
 export const useIntegrity = (locale: Locale = "en") =>
   useQuery({ queryKey: ["integrity", locale], queryFn: () => api.integrity(locale) });

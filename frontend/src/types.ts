@@ -62,6 +62,23 @@ export interface Commentary {
   basis: string;
 }
 
+/** One row of the audit log — a past LLM/extraction run and its token usage. */
+export interface AuditEntry {
+  run_id: string;
+  entity: string;
+  action: "analysis" | "extraction";
+  provider: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  status: "succeeded" | "failed";
+  created_at: string;
+}
+export interface AuditResponse {
+  entries: AuditEntry[];
+}
+
 export interface AppSettings {
   features: {
     ui_localization: boolean;

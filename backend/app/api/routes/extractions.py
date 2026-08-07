@@ -10,10 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from pathlib import Path
+
 from app.api.deps import db, object_store, settings as get_settings_dep
 from app.config import Settings
 from app.ports.object_store import LocalObjectStore
 from app.schemas.loader import load_ontology
+from app.services import audit as audit_svc
 from app.services.documents import run_extraction
 
 router = APIRouter(tags=["extractions"])
@@ -28,6 +31,9 @@ class ExtractionOptions(BaseModel):
     # Whether the user asked to review/adjust detected page scope before
     # extraction. Defaults to auto (False): detect pages and extract in one pass.
     confirm_scope: bool = False
+    # Entity name used to mint the run id (entity-slug + timestamp). Falls back to the
+    # document filename when omitted.
+    entity: str | None = None
 
 
 @router.post("/documents/{document_id}/extractions", status_code=202)
@@ -53,7 +59,11 @@ def start_extraction(
     data = store.get(doc.object_key)
     doc_model, ctx = run_extraction(data, filename=doc.filename, ontology=ontology)
 
+    entity = body.entity or Path(doc.filename or "").stem or "document"
+    run_id = audit_svc.make_run_id(entity)
+
     run = ExtractionRun(
+        id=run_id,
         document_id=doc.id,
         template_version_id=body.template_version_id,
         ontology_version_id=body.ontology_version_id,
@@ -71,6 +81,16 @@ def start_extraction(
     )
     session.add(run)
     session.commit()
+
+    # Audit trail entry for the run. The pipeline's LLM disambiguation is deferred, so
+    # extraction runs currently record no token usage (shown as "—" in the audit log);
+    # LLM analysis runs (POST /projects/{id}/analysis) carry real token counts.
+    audit_svc.record(doc.id, audit_svc.AuditEntry(
+        run_id=run_id, entity=entity, action="extraction",
+        provider=settings.llm.provider, model=settings.llm.model,
+        input_tokens=None, output_tokens=None, status="succeeded",
+    ))
+
     return {"run_id": run.id, "status": run.status,
             "stream_url": f"/api/v1/extractions/{run.id}/stream"}
 

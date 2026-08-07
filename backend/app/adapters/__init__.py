@@ -33,6 +33,14 @@ def register_builtins() -> None:
 
     registry.register("llm", "anthropic", AnthropicLlmProvider)
 
+    # OpenAI-compatible adapter (OpenAI, TokenRouter, OpenRouter, vLLM, …) — selected
+    # when llm.provider = "openai" / "openai_compatible". Uses httpx at call time; the
+    # base_url + model come from config.toml [llm], the key from llm.api_key_env.
+    from .openai_llm import OpenAiLlmProvider
+
+    registry.register("llm", "openai", OpenAiLlmProvider)
+    registry.register("llm", "openai_compatible", OpenAiLlmProvider)
+
     registry.register(
         "object_store", "local",
         lambda: LocalObjectStore(settings.object_store_root),
