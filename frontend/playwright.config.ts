@@ -22,6 +22,9 @@ export default defineConfig({
       url: "http://127.0.0.1:8000/health",
       reuseExistingServer: true,
       timeout: 120_000,
+      // Force deterministic mapping so the (network-blocked) LLM isn't attempted during
+      // e2e — keeps extraction fast and offline; alias-tier mapping still populates.
+      env: { FINEX_EXTRACTION__LLM_MAPPING: "false" },
     },
     {
       command: "npm run dev",

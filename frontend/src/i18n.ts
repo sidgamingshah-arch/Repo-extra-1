@@ -91,6 +91,7 @@ const core: LocaleDicts = {
     "ex.col.source": "SOURCE",
     "ex.col.mapping": "MAPPED TO",
     "ex.unmapped": "—",
+    "ex.pickHint": "Click a value's source chip to highlight it on the page.",
   },
   zh: {
     "group.SETUP": "设置",
@@ -157,6 +158,7 @@ const core: LocaleDicts = {
     "ex.col.source": "来源",
     "ex.col.mapping": "映射到",
     "ex.unmapped": "—",
+    "ex.pickHint": "点击数值的来源标签，在页面上高亮显示。",
   },
   ar: {
     "group.SETUP": "الإعداد",
@@ -223,6 +225,7 @@ const core: LocaleDicts = {
     "ex.col.source": "المصدر",
     "ex.col.mapping": "مطابق لـ",
     "ex.unmapped": "—",
+    "ex.pickHint": "انقر على وسم مصدر القيمة لإبرازها على الصفحة.",
   },
   fr: {
     "group.SETUP": "CONFIGURATION",
@@ -289,6 +292,7 @@ const core: LocaleDicts = {
     "ex.col.source": "SOURCE",
     "ex.col.mapping": "MAPPÉ À",
     "ex.unmapped": "—",
+    "ex.pickHint": "Cliquez sur la puce source d'une valeur pour la mettre en évidence sur la page.",
   },
 };
 

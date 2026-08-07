@@ -51,5 +51,7 @@ test("analyst uploads a document and views its extracted data with provenance", 
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   // Real extracted line item + click-to-source provenance from the native PDF.
   await expect(page.getByText("Trade receivables").first()).toBeVisible();
-  await expect(page.getByText(/^p\.1/).first()).toBeVisible();
+  // Click the value's source chip → the page renders with its bbox highlighted.
+  await page.getByText(/^p\.1/).first().click();
+  await expect(page.getByTestId("prov-highlight")).toBeVisible({ timeout: 15_000 });
 });

@@ -249,6 +249,19 @@ export interface ExtractionRunResponse {
   status: string;
   result: ExtractionResult;
 }
+export interface OntologyRef {
+  id: string;
+  ontology_key: string;
+  target_template_key: string;
+  version: number;
+}
+export interface TemplateRef {
+  id: string;
+  template_key: string;
+  name: string;
+  version: number;
+  is_published: boolean;
+}
 
 export interface IntegrityStat {
   label: string;

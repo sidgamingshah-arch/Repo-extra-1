@@ -88,13 +88,24 @@ export const useProject = () => useQuery({ queryKey: ["project"], queryFn: api.p
 export const useProjectLoaded = () => useProject().data?.loaded ?? false;
 export const useDocuments = () => useQuery({ queryKey: ["documents"], queryFn: api.documents });
 
+export const useOntologies = () => useQuery({ queryKey: ["ontologies"], queryFn: api.ontologies });
+export const useTemplates = () => useQuery({ queryKey: ["templates"], queryFn: api.templates });
+
 /** Run (and fetch) the extraction for one uploaded document — its real line items with
- * provenance. POSTs once per document and caches the result. */
-export const useExtraction = (documentId: string | undefined) =>
+ * provenance, mapped against the given ontology/template. POSTs once per (doc, ontology)
+ * and caches the result. `enabled` gates the run until the ontology list has settled. */
+export const useExtraction = (
+  documentId: string | undefined,
+  ontologyId?: string,
+  templateId?: string,
+  enabled = true,
+) =>
   useQuery({
-    queryKey: ["extraction", documentId],
-    queryFn: () => api.runExtraction(documentId as string),
-    enabled: !!documentId,
+    queryKey: ["extraction", documentId, ontologyId ?? null, templateId ?? null],
+    queryFn: () => api.runExtraction(documentId as string, {
+      ontology_version_id: ontologyId, template_version_id: templateId,
+    }),
+    enabled: !!documentId && enabled,
     staleTime: Infinity,
     retry: false,
   });

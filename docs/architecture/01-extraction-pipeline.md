@@ -97,6 +97,15 @@ This is how accuracy (full-statement LLM context for containment/residual/"Other
 hard value-level provenance coexist: the model does the semantics, the deterministic layer
 owns the numbers and their location.
 
+**In the UI.** An uploaded document's extraction is shown at `/documents/:id`
+(`ExtractionView`): each value's provenance is a click-to-source chip. For a PDF, clicking
+it renders that page — server-rasterized to PNG via `GET /documents/{id}/pages/{n}/image`
+(PyMuPDF) — and draws the value's normalized bbox as an overlay (percent-positioned, so it
+survives any display scale). The run is mapped against the seeded reference ontology
+(`app/sample/reference.py` upserts the HKFRS template + ontology at startup), so the
+"mapped to" column populates — via the LLM when reachable, else the deterministic alias
+tier offline.
+
 ## Adapter ports
 
 `ports/`: `OcrProvider`, `TableStructureProvider`, `LlmProvider` (structured JSON,

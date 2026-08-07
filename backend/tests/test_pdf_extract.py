@@ -42,6 +42,45 @@ def test_extraction_api_returns_rows_with_provenance(client):
     assert tr["note"] == "15"
 
 
+def test_page_image_endpoint_renders_png(client):
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}
+    ).json()["id"]
+    r = client.get(f"/api/v1/documents/{doc_id}/pages/0/image")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content[:8] == b"\x89PNG\r\n\x1a\n" and len(r.content) > 100
+
+
+def test_reference_ontology_seeded_and_attached_run_maps(client):
+    """The shipped HK ontology is seeded; attaching it to a run populates canonical keys
+    (deterministic here — the alias tier maps offline without an LLM)."""
+    from app.config import get_settings
+    from app.services import settings_state  # noqa: F401 (import parity with other tests)
+
+    onts = client.get("/api/v1/ontologies").json()
+    ont = next(o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1")
+    tpls = client.get("/api/v1/templates").json()
+    tpl = next(t for t in tpls if t["template_key"] == ont["target_template_key"])
+
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}
+    ).json()["id"]
+
+    s = get_settings()
+    prev = s.extraction.llm_mapping
+    s.extraction.llm_mapping = False  # force the deterministic ensemble (no network) for the test
+    try:
+        r = client.post(f"/api/v1/documents/{doc_id}/extractions",
+                        json={"ontology_version_id": ont["id"], "template_version_id": tpl["id"]})
+        assert r.status_code == 202, r.text
+        rows = r.json()["result"]["rows"]
+        tr = next(row for row in rows if "Trade receivables" in row["source_label"])
+        assert tr["canonical_key"], "expected the caption to map to a canonical concept"
+    finally:
+        s.extraction.llm_mapping = prev
+
+
 def test_scanned_page_routes_through_ocr_port():
     """A scanned page is rasterized and sent to the configured OCR provider; its words
     (already normalized) reconstruct into line items with source_kind 'ocr'."""

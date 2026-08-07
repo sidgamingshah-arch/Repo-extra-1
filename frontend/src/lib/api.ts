@@ -54,9 +54,11 @@ import type {
   Me,
   NoteDetail,
   NotesResponse,
+  OntologyRef,
   PagesResponse,
   ProjectResponse,
   ReviewResponse,
+  TemplateRef,
   SettingsPatch,
   SourceDoc,
   StatementKey,
@@ -88,11 +90,24 @@ export const api = {
     req<{ entry: AuditEntry; result: unknown }>(`/projects/${PROJECT}/analysis`, { method: "POST" }),
   project: () => req<ProjectResponse>(`/projects/${PROJECT}`),
   documents: () => req<{ documents: SourceDoc[] }>(`/documents`),
-  runExtraction: (documentId: string) =>
+  ontologies: () => req<OntologyRef[]>(`/ontologies`),
+  templates: () => req<TemplateRef[]>(`/templates`),
+  runExtraction: (
+    documentId: string,
+    body: { ontology_version_id?: string; template_version_id?: string } = {},
+  ) =>
     req<ExtractionRunResponse>(`/documents/${documentId}/extractions`, {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify(body),
     }),
+  /** PNG of a PDF page (auth'd fetch → blob), used as the click-to-source backdrop. */
+  fetchPageImage: async (documentId: string, pageIndex: number): Promise<Blob> => {
+    const res = await fetch(`${BASE}/documents/${documentId}/pages/${pageIndex}/image`, {
+      headers: { ...authHeader() },
+    });
+    if (!res.ok) throw new ApiError(res.status, `${res.status} ${res.statusText}`);
+    return res.blob();
+  },
   uploadDocument: async (file: File): Promise<{ id: string; page_count: number; integrity_report: unknown }> => {
     const fd = new FormData();
     fd.append("file", file);

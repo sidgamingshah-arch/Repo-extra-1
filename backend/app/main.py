@@ -39,6 +39,12 @@ def create_app() -> FastAPI:
     @application.on_event("startup")
     def _startup() -> None:  # pragma: no cover - trivial
         init_db()
+        # Seed the reference template + ontology so uploaded docs can be mapped out of the box.
+        from app.db.base import SessionLocal
+        from app.sample.reference import ensure_reference_data
+
+        with SessionLocal() as session:
+            ensure_reference_data(session)
 
     @application.get("/health", tags=["meta"])
     def health() -> dict:

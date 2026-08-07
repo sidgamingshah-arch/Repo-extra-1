@@ -1,7 +1,7 @@
 """Document endpoints: upload (+ upfront integrity/classification) and fetch."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -111,3 +111,38 @@ def get_document(document_id: str, session: Session = Depends(db)) -> dict:
         "page_count": row.page_count,
         "integrity_report": row.integrity_report,
     }
+
+
+@router.get("/{document_id}/pages/{page_index}/image", dependencies=[Depends(current_principal)])
+def get_page_image(
+    document_id: str,
+    page_index: int,
+    dpi: int = Query(110, ge=50, le=300),
+    session: Session = Depends(db),
+    store: LocalObjectStore = Depends(object_store),
+) -> Response:
+    """Rasterize one PDF page to PNG — the backdrop the frontend draws the value's
+    normalized bbox over (click-to-source). PDF only; spreadsheets have no page image."""
+    from app.db.models import Document
+
+    row = session.get(Document, document_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if row.fmt != "pdf":
+        raise HTTPException(status_code=400, detail="Page images are only available for PDFs")
+    try:
+        import fitz
+    except ImportError:  # pragma: no cover - PyMuPDF is a core dep
+        raise HTTPException(status_code=501, detail="PDF rendering unavailable")
+    data = store.get(row.object_key)
+    try:
+        pdf = fitz.open(stream=data, filetype="pdf")
+        if page_index < 0 or page_index >= pdf.page_count:
+            raise HTTPException(status_code=404, detail="Page out of range")
+        png = pdf[page_index].get_pixmap(dpi=dpi).tobytes("png")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Could not render page: {exc}")
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=300"})
