@@ -48,6 +48,7 @@ class Permission(str, Enum):
     REVIEW_FINALIZE = "review:finalize"     # reviewer finalizes the output
     NOTES_VIEW = "notes:view"
     COMMENTARY_VIEW = "commentary:view"
+    ANALYSIS_RUN = "analysis:run"           # trigger a live LLM financial-analysis run
     EXPORT_RUN = "export:run"
     INTEGRITY_VIEW = "integrity:view"
 
@@ -65,15 +66,15 @@ PERMISSIONS: dict[Role, set[Permission]] = {
     Role.REVIEWER: {
         Permission.EXTRACTION_VIEW, Permission.EXTRACTION_EDIT,
         Permission.REVIEW_VIEW, Permission.REVIEW_RESOLVE, Permission.REVIEW_FINALIZE,
-        Permission.NOTES_VIEW, Permission.COMMENTARY_VIEW,
+        Permission.NOTES_VIEW, Permission.COMMENTARY_VIEW, Permission.ANALYSIS_RUN,
         Permission.EXPORT_RUN, Permission.INTEGRITY_VIEW,
     },
     Role.ANALYST: {
         Permission.DOCUMENTS_MANAGE, Permission.TEMPLATE_SELECT, Permission.PIPELINE_RUN,
         Permission.CONFIG_SCOPE,  # analysts confirm page scope as part of running the pipeline
         Permission.EXTRACTION_VIEW, Permission.EXTRACTION_EDIT,
-        Permission.NOTES_VIEW, Permission.COMMENTARY_VIEW, Permission.INTEGRITY_VIEW,
-        Permission.REVIEW_SUBMIT, Permission.EXPORT_RUN,
+        Permission.NOTES_VIEW, Permission.COMMENTARY_VIEW, Permission.ANALYSIS_RUN,
+        Permission.INTEGRITY_VIEW, Permission.REVIEW_SUBMIT, Permission.EXPORT_RUN,
     },
 }
 

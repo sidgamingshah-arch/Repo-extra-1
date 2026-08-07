@@ -165,7 +165,7 @@ export default function CommentaryScreen() {
   const t = useT();
   const locale = useAppLocale();
   const { data, isPending } = useCommentary(locale);
-  const canGenerate = useCan("config:settings");
+  const canGenerate = useCan("analysis:run");
   const runAnalysis = useRunAnalysis();
 
   if (isPending || !data) {

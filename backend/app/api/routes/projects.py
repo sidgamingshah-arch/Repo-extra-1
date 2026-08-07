@@ -256,11 +256,11 @@ def get_audit(project_id: str) -> dict:
 
 
 @router.post("/{project_id}/analysis",
-             dependencies=[Depends(require(Permission.CONFIG_SETTINGS))])
+             dependencies=[Depends(require(Permission.ANALYSIS_RUN))])
 def run_project_analysis(project_id: str) -> dict:
     """Run a live LLM financial analysis via the configured provider and record it to
     the audit log with the model's input/output token usage. The run id is derived from
-    the entity name + timestamp."""
+    the entity name + timestamp. Analyst-driven (analysts/reviewers/admin)."""
     from app.ports.registry import registry as reg
     from app.services import audit as audit_svc
     from app.services.analysis_llm import build_demo_payload, run_analysis

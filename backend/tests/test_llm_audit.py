@@ -92,7 +92,10 @@ def test_analysis_run_records_token_usage(client, monkeypatch):
         audit_svc.clear("demo")
 
 
-def test_analysis_run_denied_for_reviewer(client, auth):
-    """Generating an analysis needs extraction:edit — a reviewer is forbidden."""
-    r = client.post("/api/v1/projects/demo/analysis", headers=auth("reviewer"))
-    assert r.status_code == 403, r.text
+def test_analysis_run_is_analyst_driven(anon_client, auth):
+    """Running an LLM analysis is analyst-driven: analyst/reviewer/admin hold analysis:run;
+    an unauthenticated caller is rejected (401)."""
+    for role in ("analyst", "reviewer", "admin"):
+        me = anon_client.get("/api/v1/me", headers=auth(role)).json()
+        assert "analysis:run" in me["permissions"], role
+    assert anon_client.post("/api/v1/projects/demo/analysis").status_code == 401

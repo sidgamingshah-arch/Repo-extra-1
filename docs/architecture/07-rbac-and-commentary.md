@@ -93,7 +93,8 @@ the model, action and timestamp. Each run's id combines the **entity name + date
 (`services/audit.make_run_id`, e.g. `reliance-industries-ltd-20260807-021455`), which is also
 the `ExtractionRun` primary key.
 
-Admins (`config:settings`) can trigger a live **`POST /projects/{id}/analysis`** run: it calls
-the configured LLM provider on the project's figures (`services/analysis_llm.py`) and records a
-real audit entry with the provider's token usage. Viewing the log needs only `commentary:view`.
-Runs against an unconfigured/unreachable provider are recorded as `failed` (tokens shown as "—").
+The run is **analyst-driven** — analyst, reviewer and admin hold `analysis:run` and can
+trigger a live **`POST /projects/{id}/analysis`**: it calls the configured LLM provider on
+the project's figures (`services/analysis_llm.py`) and records a real audit entry with the
+provider's token usage. Viewing the log needs only `commentary:view`. Runs against an
+unconfigured/unreachable provider are recorded as `failed` (tokens shown as "—").
