@@ -75,11 +75,16 @@ to review, not a guess.
 Value-level provenance (click-to-source) is kept trustworthy **even with the LLM at the
 centre** by a simple rule: **the LLM references facts, it never emits values.**
 
-1. The source is parsed deterministically into atomic facts, each with its exact origin.
-   Excel (`services/excel_extract.py`, `stages/extract.py`) reads every numeric row into a
-   `LineItem` whose `ExtractedValue.provenance` points at the precise **sheet + cell**
-   (e.g. `P&L!C14`) — no OCR, no LLM. (Native/scanned PDF fills the same model with
-   page + normalized bbox.)
+1. The source is parsed deterministically into atomic facts, each with its exact origin:
+   - **Excel** (`services/excel_extract.py`): every numeric row → a `LineItem` whose
+     `ExtractedValue.provenance` points at the precise **sheet + cell** (e.g. `P&L!C14`).
+   - **Native PDF** (`services/pdf_extract.py` via PyMuPDF text layer): positioned words →
+     rows → line items with **page + normalized bbox** provenance; note refs ("Note 15")
+     captured, not mistaken for values.
+   - **Scanned PDF** (same path): the page is rasterized and sent to the configured **OCR
+     provider** (`ocr.engine`, e.g. `paddleocr` behind the `.[ocr]` extra); OCR words come
+     back with normalized bboxes and feed the *same* `row_reconstruct` logic (source_kind
+     `ocr`). No OCR/LLM is needed for native inputs.
 2. Mapping then decides *which canonical concept* each fact is, by meaning. In
    `per_statement` mode (`extraction.mapping_scope`, the default) the LLM sees the whole
    statement's captions **by `item_id`** plus the candidate concepts + policies, and

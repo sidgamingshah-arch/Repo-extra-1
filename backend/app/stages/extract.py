@@ -31,10 +31,13 @@ class ExtractStage:
             ctx.log(f"extract:xlsx_line_items={len(items)}")
             return doc
 
-        if not doc.tables:
-            ctx.log("extract:no_tables")
+        # PDF: native pages via the PyMuPDF text layer, scanned pages via the OCR port —
+        # both converge on shared word→line-item reconstruction with bbox provenance.
+        if doc.fmt == DocFormat.PDF and ctx.raw_bytes:
+            from app.services.pdf_extract import extract_pdf
+
+            extract_pdf(ctx.raw_bytes, doc, ctx)
             return doc
-        # TODO (PDF native/scanned): for each table row → LineItem with values keyed by
-        #       (basis, period), note_refs, unit context, provenance (bbox).
-        ctx.log(f"extract:tables={len(doc.tables)}")
+
+        ctx.log("extract:no_source_bytes")
         return doc
