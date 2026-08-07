@@ -36,13 +36,36 @@ class NoteRefHint(BaseModel):
     regex: str = r"\bnote[s]?\.?\s*(\d+(?:\.\d+)?)"
 
 
+ValueScope = Literal[
+    "exclusive_leaf",       # a stand-alone leaf value, no overlap with others
+    "exclusive_child",      # a component of a gross parent (subtract from parent)
+    "exclusive_residual",   # parent minus confirmed children (a computed residual)
+    "not_applicable",       # headings / non-extracted rows
+]
+ExtractionMode = Literal["extract", "do_not_extract"]
+
+
 class OntologyMapping(BaseModel):
     canonical_key: str
     # Human-readable name + a definition of what this canonical concept MEANS. The
-    # description is the primary signal for LLM description-based mapping: the model
-    # matches a source caption to a concept by meaning, not string similarity.
+    # definition/description is the primary signal for LLM description-based mapping: the
+    # model matches a source caption to a concept by meaning, not string similarity.
     label: str = ""
     description: str = ""
+    # Authoritative accounting definition (preferred over `description` when present) plus
+    # natural-language inclusion / exclusion criteria and easily-confused concepts — all
+    # fed to the LLM so the mapping decision is criteria-driven, not string-driven.
+    # (Learnings from field-tested Ind-AS extraction ontologies.)
+    definition: str = ""
+    include: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
+    confusable_with: list[str] = Field(default_factory=list)  # canonical_keys easy to confuse
+    value_scope: ValueScope = "exclusive_leaf"
+    extraction_mode: ExtractionMode = "extract"
+    # Natural-language residual/decomposition rule for this concept (e.g. "= combined
+    # intangible parent − goodwill − IAUD; if reported exclusively, do not subtract").
+    decomposition_rule: str | None = None
+    others_rule: str | None = None
     aliases: list[str] = Field(default_factory=list)          # default-locale aliases
     aliases_i18n: dict[str, list[str]] = Field(default_factory=dict)  # per-locale
     keyword_hints: list[str] = Field(default_factory=list)
@@ -51,6 +74,10 @@ class OntologyMapping(BaseModel):
     sign_rule: SignRule = Field(default_factory=SignRule)
     note_ref_hint: NoteRefHint = Field(default_factory=NoteRefHint)
     min_confidence_to_auto_accept: float = 0.85
+
+    def meaning(self) -> str:
+        """Best available semantic text for description-based matching."""
+        return self.definition or self.description or self.label or self.canonical_key
 
     def aliases_for(self, locale: str | None) -> list[str]:
         out = list(self.aliases)
@@ -78,6 +105,34 @@ class DecompositionRule(BaseModel):
 class GlobalRules(BaseModel):
     credit_balance_lines: list[str] = Field(default_factory=list)  # key globs
     paren_means_negative: bool = True
+    # Natural-language extraction policies fed to the LLM system prompt so decisions
+    # follow one consistent, auditable rulebook (learnings from prior ontologies):
+    parent_child_allocation: list[str] = Field(default_factory=list)
+    duplicate_fact_rule: str = ""      # face + note = one fact w/ multiple evidence
+    other_income_rule: str = ""
+    others_policy: list[str] = Field(default_factory=list)
+    totals_policy: str = ""            # totals computed from mutually-exclusive outputs
+    no_fabricated_split: str = ""
+    source_fact_id: str = ""           # composition of the provenance identity
+
+
+class WorkedExample(BaseModel):
+    """A few-shot example injected into the mapping/extraction prompt to anchor policy."""
+
+    scenario: str
+    source: dict = Field(default_factory=dict)
+    output: list[dict] = Field(default_factory=list)
+    validation: str = ""
+    instruction: str = ""
+
+
+class OntologyMetadata(BaseModel):
+    name: str = ""
+    framework: str = ""                # e.g. IND_AS, HKFRS, IFRS
+    version: str = ""
+    source_template: str = ""
+    field_count: int | None = None
+    changes: list[str] = Field(default_factory=list)  # changelog
 
 
 class OntologyDefinition(BaseModel):
@@ -90,9 +145,11 @@ class OntologyDefinition(BaseModel):
     number_format_by_locale: dict[str, NumberFormat] = Field(
         default_factory=lambda: {"en": NumberFormat()}
     )
+    metadata: OntologyMetadata | None = None
     mappings: list[OntologyMapping] = Field(default_factory=list)
     decomposition_rules: list[DecompositionRule] = Field(default_factory=list)
     global_rules: GlobalRules = Field(default_factory=GlobalRules)
+    worked_examples: list[WorkedExample] = Field(default_factory=list)
 
     def number_format(self, locale: str | None) -> NumberFormat:
         if locale and locale in self.number_format_by_locale:

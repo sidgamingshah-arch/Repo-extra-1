@@ -11,11 +11,94 @@
     "en": {},
     "zh": {}
   },
+  "metadata": {
+    "name": "HKFRS / IFRS Hong Kong-China Extraction Ontology",
+    "framework": "HKFRS",
+    "version": "1.0",
+    "source_template": "hkfrs_hk_china_v1",
+    "field_count": 142,
+    "changes": [
+      "Initial HK/China ontology generated from the HKFRS/IFRS template."
+    ]
+  },
+  "global_rules": {
+    "paren_means_negative": true,
+    "source_fact_id": "document_id|scope|period|currency|unit|page|table_or_note|source_row_id",
+    "parent_child_allocation": [
+      "Build containment relationships before populating concepts.",
+      "Never add a gross parent and its separately mapped children.",
+      "Residual = reported parent - confirmed included children.",
+      "Subtract only with explicit inclusion wording, hierarchy, reconciliation or arithmetic support.",
+      "If containment is uncertain, retain the parent as evidence and require review."
+    ],
+    "duplicate_fact_rule": "The same economic fact on the face statement and in a note is one fact with multiple evidence references, not two additive values.",
+    "others_policy": [
+      "'Others' is section-specific and never a balancing plug.",
+      "Use only after all dedicated concepts are tested.",
+      "Retain original component labels and values.",
+      "Material or low-confidence residual mappings require review."
+    ],
+    "totals_policy": "Compute totals from mutually exclusive outputs; use reported totals for validation.",
+    "no_fabricated_split": "Do not invent a split when reliable decomposition is unavailable; use a fallback or route to review."
+  },
+  "worked_examples": [
+    {
+      "scenario": "Other income includes interest income",
+      "source": {
+        "Other income": 50,
+        "of which Interest income": 12
+      },
+      "output": [
+        {
+          "canonical_key": "pl_income__other_income",
+          "value": 38,
+          "allocation_status": "calculated_residual",
+          "calculation": "50-12"
+        },
+        {
+          "canonical_key": "pl_non_operating_expenses__interest_income",
+          "value": 12,
+          "allocation_status": "child_component"
+        }
+      ],
+      "validation": "38 + 12 = 50"
+    },
+    {
+      "scenario": "Other income is already exclusive and interest income is presented separately",
+      "source": {
+        "Other income": 38,
+        "Interest income": 12
+      },
+      "output": [
+        {
+          "canonical_key": "pl_income__other_income",
+          "value": 38,
+          "allocation_status": "direct_exclusive"
+        },
+        {
+          "canonical_key": "pl_non_operating_expenses__interest_income",
+          "value": 12,
+          "allocation_status": "direct_exclusive"
+        }
+      ],
+      "instruction": "Do not subtract again."
+    }
+  ],
   "mappings": [
     {
       "canonical_key": "bs_non_current_assets__property_plant_and_equipment",
       "label": "Property, Plant and Equipment",
+      "definition": "Property, Plant and Equipment: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Property, Plant and Equipment: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Property, Plant and Equipment"
       ],
@@ -31,7 +114,17 @@
     {
       "canonical_key": "bs_non_current_assets__land_of_use_rights",
       "label": "Land of use rights",
+      "definition": "Land of use rights: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Land of use rights: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Land of use rights"
       ],
@@ -47,7 +140,17 @@
     {
       "canonical_key": "bs_non_current_assets__right_of_use_assets",
       "label": "Right-of-use assets",
+      "definition": "Right-of-use assets: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Right-of-use assets: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Right-of-use assets"
       ],
@@ -63,7 +166,17 @@
     {
       "canonical_key": "bs_non_current_assets__construction_in_progress",
       "label": "Construction in progress",
+      "definition": "Construction in progress: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Construction in progress: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Construction in progress"
       ],
@@ -79,7 +192,17 @@
     {
       "canonical_key": "bs_non_current_assets__investment_properties",
       "label": "Investment Properties",
+      "definition": "Investment Properties: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Investment Properties: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Investment Properties"
       ],
@@ -95,7 +218,17 @@
     {
       "canonical_key": "bs_non_current_assets__goodwill",
       "label": "Goodwill",
+      "definition": "Goodwill: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Goodwill: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Goodwill"
       ],
@@ -111,7 +244,17 @@
     {
       "canonical_key": "bs_non_current_assets__other_intangible_assets",
       "label": "Other Intangible assets",
+      "definition": "Other Intangible assets: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Other Intangible assets: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Other Intangible assets"
       ],
@@ -127,7 +270,17 @@
     {
       "canonical_key": "bs_non_current_assets__intangible_assets_under_development",
       "label": "Intangible assets under development",
+      "definition": "Intangible assets under development: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Intangible assets under development: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Intangible assets under development"
       ],
@@ -143,7 +296,17 @@
     {
       "canonical_key": "bs_non_current_assets__investments_in_subsidiaries",
       "label": "Investments in subsidiaries",
+      "definition": "Investments in subsidiaries: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Investments in subsidiaries: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Investments in subsidiaries"
       ],
@@ -159,7 +322,17 @@
     {
       "canonical_key": "bs_non_current_assets__interests_in_associates",
       "label": "Interests in associates",
+      "definition": "Interests in associates: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Interests in associates: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Interests in associates"
       ],
@@ -175,7 +348,17 @@
     {
       "canonical_key": "bs_non_current_assets__equity_investments_designated_at_fair_value_through_other_comprehensive_income",
       "label": "Equity investments designated at fair value through other comprehensive income",
+      "definition": "Equity investments designated at fair value through other comprehensive income: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Equity investments designated at fair value through other comprehensive income: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Equity investments designated at fair value through other comprehensive income"
       ],
@@ -191,7 +374,17 @@
     {
       "canonical_key": "bs_non_current_assets__financial_assets_at_fair_value_through_profit_or_loss",
       "label": "Financial assets at fair value through profit or loss",
+      "definition": "Financial assets at fair value through profit or loss: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Financial assets at fair value through profit or loss: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Financial assets at fair value through profit or loss"
       ],
@@ -207,7 +400,17 @@
     {
       "canonical_key": "bs_non_current_assets__other_non_current_financial_assets",
       "label": "Other non-current financial assets",
+      "definition": "Other non-current financial assets: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Other non-current financial assets: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Other non-current financial assets"
       ],
@@ -223,7 +426,17 @@
     {
       "canonical_key": "bs_non_current_assets__deferred_income_tax_assets",
       "label": "Deferred Income Tax Assets",
+      "definition": "Deferred Income Tax Assets: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Deferred Income Tax Assets: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Deferred Income Tax Assets"
       ],
@@ -239,7 +452,17 @@
     {
       "canonical_key": "bs_non_current_assets__term_deposits",
       "label": "Term Deposits",
+      "definition": "Term Deposits: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Term Deposits: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Term Deposits"
       ],
@@ -255,7 +478,17 @@
     {
       "canonical_key": "bs_non_current_assets__others",
       "label": "Others",
+      "definition": "Others: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Others: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Others"
       ],
@@ -271,7 +504,17 @@
     {
       "canonical_key": "bs_non_current_assets__total_non_current_assets",
       "label": "Total non-current assets",
+      "definition": "Total non-current assets: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Total non-current assets: under 'Non-current assets' in the balance sheet.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total non-current assets"
       ],
@@ -287,7 +530,17 @@
     {
       "canonical_key": "bs_current_assets__cash_and_cash_equivalents",
       "label": "Cash and cash equivalents",
+      "definition": "Cash and cash equivalents: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Cash and cash equivalents: under 'Current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Cash and cash equivalents"
       ],
@@ -303,7 +556,17 @@
     {
       "canonical_key": "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
       "label": "Bank balances other than cash and cash equivalents",
+      "definition": "Bank balances other than cash and cash equivalents: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Bank balances other than cash and cash equivalents: under 'Current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Bank balances other than cash and cash equivalents"
       ],
@@ -319,7 +582,17 @@
     {
       "canonical_key": "bs_current_assets__inventories",
       "label": "Inventories",
+      "definition": "Inventories: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Inventories: under 'Current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Inventories"
       ],
@@ -335,7 +608,17 @@
     {
       "canonical_key": "bs_current_assets__trade_receivables",
       "label": "Trade receivables",
+      "definition": "Trade receivables: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Trade receivables: under 'Current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Trade receivables"
       ],
@@ -351,7 +634,17 @@
     {
       "canonical_key": "bs_current_assets__prepayments_other_receivables_and_other_assets",
       "label": "Prepayments, other receivables and other assets",
+      "definition": "Prepayments, other receivables and other assets: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Prepayments, other receivables and other assets: under 'Current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Prepayments, other receivables and other assets"
       ],
@@ -367,7 +660,17 @@
     {
       "canonical_key": "bs_current_assets__financial_assets_at_fair_value_through_other_comprehensive_income",
       "label": "Financial assets at fair value through other comprehensive income",
+      "definition": "Financial assets at fair value through other comprehensive income: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Financial assets at fair value through other comprehensive income: under 'Current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Financial assets at fair value through other comprehensive income"
       ],
@@ -383,7 +686,17 @@
     {
       "canonical_key": "bs_current_assets__other_financial_assets",
       "label": "Other Financial Assets",
+      "definition": "Other Financial Assets: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Other Financial Assets: under 'Current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Other Financial Assets"
       ],
@@ -399,7 +712,17 @@
     {
       "canonical_key": "bs_current_assets__others",
       "label": "Others",
+      "definition": "Others: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Others: under 'Current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Others"
       ],
@@ -415,7 +738,17 @@
     {
       "canonical_key": "bs_current_assets__total_current_assets",
       "label": "Total current assets",
+      "definition": "Total current assets: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
       "description": "Total current assets: under 'Current assets' in the balance sheet.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total current assets"
       ],
@@ -431,7 +764,17 @@
     {
       "canonical_key": "bs_equity__share_capital",
       "label": "Share capital",
+      "definition": "Share capital: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Share capital: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Share capital"
       ],
@@ -447,7 +790,17 @@
     {
       "canonical_key": "bs_equity__other_equity_instruments",
       "label": "Other equity instruments",
+      "definition": "Other equity instruments: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Other equity instruments: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Other equity instruments"
       ],
@@ -463,7 +816,17 @@
     {
       "canonical_key": "bs_equity__capital_reserve",
       "label": "Capital reserve",
+      "definition": "Capital reserve: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Capital reserve: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Capital reserve"
       ],
@@ -479,7 +842,17 @@
     {
       "canonical_key": "bs_equity__share_premium",
       "label": "Share Premium",
+      "definition": "Share Premium: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Share Premium: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Share Premium"
       ],
@@ -495,7 +868,17 @@
     {
       "canonical_key": "bs_equity__treasury_shares",
       "label": "Treasury Shares",
+      "definition": "Treasury Shares: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Treasury Shares: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Treasury Shares"
       ],
@@ -511,7 +894,17 @@
     {
       "canonical_key": "bs_equity__shares_held_for_share_award_schemes",
       "label": "Shares held for share award schemes",
+      "definition": "Shares held for share award schemes: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Shares held for share award schemes: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Shares held for share award schemes"
       ],
@@ -527,7 +920,17 @@
     {
       "canonical_key": "bs_equity__retained_earnings",
       "label": "Retained earnings",
+      "definition": "Retained earnings: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Retained earnings: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Retained earnings"
       ],
@@ -543,7 +946,17 @@
     {
       "canonical_key": "bs_equity__general_reserve",
       "label": "General Reserve",
+      "definition": "General Reserve: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "General Reserve: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "General Reserve"
       ],
@@ -559,7 +972,17 @@
     {
       "canonical_key": "bs_equity__other_comprehensive_income_reserve",
       "label": "Other comprehensive income reserve",
+      "definition": "Other comprehensive income reserve: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Other comprehensive income reserve: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Other comprehensive income reserve"
       ],
@@ -575,7 +998,17 @@
     {
       "canonical_key": "bs_equity__non_controlling_interests",
       "label": "Non-controlling interests",
+      "definition": "Non-controlling interests: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Non-controlling interests: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Non-controlling interests"
       ],
@@ -591,7 +1024,17 @@
     {
       "canonical_key": "bs_equity__others",
       "label": "Others",
+      "definition": "Others: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Others: under 'Equity' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Others"
       ],
@@ -607,7 +1050,17 @@
     {
       "canonical_key": "bs_equity__total_equity",
       "label": "Total equity",
+      "definition": "Total equity: under 'Equity' in the balance sheet (HKFRS/IFRS).",
       "description": "Total equity: under 'Equity' in the balance sheet.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total equity"
       ],
@@ -623,7 +1076,17 @@
     {
       "canonical_key": "bs_non_current_liabilities__non_current_borrowings",
       "label": "Non-current borrowings",
+      "definition": "Non-current borrowings: under 'Non-current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Non-current borrowings: under 'Non-current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Non-current borrowings"
       ],
@@ -639,7 +1102,17 @@
     {
       "canonical_key": "bs_non_current_liabilities__non_current_bonds_payable",
       "label": "Non-current Bonds payable",
+      "definition": "Non-current Bonds payable: under 'Non-current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Non-current Bonds payable: under 'Non-current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Non-current Bonds payable"
       ],
@@ -655,7 +1128,17 @@
     {
       "canonical_key": "bs_non_current_liabilities__non_current_notes_payable",
       "label": "Non-current Notes Payable",
+      "definition": "Non-current Notes Payable: under 'Non-current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Non-current Notes Payable: under 'Non-current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Non-current Notes Payable"
       ],
@@ -671,7 +1154,17 @@
     {
       "canonical_key": "bs_non_current_liabilities__non_current_lease_liabilities",
       "label": "Non-current Lease liabilities",
+      "definition": "Non-current Lease liabilities: under 'Non-current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Non-current Lease liabilities: under 'Non-current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Non-current Lease liabilities"
       ],
@@ -687,7 +1180,17 @@
     {
       "canonical_key": "bs_non_current_liabilities__long_term_provisions",
       "label": "Long-term provisions",
+      "definition": "Long-term provisions: under 'Non-current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Long-term provisions: under 'Non-current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Long-term provisions"
       ],
@@ -703,7 +1206,17 @@
     {
       "canonical_key": "bs_non_current_liabilities__long_term_payables",
       "label": "Long-term payables",
+      "definition": "Long-term payables: under 'Non-current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Long-term payables: under 'Non-current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Long-term payables"
       ],
@@ -719,7 +1232,17 @@
     {
       "canonical_key": "bs_non_current_liabilities__non_current_deferred_tax_liabilities_net",
       "label": "Non-current Deferred tax liabilities (net)",
+      "definition": "Non-current Deferred tax liabilities (net): under 'Non-current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Non-current Deferred tax liabilities (net): under 'Non-current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Non-current Deferred tax liabilities (net)"
       ],
@@ -735,7 +1258,17 @@
     {
       "canonical_key": "bs_non_current_liabilities__non_current_deferred_income",
       "label": "Non-current Deferred income",
+      "definition": "Non-current Deferred income: under 'Non-current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Non-current Deferred income: under 'Non-current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Non-current Deferred income"
       ],
@@ -751,7 +1284,17 @@
     {
       "canonical_key": "bs_non_current_liabilities__others",
       "label": "Others",
+      "definition": "Others: under 'Non-current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Others: under 'Non-current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Others"
       ],
@@ -767,7 +1310,17 @@
     {
       "canonical_key": "bs_non_current_liabilities__total_non_current_liabilities",
       "label": "Total non-current liabilities",
+      "definition": "Total non-current liabilities: under 'Non-current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Total non-current liabilities: under 'Non-current liabilities' in the balance sheet.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total non-current liabilities"
       ],
@@ -783,7 +1336,17 @@
     {
       "canonical_key": "bs_current_liabilities__current_borrowings",
       "label": "Current borrowings",
+      "definition": "Current borrowings: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Current borrowings: under 'Current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Current borrowings"
       ],
@@ -799,7 +1362,17 @@
     {
       "canonical_key": "bs_current_liabilities__current_potion_of_long_term_debt",
       "label": "Current potion of long term debt",
+      "definition": "Current potion of long term debt: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Current potion of long term debt: under 'Current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Current potion of long term debt"
       ],
@@ -815,7 +1388,17 @@
     {
       "canonical_key": "bs_current_liabilities__other_current_financial_liabilities",
       "label": "Other current financial liabilities",
+      "definition": "Other current financial liabilities: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Other current financial liabilities: under 'Current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Other current financial liabilities"
       ],
@@ -831,7 +1414,17 @@
     {
       "canonical_key": "bs_current_liabilities__current_trade_payables",
       "label": "Current Trade payables",
+      "definition": "Current Trade payables: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Current Trade payables: under 'Current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Current Trade payables"
       ],
@@ -847,7 +1440,17 @@
     {
       "canonical_key": "bs_current_liabilities__cuurent_notes_payable",
       "label": "Cuurent Notes Payable",
+      "definition": "Cuurent Notes Payable: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Cuurent Notes Payable: under 'Current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Cuurent Notes Payable"
       ],
@@ -863,7 +1466,17 @@
     {
       "canonical_key": "bs_current_liabilities__current_income_tax_liabilities",
       "label": "Current income tax liabilities",
+      "definition": "Current income tax liabilities: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Current income tax liabilities: under 'Current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Current income tax liabilities"
       ],
@@ -879,7 +1492,17 @@
     {
       "canonical_key": "bs_current_liabilities__current_lease_liabilities",
       "label": "Current Lease Liabilities",
+      "definition": "Current Lease Liabilities: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Current Lease Liabilities: under 'Current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Current Lease Liabilities"
       ],
@@ -895,7 +1518,17 @@
     {
       "canonical_key": "bs_current_liabilities__current_deferred_revenue",
       "label": "Current Deferred Revenue",
+      "definition": "Current Deferred Revenue: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Current Deferred Revenue: under 'Current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Current Deferred Revenue"
       ],
@@ -911,7 +1544,17 @@
     {
       "canonical_key": "bs_current_liabilities__others",
       "label": "Others",
+      "definition": "Others: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Others: under 'Current liabilities' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Others"
       ],
@@ -927,7 +1570,17 @@
     {
       "canonical_key": "bs_current_liabilities__total_current_liabilities",
       "label": "Total current liabilities",
+      "definition": "Total current liabilities: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Total current liabilities: under 'Current liabilities' in the balance sheet.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total current liabilities"
       ],
@@ -943,7 +1596,17 @@
     {
       "canonical_key": "bs_total_assets",
       "label": "Total Assets",
+      "definition": "Total Assets: a top-level line of the balance sheet (HKFRS/IFRS).",
       "description": "Total Assets: a top-level line of the balance sheet.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total Assets"
       ],
@@ -959,7 +1622,17 @@
     {
       "canonical_key": "bs_total_equity_and_liabilities",
       "label": "Total Equity and Liabilities",
+      "definition": "Total Equity and Liabilities: a top-level line of the balance sheet (HKFRS/IFRS).",
       "description": "Total Equity and Liabilities: a top-level line of the balance sheet.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total Equity and Liabilities"
       ],
@@ -975,7 +1648,17 @@
     {
       "canonical_key": "pl_income__revenue_from_operations",
       "label": "Revenue from operations",
+      "definition": "Revenue from operations: under 'Income' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Revenue from operations: under 'Income' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Revenue from operations"
       ],
@@ -991,7 +1674,17 @@
     {
       "canonical_key": "pl_income__other_income",
       "label": "Other income",
+      "definition": "Other income: under 'Income' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Other income: under 'Income' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Other income"
       ],
@@ -1007,7 +1700,17 @@
     {
       "canonical_key": "pl_income__total_income",
       "label": "Total income",
+      "definition": "Total income: under 'Income' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Total income: under 'Income' in the statement of profit or loss.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total income"
       ],
@@ -1023,7 +1726,17 @@
     {
       "canonical_key": "pl_expenses__cost_of_goods_sold",
       "label": "Cost of Goods Sold",
+      "definition": "Cost of Goods Sold: under 'Expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Cost of Goods Sold: under 'Expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Cost of Goods Sold"
       ],
@@ -1039,7 +1752,17 @@
     {
       "canonical_key": "pl_expenses__selling_and_marketing_expenses",
       "label": "Selling and Marketing Expenses",
+      "definition": "Selling and Marketing Expenses: under 'Expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Selling and Marketing Expenses: under 'Expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Selling and Marketing Expenses"
       ],
@@ -1055,7 +1778,17 @@
     {
       "canonical_key": "pl_expenses__general_and_administrative_expenses",
       "label": "General and Administrative expenses",
+      "definition": "General and Administrative expenses: under 'Expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "General and Administrative expenses: under 'Expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "General and Administrative expenses"
       ],
@@ -1071,7 +1804,17 @@
     {
       "canonical_key": "pl_expenses__research_and_development_expenses",
       "label": "Research and development expenses",
+      "definition": "Research and development expenses: under 'Expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Research and development expenses: under 'Expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Research and development expenses"
       ],
@@ -1087,7 +1830,17 @@
     {
       "canonical_key": "pl_expenses__employee_benefits_expense",
       "label": "Employee benefits expense",
+      "definition": "Employee benefits expense: under 'Expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Employee benefits expense: under 'Expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Employee benefits expense"
       ],
@@ -1103,7 +1856,17 @@
     {
       "canonical_key": "pl_expenses__purchases_of_stock_in_trade",
       "label": "Purchases of Stock-in-trade",
+      "definition": "Purchases of Stock-in-trade: under 'Expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Purchases of Stock-in-trade: under 'Expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Purchases of Stock-in-trade"
       ],
@@ -1119,7 +1882,17 @@
     {
       "canonical_key": "pl_expenses__other_operating_costs",
       "label": "Other Operating costs",
+      "definition": "Other Operating costs: under 'Expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Other Operating costs: under 'Expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Other Operating costs"
       ],
@@ -1135,7 +1908,17 @@
     {
       "canonical_key": "pl_expenses__depreciation_and_amortisation_expense",
       "label": "Depreciation and Amortisation Expense",
+      "definition": "Depreciation and Amortisation Expense: under 'Expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Depreciation and Amortisation Expense: under 'Expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Depreciation and Amortisation Expense"
       ],
@@ -1151,7 +1934,17 @@
     {
       "canonical_key": "pl_expenses__total_operating_cost",
       "label": "Total operating cost",
+      "definition": "Total operating cost: under 'Expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Total operating cost: under 'Expenses' in the statement of profit or loss.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total operating cost"
       ],
@@ -1167,7 +1960,17 @@
     {
       "canonical_key": "pl_non_operating_expenses__interest_expense",
       "label": "Interest Expense",
+      "definition": "Interest Expense: under 'Non-operating expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Interest Expense: under 'Non-operating expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Interest Expense"
       ],
@@ -1183,7 +1986,17 @@
     {
       "canonical_key": "pl_non_operating_expenses__interest_income",
       "label": "Interest Income",
+      "definition": "Interest Income: under 'Non-operating expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Interest Income: under 'Non-operating expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Interest Income"
       ],
@@ -1199,7 +2012,17 @@
     {
       "canonical_key": "pl_non_operating_expenses__investment_income",
       "label": "Investment income",
+      "definition": "Investment income: under 'Non-operating expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Investment income: under 'Non-operating expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Investment income"
       ],
@@ -1215,7 +2038,17 @@
     {
       "canonical_key": "pl_non_operating_expenses__others",
       "label": "Others",
+      "definition": "Others: under 'Non-operating expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Others: under 'Non-operating expenses' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Others"
       ],
@@ -1231,7 +2064,17 @@
     {
       "canonical_key": "pl_non_operating_expenses__total_non_operating_expense",
       "label": "Total non-operating expense",
+      "definition": "Total non-operating expense: under 'Non-operating expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Total non-operating expense: under 'Non-operating expenses' in the statement of profit or loss.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total non-operating expense"
       ],
@@ -1247,7 +2090,17 @@
     {
       "canonical_key": "pl_exceptional_items__share_of_profit_of_associates_and_jvs",
       "label": "share of profit of associates and JVs",
+      "definition": "share of profit of associates and JVs: under 'Exceptional items' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "share of profit of associates and JVs: under 'Exceptional items' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "share of profit of associates and JVs"
       ],
@@ -1263,7 +2116,17 @@
     {
       "canonical_key": "pl_exceptional_items__gain_on_derecognition_of_financial_assets_at_amortised_cost",
       "label": "Gain on derecognition of financial assets at amortised cost",
+      "definition": "Gain on derecognition of financial assets at amortised cost: under 'Exceptional items' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Gain on derecognition of financial assets at amortised cost: under 'Exceptional items' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Gain on derecognition of financial assets at amortised cost"
       ],
@@ -1279,7 +2142,17 @@
     {
       "canonical_key": "pl_exceptional_items__fair_value_change_gains",
       "label": "Fair value change gains",
+      "definition": "Fair value change gains: under 'Exceptional items' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Fair value change gains: under 'Exceptional items' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Fair value change gains"
       ],
@@ -1295,7 +2168,17 @@
     {
       "canonical_key": "pl_exceptional_items__credit_impairment_losses",
       "label": "Credit impairment losses",
+      "definition": "Credit impairment losses: under 'Exceptional items' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Credit impairment losses: under 'Exceptional items' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Credit impairment losses"
       ],
@@ -1311,7 +2194,17 @@
     {
       "canonical_key": "pl_exceptional_items__asset_impairment_losses",
       "label": "Asset impairment losses",
+      "definition": "Asset impairment losses: under 'Exceptional items' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Asset impairment losses: under 'Exceptional items' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Asset impairment losses"
       ],
@@ -1327,7 +2220,17 @@
     {
       "canonical_key": "pl_exceptional_items__gains_on_asset_disposal",
       "label": "Gains on asset disposal",
+      "definition": "Gains on asset disposal: under 'Exceptional items' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Gains on asset disposal: under 'Exceptional items' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Gains on asset disposal"
       ],
@@ -1343,7 +2246,17 @@
     {
       "canonical_key": "pl_exceptional_items__total_exceptional_items",
       "label": "Total Exceptional items",
+      "definition": "Total Exceptional items: under 'Exceptional items' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Total Exceptional items: under 'Exceptional items' in the statement of profit or loss.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total Exceptional items"
       ],
@@ -1359,7 +2272,17 @@
     {
       "canonical_key": "pl_tax_expense__current_tax",
       "label": "Current tax",
+      "definition": "Current tax: under 'Tax expense' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Current tax: under 'Tax expense' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Current tax"
       ],
@@ -1375,7 +2298,17 @@
     {
       "canonical_key": "pl_tax_expense__deferred_tax",
       "label": "Deferred tax",
+      "definition": "Deferred tax: under 'Tax expense' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Deferred tax: under 'Tax expense' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Deferred tax"
       ],
@@ -1391,7 +2324,17 @@
     {
       "canonical_key": "pl_tax_expense__others",
       "label": "Others",
+      "definition": "Others: under 'Tax expense' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Others: under 'Tax expense' in the statement of profit or loss.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Others"
       ],
@@ -1407,7 +2350,17 @@
     {
       "canonical_key": "pl_tax_expense__total_tax_expense",
       "label": "Total tax expense",
+      "definition": "Total tax expense: under 'Tax expense' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Total tax expense: under 'Tax expense' in the statement of profit or loss.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total tax expense"
       ],
@@ -1423,7 +2376,17 @@
     {
       "canonical_key": "pl_operating_profit_ebit",
       "label": "Operating Profit / EBIT",
+      "definition": "Operating Profit / EBIT: a top-level line of the statement of profit or loss (HKFRS/IFRS).",
       "description": "Operating Profit / EBIT: a top-level line of the statement of profit or loss.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Operating Profit / EBIT"
       ],
@@ -1439,7 +2402,17 @@
     {
       "canonical_key": "pl_total_expenses",
       "label": "Total expenses",
+      "definition": "Total expenses: a top-level line of the statement of profit or loss (HKFRS/IFRS).",
       "description": "Total expenses: a top-level line of the statement of profit or loss.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Total expenses"
       ],
@@ -1455,7 +2428,17 @@
     {
       "canonical_key": "pl_profit_before_exceptional_items_and_tax",
       "label": "Profit before exceptional items and tax",
+      "definition": "Profit before exceptional items and tax: a top-level line of the statement of profit or loss (HKFRS/IFRS).",
       "description": "Profit before exceptional items and tax: a top-level line of the statement of profit or loss.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Profit before exceptional items and tax"
       ],
@@ -1471,7 +2454,17 @@
     {
       "canonical_key": "pl_profit_before_tax",
       "label": "Profit before tax",
+      "definition": "Profit before tax: a top-level line of the statement of profit or loss (HKFRS/IFRS).",
       "description": "Profit before tax: a top-level line of the statement of profit or loss.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Profit before tax"
       ],
@@ -1487,7 +2480,17 @@
     {
       "canonical_key": "pl_profit_for_the_year",
       "label": "Profit for the year",
+      "definition": "Profit for the year: a top-level line of the statement of profit or loss (HKFRS/IFRS).",
       "description": "Profit for the year: a top-level line of the statement of profit or loss.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Profit for the year"
       ],
@@ -1503,7 +2506,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__profit_before_tax",
       "label": "Profit before tax",
+      "definition": "Profit before tax: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Profit before tax: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Profit before tax"
       ],
@@ -1519,7 +2532,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__income_tax_expense",
       "label": "Income tax expense",
+      "definition": "Income tax expense: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Income tax expense: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Income tax expense"
       ],
@@ -1535,7 +2558,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__depreciation_and_amortisation",
       "label": "Depreciation and amortisation",
+      "definition": "Depreciation and amortisation: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Depreciation and amortisation: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Depreciation and amortisation"
       ],
@@ -1551,7 +2584,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__finance_costs",
       "label": "Finance costs",
+      "definition": "Finance costs: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Finance costs: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Finance costs"
       ],
@@ -1567,7 +2610,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__interest_income",
       "label": "Interest income",
+      "definition": "Interest income: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Interest income: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Interest income"
       ]
@@ -1575,7 +2628,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__share_of_results_of_associates_and_joint_ventures",
       "label": "Share of results of associates and joint ventures",
+      "definition": "Share of results of associates and joint ventures: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Share of results of associates and joint ventures: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Share of results of associates and joint ventures"
       ]
@@ -1583,7 +2646,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__fair_value_changes_on_financial_instruments",
       "label": "Fair value changes on financial instruments",
+      "definition": "Fair value changes on financial instruments: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Fair value changes on financial instruments: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Fair value changes on financial instruments"
       ]
@@ -1591,7 +2664,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__impairment_losses_on_financial_and_contract_assets",
       "label": "Impairment losses on financial and contract assets",
+      "definition": "Impairment losses on financial and contract assets: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Impairment losses on financial and contract assets: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Impairment losses on financial and contract assets"
       ]
@@ -1599,7 +2682,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__loss_gain_on_disposal_of_property_plant_and_equipment",
       "label": "Loss/(gain) on disposal of property, plant and equipment",
+      "definition": "Loss/(gain) on disposal of property, plant and equipment: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Loss/(gain) on disposal of property, plant and equipment: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Loss/(gain) on disposal of property, plant and equipment"
       ]
@@ -1607,7 +2700,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_receivables",
       "label": "(Increase)/decrease in trade receivables",
+      "definition": "(Increase)/decrease in trade receivables: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "(Increase)/decrease in trade receivables: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "(Increase)/decrease in trade receivables"
       ],
@@ -1623,7 +2726,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__increase_decrease_in_inventories",
       "label": "(Increase)/decrease in inventories",
+      "definition": "(Increase)/decrease in inventories: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "(Increase)/decrease in inventories: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "(Increase)/decrease in inventories"
       ],
@@ -1639,7 +2752,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__increase_decrease_in_prepayments_and_other_receivables",
       "label": "(Increase)/decrease in prepayments and other receivables",
+      "definition": "(Increase)/decrease in prepayments and other receivables: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "(Increase)/decrease in prepayments and other receivables: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "(Increase)/decrease in prepayments and other receivables"
       ]
@@ -1647,7 +2770,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_payables",
       "label": "Increase/(decrease) in trade payables",
+      "definition": "Increase/(decrease) in trade payables: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Increase/(decrease) in trade payables: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Increase/(decrease) in trade payables"
       ],
@@ -1663,7 +2796,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__increase_decrease_in_contract_liabilities",
       "label": "Increase/(decrease) in contract liabilities",
+      "definition": "Increase/(decrease) in contract liabilities: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Increase/(decrease) in contract liabilities: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Increase/(decrease) in contract liabilities"
       ]
@@ -1671,7 +2814,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__increase_decrease_in_other_payables_and_accruals",
       "label": "Increase/(decrease) in other payables and accruals",
+      "definition": "Increase/(decrease) in other payables and accruals: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Increase/(decrease) in other payables and accruals: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Increase/(decrease) in other payables and accruals"
       ]
@@ -1679,7 +2832,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
       "label": "Cash generated from operations",
+      "definition": "Cash generated from operations: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Cash generated from operations: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Cash generated from operations"
       ],
@@ -1695,7 +2858,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__interest_received",
       "label": "Interest received",
+      "definition": "Interest received: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Interest received: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Interest received"
       ],
@@ -1711,7 +2884,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__income_tax_paid",
       "label": "Income tax paid",
+      "definition": "Income tax paid: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Income tax paid: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Income tax paid"
       ],
@@ -1727,7 +2910,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__others",
       "label": "Others",
+      "definition": "Others: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Others: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Others"
       ],
@@ -1743,7 +2936,17 @@
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__net_cash_from_operating_activities",
       "label": "Net cash from operating activities",
+      "definition": "Net cash from operating activities: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Net cash from operating activities: under 'Cash flow from operating activities' in the statement of cash flows.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Net cash from operating activities"
       ],
@@ -1759,7 +2962,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__purchase_of_property_plant_and_equipment",
       "label": "Purchase of property, plant and equipment",
+      "definition": "Purchase of property, plant and equipment: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Purchase of property, plant and equipment: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Purchase of property, plant and equipment"
       ],
@@ -1775,7 +2988,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__purchase_of_intangible_assets",
       "label": "Purchase of intangible assets",
+      "definition": "Purchase of intangible assets: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Purchase of intangible assets: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Purchase of intangible assets"
       ]
@@ -1783,7 +3006,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__additions_to_investment_properties",
       "label": "Additions to investment properties",
+      "definition": "Additions to investment properties: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Additions to investment properties: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Additions to investment properties"
       ]
@@ -1791,7 +3024,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__proceeds_from_disposal_of_property_plant_and_equipment",
       "label": "Proceeds from disposal of property, plant and equipment",
+      "definition": "Proceeds from disposal of property, plant and equipment: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Proceeds from disposal of property, plant and equipment: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Proceeds from disposal of property, plant and equipment"
       ]
@@ -1799,7 +3042,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__purchase_of_investments",
       "label": "Purchase of investments",
+      "definition": "Purchase of investments: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Purchase of investments: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Purchase of investments"
       ],
@@ -1815,7 +3068,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__proceeds_from_sale_of_investments",
       "label": "Proceeds from sale of investments",
+      "definition": "Proceeds from sale of investments: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Proceeds from sale of investments: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Proceeds from sale of investments"
       ],
@@ -1831,7 +3094,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__acquisition_of_subsidiaries_net_of_cash_acquired",
       "label": "Acquisition of subsidiaries, net of cash acquired",
+      "definition": "Acquisition of subsidiaries, net of cash acquired: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Acquisition of subsidiaries, net of cash acquired: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Acquisition of subsidiaries, net of cash acquired"
       ]
@@ -1839,7 +3112,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__disposal_of_subsidiaries_net_of_cash_disposed",
       "label": "Disposal of subsidiaries, net of cash disposed",
+      "definition": "Disposal of subsidiaries, net of cash disposed: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Disposal of subsidiaries, net of cash disposed: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Disposal of subsidiaries, net of cash disposed"
       ]
@@ -1847,7 +3130,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__dividends_received_from_associates_and_investments",
       "label": "Dividends received from associates and investments",
+      "definition": "Dividends received from associates and investments: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Dividends received from associates and investments: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Dividends received from associates and investments"
       ]
@@ -1855,7 +3148,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__interest_received",
       "label": "Interest received",
+      "definition": "Interest received: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Interest received: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Interest received"
       ],
@@ -1871,7 +3174,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__placement_withdrawal_of_time_deposits",
       "label": "(Placement)/withdrawal of time deposits",
+      "definition": "(Placement)/withdrawal of time deposits: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "(Placement)/withdrawal of time deposits: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "(Placement)/withdrawal of time deposits"
       ]
@@ -1879,7 +3192,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__others",
       "label": "Others",
+      "definition": "Others: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Others: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Others"
       ],
@@ -1895,7 +3218,17 @@
     {
       "canonical_key": "cf_cash_flow_from_investing_activities__net_cash_used_in_investing_activities",
       "label": "Net cash used in investing activities",
+      "definition": "Net cash used in investing activities: under 'Cash flow from investing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Net cash used in investing activities: under 'Cash flow from investing activities' in the statement of cash flows.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Net cash used in investing activities"
       ],
@@ -1911,7 +3244,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__proceeds_from_borrowings",
       "label": "Proceeds from borrowings",
+      "definition": "Proceeds from borrowings: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Proceeds from borrowings: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Proceeds from borrowings"
       ],
@@ -1927,7 +3270,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__repayment_of_borrowings",
       "label": "Repayment of borrowings",
+      "definition": "Repayment of borrowings: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Repayment of borrowings: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Repayment of borrowings"
       ],
@@ -1943,7 +3296,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
       "label": "Proceeds from issue of shares",
+      "definition": "Proceeds from issue of shares: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Proceeds from issue of shares: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Proceeds from issue of shares"
       ]
@@ -1951,7 +3314,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__repurchase_of_shares",
       "label": "Repurchase of shares",
+      "definition": "Repurchase of shares: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Repurchase of shares: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Repurchase of shares"
       ]
@@ -1959,7 +3332,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_bonds_and_notes",
       "label": "Proceeds from issue of bonds and notes",
+      "definition": "Proceeds from issue of bonds and notes: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Proceeds from issue of bonds and notes: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Proceeds from issue of bonds and notes"
       ]
@@ -1967,7 +3350,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__redemption_of_bonds_and_notes",
       "label": "Redemption of bonds and notes",
+      "definition": "Redemption of bonds and notes: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Redemption of bonds and notes: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Redemption of bonds and notes"
       ]
@@ -1975,7 +3368,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__principal_elements_of_lease_payments",
       "label": "Principal elements of lease payments",
+      "definition": "Principal elements of lease payments: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Principal elements of lease payments: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Principal elements of lease payments"
       ]
@@ -1983,7 +3386,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__dividends_paid",
       "label": "Dividends paid",
+      "definition": "Dividends paid: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Dividends paid: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Dividends paid"
       ],
@@ -1999,7 +3412,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests",
       "label": "Dividends paid to non-controlling interests",
+      "definition": "Dividends paid to non-controlling interests: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Dividends paid to non-controlling interests: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Dividends paid to non-controlling interests"
       ]
@@ -2007,7 +3430,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests",
       "label": "Capital contributions from non-controlling interests",
+      "definition": "Capital contributions from non-controlling interests: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Capital contributions from non-controlling interests: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Capital contributions from non-controlling interests"
       ]
@@ -2015,7 +3448,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__interest_paid",
       "label": "Interest paid",
+      "definition": "Interest paid: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Interest paid: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Interest paid"
       ],
@@ -2031,7 +3474,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__others",
       "label": "Others",
+      "definition": "Others: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Others: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Others"
       ],
@@ -2047,7 +3500,17 @@
     {
       "canonical_key": "cf_cash_flow_from_financing_activities__net_cash_from_financing_activities",
       "label": "Net cash from financing activities",
+      "definition": "Net cash from financing activities: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
       "description": "Net cash from financing activities: under 'Cash flow from financing activities' in the statement of cash flows.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Net cash from financing activities"
       ],
@@ -2063,7 +3526,17 @@
     {
       "canonical_key": "cf_net_increase_decrease_in_cash_and_cash_equivalents",
       "label": "Net increase/(decrease) in cash and cash equivalents",
+      "definition": "Net increase/(decrease) in cash and cash equivalents: a top-level line of the statement of cash flows (HKFRS/IFRS).",
       "description": "Net increase/(decrease) in cash and cash equivalents: a top-level line of the statement of cash flows.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Net increase/(decrease) in cash and cash equivalents"
       ],
@@ -2079,7 +3552,17 @@
     {
       "canonical_key": "cf_opening_cash_and_cash_equivalents",
       "label": "Opening cash and cash equivalents",
+      "definition": "Opening cash and cash equivalents: a top-level line of the statement of cash flows (HKFRS/IFRS).",
       "description": "Opening cash and cash equivalents: a top-level line of the statement of cash flows.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Opening cash and cash equivalents"
       ],
@@ -2095,7 +3578,17 @@
     {
       "canonical_key": "cf_closing_cash_and_cash_equivalents",
       "label": "Closing cash and cash equivalents",
+      "definition": "Closing cash and cash equivalents: a top-level line of the statement of cash flows (HKFRS/IFRS).",
       "description": "Closing cash and cash equivalents: a top-level line of the statement of cash flows.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
       "aliases": [
         "Closing cash and cash equivalents"
       ],

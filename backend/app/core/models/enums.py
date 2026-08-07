@@ -97,3 +97,19 @@ class MappingMethod(str, Enum):
     EMBEDDING = "embedding"
     LLM = "llm"
     UNMATCHED = "unmatched"
+
+
+class AllocationStatus(str, Enum):
+    """How a mapped value was derived — the provenance of the number, not just the label.
+
+    Adopted from field-tested Ind-AS extraction practice: it makes parent/child/residual
+    handling auditable and prevents double-counting a gross parent with its children.
+    """
+
+    DIRECT_EXCLUSIVE = "direct_exclusive"              # reported directly, no overlap
+    CHILD_COMPONENT = "child_component"                # a component of a gross parent
+    PARENT_GROSS_EVIDENCE_ONLY = "parent_gross_evidence_only"  # parent kept as evidence, not added
+    CALCULATED_RESIDUAL = "calculated_residual"        # parent − confirmed children
+    DERIVED_TOTAL = "derived_total"                    # computed from mutually exclusive outputs
+    FALLBACK_COMBINED = "fallback_combined"            # assembled from legacy components
+    UNMAPPED_REVIEW = "unmapped_review"                # no confident mapping → review

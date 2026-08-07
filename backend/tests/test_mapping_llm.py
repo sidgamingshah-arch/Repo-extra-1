@@ -38,7 +38,8 @@ class _FakeLlm:
         caption_words = set(payload["caption"].lower().replace(",", " ").split())
         best_key, best_overlap = "", 0
         for c in payload["candidates"]:
-            overlap = len(caption_words & set(c["description"].lower().split()))
+            text = (c.get("definition") or c.get("description") or "").lower()
+            overlap = len(caption_words & set(text.split()))
             if overlap > best_overlap:
                 best_key, best_overlap = c["canonical_key"], overlap
         decision = LlmMappingDecision(canonical_key=best_key, confidence=0.92 if best_key else 0.0)
@@ -61,7 +62,7 @@ def test_description_based_beats_fuzzy():
     res = m.match(caption)
     assert res.method is MappingMethod.LLM
     assert res.canonical_key == "trade_receivables"
-    assert res.confidence == 0.92
+    assert res.confidence >= 0.92  # LLM-driven; may be nudged up by corroboration
     assert m.usage["calls"] == 1 and m.usage["input_tokens"] == 120
 
 
@@ -70,6 +71,40 @@ def test_exact_alias_short_circuits_without_calling_llm():
     res = m.match("Trade receivables")  # exact normalized alias
     assert res.method is MappingMethod.EXACT
     assert m.usage["calls"] == 0  # no tokens spent on an identity match
+
+
+def test_ensemble_combines_methods_and_corroborates():
+    """The LLM is a driver, not the sole authority: deterministic agreement boosts
+    confidence, and every candidate's criteria + the ontology policies reach the model."""
+    seen = {}
+
+    class _Recorder(_FakeLlm):
+        def complete_structured(self, *, system, messages, response_schema, temperature=0.0, max_tokens=2048):
+            seen["system"] = system
+            seen["payload"] = json.loads(messages[0]["content"])
+            return super().complete_structured(system=system, messages=messages,
+                                               response_schema=response_schema)
+
+    ont = _ontology()
+    # A do-not-extract heading must never be offered as a candidate.
+    ont.mappings.append(OntologyMapping(
+        canonical_key="current_assets_heading", label="Current assets",
+        description="section heading", extraction_mode="do_not_extract", value_scope="not_applicable"))
+    # Global policies should be injected into the system prompt.
+    ont.global_rules.no_fabricated_split = "Do not invent a split."
+    ont.global_rules.others_policy = ["Others is never a balancing plug."]
+
+    m = OntologyMatcher(ont, settings=get_settings(), llm_provider=_Recorder())
+    res = m.match("Cash & cash equivalents")  # fuzzy agrees with the LLM's pick
+    assert res.canonical_key == "cash_and_equivalents" and res.method is MappingMethod.LLM
+    assert "llm" in res.agreement and "fuzzy" in res.agreement          # corroborated
+    assert res.confidence > 0.92                                        # agreement boosted it
+    # Candidate payload carries criteria; the do_not_extract heading is absent.
+    keys = {c["canonical_key"] for c in seen["payload"]["candidates"]}
+    assert "current_assets_heading" not in keys
+    assert any("value_scope" in c for c in seen["payload"]["candidates"])
+    assert "Do not invent a split." in seen["system"]
+    assert "balancing plug" in seen["system"]
 
 
 def test_llm_abstains_falls_back_to_deterministic():

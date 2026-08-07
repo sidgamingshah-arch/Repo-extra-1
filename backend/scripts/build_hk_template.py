@@ -370,9 +370,59 @@ def build():
     return template
 
 
+_INCLUDE = ["Amounts attributable to this concept for the same entity, scope, period, currency and unit."]
+_EXCLUDE = [
+    "Amounts mapped to another dedicated concept.",
+    "Gross parent totals that contain separately mapped children.",
+]
+_GLOBAL_RULES = {
+    "paren_means_negative": True,
+    "source_fact_id": "document_id|scope|period|currency|unit|page|table_or_note|source_row_id",
+    "parent_child_allocation": [
+        "Build containment relationships before populating concepts.",
+        "Never add a gross parent and its separately mapped children.",
+        "Residual = reported parent - confirmed included children.",
+        "Subtract only with explicit inclusion wording, hierarchy, reconciliation or arithmetic support.",
+        "If containment is uncertain, retain the parent as evidence and require review.",
+    ],
+    "duplicate_fact_rule": "The same economic fact on the face statement and in a note is one fact "
+                           "with multiple evidence references, not two additive values.",
+    "others_policy": [
+        "'Others' is section-specific and never a balancing plug.",
+        "Use only after all dedicated concepts are tested.",
+        "Retain original component labels and values.",
+        "Material or low-confidence residual mappings require review.",
+    ],
+    "totals_policy": "Compute totals from mutually exclusive outputs; use reported totals for validation.",
+    "no_fabricated_split": "Do not invent a split when reliable decomposition is unavailable; "
+                           "use a fallback or route to review.",
+}
+_WORKED_EXAMPLES = [
+    {
+        "scenario": "Other income includes interest income",
+        "source": {"Other income": 50, "of which Interest income": 12},
+        "output": [
+            {"canonical_key": "pl_income__other_income", "value": 38, "allocation_status": "calculated_residual", "calculation": "50-12"},
+            {"canonical_key": "pl_non_operating_expenses__interest_income", "value": 12, "allocation_status": "child_component"},
+        ],
+        "validation": "38 + 12 = 50",
+    },
+    {
+        "scenario": "Other income is already exclusive and interest income is presented separately",
+        "source": {"Other income": 38, "Interest income": 12},
+        "output": [
+            {"canonical_key": "pl_income__other_income", "value": 38, "allocation_status": "direct_exclusive"},
+            {"canonical_key": "pl_non_operating_expenses__interest_income", "value": 12, "allocation_status": "direct_exclusive"},
+        ],
+        "instruction": "Do not subtract again.",
+    },
+]
+
+
 def build_ontology(template: dict) -> dict:
-    """Companion ontology: a concept per template key, with a context-rich description so
-    description-based mapping disambiguates repeated captions (e.g. the many 'Others')."""
+    """Companion ontology: a concept per template key with a definition + include/exclude
+    criteria + value_scope, plus global extraction policies and worked examples, so the
+    ensemble's LLM driver maps by MEANING and disambiguates repeated captions ('Others')."""
     mappings = []
     for st in template["statements"]:
         human = next(h for t, h in STMT_HUMAN.items() if STMT_TYPE[t] == st["type"])
@@ -383,9 +433,14 @@ def build_ontology(template: dict) -> dict:
                 if role in ("line", "subtotal", "total"):
                     label = n["label"]
                     where = f"under '{section_label}' in the {human}" if section_label else f"a top-level line of the {human}"
-                    desc = f"{label}: {where}."
+                    is_line = role == "line"
                     m = {
-                        "canonical_key": n["canonical_key"], "label": label, "description": desc,
+                        "canonical_key": n["canonical_key"], "label": label,
+                        "definition": f"{label}: {where} (HKFRS/IFRS).",
+                        "description": f"{label}: {where}.",
+                        "value_scope": "exclusive_leaf" if is_line else "not_applicable",
+                        "extraction_mode": "extract",
+                        "include": _INCLUDE, "exclude": _EXCLUDE,
                         "aliases": [label],
                     }
                     zh = n.get("label_i18n", {}).get("zh")
@@ -404,6 +459,14 @@ def build_ontology(template: dict) -> dict:
         "locale": "en",
         "supported_locales": ["en", "zh"],
         "number_format_by_locale": {"en": {}, "zh": {}},
+        "metadata": {
+            "name": "HKFRS / IFRS Hong Kong-China Extraction Ontology",
+            "framework": "HKFRS", "version": "1.0",
+            "source_template": template["template_key"], "field_count": len(mappings),
+            "changes": ["Initial HK/China ontology generated from the HKFRS/IFRS template."],
+        },
+        "global_rules": _GLOBAL_RULES,
+        "worked_examples": _WORKED_EXAMPLES,
         "mappings": mappings,
     }
 

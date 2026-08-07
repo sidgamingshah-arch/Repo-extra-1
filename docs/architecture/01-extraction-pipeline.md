@@ -42,31 +42,33 @@ completion so all findings and partial results are available.
 11. **Confidence + validate** (`stages/confidence.py`, scaffold; combination
     implemented on `ConfidenceVector`) — run rules → review-queue items.
 
-## Mapping — description-based, LLM-driven
+## Mapping — a combination of methods, LLM as the key driver
 
-`services/mapping.py` — mapping a printed label to a canonical concept is done by
-**meaning**, not string similarity. When an LLM provider is configured (the default;
-`extraction.llm_mapping`), the model is the **decision-maker**: it is shown the caption
-plus candidate concepts *with their descriptions* (from the ontology's per-key
-`description`) and picks the one that means the same thing. So "Amounts due from
-customers", "Receivables from clients" and "Trade debtors" all resolve to
-`trade_receivables` with no matching alias — and repeated captions like "Others"
-disambiguate by their section/statement context.
+`services/mapping.py` — mapping a printed label to a canonical concept is a **combination
+of methods, none forced out**; the LLM is a *key driver*, not the sole authority. Each
+method contributes and they corroborate one another:
 
-The cheap lexical tiers still run, but only to (a) short-circuit an unambiguous exact
-alias hit (free, no tokens) and (b) pre-shortlist candidate concepts for the LLM when
-the ontology is large (`extraction.llm_candidate_cap`):
+1. **Exact / normalized lexical** — identity alias match; short-circuits (free, no tokens).
+2. **Rule / fuzzy / embedding** — every method runs and contributes candidate evidence
+   (and pre-shortlists concepts for the LLM when the ontology exceeds
+   `extraction.llm_candidate_cap`).
+3. **LLM semantic decision** (`extraction.llm_mapping`, default on) — the driver: shown
+   the caption plus candidate concepts *with their criteria* (definition, include /
+   exclude, confusable-with, value_scope) and the ontology's global policies + worked
+   examples, it chooses by **meaning**. So "Amounts due from customers" → `trade_receivables`
+   with no matching alias, and repeated "Others" captions disambiguate by section context.
 
-1. **Exact / normalized lexical** — identity match, early-exit.
-2. **LLM description match** — *the decision*: choose the concept by meaning, with a
-   calibrated confidence; below `auto_accept_confidence` it routes to the review queue.
-3. **Deterministic fallback** (rule → fuzzy → embeddings, margin-over-runner-up accept)
-   — used only when the LLM abstains or no provider is configured (`provider = "stub"`
-   or `extraction.llm_mapping = false`).
+**Combination policy:** exact wins outright; otherwise the LLM makes the call but is
+**corroborated by the deterministic methods** — agreement nudges confidence up; a strong
+lexical disagreement lowers it and flags review; the methods that agreed are recorded
+(`MappingResult.agreement`). When no LLM is configured or it abstains, the deterministic
+ensemble decides with the margin-over-runner-up accept policy. Every value also carries an
+`allocation_status` (direct / child / residual / …) so parent-child handling is auditable.
 
-Per-line LLM token usage is accumulated on the pipeline context and recorded on the
-extraction run's audit-log entry. Winning method + confidence are stored on the
-confidence vector; anything short of a confident decision goes to review, not a guess.
+Per-line LLM token usage accumulates on the pipeline context and is recorded on the
+extraction run's audit-log entry. Winning method, confidence and per-strategy scores are
+stored on the confidence vector; anything short of a confident, corroborated decision goes
+to review, not a guess.
 
 ## Adapter ports
 
