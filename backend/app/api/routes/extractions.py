@@ -82,13 +82,16 @@ def start_extraction(
     session.add(run)
     session.commit()
 
-    # Audit trail entry for the run. The pipeline's LLM disambiguation is deferred, so
-    # extraction runs currently record no token usage (shown as "—" in the audit log);
-    # LLM analysis runs (POST /projects/{id}/analysis) carry real token counts.
+    # Audit trail entry for the run. Description-based mapping (services.mapping) uses the
+    # LLM, so record the real input/output token usage accumulated on the context when the
+    # LLM was engaged; otherwise leave them null (shown as "—" in the audit log).
+    used_llm = ctx.llm_calls > 0
     audit_svc.record(doc.id, audit_svc.AuditEntry(
         run_id=run_id, entity=entity, action="extraction",
-        provider=settings.llm.provider, model=settings.llm.model,
-        input_tokens=None, output_tokens=None, status="succeeded",
+        provider=settings.llm.provider, model=ctx.llm_model or settings.llm.model,
+        input_tokens=ctx.llm_input_tokens if used_llm else None,
+        output_tokens=ctx.llm_output_tokens if used_llm else None,
+        status="succeeded",
     ))
 
     return {"run_id": run.id, "status": run.status,

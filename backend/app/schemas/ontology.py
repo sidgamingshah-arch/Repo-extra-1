@@ -38,6 +38,11 @@ class NoteRefHint(BaseModel):
 
 class OntologyMapping(BaseModel):
     canonical_key: str
+    # Human-readable name + a definition of what this canonical concept MEANS. The
+    # description is the primary signal for LLM description-based mapping: the model
+    # matches a source caption to a concept by meaning, not string similarity.
+    label: str = ""
+    description: str = ""
     aliases: list[str] = Field(default_factory=list)          # default-locale aliases
     aliases_i18n: dict[str, list[str]] = Field(default_factory=dict)  # per-locale
     keyword_hints: list[str] = Field(default_factory=list)

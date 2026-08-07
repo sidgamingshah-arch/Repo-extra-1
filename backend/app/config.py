@@ -103,6 +103,12 @@ class ExtractionSettings(BaseModel):
     auto_accept_confidence: float = 0.80
     recon_abs_tolerance: float = 1.0
     recon_rel_tolerance: float = 0.005
+    # Mapping strategy. When an LLM provider is configured, mapping is DESCRIPTION-BASED:
+    # the model chooses the canonical concept by meaning (using each candidate's
+    # description), not string similarity. The lexical/fuzzy tiers only pre-shortlist
+    # candidates. Set false to force the deterministic ensemble even with an LLM present.
+    llm_mapping: bool = True
+    llm_candidate_cap: int = 40   # max candidate concepts shown to the LLM per line
 
 
 class Settings(BaseSettings):

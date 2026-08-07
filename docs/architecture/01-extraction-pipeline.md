@@ -42,23 +42,31 @@ completion so all findings and partial results are available.
 11. **Confidence + validate** (`stages/confidence.py`, scaffold; combination
     implemented on `ConfidenceVector`) — run rules → review-queue items.
 
-## Mapping ensemble (semantic / description / similarity)
+## Mapping — description-based, LLM-driven
 
-`services/mapping.py` — mapping a printed label to a canonical key is a *tiered
-ensemble*, ordered cheap→expensive, each tunable per key in the ontology:
+`services/mapping.py` — mapping a printed label to a canonical concept is done by
+**meaning**, not string similarity. When an LLM provider is configured (the default;
+`extraction.llm_mapping`), the model is the **decision-maker**: it is shown the caption
+plus candidate concepts *with their descriptions* (from the ontology's per-key
+`description`) and picks the one that means the same thing. So "Amounts due from
+customers", "Receivables from clients" and "Trade debtors" all resolve to
+`trade_receivables` with no matching alias — and repeated captions like "Others"
+disambiguate by their section/statement context.
 
-1. **Exact / normalized lexical** (description) — high precision, early-exit.
-2. **Rule-based** — `regex_hints` + `keyword_hints`, minus `exclude_hints`.
-3. **Similarity / fuzzy** — `rapidfuzz` token-set; absorbs typos / word-order / OCR noise.
-4. **Semantic embeddings** — cosine vs alias embeddings; a multilingual model enables
-   cross-lingual matching (zh/ar/fr label → en canonical key).
-5. **Semantic + contextual LLM** — residual only, constrained to top-k candidates +
-   amount corroboration.
+The cheap lexical tiers still run, but only to (a) short-circuit an unambiguous exact
+alias hit (free, no tokens) and (b) pre-shortlist candidate concepts for the LLM when
+the ontology is large (`extraction.llm_candidate_cap`):
 
-**Combination:** early-exit on a confident exact/rule hit; otherwise pool candidate
-scores and accept the best **only if it clears a margin over the runner-up**
-(`FINEX_MAPPING_MARGIN`) — a narrow margin routes to the review queue instead of
-guessing. Winning method + per-strategy scores are recorded on the confidence vector.
+1. **Exact / normalized lexical** — identity match, early-exit.
+2. **LLM description match** — *the decision*: choose the concept by meaning, with a
+   calibrated confidence; below `auto_accept_confidence` it routes to the review queue.
+3. **Deterministic fallback** (rule → fuzzy → embeddings, margin-over-runner-up accept)
+   — used only when the LLM abstains or no provider is configured (`provider = "stub"`
+   or `extraction.llm_mapping = false`).
+
+Per-line LLM token usage is accumulated on the pipeline context and recorded on the
+extraction run's audit-log entry. Winning method + confidence are stored on the
+confidence vector; anything short of a confident decision goes to review, not a guess.
 
 ## Adapter ports
 
