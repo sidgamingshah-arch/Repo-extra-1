@@ -27,10 +27,12 @@ def _now() -> datetime:
 
 class Document(Base):
     __tablename__ = "documents"
-    __table_args__ = (UniqueConstraint("tenant_id", "content_hash", name="uq_doc_hash"),)
+    # Dedup is per owner: two analysts uploading the same file each get their own document.
+    __table_args__ = (UniqueConstraint("tenant_id", "owner", "content_hash", name="uq_doc_hash"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     tenant_id: Mapped[str] = mapped_column(String(36), default="default")
+    owner: Mapped[str] = mapped_column(String(128), default="", index=True)
     filename: Mapped[str] = mapped_column(String(512), default="")
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
     byte_size: Mapped[int] = mapped_column(Integer, default=0)

@@ -6,13 +6,14 @@ swap does not change these routes.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from pathlib import Path
 
-from app.api.deps import db, object_store, settings as get_settings_dep
+from app.api.deps import db, settings as get_settings_dep
+from app.api.routes.documents import authorized_document
 from app.config import Settings
 from app.ports.object_store import LocalObjectStore
 from app.schemas.loader import load_ontology
@@ -42,6 +43,7 @@ def _serialize_rows(doc_model) -> list[dict]:
                 }
             values.append({
                 "period_label": ev.period_label,
+                "basis": ev.basis.value,
                 "value": (str(ev.value) if ev.value is not None else None),
                 "provenance": prov,
             })
@@ -72,70 +74,102 @@ class ExtractionOptions(BaseModel):
     entity: str | None = None
 
 
+def _run_extraction_task(run_id: str, object_key: str, filename: str, options: dict,
+                         entity: str, provider: str, model_fallback: str) -> None:
+    """Run the pipeline off the request thread and record the outcome on the run row. Opens
+    its own DB session + object store (the request's are gone by the time this executes)."""
+    from app.config import get_settings
+    from app.db.base import SessionLocal
+    from app.db.models import ExtractionRun, OntologyVersion
+
+    session = SessionLocal()
+    try:
+        settings = get_settings()
+        store = LocalObjectStore(settings.object_store_root)
+        ontology = None
+        oid = options.get("ontology_version_id")
+        if oid:
+            ont_row = session.get(OntologyVersion, oid)
+            if ont_row is not None:
+                ontology = load_ontology(ont_row.definition)
+
+        doc_model, ctx = run_extraction(store.get(object_key), filename=filename, ontology=ontology)
+        run = session.get(ExtractionRun, run_id)
+        if run is None:
+            return
+        run.result = {
+            "locale": doc_model.locale,
+            "format": doc_model.fmt.value,
+            "filename": filename,
+            "pages": [p.model_dump(mode="json") for p in doc_model.pages],
+            "line_item_count": len(doc_model.line_items),
+            "notes": len(doc_model.notes),
+            "rows": _serialize_rows(doc_model),
+        }
+        run.status = "succeeded"
+        run.progress = {"phase": "done", "pct": 1.0}
+        run.logs = "\n".join(ctx.logs)
+        session.commit()
+
+        used_llm = ctx.llm_calls > 0
+        audit_svc.record(run.document_id, audit_svc.AuditEntry(
+            run_id=run_id, entity=entity, action="extraction",
+            provider=provider, model=ctx.llm_model or model_fallback,
+            input_tokens=ctx.llm_input_tokens if used_llm else None,
+            output_tokens=ctx.llm_output_tokens if used_llm else None,
+            status="succeeded",
+        ))
+    except Exception as exc:  # noqa: BLE001 — record failure on the run, don't crash the worker
+        run = session.get(ExtractionRun, run_id)
+        if run is not None:
+            run.status = "failed"
+            run.progress = {"phase": "failed", "pct": 1.0}
+            run.logs = f"{type(exc).__name__}: {exc}"
+            session.commit()
+        audit_svc.record(run.document_id if run else "unknown", audit_svc.AuditEntry(
+            run_id=run_id, entity=entity, action="extraction",
+            provider=provider, model=model_fallback,
+            input_tokens=None, output_tokens=None, status="failed",
+        ))
+    finally:
+        session.close()
+
+
 @router.post("/documents/{document_id}/extractions", status_code=202,
-             dependencies=[Depends(require(Permission.PIPELINE_RUN))])
+             dependencies=[Depends(require(Permission.PIPELINE_RUN)), Depends(authorized_document)])
 def start_extraction(
     document_id: str,
     body: ExtractionOptions,
+    background: BackgroundTasks,
     session: Session = Depends(db),
-    store: LocalObjectStore = Depends(object_store),
     settings: Settings = Depends(get_settings_dep),
 ) -> dict:
-    from app.db.models import Document, ExtractionRun, OntologyVersion
+    """Kick off extraction as a background job. Returns 202 immediately with a 'running'
+    run; the frontend polls GET /extractions/{run_id} (or /documents/{id}/run) until it
+    reaches 'succeeded'/'failed'. Keeps the API responsive on large files without a
+    separate worker/broker."""
+    from app.db.models import Document, ExtractionRun
 
     doc = session.get(Document, document_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    ontology = None
-    if body.ontology_version_id:
-        ont_row = session.get(OntologyVersion, body.ontology_version_id)
-        if ont_row is not None:
-            ontology = load_ontology(ont_row.definition)
-
-    data = store.get(doc.object_key)
-    doc_model, ctx = run_extraction(data, filename=doc.filename, ontology=ontology)
-
     entity = body.entity or Path(doc.filename or "").stem or "document"
     run_id = audit_svc.make_run_id(entity)
-    rows = _serialize_rows(doc_model)
-
     run = ExtractionRun(
-        id=run_id,
-        document_id=doc.id,
+        id=run_id, document_id=doc.id,
         template_version_id=body.template_version_id,
         ontology_version_id=body.ontology_version_id,
-        status="succeeded",
-        options=body.model_dump(),
-        progress={"phase": "done", "pct": 1.0},
-        result={
-            "locale": doc_model.locale,
-            "format": doc_model.fmt.value,
-            "filename": doc.filename,
-            "pages": [p.model_dump(mode="json") for p in doc_model.pages],
-            "line_item_count": len(doc_model.line_items),
-            "notes": len(doc_model.notes),
-            "rows": rows,
-        },
-        logs="\n".join(ctx.logs),
+        status="running", options=body.model_dump(),
+        progress={"phase": "queued", "pct": 0.0}, result=None,
     )
     session.add(run)
     session.commit()
 
-    # Audit trail entry for the run. Description-based mapping (services.mapping) uses the
-    # LLM, so record the real input/output token usage accumulated on the context when the
-    # LLM was engaged; otherwise leave them null (shown as "—" in the audit log).
-    used_llm = ctx.llm_calls > 0
-    audit_svc.record(doc.id, audit_svc.AuditEntry(
-        run_id=run_id, entity=entity, action="extraction",
-        provider=settings.llm.provider, model=ctx.llm_model or settings.llm.model,
-        input_tokens=ctx.llm_input_tokens if used_llm else None,
-        output_tokens=ctx.llm_output_tokens if used_llm else None,
-        status="succeeded",
-    ))
-
-    return {"run_id": run.id, "status": run.status, "result": run.result,
-            "stream_url": f"/api/v1/extractions/{run.id}/stream"}
+    background.add_task(_run_extraction_task, run_id, doc.object_key, doc.filename or "",
+                        body.model_dump(), entity, settings.llm.provider, settings.llm.model)
+    return {"run_id": run_id, "status": "running",
+            "stream_url": f"/api/v1/extractions/{run_id}/stream"}
 
 
 @router.get("/extractions/{run_id}")

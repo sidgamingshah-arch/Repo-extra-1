@@ -9,10 +9,33 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.deps import db, object_store
 from app.ports.object_store import LocalObjectStore
-from app.security import Permission, current_principal, require
+from app.security import Permission, Principal, Role, current_principal, require
 from app.services.documents import analyze_document, content_hash
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+_ELEVATED = {Role.ADMIN, Role.REVIEWER}  # roles that work across the whole queue
+
+
+def _can_access(doc, principal: Principal) -> bool:
+    """A document is visible to its uploader, and to reviewers/admins who work every
+    analyst's queue. Ownerless (legacy/seeded) documents stay open."""
+    return principal.role in _ELEVATED or not doc.owner or doc.owner == principal.username
+
+
+def authorized_document(
+    document_id: str,
+    session: Session = Depends(db),
+    principal: Principal = Depends(current_principal),
+):
+    """Resolve a document and enforce ownership. Returns 404 (not 403) for a document the
+    caller may not see, so existence isn't leaked across tenants."""
+    from app.db.models import Document
+
+    row = session.get(Document, document_id)
+    if row is None or not _can_access(row, principal):
+        raise HTTPException(status_code=404, detail="Document not found")
+    return row
 
 # Bounded translations for the fixed vocabulary the real integrity/review surfaces emit, so
 # a real run localizes like the demo path. Dynamic parts (source labels, finding messages)
@@ -125,12 +148,17 @@ def _to_source_doc(row) -> dict:
     }
 
 
-@router.get("", dependencies=[Depends(current_principal)])
-def list_documents(session: Session = Depends(db)) -> dict:
-    """Real uploaded documents, most recent first (Upload screen list)."""
+@router.get("")
+def list_documents(session: Session = Depends(db),
+                   principal: Principal = Depends(current_principal)) -> dict:
+    """Real uploaded documents, most recent first (Upload screen list). Scoped to the
+    caller's own uploads; reviewers/admins see the whole queue."""
     from app.db.models import Document
 
-    rows = session.execute(select(Document).order_by(Document.created_at.desc())).scalars().all()
+    q = select(Document).order_by(Document.created_at.desc())
+    if principal.role not in _ELEVATED:
+        q = q.where((Document.owner == principal.username) | (Document.owner == ""))
+    rows = session.execute(q).scalars().all()
     return {"documents": [_to_source_doc(r) for r in rows]}
 
 
@@ -139,6 +167,7 @@ async def upload_document(
     file: UploadFile = File(...),
     session: Session = Depends(db),
     store: LocalObjectStore = Depends(object_store),
+    principal: Principal = Depends(current_principal),
 ) -> dict:
     from app.db.models import Document
 
@@ -147,10 +176,13 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="Empty file")
 
     digest = content_hash(data)
+    # Dedup against the caller's OWN prior upload of the same bytes (reviewers/admins may
+    # also reuse an existing accessible copy rather than creating a duplicate).
     existing = session.execute(
         select(Document).where(Document.content_hash == digest)
-    ).scalar_one_or_none()
-    if existing is not None:
+        .where((Document.owner == principal.username) if principal.role not in _ELEVATED else True)
+    ).scalars().first()
+    if existing is not None and _can_access(existing, principal):
         return {"id": existing.id, "status": existing.status,
                 "content_hash": digest, "duplicate_of": existing.id,
                 "page_count": existing.page_count,
@@ -160,6 +192,7 @@ async def upload_document(
     object_key = store.put_bytes(data)
 
     row = Document(
+        owner=principal.username,
         filename=file.filename or "",
         content_hash=digest,
         byte_size=len(data),
@@ -290,7 +323,7 @@ def _serialize_document_integrity(row, locale: str = "en") -> dict:
     return {"score": score, "grade": L(grade), "summary": L(summary), "stats": stats, "issues": issues}
 
 
-@router.get("/{document_id}/integrity", dependencies=[Depends(current_principal)])
+@router.get("/{document_id}/integrity", dependencies=[Depends(authorized_document)])
 def get_document_integrity(document_id: str, locale: str = Query("en"),
                            session: Session = Depends(db)) -> dict:
     """Real pre-flight integrity for one uploaded document (drives the Document Integrity
@@ -390,7 +423,7 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en") -> dict:
     }
 
 
-@router.get("/{document_id}/run", dependencies=[Depends(current_principal)])
+@router.get("/{document_id}/run", dependencies=[Depends(authorized_document)])
 def get_document_run(document_id: str, session: Session = Depends(db)) -> dict:
     """The latest extraction result for a document (drives the Export preview/counts for a
     real run). 404 until the document has been extracted."""
@@ -404,7 +437,7 @@ def get_document_run(document_id: str, session: Session = Depends(db)) -> dict:
     return {"run_id": run.id, "status": run.status, "result": run.result}
 
 
-@router.get("/{document_id}/review", dependencies=[Depends(current_principal)])
+@router.get("/{document_id}/review", dependencies=[Depends(authorized_document)])
 def get_document_review(document_id: str, locale: str = Query("en"),
                         session: Session = Depends(db)) -> dict:
     """Real review queue for a document, derived from its latest extraction."""
@@ -427,7 +460,7 @@ class LineItemEdit(BaseModel):
 
 
 @router.patch("/{document_id}/line-items/{canonical_key:path}",
-              dependencies=[Depends(require(Permission.EXTRACTION_EDIT))])
+              dependencies=[Depends(require(Permission.EXTRACTION_EDIT)), Depends(authorized_document)])
 def edit_document_line_item(document_id: str, canonical_key: str, body: LineItemEdit,
                             session: Session = Depends(db)) -> dict:
     """Edit a value (and optional formula) on a real extraction. The override is persisted
@@ -447,6 +480,11 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
         raise HTTPException(status_code=404, detail="Line item not found in this run")
 
     values = target.get("values") or []
+    # Snapshot the machine-extracted values ONCE, before the first edit, so a revert can
+    # restore the original numbers exactly (edits are overlays, never a lossy overwrite).
+    if not target.get("edited"):
+        target["_original"] = {v.get("period_label"): v.get("value") for v in values}
+
     slot = next((v for v in values if v.get("period_label") == body.period), None)
     if slot is None:
         slot = {"period_label": body.period, "value": None, "provenance": None}
@@ -468,7 +506,44 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
             "value": slot["value"], "formula": target.get("formula"), "status": "edited"}
 
 
-@router.get("/{document_id}/export", dependencies=[Depends(require(Permission.EXPORT_RUN))])
+@router.delete("/{document_id}/line-items/{canonical_key:path}",
+               dependencies=[Depends(require(Permission.EXTRACTION_EDIT)), Depends(authorized_document)])
+def revert_document_line_item(document_id: str, canonical_key: str,
+                              session: Session = Depends(db)) -> dict:
+    """Revert an edited line item to its original machine-extracted values, dropping the
+    manual value(s) and formula."""
+    from app.db.models import Document
+
+    if session.get(Document, document_id) is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        raise HTTPException(status_code=404, detail="No extraction run yet for this document")
+    result = dict(run.result)
+    rows = result.get("rows", [])
+    target = next((r for r in rows if r.get("canonical_key") == canonical_key), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Line item not found in this run")
+    if not target.get("edited"):
+        return {"ok": True, "canonical_key": canonical_key, "reverted": False, "status": None}
+
+    original = target.get("_original") or {}
+    for v in target.get("values") or []:
+        if v.get("period_label") in original:
+            v["value"] = original[v["period_label"]]
+    target.pop("_original", None)
+    target.pop("formula", None)
+    target["edited"] = False
+
+    result["rows"] = rows
+    run.result = result
+    flag_modified(run, "result")
+    session.commit()
+    return {"ok": True, "canonical_key": canonical_key, "reverted": True, "status": None}
+
+
+@router.get("/{document_id}/export",
+            dependencies=[Depends(require(Permission.EXPORT_RUN)), Depends(authorized_document)])
 def export_document(
     document_id: str,
     fmt: str = Query("excel", pattern="^(excel|json)$"),
@@ -542,7 +617,7 @@ def _build_pages(pages: list[dict]) -> dict:
     }
 
 
-@router.get("/{document_id}/pages", dependencies=[Depends(current_principal)])
+@router.get("/{document_id}/pages", dependencies=[Depends(authorized_document)])
 def get_document_pages(
     document_id: str,
     session: Session = Depends(db),
@@ -573,8 +648,13 @@ def _to_num(v):
         return None
 
 
-def _cur_prior(r: dict) -> tuple[dict | None, dict | None]:
-    vals = r.get("values") or []
+def _basis_values(r: dict, basis: str) -> list[dict]:
+    """Values for the requested basis; values with no basis are treated as consolidated."""
+    return [v for v in (r.get("values") or []) if (v.get("basis") or "consolidated") == basis]
+
+
+def _cur_prior(r: dict, basis: str = "consolidated") -> tuple[dict | None, dict | None]:
+    vals = _basis_values(r, basis)
     by = {v.get("period_label"): v for v in vals}
     cur = by.get("current") or (vals[0] if vals else None)
     prior = by.get("prior") or (vals[1] if len(vals) > 1 else None)
@@ -604,9 +684,10 @@ def _template_for_run(session: Session, run) -> dict | None:
 
 
 def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
-                     filename: str) -> dict:
+                     filename: str, basis: str = "consolidated") -> dict:
     """Group the real extracted rows into one statement (by the template's sections), so the
-    Workspace grid renders real data with its provenance-backed values."""
+    Workspace grid renders real data with its provenance-backed values. Only rows that
+    carry a value for the requested `basis` (consolidated / standalone) are shown."""
     prefix = _STMT_PREFIX.get(statement_type, "")
     by_key: dict[str, dict] = {}
     for r in rows:
@@ -614,8 +695,11 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         if k:
             by_key.setdefault(k, r)
 
+    def has_basis(r: dict) -> bool:
+        return bool(_basis_values(r, basis))
+
     def item_row(key: str, label: str, r: dict) -> dict:
-        cur, prior = _cur_prior(r)
+        cur, prior = _cur_prior(r, basis)
         cat, pct = _conf_cat(r.get("mapping_confidence"))
         edited = bool(r.get("edited"))
         return {
@@ -633,7 +717,8 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                  if s.get("type") == statement_type), None)
     if stmt:
         for sec in stmt.get("sections", []):
-            matched = [c for c in sec.get("children", []) if c.get("canonical_key") in by_key]
+            matched = [c for c in sec.get("children", [])
+                       if c.get("canonical_key") in by_key and has_basis(by_key[c["canonical_key"]])]
             if not matched:
                 continue
             out.append({"id": f"sec_{sec.get('node_id', '')}", "label": sec.get("label", ""),
@@ -644,7 +729,8 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                 out.append(item_row(k, c.get("label", ""), by_key[k]))
 
     extra = [r for r in rows
-             if (r.get("canonical_key") or "").startswith(f"{prefix}_") and r["canonical_key"] not in seen]
+             if (r.get("canonical_key") or "").startswith(f"{prefix}_")
+             and r["canonical_key"] not in seen and has_basis(r)]
     if extra:
         out.append({"id": "sec_other", "label": "Other extracted items", "kind": "section",
                     "v1": None, "v2": None})
@@ -665,7 +751,7 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     }
 
 
-@router.get("/{document_id}/statement", dependencies=[Depends(current_principal)])
+@router.get("/{document_id}/statement", dependencies=[Depends(authorized_document)])
 def get_document_statement(
     document_id: str,
     statement: str = Query("balance_sheet"),
@@ -681,11 +767,11 @@ def get_document_statement(
     run = _latest_run(session, document_id)
     if run is None or not run.result:
         raise HTTPException(status_code=404, detail="No extraction run yet for this document")
-    # Real extraction is consolidated; a standalone request yields an empty (but valid) grid.
-    if basis != "consolidated":
-        return _build_statement([], None, statement, doc.filename or "document")
     template_def = _template_for_run(session, run)
-    return _build_statement(run.result.get("rows", []), template_def, statement, doc.filename or "document")
+    # Consolidated and standalone are extracted in one pass; the grid shows the requested
+    # basis (empty if the source didn't present that basis).
+    return _build_statement(run.result.get("rows", []), template_def, statement,
+                            doc.filename or "document", basis)
 
 
 def _note_no(raw) -> int | None:
@@ -705,7 +791,7 @@ def _rows_by_note(rows: list[dict]) -> dict[int, list[dict]]:
     return grouped
 
 
-@router.get("/{document_id}/notes", dependencies=[Depends(current_principal)])
+@router.get("/{document_id}/notes", dependencies=[Depends(authorized_document)])
 def get_document_notes(document_id: str, session: Session = Depends(db)) -> dict:
     """All-notes index for a real document: the notes referenced by extracted line items,
     each linked to the face items that cite it. Built from the extraction, not the demo."""
@@ -722,7 +808,7 @@ def get_document_notes(document_id: str, session: Session = Depends(db)) -> dict
     return {"notes": notes, "count": len(notes), "linked": linked}
 
 
-@router.get("/{document_id}/notes/{note_no}", dependencies=[Depends(current_principal)])
+@router.get("/{document_id}/notes/{note_no}", dependencies=[Depends(authorized_document)])
 def get_document_note(document_id: str, note_no: int, session: Session = Depends(db)) -> dict:
     """One note's detail for a real document: the face line items referencing it, with their
     values and the page they were extracted from. (Note-table sub-parsing is not available
@@ -756,7 +842,7 @@ def get_document_note(document_id: str, note_no: int, session: Session = Depends
     }
 
 
-@router.get("/{document_id}")
+@router.get("/{document_id}", dependencies=[Depends(authorized_document)])
 def get_document(document_id: str, session: Session = Depends(db)) -> dict:
     from app.db.models import Document
 
@@ -774,7 +860,7 @@ def get_document(document_id: str, session: Session = Depends(db)) -> dict:
     }
 
 
-@router.get("/{document_id}/pages/{page_index}/image", dependencies=[Depends(current_principal)])
+@router.get("/{document_id}/pages/{page_index}/image", dependencies=[Depends(authorized_document)])
 def get_page_image(
     document_id: str,
     page_index: int,
@@ -809,7 +895,7 @@ def get_page_image(
                     headers={"Cache-Control": "private, max-age=300"})
 
 
-@router.get("/{document_id}/cell-context", dependencies=[Depends(current_principal)])
+@router.get("/{document_id}/cell-context", dependencies=[Depends(authorized_document)])
 def get_cell_context(
     document_id: str,
     sheet: str = Query(..., description="Sheet name the value came from"),

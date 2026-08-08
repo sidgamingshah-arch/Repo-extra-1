@@ -2,11 +2,26 @@
 line items with page + normalized-bbox provenance."""
 from __future__ import annotations
 
+import time
+
 import pytest
 
 pytest.importorskip("fitz")
 
 from tests.fixtures.generate import make_native_pdf
+
+
+def _await_run(client, doc_id: str) -> dict:
+    """Extraction is a background job now; poll the run until it finishes and return its
+    result (raises if it fails or never completes)."""
+    for _ in range(100):
+        r = client.get(f"/api/v1/documents/{doc_id}/run")
+        if r.status_code == 200 and r.json().get("status") == "succeeded":
+            return r.json()["result"]
+        if r.status_code == 200 and r.json().get("status") == "failed":
+            raise AssertionError("extraction failed")
+        time.sleep(0.05)
+    raise AssertionError("extraction did not finish")
 
 
 def test_native_pdf_extracts_values_with_bbox_provenance():
@@ -34,7 +49,8 @@ def test_extraction_api_returns_rows_with_provenance(client):
     ).json()["id"]
     r = client.post(f"/api/v1/documents/{doc_id}/extractions", json={})
     assert r.status_code == 202, r.text
-    rows = r.json()["result"]["rows"]
+    assert r.json()["status"] == "running"                  # async: kicked off, poll for result
+    rows = _await_run(client, doc_id)["rows"]
     assert rows and any(row["values"] for row in rows)
     tr = next(row for row in rows if "Trade receivables" in row["source_label"])
     prov = tr["values"][0]["provenance"]
@@ -64,6 +80,7 @@ def test_real_review_and_export_from_extraction(client):
         "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}
     ).json()["id"]
     client.post(f"/api/v1/documents/{doc_id}/extractions", json={})
+    assert _await_run(client, doc_id)["rows"]
 
     # Latest run is fetchable for the export preview/counts.
     run = client.get(f"/api/v1/documents/{doc_id}/run")
@@ -120,6 +137,47 @@ def test_real_pages_and_statement_from_document(client):
     assert sa["rows"] == []
 
 
+def test_dual_basis_extracted_in_one_pass():
+    """A Consolidated | Standalone two-level header → both bases extracted for each line."""
+    from app.core.models.enums import Basis
+    from app.services.documents import run_extraction
+    from tests.fixtures.generate import make_dual_basis_pdf
+
+    doc, _ = run_extraction(make_dual_basis_pdf(), filename="dual.pdf")
+    tr = next(li for li in doc.line_items if "Trade receivables" in li.source_label)
+    cc = tr.get_value(Basis.CONSOLIDATED, period_label="current")
+    cp = tr.get_value(Basis.CONSOLIDATED, period_label="prior")
+    sc = tr.get_value(Basis.STANDALONE, period_label="current")
+    sp = tr.get_value(Basis.STANDALONE, period_label="prior")
+    assert cc and int(cc.value) == 3410 and cp and int(cp.value) == 2900
+    assert sc and int(sc.value) == 3100 and sp and int(sp.value) == 2700
+
+
+def test_dual_basis_statement_selects_by_basis(client):
+    from tests.fixtures.generate import make_dual_basis_pdf
+
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("dual.pdf", make_dual_basis_pdf(), "application/pdf")}
+    ).json()["id"]
+    onts = client.get("/api/v1/ontologies").json()
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    tpls = client.get("/api/v1/templates").json()
+    tpl = next((tt for tt in tpls if tt["template_key"] == ont["target_template_key"]), tpls[0])
+    client.post(f"/api/v1/documents/{doc_id}/extractions",
+                json={"ontology_version_id": ont["id"], "template_version_id": tpl["id"]})
+    _await_run(client, doc_id)
+
+    def tr_value(basis):
+        st = client.get(f"/api/v1/documents/{doc_id}/statement",
+                        params={"statement": "balance_sheet", "basis": basis}).json()
+        row = next(x for x in st["rows"]
+                   if x["kind"] == "item" and "Trade receivables" in (x.get("source_label") or ""))
+        return row["v1"]
+
+    assert tr_value("consolidated") == 3410
+    assert tr_value("standalone") == 3100        # different basis → different value, one pass
+
+
 def _extract_with_ontology(client, filename="bs.pdf"):
     doc_id = client.post(
         "/api/v1/documents", files={"file": (filename, make_native_pdf(), "application/pdf")}
@@ -130,6 +188,7 @@ def _extract_with_ontology(client, filename="bs.pdf"):
     tpl = next((tt for tt in tpls if tt["template_key"] == ont["target_template_key"]), tpls[0])
     client.post(f"/api/v1/documents/{doc_id}/extractions",
                 json={"ontology_version_id": ont["id"], "template_version_id": tpl["id"]})
+    _await_run(client, doc_id)
     return doc_id
 
 
@@ -147,6 +206,24 @@ def test_real_line_item_edit_persists_to_statement(client):
     row = next(x for x in st["rows"] if x["id"] == key)
     assert row["v1"] == 12345 and row["status"] == "edited" and row["formula"] == "=A+B"
     assert row["editable"] is True
+
+
+def test_edit_then_revert_restores_original(client):
+    doc_id = _extract_with_ontology(client)
+    st0 = client.get(f"/api/v1/documents/{doc_id}/statement", params={"statement": "balance_sheet"}).json()
+    item = next(r for r in st0["rows"] if r["kind"] == "item")
+    key, original = item["id"], item["v1"]
+
+    client.patch(f"/api/v1/documents/{doc_id}/line-items/{key}", json={"value": 99999, "formula": "=x"})
+    st1 = client.get(f"/api/v1/documents/{doc_id}/statement", params={"statement": "balance_sheet"}).json()
+    edited = next(r for r in st1["rows"] if r["id"] == key)
+    assert edited["v1"] == 99999 and edited["status"] == "edited"
+
+    r = client.delete(f"/api/v1/documents/{doc_id}/line-items/{key}")
+    assert r.status_code == 200 and r.json()["reverted"] is True
+    st2 = client.get(f"/api/v1/documents/{doc_id}/statement", params={"statement": "balance_sheet"}).json()
+    reverted = next(r for r in st2["rows"] if r["id"] == key)
+    assert reverted["v1"] == original and reverted["status"] is None and reverted["formula"] is None
 
 
 def test_real_notes_index_and_detail(client):
@@ -168,6 +245,36 @@ def test_real_integrity_and_review_localized(client):
 
     rev = client.get(f"/api/v1/documents/{doc_id}/review", params={"locale": "fr"}).json()
     assert rev["tabs"][0]["label"] == "Tous"                    # "All" localized (fr)
+
+
+def test_can_access_enforces_ownership():
+    from app.api.routes.documents import _can_access
+    from app.security import Principal, Role
+
+    class _Doc:
+        owner = "alice"
+
+    bob = Principal(role=Role.ANALYST, username="bob", name="Bob", via="session")
+    alice = Principal(role=Role.ANALYST, username="alice", name="Alice", via="session")
+    reviewer = Principal(role=Role.REVIEWER, username="rev", name="Rev", via="session")
+    assert not _can_access(_Doc(), bob)          # another analyst's document
+    assert _can_access(_Doc(), alice)            # the owner
+    assert _can_access(_Doc(), reviewer)         # reviewer works the whole queue
+
+
+def test_document_ownership_scoping(anon_client, auth):
+    up = anon_client.post(
+        "/api/v1/documents", files={"file": ("own.pdf", make_native_pdf(), "application/pdf")},
+        headers=auth("analyst"),
+    )
+    doc_id = up.json()["id"]
+    # The analyst sees their own upload; a reviewer (elevated) can open it too.
+    mine = anon_client.get("/api/v1/documents", headers=auth("analyst")).json()["documents"]
+    assert any(d["id"] == doc_id for d in mine)
+    assert anon_client.get(f"/api/v1/documents/{doc_id}", headers=auth("reviewer")).status_code == 200
+    assert anon_client.get(f"/api/v1/documents/{doc_id}/integrity", headers=auth("reviewer")).status_code == 200
+    # Unauthenticated is rejected outright.
+    assert anon_client.get(f"/api/v1/documents/{doc_id}").status_code == 401
 
 
 def test_review_and_run_404_before_extraction(client):
@@ -225,7 +332,7 @@ def test_reference_ontology_seeded_and_attached_run_maps(client):
         r = client.post(f"/api/v1/documents/{doc_id}/extractions",
                         json={"ontology_version_id": ont["id"], "template_version_id": tpl["id"]})
         assert r.status_code == 202, r.text
-        rows = r.json()["result"]["rows"]
+        rows = _await_run(client, doc_id)["rows"]
         tr = next(row for row in rows if "Trade receivables" in row["source_label"])
         assert tr["canonical_key"], "expected the caption to map to a canonical concept"
     finally:

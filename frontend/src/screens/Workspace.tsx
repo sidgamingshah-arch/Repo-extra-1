@@ -8,7 +8,7 @@ import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/u
 import { EmptyState } from "../components/EmptyState";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
 import type { Basis, StatementResponse, StatementRow } from "../types";
-import { useDocumentStatement, useEditDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
+import { useDocumentStatement, useEditDocumentLineItem, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
 import { SCREENS } from "./config";
@@ -323,6 +323,7 @@ export default function WorkspaceScreen() {
   const isPending = usingReal ? realQ.isPending : demoQ.isPending;
   const editMut = useEditLineItem();
   const realEditMut = useEditDocumentLineItem(activeDocumentId ?? undefined);
+  const realRevertMut = useRevertDocumentLineItem(activeDocumentId ?? undefined);
 
   if (!usingReal && !loaded) return <EmptyState />;
   if (usingReal && realQ.isError) return <EmptyState />;   // uploaded but not extracted yet
@@ -615,6 +616,18 @@ export default function WorkspaceScreen() {
                 <span style={{ fontSize: 11, color: color.muted, fontFamily: font.mono }}>
                   source: {insp?.src ?? ""}
                 </span>
+                {!editing && usingReal && selRowObj?.status === "edited" && (
+                  <button
+                    onClick={() => selRowObj && realRevertMut.mutate(selRowObj.id)}
+                    style={{
+                      fontSize: 11, fontWeight: 600, color: color.sec2, background: "#fff",
+                      border: `1px solid ${color.controlBorder}`, borderRadius: radius.controlSm,
+                      padding: "5px 11px", cursor: "pointer",
+                    }}
+                  >
+                    ↺ Revert
+                  </button>
+                )}
                 {!editing && editable && (
                   <button
                     onClick={startEdit}

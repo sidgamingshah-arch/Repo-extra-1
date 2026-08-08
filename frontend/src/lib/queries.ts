@@ -92,16 +92,17 @@ export const useOntologies = () => useQuery({ queryKey: ["ontologies"], queryFn:
 export const useTemplates = () => useQuery({ queryKey: ["templates"], queryFn: api.templates });
 
 /** Run (and fetch) the extraction for one uploaded document — its real line items with
- * provenance, mapped against the given ontology/template. POSTs once per (doc, ontology)
- * and caches the result. `enabled` gates the run until the ontology list has settled. */
-export const useExtraction = (
+ * provenance, mapped against the given ontology/template. Extraction is a background job:
+ * this POSTs once per (doc, ontology/template) to start it, then polls the run until it
+ * reaches succeeded/failed. `enabled` gates the start until the ontology list has settled. */
+export function useExtraction(
   documentId: string | undefined,
   ontologyId?: string,
   templateId?: string,
   enabled = true,
-) =>
-  useQuery({
-    queryKey: ["extraction", documentId, ontologyId ?? null, templateId ?? null],
+) {
+  const start = useQuery({
+    queryKey: ["extraction-start", documentId, ontologyId ?? null, templateId ?? null],
     queryFn: () => api.runExtraction(documentId as string, {
       ontology_version_id: ontologyId, template_version_id: templateId,
     }),
@@ -109,6 +110,26 @@ export const useExtraction = (
     staleTime: Infinity,
     retry: false,
   });
+  const runId = start.data?.run_id;
+  const poll = useQuery({
+    queryKey: ["extraction-run", runId],
+    queryFn: () => api.getRun(runId as string),
+    enabled: !!runId,
+    retry: false,
+    // Keep polling while the background job is running; stop once it settles.
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 1000 : false),
+  });
+
+  const run = poll.data;
+  const succeeded = run?.status === "succeeded" && !!run?.result;
+  const failed = start.isError || poll.isError || run?.status === "failed";
+  return {
+    data: succeeded ? run : undefined,
+    isPending: (start.isPending && enabled) || (!!runId && !succeeded && !failed),
+    isError: failed,
+    error: (start.error as Error) ?? (poll.error as Error) ?? undefined,
+  };
+}
 
 /** Cells around a value's spreadsheet origin — the Excel click-to-source backdrop.
  * Enabled only once a spreadsheet cell has been picked. */
@@ -173,9 +194,23 @@ export const useDocumentNote = (documentId: string | undefined, no: number) =>
 /** Edit a value/formula on a real extraction; refreshes the document's statement/run/export. */
 export function useEditDocumentLineItem(documentId: string | undefined) {
   const qc = useQueryClient();
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["document-statement", documentId] });
+    qc.invalidateQueries({ queryKey: ["document-run", documentId] });
+    qc.invalidateQueries({ queryKey: ["document-review", documentId] });
+  };
   return useMutation({
     mutationFn: (vars: { key: string; value: number | null; formula: string }) =>
       api.editDocumentLineItem(documentId as string, vars.key, vars.value, vars.formula),
+    onSuccess: invalidate,
+  });
+}
+
+/** Revert an edited real line item to its original machine-extracted values. */
+export function useRevertDocumentLineItem(documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string) => api.revertDocumentLineItem(documentId as string, key),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["document-statement", documentId] });
       qc.invalidateQueries({ queryKey: ["document-run", documentId] });

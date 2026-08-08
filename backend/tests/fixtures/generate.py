@@ -37,6 +37,46 @@ def make_native_pdf(title: str = "Balance Sheet") -> bytes:
     return buf.getvalue()
 
 
+def make_dual_basis_pdf() -> bytes:
+    """A native PDF whose columns are a two-level Consolidated | Standalone header, each with
+    a current + prior period — for testing consolidated+standalone extraction in one pass."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _, height = A4
+    y = height - 72
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(72, y, "Balance Sheet")
+    # Two-level column header: Consolidated over cols ~300/370, Standalone over ~440/510.
+    c.setFont("Helvetica-Bold", 9)
+    y -= 22
+    c.drawString(300, y, "Consolidated")
+    c.drawString(445, y, "Standalone")
+    c.setFont("Helvetica", 9)
+    y -= 14
+    c.drawRightString(330, y, "2025")
+    c.drawRightString(400, y, "2024")
+    c.drawRightString(475, y, "2025")
+    c.drawRightString(545, y, "2024")
+    c.setFont("Helvetica", 10)
+    rows = [
+        ("Trade receivables", ("3,410", "2,900", "3,100", "2,700")),
+        ("Cash and cash equivalents", ("1,204", "980", "1,050", "900")),
+    ]
+    for label, (cc, cp, sc, sp) in rows:
+        y -= 22
+        c.drawString(72, y, label)
+        c.drawRightString(330, y, cc)
+        c.drawRightString(400, y, cp)
+        c.drawRightString(475, y, sc)
+        c.drawRightString(545, y, sp)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
 def make_multipage_pdf() -> bytes:
     """A 2-page native PDF: face on page 0, notes on page 1."""
     from reportlab.lib.pagesizes import A4

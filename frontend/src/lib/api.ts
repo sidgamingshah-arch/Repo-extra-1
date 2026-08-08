@@ -111,10 +111,12 @@ export const api = {
     documentId: string,
     body: { ontology_version_id?: string; template_version_id?: string } = {},
   ) =>
-    req<ExtractionRunResponse>(`/documents/${documentId}/extractions`, {
+    req<{ run_id: string; status: string }>(`/documents/${documentId}/extractions`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  /** Poll a background extraction run's status/result. */
+  getRun: (runId: string) => req<ExtractionRunResponse>(`/extractions/${runId}`),
   /** Real per-document pre-flight integrity (drives the Integrity screen for an upload). */
   documentIntegrity: (documentId: string, locale: Locale = "en") =>
     req<IntegrityResponse>(`/documents/${documentId}/integrity?locale=${locale}`),
@@ -132,6 +134,12 @@ export const api = {
     req<{ status: string; value: string | null }>(
       `/documents/${documentId}/line-items/${encodeURIComponent(key)}`,
       { method: "PATCH", body: JSON.stringify({ value, formula }) },
+    ),
+  /** Revert an edited line item to its original machine-extracted values. */
+  revertDocumentLineItem: (documentId: string, key: string) =>
+    req<{ reverted: boolean }>(
+      `/documents/${documentId}/line-items/${encodeURIComponent(key)}`,
+      { method: "DELETE" },
     ),
   /** The latest extraction run for a document (drives the Export preview/counts). */
   documentRun: (documentId: string) =>

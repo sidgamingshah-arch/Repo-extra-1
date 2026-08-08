@@ -152,12 +152,50 @@ def _wrap_adjacent(cur: BBox, nxt: BBox, nxt_label: list[Word]) -> bool:
     return abs(cur.x0 - label_x0) <= 0.06                # left-aligned in the label column
 
 
+_CONSOL = re.compile(r"consolidat", re.IGNORECASE)
+_STANDALONE = re.compile(r"standalone|separate", re.IGNORECASE)
+
+
+def _basis_bands(rows: list[list[Word]]) -> list[tuple[Basis, float]]:
+    """Detect a two-level Consolidated/Standalone column header and return each basis token's
+    horizontal centre, so value columns can be attributed to the right basis. Financial
+    statements frequently present both bases side by side; when no such header exists the
+    result is empty and everything is treated as consolidated (the common single-basis case)."""
+    best: list[tuple[Basis, float]] = []
+    for row in rows:
+        bands: list[tuple[Basis, float]] = []
+        for w in row:
+            xc = (w.bbox.x0 + w.bbox.x1) / 2
+            if _CONSOL.search(w.text):
+                bands.append((Basis.CONSOLIDATED, xc))
+            elif _STANDALONE.search(w.text):
+                bands.append((Basis.STANDALONE, xc))
+        # The header band is the row that mentions both bases (or the most).
+        if len({b for b, _ in bands}) >= 2 or len(bands) > len(best):
+            best = bands
+        if len({b for b, _ in bands}) >= 2:
+            break
+    return best
+
+
+def _basis_for(x: float, bands: list[tuple[Basis, float]]) -> Basis:
+    if not bands:
+        return Basis.CONSOLIDATED
+    return min(bands, key=lambda b: abs(b[1] - x))[0]
+
+
 def build_line_items(words: list[Word], *, page_index: int, document_id: str | None,
                      source_kind: str, ordinal_start: int = 0) -> tuple[list[LineItem], int]:
-    """Reconstruct line items from positioned words. Returns (items, next_ordinal)."""
+    """Reconstruct line items from positioned words. Returns (items, next_ordinal).
+
+    Consolidated and standalone columns are extracted in one pass: a Consolidated/Standalone
+    header band (if present) attributes each value column to its basis; within a basis,
+    left→right columns become current / prior periods."""
     items: list[LineItem] = []
     ordinal = ordinal_start
-    for row in _merge_wrapped_labels(_group_rows(words)):
+    rows = _merge_wrapped_labels(_group_rows(words))
+    bands = _basis_bands(rows)
+    for row in rows:
         label_words, note_ref, value_words = _scan_row(row)
 
         label = " ".join(w.text for w in label_words).strip()
@@ -167,18 +205,22 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
         li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
                       source=ValueSource.MACHINE)
         label_bbox = _union([w.bbox for w in label_words])
-        # Value columns left→right → current, prior, …
-        for k, vw in enumerate(sorted(value_words, key=lambda w: w.bbox.x0)):
+        # Group value columns by basis (via the header band), then order within each basis.
+        per_basis: dict[Basis, int] = {}
+        for vw in sorted(value_words, key=lambda w: w.bbox.x0):
             dec = _num(vw.text)
             if dec is None:
                 continue
+            basis = _basis_for((vw.bbox.x0 + vw.bbox.x1) / 2, bands)
+            k = per_basis.get(basis, 0)
+            per_basis[basis] = k + 1
             prov = Provenance(
                 document_id=document_id, page_index=page_index, bbox=vw.bbox,
                 value_bbox=vw.bbox, label_bbox=label_bbox, text_snippet=label,
                 source_kind=source_kind, producer=f"extract:{source_kind}@0.1.0",
             )
             li.set_value(ExtractedValue(
-                value_raw=dec, value=dec, basis=Basis.CONSOLIDATED,
+                value_raw=dec, value=dec, basis=basis,
                 period_label="current" if k == 0 else "prior" if k == 1 else f"col{k}",
                 unit_ctx=UnitContext(), provenance=prov,
             ))
