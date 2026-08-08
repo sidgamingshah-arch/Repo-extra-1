@@ -98,13 +98,27 @@ hard value-level provenance coexist: the model does the semantics, the determini
 owns the numbers and their location.
 
 **In the UI.** An uploaded document's extraction is shown at `/documents/:id`
-(`ExtractionView`): each value's provenance is a click-to-source chip. For a PDF, clicking
-it renders that page — server-rasterized to PNG via `GET /documents/{id}/pages/{n}/image`
-(PyMuPDF) — and draws the value's normalized bbox as an overlay (percent-positioned, so it
-survives any display scale). The run is mapped against the seeded reference ontology
-(`app/sample/reference.py` upserts the HKFRS template + ontology at startup), so the
-"mapped to" column populates — via the LLM when reachable, else the deterministic alias
-tier offline.
+(`ExtractionView`): each value's provenance is a click-to-source chip, and the source panel
+adapts to the source kind:
+- **PDF** — clicking renders that page, server-rasterized to PNG via
+  `GET /documents/{id}/pages/{n}/image` (PyMuPDF), and draws the value's normalized bbox as
+  an overlay (percent-positioned, so it survives any display scale).
+- **Excel** — clicking a `Sheet!Cell` chip fetches a window of surrounding cells via
+  `GET /documents/{id}/cell-context?sheet=&cell=` (`services/excel_extract.cell_context`)
+  and renders a mini spreadsheet grid with the exact origin cell highlighted — the
+  spreadsheet analogue of the PDF overlay, so click-to-source is uniform across formats.
+
+The run is mapped against the seeded reference ontology (`app/sample/reference.py` upserts
+the HKFRS template + ontology at startup), so the "mapped to" column populates — via the
+LLM when reachable, else the deterministic alias tier offline.
+
+**Row reconstruction robustness.** `services/row_reconstruct.py` groups positioned words
+(native text layer *or* OCR) into visual rows, then folds a **wrapped label** — a label
+that breaks across two tightly-spaced, left-aligned lines (e.g. "Property, plant and" /
+"equipment 12,500") — back into one line item so the caption isn't truncated to its last
+fragment. The merge is deliberately conservative (paragraph-tight vertical gap + label-
+column alignment, with an ALL-CAPS/`:`-suffixed section-header guard) so headings are never
+swallowed into the item below them.
 
 ## Adapter ports
 

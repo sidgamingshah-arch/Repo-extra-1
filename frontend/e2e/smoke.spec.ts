@@ -55,3 +55,19 @@ test("analyst uploads a document and views its extracted data with provenance", 
   await page.getByText(/^p\.1/).first().click();
   await expect(page.getByTestId("prov-highlight")).toBeVisible({ timeout: 15_000 });
 });
+
+test("analyst uploads a spreadsheet and gets Excel cell-level click-to-source", async ({ page }) => {
+  await loginAs(page, "analyst");
+  await page.goto("/upload", DCL);
+  await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.xlsx");
+  await expect(page.getByText("sample.xlsx")).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole("button", { name: "View →" }).first().click();
+  await expect(page).toHaveURL(/\/documents\//);
+  await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Trade receivables").first()).toBeVisible();
+
+  // Click a Sheet!Cell chip → the surrounding cells render with the target highlighted.
+  await page.getByText(/!B\d/).first().click();
+  await expect(page.getByTestId("cell-target")).toBeVisible({ timeout: 15_000 });
+});

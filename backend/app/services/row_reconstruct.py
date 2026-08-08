@@ -61,30 +61,104 @@ def _group_rows(words: list[Word], y_tol: float = 0.012) -> list[list[Word]]:
     return rows
 
 
+def _scan_row(row: list[Word]) -> tuple[list[Word], str | None, list[Word]]:
+    """Split one visual row into (label words, note-ref, value words).
+
+    A "Note"/"Notes" token plus the *single* following number is a note reference, not a
+    value — the value lives in the far-right column, so it must not be consumed as a value.
+    """
+    label_words: list[Word] = []
+    note_ref: str | None = None
+    value_words: list[Word] = []
+    i = 0
+    while i < len(row):
+        tok = row[i].text.strip()
+        if _NOTE.match(tok):
+            if i + 1 < len(row) and _num(row[i + 1].text) is not None:
+                note_ref = row[i + 1].text.strip().strip(".")
+                i += 2
+                continue
+        if _num(tok) is not None:
+            value_words.append(row[i])
+        elif not value_words:   # text before any number is part of the label
+            label_words.append(row[i])
+        i += 1
+    return label_words, note_ref, value_words
+
+
+def _row_box(row: list[Word]) -> BBox:
+    b = row[0].bbox
+    for w in row[1:]:
+        b = b.union(w.bbox)
+    return b
+
+
+def _looks_like_header(label_words: list[Word]) -> bool:
+    """A section header (e.g. "Non-current assets", "ASSETS") is a standalone label line,
+    NOT a wrapped continuation — never fold it into a neighbouring valued row."""
+    text = " ".join(w.text for w in label_words).strip()
+    if not text:
+        return True
+    if text.rstrip(":").isupper():          # ALL-CAPS banners
+        return True
+    if text.endswith(":"):                  # "Represented by:" style headers
+        return True
+    return False
+
+
+def _merge_wrapped_labels(rows: list[list[Word]]) -> list[list[Word]]:
+    """Fold a label-only line into the following valued row when the two are clearly one
+    wrapped label: tight vertical spacing *and* left-alignment inside the label column.
+
+    Conservative on purpose — a wrong merge corrupts a label. A label-only line that reads
+    like a section header, or that is loosely spaced / mis-aligned, is left untouched (the
+    main loop then simply skips it, as before).
+    """
+    out: list[list[Word]] = []
+    pending: list[Word] = []
+    for idx, row in enumerate(rows):
+        label_words, note_ref, value_words = _scan_row(row)
+        if value_words:
+            out.append(pending + row if pending else row)
+            pending = []
+            continue
+        # Label-only (or note-only) line: candidate wrapped-label continuation.
+        nxt = rows[idx + 1] if idx + 1 < len(rows) else None
+        is_wrap = (
+            nxt is not None
+            and label_words
+            and note_ref is None
+            and not _looks_like_header(label_words)
+            and _scan_row(nxt)[2]                       # next row actually carries values
+            and _wrap_adjacent(_row_box(row), _row_box(nxt), _scan_row(nxt)[0])
+        )
+        if is_wrap:
+            pending = pending + row
+        else:
+            out.append(pending + row if pending else row)
+            pending = []
+    if pending:                                          # trailing label-only text, no value
+        out.append(pending)
+    return out
+
+
+def _wrap_adjacent(cur: BBox, nxt: BBox, nxt_label: list[Word]) -> bool:
+    """True when `cur` sits directly above `nxt`'s label with paragraph-tight spacing."""
+    gap = nxt.y0 - cur.y1
+    line_h = max(cur.y1 - cur.y0, 1e-4)
+    if gap > 0.6 * line_h or gap < -0.5 * line_h:        # tight spacing (same text block)
+        return False
+    label_x0 = min((w.bbox.x0 for w in nxt_label), default=nxt.x0)
+    return abs(cur.x0 - label_x0) <= 0.06                # left-aligned in the label column
+
+
 def build_line_items(words: list[Word], *, page_index: int, document_id: str | None,
                      source_kind: str, ordinal_start: int = 0) -> tuple[list[LineItem], int]:
     """Reconstruct line items from positioned words. Returns (items, next_ordinal)."""
     items: list[LineItem] = []
     ordinal = ordinal_start
-    for row in _group_rows(words):
-        label_words: list[Word] = []
-        note_ref: str | None = None
-        value_words: list[Word] = []
-        i = 0
-        while i < len(row):
-            tok = row[i].text.strip()
-            if _NOTE.match(tok):
-                # "Note"/"Notes" + the SINGLE following number is a note reference (not a
-                # value — the value lives in the far-right column, so don't consume it).
-                if i + 1 < len(row) and _num(row[i + 1].text) is not None:
-                    note_ref = row[i + 1].text.strip().strip(".")
-                    i += 2
-                    continue
-            if _num(tok) is not None:
-                value_words.append(row[i])
-            elif not value_words:   # text before any number is part of the label
-                label_words.append(row[i])
-            i += 1
+    for row in _merge_wrapped_labels(_group_rows(words)):
+        label_words, note_ref, value_words = _scan_row(row)
 
         label = " ".join(w.text for w in label_words).strip()
         if not label or not value_words:

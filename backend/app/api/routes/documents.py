@@ -146,3 +146,31 @@ def get_page_image(
         raise HTTPException(status_code=422, detail=f"Could not render page: {exc}")
     return Response(content=png, media_type="image/png",
                     headers={"Cache-Control": "private, max-age=300"})
+
+
+@router.get("/{document_id}/cell-context", dependencies=[Depends(current_principal)])
+def get_cell_context(
+    document_id: str,
+    sheet: str = Query(..., description="Sheet name the value came from"),
+    cell: str = Query(..., description="Cell reference, e.g. C14"),
+    radius: int = Query(4, ge=1, le=12),
+    session: Session = Depends(db),
+    store: LocalObjectStore = Depends(object_store),
+) -> dict:
+    """A window of cells around a value's origin — the spreadsheet click-to-source
+    backdrop (mirrors the PDF page image for XLSX sources)."""
+    from app.db.models import Document
+    from app.services.excel_extract import cell_context
+
+    row = session.get(Document, document_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if row.fmt != "xlsx":
+        raise HTTPException(status_code=400, detail="Cell context is only available for spreadsheets")
+    data = store.get(row.object_key)
+    try:
+        return cell_context(data, sheet=sheet, cell=cell, radius=radius)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Sheet not found: {sheet}")

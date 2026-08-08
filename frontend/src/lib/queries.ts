@@ -110,6 +110,17 @@ export const useExtraction = (
     retry: false,
   });
 
+/** Cells around a value's spreadsheet origin — the Excel click-to-source backdrop.
+ * Enabled only once a spreadsheet cell has been picked. */
+export const useCellContext = (documentId: string, sheet?: string, cell?: string) =>
+  useQuery({
+    queryKey: ["cell-context", documentId, sheet ?? null, cell ?? null],
+    queryFn: () => api.cellContext(documentId, sheet as string, cell as string),
+    enabled: !!documentId && !!sheet && !!cell,
+    staleTime: Infinity,
+    retry: false,
+  });
+
 /** Upload a source document; refreshes the documents list and project. */
 export function useUploadDocument() {
   const qc = useQueryClient();

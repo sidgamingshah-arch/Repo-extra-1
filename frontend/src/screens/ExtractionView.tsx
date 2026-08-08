@@ -2,40 +2,48 @@
  * provenance. Clicking a PDF value opens a Source panel that renders that page and
  * highlights the value's bounding box. Mapping is against the seeded reference ontology.
  * Distinct from the demo-driven workspace: this reads a live extraction run. */
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card } from "../components/ui";
 import { useT } from "../i18n";
 import { api } from "../lib/api";
-import { useExtraction, useOntologies, useTemplates } from "../lib/queries";
+import { useCellContext, useExtraction, useOntologies, useTemplates } from "../lib/queries";
 import { SCREENS } from "./config";
 import { color, font } from "../theme";
 import type { ExtractionProvenance, ExtractionRow } from "../types";
 
-/** A value's source location, resolved to what the Source panel needs to render it. */
-interface Picked {
-  page_index: number;
-  bbox: { x0: number; y0: number; x1: number; y1: number };
-  label: string;
+/** A value's source location, resolved to what the Source panel needs to render it.
+ *  PDF sources carry a page + bbox; spreadsheet sources carry a sheet + cell. */
+type Picked =
+  | { kind: "pdf"; page_index: number; bbox: { x0: number; y0: number; x1: number; y1: number }; label: string }
+  | { kind: "xlsx"; sheet: string; cell: string; label: string };
+
+/** Resolve a provenance record to a Picked, or null if it isn't click-to-source-able. */
+function toPicked(p: ExtractionProvenance | null, label: string): Picked | null {
+  if (!p) return null;
+  if (p.source_kind === "spreadsheet" && p.sheet && p.cell)
+    return { kind: "xlsx", sheet: p.sheet, cell: p.cell, label };
+  if (p.bbox) return { kind: "pdf", page_index: p.page_index, bbox: p.bbox, label };
+  return null;
 }
 
 function SourceChip({ p, onPick }: { p: ExtractionProvenance | null; onPick?: () => void }) {
   if (!p) return <span style={{ color: color.faint }}>—</span>;
-  const isPdf = p.source_kind !== "spreadsheet" && !!p.bbox;
+  const clickable = !!onPick;
   const label =
     p.source_kind === "spreadsheet" && p.sheet
       ? `${p.sheet}!${p.cell ?? ""}`
       : `p.${p.page_index + 1}${p.bbox ? " ⤢" : ""}`;
   return (
     <span
-      onClick={isPdf ? onPick : undefined}
-      role={isPdf ? "button" : undefined}
+      onClick={onPick}
+      role={clickable ? "button" : undefined}
       title={p.text_snippet ?? undefined}
       style={{
         fontFamily: font.mono, fontSize: 10.5, color: color.indigo,
         background: color.indigoTint2, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap",
-        cursor: isPdf ? "pointer" : "default",
+        cursor: clickable ? "pointer" : "default",
       }}
     >
       {label}
@@ -55,17 +63,15 @@ function RowLine({ row, t, onPick }: {
       <span style={{ fontSize: 12.5, color: color.ink }}>{row.source_label}</span>
       <span style={{ fontSize: 11, fontFamily: font.mono, color: color.muted }}>{row.note ?? ""}</span>
       <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {row.values.map((v, i) => (
-          <span key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-            <span style={{ fontSize: 11.5, fontFamily: font.mono, color: color.ink }}>{v.value ?? "—"}</span>
-            <SourceChip
-              p={v.provenance}
-              onPick={v.provenance?.bbox
-                ? () => onPick({ page_index: v.provenance!.page_index, bbox: v.provenance!.bbox!, label: row.source_label })
-                : undefined}
-            />
-          </span>
-        ))}
+        {row.values.map((v, i) => {
+          const picked = toPicked(v.provenance, row.source_label);
+          return (
+            <span key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <span style={{ fontSize: 11.5, fontFamily: font.mono, color: color.ink }}>{v.value ?? "—"}</span>
+              <SourceChip p={v.provenance} onPick={picked ? () => onPick(picked) : undefined} />
+            </span>
+          );
+        })}
       </span>
       <span style={{ display: "flex", flexDirection: "column" }}>
         <span style={{ fontSize: 11.5, color: row.canonical_key ? color.ink2 : color.faint }}>
@@ -80,8 +86,23 @@ function RowLine({ row, t, onPick }: {
   );
 }
 
+type PdfPick = Extract<Picked, { kind: "pdf" }>;
+type XlsxPick = Extract<Picked, { kind: "xlsx" }>;
+
+/** Shared chrome for a source panel: sticky column with a heading and a card. */
+function PanelShell({ t, children }: { t: (k: string) => string; children: React.ReactNode }) {
+  return (
+    <div style={{ width: 420, flex: "0 0 420px", position: "sticky", top: 0, alignSelf: "flex-start" }}>
+      <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.3, color: color.muted, margin: "0 0 8px" }}>
+        {t("ex.col.source").toUpperCase()}
+      </div>
+      <Card pad={10}>{children}</Card>
+    </div>
+  );
+}
+
 /** Renders a PDF page image (auth'd fetch → blob URL) with the picked value's bbox drawn. */
-function SourcePanel({ documentId, picked, t }: { documentId: string; picked: Picked | null; t: (k: string) => string }) {
+function SourcePanel({ documentId, picked, t }: { documentId: string; picked: PdfPick | null; t: (k: string) => string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [err, setErr] = useState(false);
   useEffect(() => {
@@ -101,40 +122,106 @@ function SourcePanel({ documentId, picked, t }: { documentId: string; picked: Pi
 
   const b = picked?.bbox;
   return (
-    <div style={{ width: 420, flex: "0 0 420px", position: "sticky", top: 0, alignSelf: "flex-start" }}>
-      <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.3, color: color.muted, margin: "0 0 8px" }}>
-        {t("ex.col.source").toUpperCase()}
-      </div>
-      <Card pad={10}>
-        {!picked && (
-          <div style={{ fontSize: 12, color: color.muted, padding: "24px 8px", textAlign: "center" }}>
-            {t("ex.pickHint")}
+    <PanelShell t={t}>
+      {!picked && (
+        <div style={{ fontSize: 12, color: color.muted, padding: "24px 8px", textAlign: "center" }}>
+          {t("ex.pickHint")}
+        </div>
+      )}
+      {picked && err && <div style={{ fontSize: 12, color: color.redFg }}>{t("ex.failed")}</div>}
+      {picked && !err && (
+        <>
+          <div style={{ fontSize: 11, color: color.sec2, marginBottom: 8 }}>
+            {picked.label} · p.{picked.page_index + 1}
           </div>
-        )}
-        {picked && err && <div style={{ fontSize: 12, color: color.redFg }}>{t("ex.failed")}</div>}
-        {picked && !err && (
-          <>
-            <div style={{ fontSize: 11, color: color.sec2, marginBottom: 8 }}>
-              {picked.label} · p.{picked.page_index + 1}
-            </div>
-            <div style={{ position: "relative", display: "inline-block", width: "100%",
-                          border: `1px solid ${color.hairline3}`, borderRadius: 6, overflow: "hidden" }}>
-              {url && <img src={url} alt="" style={{ display: "block", width: "100%" }} />}
-              {url && b && (
-                <div data-testid="prov-highlight" style={{
-                  position: "absolute",
-                  left: `${b.x0 * 100}%`, top: `${b.y0 * 100}%`,
-                  width: `${(b.x1 - b.x0) * 100}%`, height: `${(b.y1 - b.y0) * 100}%`,
-                  border: `2px solid ${color.amberFg}`, background: "rgba(217,164,65,0.22)",
-                  borderRadius: 2, boxShadow: "0 0 0 1px rgba(0,0,0,0.05)",
-                }} />
-              )}
-            </div>
-          </>
-        )}
-      </Card>
-    </div>
+          <div style={{ position: "relative", display: "inline-block", width: "100%",
+                        border: `1px solid ${color.hairline3}`, borderRadius: 6, overflow: "hidden" }}>
+            {url && <img src={url} alt="" style={{ display: "block", width: "100%" }} />}
+            {url && b && (
+              <div data-testid="prov-highlight" style={{
+                position: "absolute",
+                left: `${b.x0 * 100}%`, top: `${b.y0 * 100}%`,
+                width: `${(b.x1 - b.x0) * 100}%`, height: `${(b.y1 - b.y0) * 100}%`,
+                border: `2px solid ${color.amberFg}`, background: "rgba(217,164,65,0.22)",
+                borderRadius: 2, boxShadow: "0 0 0 1px rgba(0,0,0,0.05)",
+              }} />
+            )}
+          </div>
+        </>
+      )}
+    </PanelShell>
   );
+}
+
+/** Spreadsheet click-to-source: renders a small window of cells around the value's origin
+ * with the target cell highlighted — the Excel analogue of the PDF page overlay. */
+function ExcelSourcePanel({ documentId, picked, t }: { documentId: string; picked: XlsxPick | null; t: (k: string) => string }) {
+  const q = useCellContext(documentId, picked?.sheet, picked?.cell);
+  return (
+    <PanelShell t={t}>
+      {!picked && (
+        <div style={{ fontSize: 12, color: color.muted, padding: "24px 8px", textAlign: "center" }}>
+          {t("ex.pickHint")}
+        </div>
+      )}
+      {picked && q.isError && <div style={{ fontSize: 12, color: color.redFg }}>{t("ex.failed")}</div>}
+      {picked && q.isPending && !q.isError && (
+        <div style={{ fontSize: 12, color: color.muted, padding: "18px 8px" }}>{t("ex.running")}</div>
+      )}
+      {picked && q.data && (
+        <>
+          <div style={{ fontSize: 11, color: color.sec2, marginBottom: 8 }}>
+            {picked.label} · <span style={{ fontFamily: font.mono }}>{q.data.sheet}!{q.data.target}</span>
+          </div>
+          <div style={{ overflowX: "auto", border: `1px solid ${color.hairline3}`, borderRadius: 6 }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 10.5, fontFamily: font.mono, width: "100%" }}>
+              <thead>
+                <tr>
+                  <th style={cellSt(false, true)}></th>
+                  {q.data.col_letters.map((c) => (
+                    <th key={c} style={cellSt(false, true)}>{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {q.data.grid.map((line, r) => (
+                  <tr key={r}>
+                    <td style={cellSt(false, true)}>{q.data!.row_numbers[r]}</td>
+                    {line.map((cell) => (
+                      <td key={cell.ref}
+                          data-testid={cell.is_target ? "cell-target" : undefined}
+                          title={cell.ref}
+                          style={{
+                            ...cellSt(cell.is_target, false),
+                            textAlign: cell.numeric ? "right" : "left",
+                          }}>
+                        {cell.value.length > 22 ? cell.value.slice(0, 21) + "…" : cell.value}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </PanelShell>
+  );
+}
+
+function cellSt(target: boolean, header: boolean): React.CSSProperties {
+  return {
+    border: `1px solid ${color.hairline2}`,
+    padding: "3px 6px",
+    whiteSpace: "nowrap",
+    maxWidth: 130,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    background: target ? "rgba(217,164,65,0.22)" : header ? color.rowAltBg : undefined,
+    color: header ? color.muted : color.ink,
+    fontWeight: target ? 700 : header ? 600 : 400,
+    outline: target ? `2px solid ${color.amberFg}` : undefined,
+  };
 }
 
 export default function ExtractionView() {
@@ -197,7 +284,10 @@ export default function ExtractionView() {
               </Card>
             </div>
             {data.result.format === "pdf" && id && (
-              <SourcePanel documentId={id} picked={picked} t={t} />
+              <SourcePanel documentId={id} picked={picked?.kind === "pdf" ? picked : null} t={t} />
+            )}
+            {(data.result.format === "xlsx" || data.result.format === "xls") && id && (
+              <ExcelSourcePanel documentId={id} picked={picked?.kind === "xlsx" ? picked : null} t={t} />
             )}
           </div>
         </>

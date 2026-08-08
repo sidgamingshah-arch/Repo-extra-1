@@ -249,6 +249,20 @@ export interface ExtractionRunResponse {
   status: string;
   result: ExtractionResult;
 }
+/** A window of spreadsheet cells around a value's origin (Excel click-to-source). */
+export interface CellContextCell {
+  ref: string;
+  value: string;
+  is_target: boolean;
+  numeric: boolean;
+}
+export interface CellContext {
+  sheet: string;
+  target: string;
+  col_letters: string[];
+  row_numbers: number[];
+  grid: CellContextCell[][];
+}
 export interface OntologyRef {
   id: string;
   ontology_key: string;

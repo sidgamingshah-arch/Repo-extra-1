@@ -44,6 +44,7 @@ import type {
   AuditEntry,
   AuditResponse,
   Basis,
+  CellContext,
   Commentary,
   DemoUser,
   ExtractionRunResponse,
@@ -100,6 +101,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  /** A window of spreadsheet cells around a value's origin — the Excel click-to-source
+   * backdrop (mirrors fetchPageImage for PDFs). */
+  cellContext: (documentId: string, sheet: string, cell: string) =>
+    req<CellContext>(
+      `/documents/${documentId}/cell-context?sheet=${encodeURIComponent(sheet)}&cell=${encodeURIComponent(cell)}`,
+    ),
   /** PNG of a PDF page (auth'd fetch → blob), used as the click-to-source backdrop. */
   fetchPageImage: async (documentId: string, pageIndex: number): Promise<Blob> => {
     const res = await fetch(`${BASE}/documents/${documentId}/pages/${pageIndex}/image`, {

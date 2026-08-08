@@ -9,6 +9,7 @@ a separate, LLM-driven step — this stage only produces trustworthy, source-anc
 from __future__ import annotations
 
 import io
+import re
 from decimal import Decimal, InvalidOperation
 
 from app.core.models.enums import Basis, LineRole, ValueSource
@@ -16,6 +17,7 @@ from app.core.models.geometry import Provenance
 from app.core.models.line_item import ExtractedValue, LineItem, UnitContext
 
 _PRODUCER = "extract:xlsx@0.1.0"
+_CELL_RE = re.compile(r"^([A-Za-z]+)(\d+)$")
 
 
 def _col_letter(idx1: int) -> str:
@@ -25,6 +27,22 @@ def _col_letter(idx1: int) -> str:
         idx1, r = divmod(idx1 - 1, 26)
         s = chr(65 + r) + s
     return s
+
+
+def _col_index0(letters: str) -> int:
+    """Excel column letters → 0-based column index (A→0, AA→26)."""
+    n = 0
+    for ch in letters.upper():
+        n = n * 26 + (ord(ch) - 64)
+    return n - 1
+
+
+def _parse_cell(ref: str) -> tuple[int, int] | None:
+    """"C14" → (col0=2, row0=13); None if malformed."""
+    m = _CELL_RE.match(ref.strip())
+    if not m:
+        return None
+    return _col_index0(m.group(1)), int(m.group(2)) - 1
 
 
 def _to_decimal(v) -> Decimal | None:
@@ -137,3 +155,51 @@ def _row_item(sheet, sheet_index, r_idx, label, row, label_col, value_cols, head
         li.set_value(ev)
         got = True
     return li if got else None
+
+
+def cell_context(data: bytes, *, sheet: str, cell: str, radius: int = 4) -> dict:
+    """A small window of the sheet around ``cell`` — the spreadsheet equivalent of the PDF
+    page image, so the frontend can render the value *in situ* and highlight its cell.
+
+    Raises ``ValueError`` for a bad cell ref and ``KeyError`` for an unknown sheet.
+    """
+    import openpyxl
+
+    parsed = _parse_cell(cell)
+    if parsed is None:
+        raise ValueError(f"Bad cell reference: {cell!r}")
+    tcol, trow = parsed
+
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+    try:
+        if sheet not in wb.sheetnames:
+            raise KeyError(sheet)
+        rows = [list(r) for r in wb[sheet].iter_rows(values_only=True)]
+    finally:
+        wb.close()
+
+    width = max((len(r) for r in rows), default=tcol + 1)
+    r0, r1 = max(0, trow - radius), min(max(len(rows), trow + 1), trow + radius + 1)
+    c0, c1 = max(0, tcol - radius), min(max(width, tcol + 1), tcol + radius + 1)
+
+    grid: list[list[dict]] = []
+    for r in range(r0, r1):
+        row = rows[r] if r < len(rows) else []
+        line: list[dict] = []
+        for c in range(c0, c1):
+            v = row[c] if c < len(row) else None
+            line.append({
+                "ref": f"{_col_letter(c + 1)}{r + 1}",
+                "value": "" if v is None else str(v),
+                "is_target": c == tcol and r == trow,
+                "numeric": _to_decimal(v) is not None,
+            })
+        grid.append(line)
+
+    return {
+        "sheet": sheet,
+        "target": cell,
+        "col_letters": [_col_letter(c + 1) for c in range(c0, c1)],
+        "row_numbers": list(range(r0 + 1, r1 + 1)),
+        "grid": grid,
+    }
