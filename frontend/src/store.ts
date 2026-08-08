@@ -11,7 +11,7 @@
  * `appLocale` (see useAppLocale) is the effective locale for interface chrome. */
 import { create } from "zustand";
 
-import { getToken, setStoredToken } from "./lib/api";
+import { getStoredActiveDoc, getToken, setStoredActiveDoc, setStoredToken } from "./lib/api";
 import type { Basis, ExportFmt, ExtractMode, Locale, StatementKey } from "./types";
 
 interface UIState {
@@ -55,7 +55,7 @@ export const useUI = create<UIState>((set) => ({
   uiLocalization: false,
   token: getToken(),
   extractMode: "auto",
-  activeDocumentId: null,
+  activeDocumentId: getStoredActiveDoc(),
   dataset: "consolidated",
   statement: "balance_sheet",
   sel: "trade_recv",
@@ -73,7 +73,10 @@ export const useUI = create<UIState>((set) => ({
     set({ token });
   },
   setExtractMode: (extractMode) => set({ extractMode }),
-  setActiveDocumentId: (activeDocumentId) => set({ activeDocumentId }),
+  setActiveDocumentId: (activeDocumentId) => {
+    setStoredActiveDoc(activeDocumentId);
+    set({ activeDocumentId });
+  },
   setDataset: (dataset) => set({ dataset }),
   setStatement: (statement) => set({ statement, sel: "" }),
   selRow: (sel) => set({ sel, editing: false }),

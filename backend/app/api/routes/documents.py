@@ -114,15 +114,39 @@ _SEV = {
 }
 
 
+def _pct_label(ratio: float) -> str:
+    """Percent label that never reads a contradictory '0%' for a non-zero ratio."""
+    pct = round(ratio * 100)
+    if ratio > 0 and pct == 0:
+        return "<1%"
+    return f"{pct}%"
+
+
 def _serialize_document_integrity(row) -> dict:
     """Map a stored IntegrityReport (per uploaded document) into the IntegrityResponse the
     Document Integrity screen renders — so a real uploaded file surfaces its own pre-flight
     results, not the demo project's."""
-    report = row.integrity_report or {}
+    report = row.integrity_report
+    # No stored report → the file was never actually checked. Do NOT fabricate an all-clear;
+    # surface an explicit "not analyzed" state so an unchecked file is never shown as clean.
+    if not report:
+        return {
+            "score": 0, "grade": "Not analyzed",
+            "summary": "No integrity report is available for this document. Re-upload to run the pre-flight checks.",
+            "stats": [
+                {"label": "Pages", "value": str(row.page_count or 0), "sub": "detected", "tone": "neutral"},
+                {"label": "Document type", "value": "Unknown", "sub": "native vs scanned", "tone": "warn"},
+                {"label": "Scanned pages", "value": "—", "sub": "need OCR", "tone": "neutral"},
+                {"label": "Issues", "value": "—", "sub": "not checked", "tone": "warn"},
+            ],
+            "issues": [{"title": "Integrity not available",
+                        "detail": "This document has no stored pre-flight report.",
+                        "pages": "All", "note": "UNKNOWN", "status": "Not analyzed", "severity": "warn"}],
+        }
+
     findings = report.get("findings", []) or []
     page_count = report.get("page_count", row.page_count or 0)
     scanned_ratio = float(report.get("scanned_page_ratio", 0.0) or 0.0)
-    has_text = report.get("has_text_layer", True)
 
     score = 100
     has_blocker = False
@@ -131,14 +155,17 @@ def _serialize_document_integrity(row) -> dict:
         sev = str(f.get("severity", "info"))
         fe_sev, penalty = _SEV.get(sev, ("ok", 2))
         score -= penalty
-        has_blocker = has_blocker or sev in ("blocker", "error")
+        # Only BLOCKER gates extraction — matches IntegrityReport.has_blockers and the
+        # pipeline's gating semantics (ERROR/WARNING annotate but never halt the run).
+        blocking = sev == "blocker"
+        has_blocker = has_blocker or blocking
         pidx = f.get("page_index")
         issues.append({
             "title": _CHECK_TITLES.get(f.get("check_id", ""), str(f.get("check_id", "Issue")).replace("_", " ").title()),
             "detail": f.get("message", ""),
             "pages": f"p.{pidx + 1}" if isinstance(pidx, int) else "All",
             "note": sev.upper(),
-            "status": "Blocking" if sev in ("blocker", "error") else "Advisory",
+            "status": "Blocking" if blocking else "Advisory",
             "severity": fe_sev,
         })
     score = max(0, min(100, score))
@@ -157,7 +184,7 @@ def _serialize_document_integrity(row) -> dict:
         {"label": "Pages", "value": str(page_count), "sub": "detected", "tone": "neutral"},
         {"label": "Document type", "value": kind, "sub": "native vs scanned",
          "tone": "ok" if kind == "Native" else "warn"},
-        {"label": "Scanned pages", "value": f"{round(scanned_ratio * 100)}%",
+        {"label": "Scanned pages", "value": _pct_label(scanned_ratio),
          "sub": "need OCR", "tone": "warn" if scanned_ratio > 0 else "ok"},
         {"label": "Issues", "value": str(len(findings)), "sub": "found",
          "tone": "warn" if findings else "ok"},
@@ -178,6 +205,147 @@ def get_document_integrity(document_id: str, session: Session = Depends(db)) -> 
     if row is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return _serialize_document_integrity(row)
+
+
+def _latest_run(session: Session, document_id: str):
+    """Most recent extraction run for a document, or None if it hasn't been extracted."""
+    from app.db.models import ExtractionRun
+
+    return session.execute(
+        select(ExtractionRun)
+        .where(ExtractionRun.document_id == document_id)
+        .order_by(ExtractionRun.created_at.desc())
+    ).scalars().first()
+
+
+def _prov_label(prov: dict | None) -> str:
+    if not prov:
+        return "—"
+    if prov.get("source_kind") == "spreadsheet" and prov.get("sheet"):
+        return f"{prov['sheet']}!{prov.get('cell', '')}"
+    return f"p.{(prov.get('page_index', 0) or 0) + 1}"
+
+
+_LOW_CONF = 0.75  # mapping confidence below this routes to review
+
+
+def _build_review(rows: list[dict], filename: str) -> dict:
+    """Derive the human-in-the-loop review queue from a real extraction: unmapped and
+    low-confidence line items become review checks (the QA the analyst works before
+    export). No demo data involved."""
+    checks: list[dict] = []
+    unmapped = low_conf = 0
+    for i, r in enumerate(rows):
+        key = r.get("canonical_key")
+        conf = r.get("mapping_confidence")
+        flags = r.get("flags") or []
+        first = (r.get("values") or [{}])[0]
+        val = first.get("value")
+        where = f"{filename} · {_prov_label(first.get('provenance'))}"
+        pct = f"{round(conf * 100)}%" if isinstance(conf, (int, float)) else "—"
+
+        if not key:
+            unmapped += 1
+            checks.append({
+                "id": f"chk-unmapped-{i}", "type": "unmapped", "icon": "?",
+                "title": r.get("source_label", "Line item"), "where": where,
+                "severity": "Unmapped", "tone": "low", "delta": "—",
+                "target": r.get("source_label", ""),
+                "calc": [
+                    ["Source label", r.get("source_label", ""), False],
+                    ["Mapped to", "— (no confident match)", True],
+                    ["Value", str(val) if val is not None else "—", False],
+                ],
+                "fix": "No canonical concept matched with confidence. Pick the correct template "
+                       "line item, or add an alias so future runs map it automatically.",
+            })
+        elif "low_mapping_confidence" in flags or (isinstance(conf, (int, float)) and conf < _LOW_CONF):
+            low_conf += 1
+            checks.append({
+                "id": f"chk-lowconf-{i}", "type": "low_confidence", "icon": "!",
+                "title": r.get("source_label", "Line item"), "where": where,
+                "severity": "Low confidence", "tone": "med", "delta": pct,
+                "target": r.get("source_label", ""),
+                "calc": [
+                    ["Source label", r.get("source_label", ""), False],
+                    ["Mapped to", key, True],
+                    ["Method", r.get("mapping_method") or "—", False],
+                    ["Confidence", pct, False],
+                    ["Value", str(val) if val is not None else "—", False],
+                ],
+                "fix": "The mapping is uncertain. Confirm the concept is correct or reassign it; "
+                       "the value and its source location are shown so you can verify against the document.",
+            })
+    total = len(checks)
+    passed = max(0, len(rows) - total)
+    return {
+        "checks": checks,
+        "tabs": [
+            {"label": "All", "count": total},
+            {"label": "Unmapped", "count": unmapped},
+            {"label": "Low confidence", "count": low_conf},
+        ],
+        "summary": {"open": total, "passed": passed},
+    }
+
+
+@router.get("/{document_id}/run", dependencies=[Depends(current_principal)])
+def get_document_run(document_id: str, session: Session = Depends(db)) -> dict:
+    """The latest extraction result for a document (drives the Export preview/counts for a
+    real run). 404 until the document has been extracted."""
+    from app.db.models import Document
+
+    if session.get(Document, document_id) is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        raise HTTPException(status_code=404, detail="No extraction run yet for this document")
+    return {"run_id": run.id, "status": run.status, "result": run.result}
+
+
+@router.get("/{document_id}/review", dependencies=[Depends(current_principal)])
+def get_document_review(document_id: str, session: Session = Depends(db)) -> dict:
+    """Real review queue for a document, derived from its latest extraction."""
+    from app.db.models import Document
+
+    doc = session.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        return {"checks": [], "tabs": [{"label": "All", "count": 0}], "summary": {"open": 0, "passed": 0}}
+    return _build_review(run.result.get("rows", []), doc.filename or "document")
+
+
+@router.get("/{document_id}/export", dependencies=[Depends(require(Permission.EXPORT_RUN))])
+def export_document(
+    document_id: str,
+    fmt: str = Query("excel", pattern="^(excel|json)$"),
+    session: Session = Depends(db),
+) -> Response:
+    """Export a real document's extracted, mapped line items as Excel or JSON, built from
+    the latest run (not the demo project)."""
+    from app.db.models import Document
+    from app.services.export import build_rows_json, build_rows_xlsx
+
+    doc = session.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        raise HTTPException(status_code=404, detail="No extraction run yet for this document")
+    rows = run.result.get("rows", [])
+    name = (doc.filename or "extract").rsplit(".", 1)[0]
+    if fmt == "json":
+        data = build_rows_json(rows, filename=doc.filename or "document")
+        return Response(content=data, media_type="application/json",
+                        headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
+    data = build_rows_xlsx(rows, filename=doc.filename or "document")
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{name}.xlsx"'},
+    )
 
 
 @router.get("/{document_id}")

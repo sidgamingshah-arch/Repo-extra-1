@@ -57,6 +57,60 @@ def test_document_integrity_endpoint_shapes_real_report(client):
     assert all({"title", "detail", "pages", "note", "status", "severity"} <= set(i) for i in body["issues"])
 
 
+def test_real_review_and_export_from_extraction(client):
+    """A real uploaded file → extract → review queue + Excel/JSON export, all from the
+    document's own run (no demo data)."""
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}
+    ).json()["id"]
+    client.post(f"/api/v1/documents/{doc_id}/extractions", json={})
+
+    # Latest run is fetchable for the export preview/counts.
+    run = client.get(f"/api/v1/documents/{doc_id}/run")
+    assert run.status_code == 200 and run.json()["result"]["rows"]
+
+    # Review queue derives from the real rows.
+    rev = client.get(f"/api/v1/documents/{doc_id}/review").json()
+    assert set(rev) == {"checks", "tabs", "summary"}
+    assert rev["tabs"][0]["label"] == "All"
+    assert rev["summary"]["open"] + rev["summary"]["passed"] >= 1
+
+    # JSON export contains the real line items with source locations.
+    j = client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "json"})
+    assert j.status_code == 200 and j.headers["content-type"].startswith("application/json")
+    body = j.json()
+    assert body["source_document"] == "bs.pdf" and body["line_item_count"] >= 1
+    assert any("Trade receivables" in (li["source_label"] or "") for li in body["line_items"])
+
+    # Excel export is a real workbook.
+    x = client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "excel"})
+    assert x.status_code == 200
+    assert x.content[:2] == b"PK" and len(x.content) > 200          # xlsx = zip
+
+
+def test_review_and_run_404_before_extraction(client):
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("x.pdf", make_native_pdf(), "application/pdf")}
+    ).json()["id"]
+    # No run yet → /run and /export 404; /review returns an empty (but valid) queue.
+    assert client.get(f"/api/v1/documents/{doc_id}/run").status_code == 404
+    assert client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "json"}).status_code == 404
+    rev = client.get(f"/api/v1/documents/{doc_id}/review").json()
+    assert rev["summary"] == {"open": 0, "passed": 0}
+
+
+def test_missing_integrity_report_is_not_shown_as_clean(client):
+    """A document with no stored integrity report must NOT be reported as a clean all-clear."""
+    from app.api.routes.documents import _serialize_document_integrity
+
+    class _Row:
+        integrity_report = None
+        page_count = 3
+    body = _serialize_document_integrity(_Row())
+    assert body["grade"] == "Not analyzed" and body["score"] == 0
+    assert all(i["severity"] != "ok" for i in body["issues"])
+
+
 def test_page_image_endpoint_renders_png(client):
     doc_id = client.post(
         "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}

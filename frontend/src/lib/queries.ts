@@ -144,12 +144,30 @@ export const useDocumentIntegrity = (documentId: string | undefined) =>
     enabled: !!documentId,
     retry: false,
   });
-export const useIntegrity = (locale: Locale = "en") =>
-  useQuery({ queryKey: ["integrity", locale], queryFn: () => api.integrity(locale) });
+
+/** Real per-document review queue (unmapped + low-confidence items from the latest run). */
+export const useDocumentReview = (documentId: string | undefined) =>
+  useQuery({
+    queryKey: ["document-review", documentId],
+    queryFn: () => api.documentReview(documentId as string),
+    enabled: !!documentId,
+    retry: false,
+  });
+
+/** Latest extraction run for a document (Export preview/counts). */
+export const useDocumentRun = (documentId: string | undefined) =>
+  useQuery({
+    queryKey: ["document-run", documentId],
+    queryFn: () => api.documentRun(documentId as string),
+    enabled: !!documentId,
+    retry: false,
+  });
+export const useIntegrity = (locale: Locale = "en", enabled = true) =>
+  useQuery({ queryKey: ["integrity", locale], queryFn: () => api.integrity(locale), enabled });
 export const usePages = (locale: Locale = "en") =>
   useQuery({ queryKey: ["pages", locale], queryFn: () => api.pages(locale) });
-export const useReview = (locale: Locale = "en") =>
-  useQuery({ queryKey: ["review", locale], queryFn: () => api.review(locale) });
+export const useReview = (locale: Locale = "en", enabled = true) =>
+  useQuery({ queryKey: ["review", locale], queryFn: () => api.review(locale), enabled });
 export const useNotes = (locale: Locale = "en") =>
   useQuery({ queryKey: ["notes", locale], queryFn: () => api.notes(locale) });
 export const useNote = (no: number, locale: Locale = "en") =>

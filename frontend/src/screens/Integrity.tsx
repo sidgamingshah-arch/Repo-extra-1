@@ -1,11 +1,12 @@
 /** Screen 2 — Document integrity. Pre-flight scan results (score, stats, issues). */
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button, Card } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { color, font, radius } from "../theme";
 import type { IntegrityIssue, IntegrityStat } from "../types";
-import { useDocumentIntegrity, useDocuments, useIntegrity, useProjectLoaded } from "../lib/queries";
+import { useDocumentIntegrity, useIntegrity, useProjectLoaded } from "../lib/queries";
 import { useAppLocale, useUI } from "../store";
 import { SCREENS } from "./config";
 import { useT } from "../i18n";
@@ -32,17 +33,25 @@ export default function IntegrityScreen() {
   const locale = useAppLocale();
   const extractMode = useUI((s) => s.extractMode);
   const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const setActiveDocumentId = useUI((s) => s.setActiveDocumentId);
 
-  // A real uploaded document takes precedence: show ITS integrity (the file just uploaded,
-  // else the most recent). Only when there's no real document do we fall back to the demo
-  // project's integrity / the greenfield empty state.
-  const { data: docsData } = useDocuments();
-  const docId = activeDocumentId ?? docsData?.documents?.[0]?.id;
+  // The document explicitly being worked this session (set on upload, persisted across
+  // refresh) drives the screen. We deliberately do NOT fall back to "the most recent
+  // document in the list" — that could be another session's file. When there's no active
+  // document, the demo project shows only if an admin has enabled seed_demo; otherwise the
+  // greenfield empty state. So real runs are deterministic and demo never leaks in.
+  const docId = activeDocumentId ?? undefined;
+  const usingReal = !!docId;
   const realQ = useDocumentIntegrity(docId);
   const loaded = useProjectLoaded();
-  const demoQ = useIntegrity(locale);
+  const demoQ = useIntegrity(locale, !usingReal);
 
-  const usingReal = !!docId;
+  // A persisted/stale active id that no longer resolves (deleted doc, DB reset, duplicate)
+  // will 404 — clear it so the app falls back cleanly instead of showing a raw error.
+  useEffect(() => {
+    if (usingReal && realQ.isError) setActiveDocumentId(null);
+  }, [usingReal, realQ.isError, setActiveDocumentId]);
+
   const data = usingReal ? realQ.data : demoQ.data;
   const isPending = usingReal ? realQ.isPending : demoQ.isPending;
 
@@ -51,14 +60,10 @@ export default function IntegrityScreen() {
     navigate(extractMode === "auto" ? SCREENS.workspace.path : SCREENS.scope.path);
   };
 
+  // No real document to work: demo only if an admin enabled it, else greenfield guidance.
   if (!usingReal && !loaded) return <EmptyState />;
-  if (usingReal && realQ.isError) {
-    return (
-      <div style={{ maxWidth: 560, margin: "72px auto", textAlign: "center", color: color.redFg, padding: "0 24px" }}>
-        {t("i.failed")}: {(realQ.error as Error)?.message}
-      </div>
-    );
-  }
+  // Real doc's integrity couldn't load — degrade to guidance (effect clears the stale id).
+  if (usingReal && realQ.isError) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>

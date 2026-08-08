@@ -13,6 +13,20 @@ export function setStoredToken(token: string | null): void {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
+// The document currently being worked through the stepper (integrity → extract → review →
+// export). Persisted so a page refresh keeps the real run bound to the SAME file rather
+// than silently falling back to some other document in the shared list.
+const ACTIVE_DOC_KEY = "finex-active-doc";
+export function getStoredActiveDoc(): string | null {
+  if (typeof localStorage === "undefined") return null;
+  return localStorage.getItem(ACTIVE_DOC_KEY);
+}
+export function setStoredActiveDoc(id: string | null): void {
+  if (typeof localStorage === "undefined") return;
+  if (id) localStorage.setItem(ACTIVE_DOC_KEY, id);
+  else localStorage.removeItem(ACTIVE_DOC_KEY);
+}
+
 /** Error carrying the HTTP status so callers (e.g. auth gating) can special-case 401. */
 export class ApiError extends Error {
   status: number;
@@ -104,6 +118,13 @@ export const api = {
   /** Real per-document pre-flight integrity (drives the Integrity screen for an upload). */
   documentIntegrity: (documentId: string) =>
     req<IntegrityResponse>(`/documents/${documentId}/integrity`),
+  /** Real per-document review queue, derived from the latest extraction (unmapped + low
+   * confidence). */
+  documentReview: (documentId: string) =>
+    req<ReviewResponse>(`/documents/${documentId}/review`),
+  /** The latest extraction run for a document (drives the Export preview/counts). */
+  documentRun: (documentId: string) =>
+    req<ExtractionRunResponse>(`/documents/${documentId}/run`),
   /** A window of spreadsheet cells around a value's origin — the Excel click-to-source
    * backdrop (mirrors fetchPageImage for PDFs). */
   cellContext: (documentId: string, sheet: string, cell: string) =>
@@ -174,6 +195,23 @@ export async function downloadExport(body: {
   const a = document.createElement("a");
   a.href = url;
   a.download = body.format === "excel" ? "spread.xlsx" : "extract.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** GET a REAL document's export (built from its latest extraction) and download it. */
+export async function downloadDocumentExport(documentId: string, format: ExportFmt): Promise<void> {
+  const res = await fetch(`${BASE}/documents/${documentId}/export?fmt=${format}`, {
+    headers: { ...authHeader() },
+  });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = format === "excel" ? "extract.xlsx" : "extract.json";
   document.body.appendChild(a);
   a.click();
   a.remove();

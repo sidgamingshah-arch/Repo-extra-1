@@ -43,7 +43,7 @@ test("analyst uploads a document and views its extracted data with provenance", 
   await page.goto("/upload", DCL);
   // The dropzone's hidden file input is real (browse is clickable).
   await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.pdf");
-  await expect(page.getByText("sample.pdf")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("doc-row").filter({ hasText: "sample.pdf" })).toBeVisible({ timeout: 15_000 });
 
   // Open the extraction view for *this* document (select by filename — the docs list
   // persists across runs, so "the first row" is not necessarily the one just uploaded).
@@ -62,7 +62,7 @@ test("analyst uploads a spreadsheet and gets Excel cell-level click-to-source", 
   await loginAs(page, "analyst");
   await page.goto("/upload", DCL);
   await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.xlsx");
-  await expect(page.getByText("sample.xlsx")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("doc-row").filter({ hasText: "sample.xlsx" })).toBeVisible({ timeout: 15_000 });
 
   await page.getByTestId("doc-row").filter({ hasText: "sample.xlsx" })
     .getByRole("button", { name: "View →" }).click();
@@ -81,7 +81,7 @@ test("end-to-end: upload a new file → Run integrity check shows real results �
 
   // Upload a brand-new file.
   await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.pdf");
-  await expect(page.getByText("sample.pdf")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("doc-row").filter({ hasText: "sample.pdf" })).toBeVisible({ timeout: 15_000 });
 
   // Hit "Run integrity check" → the Document Integrity screen must render THIS file's real
   // pre-flight results, not a blank/empty page.
@@ -96,6 +96,18 @@ test("end-to-end: upload a new file → Run integrity check shows real results �
   await expect(page).toHaveURL(/\/documents\//);
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Trade receivables").first()).toBeVisible();
+
+  // Review runs on the REAL document (its own queue), not the demo project.
+  await page.goto("/review", DCL);
+  await expect(page.getByRole("heading", { name: "Review queue" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: "No project yet" })).toHaveCount(0);
+
+  // Export previews the REAL extracted rows (real data, not the demo Reliance sample).
+  await page.goto("/export", DCL);
+  await expect(page.getByRole("heading", { name: "Export" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("3410").first()).toBeVisible({ timeout: 15_000 });   // real extracted value
+  await expect(page.getByText("4,23,180")).toHaveCount(0);                          // demo preview value absent
+  await expect(page.getByText("Reliance Industries Ltd")).toHaveCount(0);           // demo chrome absent in real run
 });
 
 test("analyst can reach the template screen and select a template for a run", async ({ page }) => {
