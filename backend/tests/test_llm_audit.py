@@ -74,7 +74,10 @@ def test_analysis_run_records_token_usage(client, monkeypatch):
             )
             return result, {"model": "moonshotai/kimi-k3-free", "input_tokens": 4321, "output_tokens": 654}
 
-    # Point the configured provider id at the fake so no network call happens.
+    # Point the configured provider id at the fake so no network call happens. Snapshot the
+    # previous factory so we can RESTORE it — otherwise this fake leaks into the global
+    # registry and later extraction tests would wrongly engage the LLM mapping path.
+    prev_factory = registry._factories.get("llm", {}).get(provider_id)
     registry.register("llm", provider_id, _FakeProvider)
     audit_svc.clear("demo")
     try:
@@ -90,6 +93,10 @@ def test_analysis_run_records_token_usage(client, monkeypatch):
         assert top["run_id"] == entry["run_id"] and top["status"] == "succeeded"
     finally:
         audit_svc.clear("demo")
+        if prev_factory is not None:
+            registry.register("llm", provider_id, prev_factory)
+        else:
+            registry._factories.get("llm", {}).pop(provider_id, None)
 
 
 def test_analysis_run_is_analyst_driven(anon_client, auth):

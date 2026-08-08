@@ -88,6 +88,38 @@ def test_real_review_and_export_from_extraction(client):
     assert x.content[:2] == b"PK" and len(x.content) > 200          # xlsx = zip
 
 
+def test_real_pages_and_statement_from_document(client):
+    """Page Scope + Workspace read the real document: page classification (pre-extraction)
+    and the extracted statement grouped by the template."""
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}
+    ).json()["id"]
+
+    # Pages are available before extraction (confirm-scope step).
+    pg = client.get(f"/api/v1/documents/{doc_id}/pages").json()
+    assert pg["total"] >= 1 and pg["total"] == len(pg["pages"])
+    assert pg["focused"] + pg["skipped"] == pg["total"]
+    assert all({"no", "cls", "conf", "included", "scan"} <= set(p) for p in pg["pages"])
+
+    # Attach the seeded HK ontology/template so mapping produces canonical keys (as the UI does).
+    onts = client.get("/api/v1/ontologies").json()
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    tpls = client.get("/api/v1/templates").json()
+    tpl = next((tt for tt in tpls if tt["template_key"] == ont["target_template_key"]), tpls[0])
+    client.post(f"/api/v1/documents/{doc_id}/extractions",
+                json={"ontology_version_id": ont["id"], "template_version_id": tpl["id"]})
+    st = client.get(f"/api/v1/documents/{doc_id}/statement", params={"statement": "balance_sheet"}).json()
+    assert st["statement"] == "balance_sheet" and st["viewer"]["company"] == "bs.pdf"
+    items = [r for r in st["rows"] if r["kind"] == "item"]
+    assert items and any("Trade receivables" in (r.get("source_label") or "") for r in items)
+    assert all(r["v1"] is None or isinstance(r["v1"], (int, float)) for r in st["rows"])
+
+    # Standalone basis (not extracted) → valid but empty grid, never demo data.
+    sa = client.get(f"/api/v1/documents/{doc_id}/statement",
+                    params={"statement": "balance_sheet", "basis": "standalone"}).json()
+    assert sa["rows"] == []
+
+
 def test_review_and_run_404_before_extraction(client):
     doc_id = client.post(
         "/api/v1/documents", files={"file": ("x.pdf", make_native_pdf(), "application/pdf")}

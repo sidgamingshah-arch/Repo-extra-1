@@ -164,8 +164,8 @@ export const useDocumentRun = (documentId: string | undefined) =>
   });
 export const useIntegrity = (locale: Locale = "en", enabled = true) =>
   useQuery({ queryKey: ["integrity", locale], queryFn: () => api.integrity(locale), enabled });
-export const usePages = (locale: Locale = "en") =>
-  useQuery({ queryKey: ["pages", locale], queryFn: () => api.pages(locale) });
+export const usePages = (locale: Locale = "en", enabled = true) =>
+  useQuery({ queryKey: ["pages", locale], queryFn: () => api.pages(locale), enabled });
 export const useReview = (locale: Locale = "en", enabled = true) =>
   useQuery({ queryKey: ["review", locale], queryFn: () => api.review(locale), enabled });
 export const useNotes = (locale: Locale = "en") =>
@@ -178,10 +178,29 @@ export const useExportOptions = () =>
   useQuery({ queryKey: ["export-options"], queryFn: api.exportOptions });
 export const useLanguages = () => useQuery({ queryKey: ["languages"], queryFn: api.languages });
 
-export const useStatement = (statement: StatementKey, basis: Basis, locale: Locale = "en") =>
+export const useStatement = (statement: StatementKey, basis: Basis, locale: Locale = "en", enabled = true) =>
   useQuery({
     queryKey: ["statement", statement, basis, locale],
     queryFn: () => api.statement(statement, basis, locale),
+    enabled,
+  });
+
+/** Real per-page classification for a document (Page Scope). */
+export const useDocumentPages = (documentId: string | undefined) =>
+  useQuery({
+    queryKey: ["document-pages", documentId],
+    queryFn: () => api.documentPages(documentId as string),
+    enabled: !!documentId,
+    retry: false,
+  });
+
+/** One statement of a document's real extraction (Workspace grid). */
+export const useDocumentStatement = (documentId: string | undefined, statement: StatementKey, basis: Basis) =>
+  useQuery({
+    queryKey: ["document-statement", documentId, statement, basis],
+    queryFn: () => api.documentStatement(documentId as string, statement, basis),
+    enabled: !!documentId,
+    retry: false,
   });
 
 export function useEditLineItem() {

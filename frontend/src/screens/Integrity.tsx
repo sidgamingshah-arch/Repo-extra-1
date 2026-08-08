@@ -56,7 +56,11 @@ export default function IntegrityScreen() {
   const isPending = usingReal ? realQ.isPending : demoQ.isPending;
 
   const goNext = () => {
-    if (usingReal) return navigate(`/documents/${docId}`);           // real extraction + provenance
+    // Confirm-scope mode pauses on Page Scope first (real pages); auto goes straight to the
+    // real extraction. Demo path keeps the workspace/scope destinations.
+    if (usingReal) {
+      return navigate(extractMode === "auto" ? `/documents/${docId}` : SCREENS.scope.path);
+    }
     navigate(extractMode === "auto" ? SCREENS.workspace.path : SCREENS.scope.path);
   };
 

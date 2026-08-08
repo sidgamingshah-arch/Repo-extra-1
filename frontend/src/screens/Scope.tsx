@@ -4,8 +4,8 @@ import { useNavigate } from "react-router-dom";
 import { Button, Toggle } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { SCREENS } from "./config";
-import { usePages, useProjectLoaded } from "../lib/queries";
-import { useAppLocale } from "../store";
+import { useDocumentPages, usePages, useProjectLoaded } from "../lib/queries";
+import { useAppLocale, useUI } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
 import { color, confStyle, font, layout, radius } from "../theme";
@@ -97,10 +97,16 @@ export default function ScopeScreen() {
   const t = useT();
   const locale = useAppLocale();
   const canScope = useCan("config:scope");
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const usingReal = !!activeDocumentId;
   const loaded = useProjectLoaded();
-  const { data, isPending } = usePages(locale);
+  const realQ = useDocumentPages(activeDocumentId ?? undefined);
+  const demoQ = usePages(locale, !usingReal);
+  const data = usingReal ? realQ.data : demoQ.data;
+  const isPending = usingReal ? realQ.isPending : demoQ.isPending;
 
-  if (!loaded) return <EmptyState />;
+  if (!usingReal && !loaded) return <EmptyState />;
+  if (usingReal && realQ.isError) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>
@@ -172,7 +178,7 @@ export default function ScopeScreen() {
         <Button variant="secondary" onClick={() => nav(SCREENS.integrity.path)}>
           ← {t("sc.back")}
         </Button>
-        <Button onClick={() => nav(SCREENS.workspace.path)}>
+        <Button onClick={() => nav(usingReal ? `/documents/${activeDocumentId}` : SCREENS.workspace.path)}>
           {t("sc.extract")} {data.focused} {t("sc.pages")} →
         </Button>
       </div>

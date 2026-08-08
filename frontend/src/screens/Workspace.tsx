@@ -8,7 +8,7 @@ import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/u
 import { EmptyState } from "../components/EmptyState";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
 import type { Basis, StatementResponse, StatementRow } from "../types";
-import { useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
+import { useDocumentStatement, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
 import { SCREENS } from "./config";
@@ -313,16 +313,24 @@ export default function WorkspaceScreen() {
       navigate(SCREENS.notes.path);
     }
   };
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const usingReal = !!activeDocumentId;
+  const editable = !usingReal;   // the real workspace is read-only (edits are demo-only for now)
   const loaded = useProjectLoaded();
-  const { data, isPending } = useStatement(statement, dataset, locale);
+  const realQ = useDocumentStatement(activeDocumentId ?? undefined, statement, dataset);
+  const demoQ = useStatement(statement, dataset, locale, !usingReal);
+  const data = usingReal ? realQ.data : demoQ.data;
+  const isPending = usingReal ? realQ.isPending : demoQ.isPending;
   const editMut = useEditLineItem();
 
-  if (!loaded) return <EmptyState />;
+  if (!usingReal && !loaded) return <EmptyState />;
+  if (usingReal && realQ.isError) return <EmptyState />;   // uploaded but not extracted yet
   if (isPending || !data) {
     return <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>;
   }
 
   const d: StatementResponse = data;
+  const lowConfCount = d.rows.filter((r) => r.confidence?.cat === "low").length;
   const selRowObj = d.rows.find((r) => r.id === sel) ?? d.rows.find((r) => r.inspector);
   const insp = selRowObj?.inspector;
   const isEdited = selRowObj?.status === "edited";
@@ -365,21 +373,23 @@ export default function WorkspaceScreen() {
               cursor: "pointer",
             }}
           >
-            3 {t("ws.lowconf")}
+            {usingReal ? lowConfCount : 3} {t("ws.lowconf")}
           </span>
-          <span
-            style={{
-              fontSize: 11.5,
-              color: color.amberFg,
-              fontWeight: 600,
-              background: color.amberBg,
-              padding: "5px 10px",
-              borderRadius: radius.pill,
-              cursor: "pointer",
-            }}
-          >
-            2 {t("ws.unreconciled")}
-          </span>
+          {!usingReal && (
+            <span
+              style={{
+                fontSize: 11.5,
+                color: color.amberFg,
+                fontWeight: 600,
+                background: color.amberBg,
+                padding: "5px 10px",
+                borderRadius: radius.pill,
+                cursor: "pointer",
+              }}
+            >
+              2 {t("ws.unreconciled")}
+            </span>
+          )}
           <button
             onClick={() => navigate(SCREENS.export.path)}
             style={{
@@ -422,7 +432,7 @@ export default function WorkspaceScreen() {
               flex: "0 0 auto",
             }}
           >
-            <span style={{ fontSize: 11.5, fontWeight: 600 }}>AnnualReport_RIL_FY25.pdf</span>
+            <span style={{ fontSize: 11.5, fontWeight: 600 }}>{d.viewer.company}</span>
             <div style={{ display: "flex", gap: 4, marginLeft: 6 }}>
               {d.viewer.chips.map((c) => (
                 <span
@@ -547,7 +557,8 @@ export default function WorkspaceScreen() {
           {/* scroll body */}
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {d.rows.map((r) => (
-              <OutputRow key={r.id} row={r} sel={sel} onSelect={selRow} onEdit={selForEdit} onOpenNote={openNote} />
+              <OutputRow key={r.id} row={r} sel={sel} onSelect={selRow}
+                         onEdit={editable ? selForEdit : () => {}} onOpenNote={openNote} />
             ))}
           </div>
 
@@ -603,7 +614,7 @@ export default function WorkspaceScreen() {
                 <span style={{ fontSize: 11, color: color.muted, fontFamily: font.mono }}>
                   source: {insp?.src ?? ""}
                 </span>
-                {!editing && (
+                {!editing && editable && (
                   <button
                     onClick={startEdit}
                     style={{
@@ -623,7 +634,7 @@ export default function WorkspaceScreen() {
               </div>
             </div>
 
-            {editing && selRowObj ? (
+            {editing && editable && selRowObj ? (
               <InspectorEditor
                 key={selRowObj.id}
                 row={selRowObj}

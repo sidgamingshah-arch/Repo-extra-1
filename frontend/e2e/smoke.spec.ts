@@ -76,6 +76,7 @@ test("analyst uploads a spreadsheet and gets Excel cell-level click-to-source", 
 });
 
 test("end-to-end: upload a new file → Run integrity check shows real results → extract", async ({ page }) => {
+  test.setTimeout(180_000);   // full real path: upload → integrity → extract → scope → workspace → review → export
   await loginAs(page, "analyst");
   await page.goto("/upload", DCL);
 
@@ -96,6 +97,18 @@ test("end-to-end: upload a new file → Run integrity check shows real results �
   await expect(page).toHaveURL(/\/documents\//);
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Trade receivables").first()).toBeVisible();
+
+  // Page Scope reads the REAL document's classified pages.
+  await page.goto("/scope", DCL);
+  await expect(page.getByRole("heading", { name: "Statement page detection" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("All pages")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No project yet" })).toHaveCount(0);
+
+  // Workspace renders the REAL extracted statement (its own line items, real filename).
+  await page.goto("/workspace", DCL);
+  await expect(page.getByText("Trade receivables").first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("sample.pdf").first()).toBeVisible();               // real source in the viewer
+  await expect(page.getByText("Reliance Industries Ltd")).toHaveCount(0);         // no demo leakage
 
   // Review runs on the REAL document (its own queue), not the demo project.
   await page.goto("/review", DCL);

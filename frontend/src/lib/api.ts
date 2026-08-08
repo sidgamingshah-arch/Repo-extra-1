@@ -125,6 +125,14 @@ export const api = {
   /** The latest extraction run for a document (drives the Export preview/counts). */
   documentRun: (documentId: string) =>
     req<ExtractionRunResponse>(`/documents/${documentId}/run`),
+  /** Real per-page classification for the Page Scope screen (available pre-extraction). */
+  documentPages: (documentId: string) =>
+    req<PagesResponse>(`/documents/${documentId}/pages`),
+  /** One statement of a document's real extraction, grouped for the Workspace grid. */
+  documentStatement: (documentId: string, statement: StatementKey, basis: Basis) =>
+    req<StatementResponse>(
+      `/documents/${documentId}/statement?statement=${statement}&basis=${basis}`,
+    ),
   /** A window of spreadsheet cells around a value's origin — the Excel click-to-source
    * backdrop (mirrors fetchPageImage for PDFs). */
   cellContext: (documentId: string, sheet: string, cell: string) =>

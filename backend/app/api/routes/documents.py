@@ -348,6 +348,194 @@ def export_document(
     )
 
 
+_PAGE_CLS = {"face": "Statement face", "notes": "Notes", "other": "Other",
+             "cover": "Cover", "toc": "Contents", "unknown": "Unclassified"}
+
+
+def _conf_cat(c) -> tuple[str, int]:
+    if not isinstance(c, (int, float)):
+        return "med", 60
+    pct = round(c * 100)
+    return ("high" if c >= 0.85 else "med" if c >= 0.7 else "low"), pct
+
+
+def _build_pages(pages: list[dict]) -> dict:
+    """PagesResponse from the document's real classified pages — face/notes are included in
+    the extraction scope, everything else is skipped."""
+    cards = []
+    counts = {"face": 0, "notes": 0, "other": 0}
+    for p in pages:
+        kind = p.get("kind", "unknown")
+        included = kind in ("face", "notes")
+        cat, _ = _conf_cat(p.get("classification_confidence"))
+        cards.append({
+            "no": (p.get("index", 0) or 0) + 1,
+            "cls": _PAGE_CLS.get(kind, kind.title()),
+            "sub": "in scope" if included else "skipped",
+            "conf": cat,
+            "included": included,
+            "scan": "scanned" if p.get("source_kind") == "scanned" else "native",
+        })
+        counts[kind if kind in counts else "other"] = counts.get(kind if kind in counts else "other", 0) + 1
+    total = len(cards)
+    focused = counts["face"] + counts["notes"]
+    return {
+        "pages": cards,
+        "filters": [
+            {"label": "All pages", "count": total},
+            {"label": "Face", "count": counts["face"]},
+            {"label": "Notes", "count": counts["notes"]},
+            {"label": "Other", "count": counts["other"]},
+        ],
+        "focused": focused, "total": total, "skipped": total - focused,
+    }
+
+
+@router.get("/{document_id}/pages", dependencies=[Depends(current_principal)])
+def get_document_pages(
+    document_id: str,
+    session: Session = Depends(db),
+    store: LocalObjectStore = Depends(object_store),
+) -> dict:
+    """Real per-page classification for the Page Scope screen — recomputed from the stored
+    file so it's available even before extraction (the confirm-scope step)."""
+    from app.db.models import Document
+
+    row = session.get(Document, document_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    doc_model, _ctx = analyze_document(store.get(row.object_key), filename=row.filename or "")
+    return _build_pages([p.model_dump(mode="json") for p in doc_model.pages])
+
+
+_STMT_PREFIX = {"balance_sheet": "bs", "profit_and_loss": "pl", "cash_flow": "cf"}
+_STMT_LABEL = {"balance_sheet": "Balance sheet", "profit_and_loss": "Profit & loss",
+               "cash_flow": "Cash flow"}
+
+
+def _to_num(v):
+    if v is None:
+        return None
+    try:
+        return float(str(v).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _cur_prior(r: dict) -> tuple[dict | None, dict | None]:
+    vals = r.get("values") or []
+    by = {v.get("period_label"): v for v in vals}
+    cur = by.get("current") or (vals[0] if vals else None)
+    prior = by.get("prior") or (vals[1] if len(vals) > 1 else None)
+    return cur, prior
+
+
+def _inspector(r: dict, cur: dict | None) -> dict:
+    prov = (cur or {}).get("provenance")
+    return {"tag": "machine", "src": _prov_label(prov) if prov else "",
+            "formula": "", "result": str((cur or {}).get("value") or ""),
+            "note": f"Mapped by {r.get('mapping_method') or 'ensemble'}"}
+
+
+def _template_for_run(session: Session, run) -> dict | None:
+    """The template the run used, else the seeded HK reference template."""
+    from app.db.models import TemplateVersion
+
+    tid = (run.options or {}).get("template_version_id")
+    if tid:
+        tv = session.get(TemplateVersion, tid)
+        if tv:
+            return tv.definition
+    tv = session.execute(
+        select(TemplateVersion).order_by(TemplateVersion.version.desc())
+    ).scalars().first()
+    return tv.definition if tv else None
+
+
+def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
+                     filename: str) -> dict:
+    """Group the real extracted rows into one statement (by the template's sections), so the
+    Workspace grid renders real data with its provenance-backed values."""
+    prefix = _STMT_PREFIX.get(statement_type, "")
+    by_key: dict[str, dict] = {}
+    for r in rows:
+        k = r.get("canonical_key")
+        if k:
+            by_key.setdefault(k, r)
+
+    def item_row(key: str, label: str, r: dict) -> dict:
+        cur, prior = _cur_prior(r)
+        cat, pct = _conf_cat(r.get("mapping_confidence"))
+        return {
+            "id": key, "label": label or r.get("source_label"),
+            "source_label": r.get("source_label"), "kind": "item",
+            "note": r.get("note"), "note2": None, "status": None,
+            "confidence": {"cat": cat, "pct": pct}, "editable": False,
+            "formula": None, "inspector": _inspector(r, cur),
+            "v1": _to_num((cur or {}).get("value")), "v2": _to_num((prior or {}).get("value")),
+        }
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    stmt = next((s for s in (template_def or {}).get("statements", [])
+                 if s.get("type") == statement_type), None)
+    if stmt:
+        for sec in stmt.get("sections", []):
+            matched = [c for c in sec.get("children", []) if c.get("canonical_key") in by_key]
+            if not matched:
+                continue
+            out.append({"id": f"sec_{sec.get('node_id', '')}", "label": sec.get("label", ""),
+                        "kind": "section", "v1": None, "v2": None})
+            for c in matched:
+                k = c["canonical_key"]
+                seen.add(k)
+                out.append(item_row(k, c.get("label", ""), by_key[k]))
+
+    extra = [r for r in rows
+             if (r.get("canonical_key") or "").startswith(f"{prefix}_") and r["canonical_key"] not in seen]
+    if extra:
+        out.append({"id": "sec_other", "label": "Other extracted items", "kind": "section",
+                    "v1": None, "v2": None})
+        for r in extra:
+            out.append(item_row(r["canonical_key"], r.get("source_label", ""), r))
+
+    return {
+        "statement": statement_type, "label": _STMT_LABEL.get(statement_type, statement_type),
+        "basis": "consolidated", "periods": ["Current", "Prior"],
+        "currency": "", "currency_symbol": "", "units": "",
+        "rows": out,
+        "viewer": {
+            "company": filename, "subtitle": "Extracted statement",
+            "chips": [{"label": "Consolidated", "active": True}],
+            "callout": "Values are read deterministically from the source; mapping is by the "
+                       "ensemble. Open the extraction view for click-to-source provenance.",
+        },
+    }
+
+
+@router.get("/{document_id}/statement", dependencies=[Depends(current_principal)])
+def get_document_statement(
+    document_id: str,
+    statement: str = Query("balance_sheet"),
+    basis: str = Query("consolidated"),
+    session: Session = Depends(db),
+) -> dict:
+    """One statement of a document's real extraction, grouped for the Workspace grid."""
+    from app.db.models import Document
+
+    doc = session.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        raise HTTPException(status_code=404, detail="No extraction run yet for this document")
+    # Real extraction is consolidated; a standalone request yields an empty (but valid) grid.
+    if basis != "consolidated":
+        return _build_statement([], None, statement, doc.filename or "document")
+    template_def = _template_for_run(session, run)
+    return _build_statement(run.result.get("rows", []), template_def, statement, doc.filename or "document")
+
+
 @router.get("/{document_id}")
 def get_document(document_id: str, session: Session = Depends(db)) -> dict:
     from app.db.models import Document
