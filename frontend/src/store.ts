@@ -20,6 +20,7 @@ interface UIState {
   token: string | null; // session token
 
   extractMode: ExtractMode; // chosen at upload: auto-extract vs confirm page scope
+  activeDocumentId: string | null; // the real uploaded document being worked (drives integrity/extract)
   dataset: Basis;
   statement: StatementKey;
   sel: string; // selected line-item id in the workspace
@@ -34,6 +35,7 @@ interface UIState {
   setUiLocalization: (v: boolean) => void;
   setToken: (t: string | null) => void;
   setExtractMode: (m: ExtractMode) => void;
+  setActiveDocumentId: (id: string | null) => void;
   setDataset: (b: Basis) => void;
   setStatement: (s: StatementKey) => void;
   selRow: (id: string) => void;
@@ -53,6 +55,7 @@ export const useUI = create<UIState>((set) => ({
   uiLocalization: false,
   token: getToken(),
   extractMode: "auto",
+  activeDocumentId: null,
   dataset: "consolidated",
   statement: "balance_sheet",
   sel: "trade_recv",
@@ -70,6 +73,7 @@ export const useUI = create<UIState>((set) => ({
     set({ token });
   },
   setExtractMode: (extractMode) => set({ extractMode }),
+  setActiveDocumentId: (activeDocumentId) => set({ activeDocumentId }),
   setDataset: (dataset) => set({ dataset }),
   setStatement: (statement) => set({ statement, sel: "" }),
   selRow: (sel) => set({ sel, editing: false }),

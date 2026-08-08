@@ -121,17 +121,29 @@ export const useCellContext = (documentId: string, sheet?: string, cell?: string
     retry: false,
   });
 
-/** Upload a source document; refreshes the documents list and project. */
+/** Upload a source document; refreshes the documents list and project, and marks the
+ * uploaded document active so the Integrity/Extract steps operate on the real file. */
 export function useUploadDocument() {
   const qc = useQueryClient();
+  const setActiveDocumentId = useUI((s) => s.setActiveDocumentId);
   return useMutation({
     mutationFn: (file: File) => api.uploadDocument(file),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (res?.id) setActiveDocumentId(res.id);
       qc.invalidateQueries({ queryKey: ["documents"] });
       qc.invalidateQueries({ queryKey: ["project"] });
     },
   });
 }
+
+/** Real per-document pre-flight integrity — the uploaded file's own results. */
+export const useDocumentIntegrity = (documentId: string | undefined) =>
+  useQuery({
+    queryKey: ["document-integrity", documentId],
+    queryFn: () => api.documentIntegrity(documentId as string),
+    enabled: !!documentId,
+    retry: false,
+  });
 export const useIntegrity = (locale: Locale = "en") =>
   useQuery({ queryKey: ["integrity", locale], queryFn: () => api.integrity(locale) });
 export const usePages = (locale: Locale = "en") =>

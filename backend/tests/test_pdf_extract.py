@@ -42,6 +42,21 @@ def test_extraction_api_returns_rows_with_provenance(client):
     assert tr["note"] == "15"
 
 
+def test_document_integrity_endpoint_shapes_real_report(client):
+    """A real uploaded file surfaces its own pre-flight integrity in the screen's shape."""
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}
+    ).json()["id"]
+    r = client.get(f"/api/v1/documents/{doc_id}/integrity")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert 0 <= body["score"] <= 100
+    assert body["grade"] and body["summary"]
+    assert len(body["stats"]) == 4 and any(s["label"] == "Pages" for s in body["stats"])
+    assert body["issues"]  # at least the "no issues" row for a clean native PDF
+    assert all({"title", "detail", "pages", "note", "status", "severity"} <= set(i) for i in body["issues"])
+
+
 def test_page_image_endpoint_renders_png(client):
     doc_id = client.post(
         "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}

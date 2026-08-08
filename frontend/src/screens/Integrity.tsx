@@ -5,7 +5,7 @@ import { Button, Card } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { color, font, radius } from "../theme";
 import type { IntegrityIssue, IntegrityStat } from "../types";
-import { useIntegrity, useProjectLoaded } from "../lib/queries";
+import { useDocumentIntegrity, useDocuments, useIntegrity, useProjectLoaded } from "../lib/queries";
 import { useAppLocale, useUI } from "../store";
 import { SCREENS } from "./config";
 import { useT } from "../i18n";
@@ -31,10 +31,34 @@ export default function IntegrityScreen() {
   const t = useT();
   const locale = useAppLocale();
   const extractMode = useUI((s) => s.extractMode);
-  const loaded = useProjectLoaded();
-  const { data, isPending } = useIntegrity(locale);
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
 
-  if (!loaded) return <EmptyState />;
+  // A real uploaded document takes precedence: show ITS integrity (the file just uploaded,
+  // else the most recent). Only when there's no real document do we fall back to the demo
+  // project's integrity / the greenfield empty state.
+  const { data: docsData } = useDocuments();
+  const docId = activeDocumentId ?? docsData?.documents?.[0]?.id;
+  const realQ = useDocumentIntegrity(docId);
+  const loaded = useProjectLoaded();
+  const demoQ = useIntegrity(locale);
+
+  const usingReal = !!docId;
+  const data = usingReal ? realQ.data : demoQ.data;
+  const isPending = usingReal ? realQ.isPending : demoQ.isPending;
+
+  const goNext = () => {
+    if (usingReal) return navigate(`/documents/${docId}`);           // real extraction + provenance
+    navigate(extractMode === "auto" ? SCREENS.workspace.path : SCREENS.scope.path);
+  };
+
+  if (!usingReal && !loaded) return <EmptyState />;
+  if (usingReal && realQ.isError) {
+    return (
+      <div style={{ maxWidth: 560, margin: "72px auto", textAlign: "center", color: color.redFg, padding: "0 24px" }}>
+        {t("i.failed")}: {(realQ.error as Error)?.message}
+      </div>
+    );
+  }
   if (isPending || !data) {
     return (
       <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>
@@ -193,11 +217,9 @@ export default function IntegrityScreen() {
         <Button variant="secondary" onClick={() => navigate("/upload")}>
           ← {t("i.back")}
         </Button>
-        {extractMode === "auto" ? (
-          <Button onClick={() => navigate(SCREENS.workspace.path)}>{t("i.extractNow")} →</Button>
-        ) : (
-          <Button onClick={() => navigate(SCREENS.scope.path)}>{t("i.detect")} →</Button>
-        )}
+        <Button onClick={goNext}>
+          {usingReal || extractMode === "auto" ? t("i.extractNow") : t("i.detect")} →
+        </Button>
       </div>
     </div>
   );

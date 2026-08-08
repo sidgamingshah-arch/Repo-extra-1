@@ -75,6 +75,29 @@ test("analyst uploads a spreadsheet and gets Excel cell-level click-to-source", 
   await expect(page.getByTestId("cell-target")).toBeVisible({ timeout: 15_000 });
 });
 
+test("end-to-end: upload a new file → Run integrity check shows real results → extract", async ({ page }) => {
+  await loginAs(page, "analyst");
+  await page.goto("/upload", DCL);
+
+  // Upload a brand-new file.
+  await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.pdf");
+  await expect(page.getByText("sample.pdf")).toBeVisible({ timeout: 15_000 });
+
+  // Hit "Run integrity check" → the Document Integrity screen must render THIS file's real
+  // pre-flight results, not a blank/empty page.
+  await page.getByRole("button", { name: /Run integrity check/ }).click();
+  await expect(page).toHaveURL(/\/integrity/);
+  await expect(page.getByRole("heading", { name: "Document integrity" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Pages", { exact: true })).toBeVisible();        // real stat, not EmptyState
+  await expect(page.getByRole("heading", { name: "No project yet" })).toHaveCount(0);
+
+  // Continue into the real extraction for the uploaded document.
+  await page.getByRole("button", { name: /Extract now/ }).click();
+  await expect(page).toHaveURL(/\/documents\//);
+  await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Trade receivables").first()).toBeVisible();
+});
+
 test("analyst can reach the template screen and select a template for a run", async ({ page }) => {
   await loginAs(page, "analyst");
 

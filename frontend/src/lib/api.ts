@@ -101,6 +101,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  /** Real per-document pre-flight integrity (drives the Integrity screen for an upload). */
+  documentIntegrity: (documentId: string) =>
+    req<IntegrityResponse>(`/documents/${documentId}/integrity`),
   /** A window of spreadsheet cells around a value's origin — the Excel click-to-source
    * backdrop (mirrors fetchPageImage for PDFs). */
   cellContext: (documentId: string, sheet: string, cell: string) =>

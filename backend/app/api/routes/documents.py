@@ -95,6 +95,91 @@ async def upload_document(
     }
 
 
+_CHECK_TITLES = {
+    "UNKNOWN_FORMAT": "Unrecognized file format",
+    "CORRUPT": "File appears corrupt",
+    "PASSWORD_PROTECTED": "Password-protected document",
+    "ENCRYPTED": "Encrypted document",
+    "MIXED_SCAN": "Mixed scanned and native pages",
+    "ROTATED_PAGE": "Rotated page",
+    "INCONSISTENT_DIMENSIONS": "Inconsistent page dimensions",
+    "HIDDEN_SHEET": "Hidden worksheet",
+    "NO_PAGES": "No pages found",
+    "BLANK_PAGE": "Blank page",
+}
+# Map pipeline severities → the frontend's issue severity + score penalty.
+_SEV = {
+    "blocker": ("low", 35), "error": ("low", 25),
+    "warning": ("warn", 8), "info": ("ok", 2),
+}
+
+
+def _serialize_document_integrity(row) -> dict:
+    """Map a stored IntegrityReport (per uploaded document) into the IntegrityResponse the
+    Document Integrity screen renders — so a real uploaded file surfaces its own pre-flight
+    results, not the demo project's."""
+    report = row.integrity_report or {}
+    findings = report.get("findings", []) or []
+    page_count = report.get("page_count", row.page_count or 0)
+    scanned_ratio = float(report.get("scanned_page_ratio", 0.0) or 0.0)
+    has_text = report.get("has_text_layer", True)
+
+    score = 100
+    has_blocker = False
+    issues = []
+    for f in findings:
+        sev = str(f.get("severity", "info"))
+        fe_sev, penalty = _SEV.get(sev, ("ok", 2))
+        score -= penalty
+        has_blocker = has_blocker or sev in ("blocker", "error")
+        pidx = f.get("page_index")
+        issues.append({
+            "title": _CHECK_TITLES.get(f.get("check_id", ""), str(f.get("check_id", "Issue")).replace("_", " ").title()),
+            "detail": f.get("message", ""),
+            "pages": f"p.{pidx + 1}" if isinstance(pidx, int) else "All",
+            "note": sev.upper(),
+            "status": "Blocking" if sev in ("blocker", "error") else "Advisory",
+            "severity": fe_sev,
+        })
+    score = max(0, min(100, score))
+
+    if has_blocker:
+        grade, summary = "Blocked", "Resolve the blocking issues before extracting."
+    elif score >= 90:
+        grade, summary = "Ready to extract", "No material issues detected."
+    elif score >= 70:
+        grade, summary = "Minor issues", "Proceed with caution — review the flagged items."
+    else:
+        grade, summary = "Needs attention", "Several issues detected — review before extracting."
+
+    kind = "Native" if scanned_ratio == 0 else "Scanned" if scanned_ratio >= 0.99 else "Mixed"
+    stats = [
+        {"label": "Pages", "value": str(page_count), "sub": "detected", "tone": "neutral"},
+        {"label": "Document type", "value": kind, "sub": "native vs scanned",
+         "tone": "ok" if kind == "Native" else "warn"},
+        {"label": "Scanned pages", "value": f"{round(scanned_ratio * 100)}%",
+         "sub": "need OCR", "tone": "warn" if scanned_ratio > 0 else "ok"},
+        {"label": "Issues", "value": str(len(findings)), "sub": "found",
+         "tone": "warn" if findings else "ok"},
+    ]
+    if not issues:
+        issues = [{"title": "No issues detected", "detail": "The document passed all integrity checks.",
+                   "pages": "All", "note": "OK", "status": "Passed", "severity": "ok"}]
+    return {"score": score, "grade": grade, "summary": summary, "stats": stats, "issues": issues}
+
+
+@router.get("/{document_id}/integrity", dependencies=[Depends(current_principal)])
+def get_document_integrity(document_id: str, session: Session = Depends(db)) -> dict:
+    """Real pre-flight integrity for one uploaded document (drives the Document Integrity
+    screen when working a real file, rather than the demo project)."""
+    from app.db.models import Document
+
+    row = session.get(Document, document_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return _serialize_document_integrity(row)
+
+
 @router.get("/{document_id}")
 def get_document(document_id: str, session: Session = Depends(db)) -> dict:
     from app.db.models import Document
