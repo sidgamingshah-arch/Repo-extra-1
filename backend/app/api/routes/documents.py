@@ -547,12 +547,19 @@ def revert_document_line_item(document_id: str, canonical_key: str,
 def export_document(
     document_id: str,
     fmt: str = Query("excel", pattern="^(excel|json)$"),
+    layout: str = Query("statement", pattern="^(statement|flat)$"),
+    locale: str = Query("en"),
     session: Session = Depends(db),
 ) -> Response:
     """Export a real document's extracted, mapped line items as Excel or JSON, built from
-    the latest run (not the demo project)."""
+    the latest run (not the demo project).
+
+    Excel supports two layouts: ``statement`` (default) mirrors the run's template —
+    sections, subtotals, totals, ordering, localized labels, consolidated + standalone
+    side by side; ``flat`` is one row per line item. JSON is always the structured-flat
+    shape for downstream systems."""
     from app.db.models import Document
-    from app.services.export import build_rows_json, build_rows_xlsx
+    from app.services.export import build_rows_json, build_rows_xlsx, build_statement_workbook
 
     doc = session.get(Document, document_id)
     if doc is None:
@@ -566,7 +573,13 @@ def export_document(
         data = build_rows_json(rows, filename=doc.filename or "document")
         return Response(content=data, media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
-    data = build_rows_xlsx(rows, filename=doc.filename or "document")
+
+    template_def = _template_for_run(session, run)
+    if layout == "statement" and template_def:
+        data = build_statement_workbook(rows, template_def, locale=locale,
+                                        filename=doc.filename or "document")
+    else:
+        data = build_rows_xlsx(rows, filename=doc.filename or "document")
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

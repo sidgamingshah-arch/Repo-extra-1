@@ -11,6 +11,35 @@ import json
 
 from app.sample.demo import CONF_PCT
 
+# Statement titles for the formatted export, localized like the rest of the app. Line-item
+# labels come from the TEMPLATE's label_i18n, so the export is fully template-driven.
+_STMT_TITLE = {
+    "balance_sheet": {"en": "Balance Sheet", "zh": "资产负债表", "ar": "الميزانية العمومية",
+                      "fr": "Bilan"},
+    "profit_and_loss": {"en": "Profit & Loss", "zh": "利润表", "ar": "الأرباح والخسائر",
+                        "fr": "Compte de résultat"},
+    "cash_flow": {"en": "Cash Flow", "zh": "现金流量表", "ar": "التدفقات النقدية",
+                  "fr": "Flux de trésorerie"},
+}
+_STMT_SHEET = {"balance_sheet": "Balance Sheet", "profit_and_loss": "Profit & Loss",
+               "cash_flow": "Cash Flow"}
+_BASIS_LABEL = {
+    "consolidated": {"en": "Consolidated", "zh": "合并", "ar": "موحّد", "fr": "Consolidé"},
+    "standalone": {"en": "Standalone", "zh": "单独", "ar": "مستقل", "fr": "Individuel"},
+}
+_COL = {
+    "Line item": {"zh": "项目", "ar": "البند", "fr": "Poste"},
+    "Note": {"zh": "附注", "ar": "إيضاح", "fr": "Note"},
+    "Current": {"zh": "本期", "ar": "الحالية", "fr": "Actuel"},
+    "Prior": {"zh": "上期", "ar": "السابقة", "fr": "Précédent"},
+    "Conf": {"zh": "置信度", "ar": "الثقة", "fr": "Conf."},
+    "Source": {"zh": "来源", "ar": "المصدر", "fr": "Source"},
+}
+
+
+def _col(term: str, locale: str) -> str:
+    return term if locale == "en" else _COL.get(term, {}).get(locale, term)
+
 
 def _prov_str(prov: dict | None) -> str:
     if not prov:
@@ -79,6 +108,197 @@ def build_rows_xlsx(rows: list[dict], *, filename: str) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Formatted statement export — mirrors the TEMPLATE's structure (sections,
+# subtotals, totals, ordering, localized labels) with consolidated + standalone
+# side by side. Driven entirely by the template, so any template of the same
+# schema produces the same high-quality output.
+# ---------------------------------------------------------------------------
+def _label(node: dict, locale: str) -> str:
+    return (node.get("label_i18n") or {}).get(locale) or node.get("label") or node.get("canonical_key") or ""
+
+
+def _cell_value(row: dict | None, basis: str, period: str):
+    if not row:
+        return None
+    for v in row.get("values") or []:
+        if (v.get("basis") or "consolidated") == basis and v.get("period_label") == period:
+            return _num(v.get("value"))
+    return None
+
+
+def _num(s):
+    if s is None:
+        return None
+    try:
+        return float(str(s).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _bases_present(rows: list[dict]) -> list[str]:
+    found = {(v.get("basis") or "consolidated") for r in rows for v in (r.get("values") or [])}
+    return [b for b in ("consolidated", "standalone") if b in found] or ["consolidated"]
+
+
+def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: str = "en",
+                             filename: str = "") -> bytes:
+    """A formatted, statement-shaped workbook: one sheet per statement in the template, with
+    its sections / subtotals / totals, localized line labels, and consolidated + standalone
+    columns side by side. Purely template-driven — the same code renders any template."""
+    import openpyxl
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    by_key = {r["canonical_key"]: r for r in rows if r.get("canonical_key")}
+    bases = _bases_present(rows)
+
+    ink = "1f2937"
+    section_fill = PatternFill("solid", fgColor="EEF1F6")
+    total_fill = PatternFill("solid", fgColor="E7ECF5")
+    band_fill = PatternFill("solid", fgColor="243044")
+    thin_top = Border(top=Side(style="thin", color="9AA4B2"))
+    dbl_top = Border(top=Side(style="double", color="6B7686"))
+    right = Alignment(horizontal="right")
+    num_fmt = "#,##0;(#,##0)"
+
+    # Column layout: Line item | Note | [basis × (Current, Prior)] | Conf | Source
+    period_cols = [(b, p) for b in bases for p in ("current", "prior")]
+    n_val = len(period_cols)
+    first_val = 3                                   # col C
+    conf_col = first_val + n_val
+    src_col = conf_col + 1
+    last_col = src_col
+
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    statements = [s for s in template_def.get("statements", []) if s.get("type")]
+
+    any_sheet = False
+    for stmt in statements:
+        stype = stmt.get("type")
+        # Which of this statement's keys were actually extracted?
+        stmt_keys = _statement_keys(stmt)
+        if not (stmt_keys & set(by_key)):
+            continue
+        any_sheet = True
+        ws = wb.create_sheet(_STMT_SHEET.get(stype, stype)[:31])
+
+        ws.cell(1, 1, filename).font = Font(size=9, color="8A94A6")
+        ws.cell(2, 1, _STMT_TITLE.get(stype, {}).get(locale, stype)).font = Font(bold=True, size=13, color=ink)
+
+        # Header band (row 4: basis groups; row 5: column names).
+        hb, hc = 4, 5
+        ws.cell(hb, 1, filename and "" or "")
+        for idx, b in enumerate(bases):
+            c0 = first_val + idx * 2
+            cell = ws.cell(hb, c0, _BASIS_LABEL[b][locale] if b in _BASIS_LABEL else b)
+            cell.font = Font(bold=True, color="FFFFFF"); cell.alignment = Alignment(horizontal="center")
+            cell.fill = band_fill
+            ws.merge_cells(start_row=hb, start_column=c0, end_row=hb, end_column=c0 + 1)
+            ws.cell(hb, c0 + 1).fill = band_fill
+        for col, name in [(1, "Line item"), (2, "Note"), (conf_col, "Conf"), (src_col, "Source")]:
+            hcell = ws.cell(hc, col, _col(name, locale)); hcell.font = Font(bold=True, size=9, color="5A6472")
+        for (b, p) in period_cols:
+            ci = first_val + period_cols.index((b, p))
+            hcell = ws.cell(hc, ci, _col("Current" if p == "current" else "Prior", locale))
+            hcell.font = Font(bold=True, size=9, color="5A6472"); hcell.alignment = right
+
+        r = hc + 1
+        r = _emit_nodes(ws, stmt.get("sections", []), by_key, period_cols, first_val, conf_col,
+                        src_col, locale, r, section_fill, total_fill, thin_top, dbl_top, right,
+                        num_fmt, ink)
+
+        ws.freeze_panes = ws.cell(hc + 1, 1)
+        ws.column_dimensions["A"].width = 46
+        ws.column_dimensions["B"].width = 7
+        for i in range(n_val):
+            ws.column_dimensions[get_column_letter(first_val + i)].width = 14
+        ws.column_dimensions[get_column_letter(conf_col)].width = 7
+        ws.column_dimensions[get_column_letter(src_col)].width = 16
+
+    if not any_sheet:                                # nothing extracted → a friendly stub sheet
+        ws = wb.create_sheet("Extraction")
+        ws.cell(1, 1, "No extracted line items for this document.")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _statement_keys(stmt: dict) -> set[str]:
+    keys: set[str] = set()
+
+    def walk(nodes):
+        for n in nodes:
+            if n.get("canonical_key"):
+                keys.add(n["canonical_key"])
+            walk(n.get("children", []))
+
+    walk(stmt.get("sections", []))
+    return keys
+
+
+def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, locale, r,
+                section_fill, total_fill, thin_top, dbl_top, right, num_fmt, ink):
+    from openpyxl.styles import Alignment, Font
+
+    for node in nodes:
+        role = node.get("role")
+        key = node.get("canonical_key")
+        row = by_key.get(key)
+        label = _label(node, locale)
+
+        if role == "header":
+            children = node.get("children", [])
+            # Skip whole sections with nothing extracted, to keep the statement readable.
+            if not any(c.get("canonical_key") in by_key for c in children):
+                continue
+            hc = ws.cell(r, 1, label)
+            hc.font = Font(bold=True, color=ink)
+            for c in range(1, src_col + 1):
+                ws.cell(r, c).fill = section_fill
+            r += 1
+            # Show extracted lines + structural subtotals/totals.
+            for child in children:
+                if child.get("canonical_key") in by_key or child.get("role") in ("subtotal", "total"):
+                    r = _emit_nodes(ws, [child], by_key, period_cols, first_val, conf_col, src_col,
+                                    locale, r, section_fill, total_fill, thin_top, dbl_top, right,
+                                    num_fmt, ink)
+            continue
+
+        is_bold = role in ("subtotal", "total")
+        lab = ws.cell(r, 1, label)
+        lab.font = Font(bold=is_bold, color=ink)
+        lab.alignment = Alignment(indent=0 if is_bold else 1)
+        ws.cell(r, 2, (row or {}).get("note") or "")
+
+        for (b, p) in period_cols:
+            ci = first_val + period_cols.index((b, p))
+            val = _cell_value(row, b, p)
+            cell = ws.cell(r, ci, val)
+            cell.number_format = num_fmt
+            cell.alignment = right
+            if is_bold:
+                cell.font = Font(bold=True)
+
+        if row is not None:
+            conf = row.get("mapping_confidence")
+            ws.cell(r, conf_col, f"{round(conf * 100)}%" if isinstance(conf, (int, float)) else "")
+            vals = row.get("values") or []
+            ws.cell(r, src_col, _prov_str(vals[0].get("provenance")) if vals else "")
+
+        if role == "subtotal":
+            for c in range(1, src_col + 1):
+                ws.cell(r, c).border = thin_top
+        elif role == "total":
+            for c in range(1, src_col + 1):
+                ws.cell(r, c).border = dbl_top
+                ws.cell(r, c).fill = total_fill
+        r += 1
+    return r
 
 
 def _apply_units(v, scale: float):

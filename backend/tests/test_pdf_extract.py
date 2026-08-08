@@ -208,6 +208,38 @@ def test_real_line_item_edit_persists_to_statement(client):
     assert row["editable"] is True
 
 
+def test_formatted_statement_export_is_template_driven(client):
+    """The default Excel export mirrors the run's template — one sheet per statement, with
+    the template's sections/subtotals/totals and localized labels — for ANY such template."""
+    import openpyxl
+    import io as _io
+
+    doc_id = _extract_with_ontology(client)
+
+    # Statement layout (default) → a workbook with a Balance Sheet sheet built from the template.
+    x = client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "excel", "layout": "statement"})
+    assert x.status_code == 200 and x.content[:2] == b"PK"
+    wb = openpyxl.load_workbook(_io.BytesIO(x.content))
+    assert "Balance Sheet" in wb.sheetnames
+    ws = wb["Balance Sheet"]
+    joined = " | ".join(str(v) for row in ws.iter_rows(values_only=True) for v in row if v)
+    assert "Current assets" in joined                 # a template section header
+    assert "Total current assets" in joined           # a template subtotal (structural anchor)
+    assert "Trade receivables" in joined              # an extracted, template-labelled line
+
+    # Localized (zh) labels come from the template's label_i18n.
+    zh = client.get(f"/api/v1/documents/{doc_id}/export",
+                    params={"fmt": "excel", "layout": "statement", "locale": "zh"})
+    wbz = openpyxl.load_workbook(_io.BytesIO(zh.content))
+    zjoined = " | ".join(str(v) for row in wbz["Balance Sheet"].iter_rows(values_only=True)
+                         for v in row if v)
+    assert "流动资产" in zjoined and "应收账款" in zjoined       # section + line in Chinese
+
+    # Flat layout is still available.
+    flat = client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "excel", "layout": "flat"})
+    assert flat.status_code == 200 and flat.content[:2] == b"PK"
+
+
 def test_edit_then_revert_restores_original(client):
     doc_id = _extract_with_ontology(client)
     st0 = client.get(f"/api/v1/documents/{doc_id}/statement", params={"statement": "balance_sheet"}).json()

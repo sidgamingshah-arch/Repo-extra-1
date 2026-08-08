@@ -264,6 +264,7 @@ export default function ExportScreen() {
   const runQ = useDocumentRun(activeDocumentId ?? undefined);
   const exportFmt = useUI((s) => s.exportFmt);
   const setFmt = useUI((s) => s.setFmt);
+  const outputLocale = useUI((s) => s.locale);
   const isExcel = exportFmt === "excel";
 
   // No real document and no admin-seeded demo → greenfield guidance.
@@ -384,7 +385,7 @@ export default function ExportScreen() {
               <button
                 onClick={() =>
                   usingReal && activeDocumentId
-                    ? downloadDocumentExport(activeDocumentId, exportFmt)
+                    ? downloadDocumentExport(activeDocumentId, exportFmt, outputLocale)
                     : downloadExport({
                         format: exportFmt,
                         basis: "consolidated",

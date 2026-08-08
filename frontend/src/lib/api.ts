@@ -228,11 +228,15 @@ export async function downloadExport(body: {
   URL.revokeObjectURL(url);
 }
 
-/** GET a REAL document's export (built from its latest extraction) and download it. */
-export async function downloadDocumentExport(documentId: string, format: ExportFmt): Promise<void> {
-  const res = await fetch(`${BASE}/documents/${documentId}/export?fmt=${format}`, {
-    headers: { ...authHeader() },
-  });
+/** GET a REAL document's export (built from its latest extraction) and download it. Excel
+ * uses the formatted, template-driven statement layout, localized to `locale`. */
+export async function downloadDocumentExport(
+  documentId: string, format: ExportFmt, locale: Locale = "en",
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/documents/${documentId}/export?fmt=${format}&layout=statement&locale=${locale}`,
+    { headers: { ...authHeader() } },
+  );
   if (!res.ok) throw new Error(`Export failed: ${res.status}`);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
