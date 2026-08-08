@@ -26,7 +26,7 @@ export default function ReviewScreen() {
   const activeDocumentId = useUI((s) => s.activeDocumentId);
   const usingReal = !!activeDocumentId;
   const loaded = useProjectLoaded();
-  const realQ = useDocumentReview(activeDocumentId ?? undefined);
+  const realQ = useDocumentReview(activeDocumentId ?? undefined, locale);
   const demoQ = useReview(locale, !usingReal);
   const data = usingReal ? realQ.data : demoQ.data;
   const isPending = usingReal ? realQ.isPending : demoQ.isPending;

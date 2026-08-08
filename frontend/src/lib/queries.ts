@@ -137,22 +137,52 @@ export function useUploadDocument() {
 }
 
 /** Real per-document pre-flight integrity — the uploaded file's own results. */
-export const useDocumentIntegrity = (documentId: string | undefined) =>
+export const useDocumentIntegrity = (documentId: string | undefined, locale: Locale = "en") =>
   useQuery({
-    queryKey: ["document-integrity", documentId],
-    queryFn: () => api.documentIntegrity(documentId as string),
+    queryKey: ["document-integrity", documentId, locale],
+    queryFn: () => api.documentIntegrity(documentId as string, locale),
     enabled: !!documentId,
     retry: false,
   });
 
 /** Real per-document review queue (unmapped + low-confidence items from the latest run). */
-export const useDocumentReview = (documentId: string | undefined) =>
+export const useDocumentReview = (documentId: string | undefined, locale: Locale = "en") =>
   useQuery({
-    queryKey: ["document-review", documentId],
-    queryFn: () => api.documentReview(documentId as string),
+    queryKey: ["document-review", documentId, locale],
+    queryFn: () => api.documentReview(documentId as string, locale),
     enabled: !!documentId,
     retry: false,
   });
+
+/** Real per-document notes index + one note's detail. */
+export const useDocumentNotes = (documentId: string | undefined) =>
+  useQuery({
+    queryKey: ["document-notes", documentId],
+    queryFn: () => api.documentNotes(documentId as string),
+    enabled: !!documentId,
+    retry: false,
+  });
+export const useDocumentNote = (documentId: string | undefined, no: number) =>
+  useQuery({
+    queryKey: ["document-note", documentId, no],
+    queryFn: () => api.documentNote(documentId as string, no),
+    enabled: !!documentId,
+    retry: false,
+  });
+
+/** Edit a value/formula on a real extraction; refreshes the document's statement/run/export. */
+export function useEditDocumentLineItem(documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { key: string; value: number | null; formula: string }) =>
+      api.editDocumentLineItem(documentId as string, vars.key, vars.value, vars.formula),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["document-statement", documentId] });
+      qc.invalidateQueries({ queryKey: ["document-run", documentId] });
+      qc.invalidateQueries({ queryKey: ["document-review", documentId] });
+    },
+  });
+}
 
 /** Latest extraction run for a document (Export preview/counts). */
 export const useDocumentRun = (documentId: string | undefined) =>
@@ -168,10 +198,10 @@ export const usePages = (locale: Locale = "en", enabled = true) =>
   useQuery({ queryKey: ["pages", locale], queryFn: () => api.pages(locale), enabled });
 export const useReview = (locale: Locale = "en", enabled = true) =>
   useQuery({ queryKey: ["review", locale], queryFn: () => api.review(locale), enabled });
-export const useNotes = (locale: Locale = "en") =>
-  useQuery({ queryKey: ["notes", locale], queryFn: () => api.notes(locale) });
-export const useNote = (no: number, locale: Locale = "en") =>
-  useQuery({ queryKey: ["note", no, locale], queryFn: () => api.note(no, locale) });
+export const useNotes = (locale: Locale = "en", enabled = true) =>
+  useQuery({ queryKey: ["notes", locale], queryFn: () => api.notes(locale), enabled });
+export const useNote = (no: number, locale: Locale = "en", enabled = true) =>
+  useQuery({ queryKey: ["note", no, locale], queryFn: () => api.note(no, locale), enabled });
 export const useTemplate = (locale: Locale = "en") =>
   useQuery({ queryKey: ["template", locale], queryFn: () => api.template(locale) });
 export const useExportOptions = () =>

@@ -116,12 +116,23 @@ export const api = {
       body: JSON.stringify(body),
     }),
   /** Real per-document pre-flight integrity (drives the Integrity screen for an upload). */
-  documentIntegrity: (documentId: string) =>
-    req<IntegrityResponse>(`/documents/${documentId}/integrity`),
+  documentIntegrity: (documentId: string, locale: Locale = "en") =>
+    req<IntegrityResponse>(`/documents/${documentId}/integrity?locale=${locale}`),
   /** Real per-document review queue, derived from the latest extraction (unmapped + low
    * confidence). */
-  documentReview: (documentId: string) =>
-    req<ReviewResponse>(`/documents/${documentId}/review`),
+  documentReview: (documentId: string, locale: Locale = "en") =>
+    req<ReviewResponse>(`/documents/${documentId}/review?locale=${locale}`),
+  /** Real per-document notes index + detail, from line-item note references. */
+  documentNotes: (documentId: string) =>
+    req<NotesResponse>(`/documents/${documentId}/notes`),
+  documentNote: (documentId: string, no: number) =>
+    req<NoteDetail>(`/documents/${documentId}/notes/${no}`),
+  /** Edit a value/formula on a real extraction (persists onto the latest run). */
+  editDocumentLineItem: (documentId: string, key: string, value: number | null, formula: string) =>
+    req<{ status: string; value: string | null }>(
+      `/documents/${documentId}/line-items/${encodeURIComponent(key)}`,
+      { method: "PATCH", body: JSON.stringify({ value, formula }) },
+    ),
   /** The latest extraction run for a document (drives the Export preview/counts). */
   documentRun: (documentId: string) =>
     req<ExtractionRunResponse>(`/documents/${documentId}/run`),

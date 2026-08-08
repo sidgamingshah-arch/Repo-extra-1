@@ -1,11 +1,12 @@
 /** Screen 6 — All Notes. Left index of extracted notes; right detail with a
  * particulars grid and a note-to-face reconciliation callout. */
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Card } from "../components/ui";
 import { SCREENS } from "./config";
 import { useT } from "../i18n";
-import { useNote, useNotes, useProjectLoaded } from "../lib/queries";
+import { useDocumentNote, useDocumentNotes, useNote, useNotes, useProjectLoaded } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { useUI } from "../store";
 import { color, confStyle, fmtIN, font, radius } from "../theme";
@@ -136,12 +137,27 @@ function Detail({ detail }: { detail: NoteDetail }) {
 export default function NotesScreen() {
   const t = useT();
   const locale = useUI((s) => s.locale);
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const usingReal = !!activeDocumentId;
   const loaded = useProjectLoaded();
-  const { data: notes } = useNotes(locale);
   const { note, setNote } = useUI();
-  const { data: detail } = useNote(note, locale);
+  // Real document → notes from its extraction (line-item note references); else the demo.
+  const realNotes = useDocumentNotes(activeDocumentId ?? undefined);
+  const realDetail = useDocumentNote(activeDocumentId ?? undefined, note);
+  const demoNotes = useNotes(locale, !usingReal);
+  const demoDetail = useNote(note, locale, !usingReal);
+  const notes = usingReal ? realNotes.data : demoNotes.data;
+  const detail = usingReal ? realDetail.data : demoDetail.data;
 
-  if (!loaded) return <EmptyState />;
+  // On a real doc, if the remembered note isn't one this document has, select the first.
+  useEffect(() => {
+    if (usingReal && notes?.notes.length && !notes.notes.some((n) => n.no === note)) {
+      setNote(notes.notes[0].no);
+    }
+  }, [usingReal, notes, note, setNote]);
+
+  if (!usingReal && !loaded) return <EmptyState />;
+  if (usingReal && realNotes.isError) return <EmptyState />;
   if (!notes) return <Loading />;
 
   return (

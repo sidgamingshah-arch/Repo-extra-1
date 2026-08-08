@@ -42,7 +42,7 @@ export default function IntegrityScreen() {
   // greenfield empty state. So real runs are deterministic and demo never leaks in.
   const docId = activeDocumentId ?? undefined;
   const usingReal = !!docId;
-  const realQ = useDocumentIntegrity(docId);
+  const realQ = useDocumentIntegrity(docId, locale);
   const loaded = useProjectLoaded();
   const demoQ = useIntegrity(locale, !usingReal);
 

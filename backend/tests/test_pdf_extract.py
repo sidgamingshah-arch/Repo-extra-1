@@ -120,6 +120,56 @@ def test_real_pages_and_statement_from_document(client):
     assert sa["rows"] == []
 
 
+def _extract_with_ontology(client, filename="bs.pdf"):
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": (filename, make_native_pdf(), "application/pdf")}
+    ).json()["id"]
+    onts = client.get("/api/v1/ontologies").json()
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    tpls = client.get("/api/v1/templates").json()
+    tpl = next((tt for tt in tpls if tt["template_key"] == ont["target_template_key"]), tpls[0])
+    client.post(f"/api/v1/documents/{doc_id}/extractions",
+                json={"ontology_version_id": ont["id"], "template_version_id": tpl["id"]})
+    return doc_id
+
+
+def test_real_line_item_edit_persists_to_statement(client):
+    doc_id = _extract_with_ontology(client)
+    rows = client.get(f"/api/v1/documents/{doc_id}/run").json()["result"]["rows"]
+    key = next(r["canonical_key"] for r in rows if r.get("canonical_key"))
+
+    r = client.patch(f"/api/v1/documents/{doc_id}/line-items/{key}",
+                     json={"value": 12345, "formula": "=A+B"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "edited" and r.json()["value"] == "12345"
+
+    st = client.get(f"/api/v1/documents/{doc_id}/statement", params={"statement": "balance_sheet"}).json()
+    row = next(x for x in st["rows"] if x["id"] == key)
+    assert row["v1"] == 12345 and row["status"] == "edited" and row["formula"] == "=A+B"
+    assert row["editable"] is True
+
+
+def test_real_notes_index_and_detail(client):
+    doc_id = _extract_with_ontology(client)
+    notes = client.get(f"/api/v1/documents/{doc_id}/notes").json()
+    assert notes["count"] >= 1 and notes["linked"] >= 1
+    assert any(n["no"] == 15 for n in notes["notes"])        # make_native_pdf cites "Note 15"
+
+    detail = client.get(f"/api/v1/documents/{doc_id}/notes/15").json()
+    assert detail["no"] == 15 and detail["linked_label"]
+    assert detail["rows"] and detail["reconciliation"] is None
+
+
+def test_real_integrity_and_review_localized(client):
+    doc_id = _extract_with_ontology(client)
+    zh = client.get(f"/api/v1/documents/{doc_id}/integrity", params={"locale": "zh"}).json()
+    assert any(s["label"] == "页数" for s in zh["stats"])       # "Pages" localized
+    assert zh["grade"] and zh["grade"] != "Ready to extract"
+
+    rev = client.get(f"/api/v1/documents/{doc_id}/review", params={"locale": "fr"}).json()
+    assert rev["tabs"][0]["label"] == "Tous"                    # "All" localized (fr)
+
+
 def test_review_and_run_404_before_extraction(client):
     doc_id = client.post(
         "/api/v1/documents", files={"file": ("x.pdf", make_native_pdf(), "application/pdf")}

@@ -110,6 +110,11 @@ test("end-to-end: upload a new file â†’ Run integrity check shows real results â
   await expect(page.getByText("sample.pdf").first()).toBeVisible();               // real source in the viewer
   await expect(page.getByText("Reliance Industries Ltd")).toHaveCount(0);         // no demo leakage
 
+  // All Notes reads the REAL document's note references (make_native_pdf cites Note 15).
+  await page.goto("/notes", DCL);
+  await expect(page.getByText("N15").first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: "No project yet" })).toHaveCount(0);
+
   // Review runs on the REAL document (its own queue), not the demo project.
   await page.goto("/review", DCL);
   await expect(page.getByRole("heading", { name: "Review queue" })).toBeVisible({ timeout: 15_000 });

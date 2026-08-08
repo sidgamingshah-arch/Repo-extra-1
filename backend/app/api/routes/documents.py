@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.deps import db, object_store
 from app.ports.object_store import LocalObjectStore
@@ -11,6 +13,95 @@ from app.security import Permission, current_principal, require
 from app.services.documents import analyze_document, content_hash
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+# Bounded translations for the fixed vocabulary the real integrity/review surfaces emit, so
+# a real run localizes like the demo path. Dynamic parts (source labels, finding messages)
+# stay verbatim — they're data, not chrome.
+_TR: dict[str, dict[str, str]] = {
+    # integrity grades
+    "Not analyzed": {"zh": "未分析", "ar": "لم يُحلَّل", "fr": "Non analysé"},
+    "Blocked": {"zh": "已阻止", "ar": "محظور", "fr": "Bloqué"},
+    "Ready to extract": {"zh": "可提取", "ar": "جاهز للاستخراج", "fr": "Prêt à extraire"},
+    "Minor issues": {"zh": "存在小问题", "ar": "مشكلات طفيفة", "fr": "Problèmes mineurs"},
+    "Needs attention": {"zh": "需要关注", "ar": "يتطلب انتباهًا", "fr": "À vérifier"},
+    # summaries
+    "No integrity report is available for this document. Re-upload to run the pre-flight checks.":
+        {"zh": "该文档没有可用的完整性报告。请重新上传以运行预检。",
+         "ar": "لا يتوفر تقرير سلامة لهذا المستند. أعد الرفع لتشغيل الفحوصات المسبقة.",
+         "fr": "Aucun rapport d'intégrité disponible pour ce document. Re-téléversez pour lancer les contrôles."},
+    "Resolve the blocking issues before extracting.":
+        {"zh": "请在提取前解决阻断性问题。", "ar": "عالج المشكلات الحاجبة قبل الاستخراج.",
+         "fr": "Résolvez les problèmes bloquants avant l'extraction."},
+    "No material issues detected.":
+        {"zh": "未发现重大问题。", "ar": "لم تُكتشف مشكلات جوهرية.", "fr": "Aucun problème important détecté."},
+    "Proceed with caution — review the flagged items.":
+        {"zh": "请谨慎处理——请查看标记的项目。", "ar": "تابع بحذر — راجع العناصر المُعلَّمة.",
+         "fr": "Procédez avec prudence — vérifiez les éléments signalés."},
+    "Several issues detected — review before extracting.":
+        {"zh": "发现多个问题——请在提取前查看。", "ar": "اكتُشفت عدة مشكلات — راجعها قبل الاستخراج.",
+         "fr": "Plusieurs problèmes détectés — vérifiez avant l'extraction."},
+    # stat labels / subs / values
+    "Pages": {"zh": "页数", "ar": "الصفحات", "fr": "Pages"},
+    "Document type": {"zh": "文档类型", "ar": "نوع المستند", "fr": "Type de document"},
+    "Scanned pages": {"zh": "扫描页", "ar": "الصفحات الممسوحة", "fr": "Pages numérisées"},
+    "Issues": {"zh": "问题", "ar": "المشكلات", "fr": "Problèmes"},
+    "detected": {"zh": "已检测", "ar": "مكتشفة", "fr": "détectées"},
+    "native vs scanned": {"zh": "原生与扫描", "ar": "أصلي مقابل ممسوح", "fr": "natif vs numérisé"},
+    "need OCR": {"zh": "需要 OCR", "ar": "تحتاج OCR", "fr": "nécessitent l'OCR"},
+    "found": {"zh": "已发现", "ar": "موجودة", "fr": "trouvés"},
+    "not checked": {"zh": "未检查", "ar": "لم تُفحص", "fr": "non vérifié"},
+    "Native": {"zh": "原生", "ar": "أصلي", "fr": "Natif"},
+    "Scanned": {"zh": "扫描", "ar": "ممسوح", "fr": "Numérisé"},
+    "Mixed": {"zh": "混合", "ar": "مختلط", "fr": "Mixte"},
+    "Unknown": {"zh": "未知", "ar": "غير معروف", "fr": "Inconnu"},
+    # statuses
+    "Blocking": {"zh": "阻断", "ar": "حاجب", "fr": "Bloquant"},
+    "Advisory": {"zh": "提示", "ar": "إرشادي", "fr": "Indicatif"},
+    "Passed": {"zh": "通过", "ar": "ناجح", "fr": "Réussi"},
+    # special
+    "No issues detected": {"zh": "未发现问题", "ar": "لم تُكتشف مشكلات", "fr": "Aucun problème détecté"},
+    "The document passed all integrity checks.":
+        {"zh": "该文档通过了所有完整性检查。", "ar": "اجتاز المستند جميع فحوصات السلامة.",
+         "fr": "Le document a réussi tous les contrôles d'intégrité."},
+    "Integrity not available": {"zh": "无完整性信息", "ar": "السلامة غير متاحة", "fr": "Intégrité indisponible"},
+    "This document has no stored pre-flight report.":
+        {"zh": "该文档没有已存储的预检报告。", "ar": "لا يوجد تقرير مسبق مخزَّن لهذا المستند.",
+         "fr": "Ce document n'a pas de rapport de contrôle enregistré."},
+    # review
+    "All": {"zh": "全部", "ar": "الكل", "fr": "Tous"},
+    "Unmapped": {"zh": "未映射", "ar": "غير مُطابَق", "fr": "Non mappé"},
+    "Low confidence": {"zh": "低置信度", "ar": "ثقة منخفضة", "fr": "Faible confiance"},
+    "No canonical concept matched with confidence. Pick the correct template line item, "
+    "or add an alias so future runs map it automatically.":
+        {"zh": "没有可信匹配的规范概念。请选择正确的模板项目，或添加别名以便后续自动映射。",
+         "ar": "لم يُطابَق أي مفهوم قياسي بثقة. اختر بند القالب الصحيح أو أضف اسمًا بديلًا ليُطابَق تلقائيًا لاحقًا.",
+         "fr": "Aucun concept canonique n'a été associé avec confiance. Choisissez le bon poste du modèle, ou ajoutez un alias."},
+    "The mapping is uncertain. Confirm the concept is correct or reassign it; the value and "
+    "its source location are shown so you can verify against the document.":
+        {"zh": "映射不确定。请确认概念是否正确或重新指定；已显示数值及其来源位置以便与文档核对。",
+         "ar": "التطابق غير مؤكد. أكِّد صحة المفهوم أو أعِد تعيينه؛ تظهر القيمة وموقع مصدرها للتحقق مقابل المستند.",
+         "fr": "Le mappage est incertain. Confirmez le concept ou réattribuez-le ; la valeur et sa source sont affichées pour vérification."},
+}
+
+
+_TR.update({
+    "Unrecognized file format": {"zh": "无法识别的文件格式", "ar": "تنسيق ملف غير معروف", "fr": "Format de fichier non reconnu"},
+    "File appears corrupt": {"zh": "文件似乎已损坏", "ar": "يبدو الملف تالفًا", "fr": "Le fichier semble corrompu"},
+    "Password-protected document": {"zh": "受密码保护的文档", "ar": "مستند محمي بكلمة مرور", "fr": "Document protégé par mot de passe"},
+    "Encrypted document": {"zh": "加密文档", "ar": "مستند مشفَّر", "fr": "Document chiffré"},
+    "Mixed scanned and native pages": {"zh": "扫描页与原生页混合", "ar": "صفحات ممسوحة وأصلية مختلطة", "fr": "Pages numérisées et natives mélangées"},
+    "Rotated page": {"zh": "页面旋转", "ar": "صفحة مُدارة", "fr": "Page pivotée"},
+    "Inconsistent page dimensions": {"zh": "页面尺寸不一致", "ar": "أبعاد صفحات غير متسقة", "fr": "Dimensions de page incohérentes"},
+    "Hidden worksheet": {"zh": "隐藏的工作表", "ar": "ورقة عمل مخفية", "fr": "Feuille masquée"},
+    "No pages found": {"zh": "未找到页面", "ar": "لا توجد صفحات", "fr": "Aucune page trouvée"},
+    "Blank page": {"zh": "空白页", "ar": "صفحة فارغة", "fr": "Page vierge"},
+})
+
+
+def _t(s: str, locale: str) -> str:
+    if not s or locale == "en":
+        return s
+    return _TR.get(s, {}).get(locale, s)
 
 
 def _tag_for(fmt: str) -> str:
@@ -122,26 +213,29 @@ def _pct_label(ratio: float) -> str:
     return f"{pct}%"
 
 
-def _serialize_document_integrity(row) -> dict:
+def _serialize_document_integrity(row, locale: str = "en") -> dict:
     """Map a stored IntegrityReport (per uploaded document) into the IntegrityResponse the
     Document Integrity screen renders — so a real uploaded file surfaces its own pre-flight
-    results, not the demo project's."""
+    results, not the demo project's. Localized to `locale` for the fixed vocabulary."""
+    def L(s: str) -> str:
+        return _t(s, locale)
+
     report = row.integrity_report
     # No stored report → the file was never actually checked. Do NOT fabricate an all-clear;
     # surface an explicit "not analyzed" state so an unchecked file is never shown as clean.
     if not report:
         return {
-            "score": 0, "grade": "Not analyzed",
-            "summary": "No integrity report is available for this document. Re-upload to run the pre-flight checks.",
+            "score": 0, "grade": L("Not analyzed"),
+            "summary": L("No integrity report is available for this document. Re-upload to run the pre-flight checks."),
             "stats": [
-                {"label": "Pages", "value": str(row.page_count or 0), "sub": "detected", "tone": "neutral"},
-                {"label": "Document type", "value": "Unknown", "sub": "native vs scanned", "tone": "warn"},
-                {"label": "Scanned pages", "value": "—", "sub": "need OCR", "tone": "neutral"},
-                {"label": "Issues", "value": "—", "sub": "not checked", "tone": "warn"},
+                {"label": L("Pages"), "value": str(row.page_count or 0), "sub": L("detected"), "tone": "neutral"},
+                {"label": L("Document type"), "value": L("Unknown"), "sub": L("native vs scanned"), "tone": "warn"},
+                {"label": L("Scanned pages"), "value": "—", "sub": L("need OCR"), "tone": "neutral"},
+                {"label": L("Issues"), "value": "—", "sub": L("not checked"), "tone": "warn"},
             ],
-            "issues": [{"title": "Integrity not available",
-                        "detail": "This document has no stored pre-flight report.",
-                        "pages": "All", "note": "UNKNOWN", "status": "Not analyzed", "severity": "warn"}],
+            "issues": [{"title": L("Integrity not available"),
+                        "detail": L("This document has no stored pre-flight report."),
+                        "pages": "All", "note": "UNKNOWN", "status": L("Not analyzed"), "severity": "warn"}],
         }
 
     findings = report.get("findings", []) or []
@@ -160,12 +254,13 @@ def _serialize_document_integrity(row) -> dict:
         blocking = sev == "blocker"
         has_blocker = has_blocker or blocking
         pidx = f.get("page_index")
+        title = _CHECK_TITLES.get(f.get("check_id", ""), str(f.get("check_id", "Issue")).replace("_", " ").title())
         issues.append({
-            "title": _CHECK_TITLES.get(f.get("check_id", ""), str(f.get("check_id", "Issue")).replace("_", " ").title()),
+            "title": L(title),
             "detail": f.get("message", ""),
             "pages": f"p.{pidx + 1}" if isinstance(pidx, int) else "All",
             "note": sev.upper(),
-            "status": "Blocking" if blocking else "Advisory",
+            "status": L("Blocking") if blocking else L("Advisory"),
             "severity": fe_sev,
         })
     score = max(0, min(100, score))
@@ -181,22 +276,23 @@ def _serialize_document_integrity(row) -> dict:
 
     kind = "Native" if scanned_ratio == 0 else "Scanned" if scanned_ratio >= 0.99 else "Mixed"
     stats = [
-        {"label": "Pages", "value": str(page_count), "sub": "detected", "tone": "neutral"},
-        {"label": "Document type", "value": kind, "sub": "native vs scanned",
+        {"label": L("Pages"), "value": str(page_count), "sub": L("detected"), "tone": "neutral"},
+        {"label": L("Document type"), "value": L(kind), "sub": L("native vs scanned"),
          "tone": "ok" if kind == "Native" else "warn"},
-        {"label": "Scanned pages", "value": _pct_label(scanned_ratio),
-         "sub": "need OCR", "tone": "warn" if scanned_ratio > 0 else "ok"},
-        {"label": "Issues", "value": str(len(findings)), "sub": "found",
+        {"label": L("Scanned pages"), "value": _pct_label(scanned_ratio),
+         "sub": L("need OCR"), "tone": "warn" if scanned_ratio > 0 else "ok"},
+        {"label": L("Issues"), "value": str(len(findings)), "sub": L("found"),
          "tone": "warn" if findings else "ok"},
     ]
     if not issues:
-        issues = [{"title": "No issues detected", "detail": "The document passed all integrity checks.",
-                   "pages": "All", "note": "OK", "status": "Passed", "severity": "ok"}]
-    return {"score": score, "grade": grade, "summary": summary, "stats": stats, "issues": issues}
+        issues = [{"title": L("No issues detected"), "detail": L("The document passed all integrity checks."),
+                   "pages": "All", "note": "OK", "status": L("Passed"), "severity": "ok"}]
+    return {"score": score, "grade": L(grade), "summary": L(summary), "stats": stats, "issues": issues}
 
 
 @router.get("/{document_id}/integrity", dependencies=[Depends(current_principal)])
-def get_document_integrity(document_id: str, session: Session = Depends(db)) -> dict:
+def get_document_integrity(document_id: str, locale: str = Query("en"),
+                           session: Session = Depends(db)) -> dict:
     """Real pre-flight integrity for one uploaded document (drives the Document Integrity
     screen when working a real file, rather than the demo project)."""
     from app.db.models import Document
@@ -204,7 +300,7 @@ def get_document_integrity(document_id: str, session: Session = Depends(db)) -> 
     row = session.get(Document, document_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    return _serialize_document_integrity(row)
+    return _serialize_document_integrity(row, locale)
 
 
 def _latest_run(session: Session, document_id: str):
@@ -229,10 +325,17 @@ def _prov_label(prov: dict | None) -> str:
 _LOW_CONF = 0.75  # mapping confidence below this routes to review
 
 
-def _build_review(rows: list[dict], filename: str) -> dict:
+def _build_review(rows: list[dict], filename: str, locale: str = "en") -> dict:
     """Derive the human-in-the-loop review queue from a real extraction: unmapped and
     low-confidence line items become review checks (the QA the analyst works before
     export). No demo data involved."""
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    _UNMAPPED_FIX = ("No canonical concept matched with confidence. Pick the correct template "
+                     "line item, or add an alias so future runs map it automatically.")
+    _LOWCONF_FIX = ("The mapping is uncertain. Confirm the concept is correct or reassign it; "
+                    "the value and its source location are shown so you can verify against the document.")
     checks: list[dict] = []
     unmapped = low_conf = 0
     for i, r in enumerate(rows):
@@ -249,22 +352,21 @@ def _build_review(rows: list[dict], filename: str) -> dict:
             checks.append({
                 "id": f"chk-unmapped-{i}", "type": "unmapped", "icon": "?",
                 "title": r.get("source_label", "Line item"), "where": where,
-                "severity": "Unmapped", "tone": "low", "delta": "—",
+                "severity": L("Unmapped"), "tone": "low", "delta": "—",
                 "target": r.get("source_label", ""),
                 "calc": [
                     ["Source label", r.get("source_label", ""), False],
                     ["Mapped to", "— (no confident match)", True],
                     ["Value", str(val) if val is not None else "—", False],
                 ],
-                "fix": "No canonical concept matched with confidence. Pick the correct template "
-                       "line item, or add an alias so future runs map it automatically.",
+                "fix": L(_UNMAPPED_FIX),
             })
         elif "low_mapping_confidence" in flags or (isinstance(conf, (int, float)) and conf < _LOW_CONF):
             low_conf += 1
             checks.append({
                 "id": f"chk-lowconf-{i}", "type": "low_confidence", "icon": "!",
                 "title": r.get("source_label", "Line item"), "where": where,
-                "severity": "Low confidence", "tone": "med", "delta": pct,
+                "severity": L("Low confidence"), "tone": "med", "delta": pct,
                 "target": r.get("source_label", ""),
                 "calc": [
                     ["Source label", r.get("source_label", ""), False],
@@ -273,17 +375,16 @@ def _build_review(rows: list[dict], filename: str) -> dict:
                     ["Confidence", pct, False],
                     ["Value", str(val) if val is not None else "—", False],
                 ],
-                "fix": "The mapping is uncertain. Confirm the concept is correct or reassign it; "
-                       "the value and its source location are shown so you can verify against the document.",
+                "fix": L(_LOWCONF_FIX),
             })
     total = len(checks)
     passed = max(0, len(rows) - total)
     return {
         "checks": checks,
         "tabs": [
-            {"label": "All", "count": total},
-            {"label": "Unmapped", "count": unmapped},
-            {"label": "Low confidence", "count": low_conf},
+            {"label": L("All"), "count": total},
+            {"label": L("Unmapped"), "count": unmapped},
+            {"label": L("Low confidence"), "count": low_conf},
         ],
         "summary": {"open": total, "passed": passed},
     }
@@ -304,7 +405,8 @@ def get_document_run(document_id: str, session: Session = Depends(db)) -> dict:
 
 
 @router.get("/{document_id}/review", dependencies=[Depends(current_principal)])
-def get_document_review(document_id: str, session: Session = Depends(db)) -> dict:
+def get_document_review(document_id: str, locale: str = Query("en"),
+                        session: Session = Depends(db)) -> dict:
     """Real review queue for a document, derived from its latest extraction."""
     from app.db.models import Document
 
@@ -313,8 +415,57 @@ def get_document_review(document_id: str, session: Session = Depends(db)) -> dic
         raise HTTPException(status_code=404, detail="Document not found")
     run = _latest_run(session, document_id)
     if run is None or not run.result:
-        return {"checks": [], "tabs": [{"label": "All", "count": 0}], "summary": {"open": 0, "passed": 0}}
-    return _build_review(run.result.get("rows", []), doc.filename or "document")
+        return {"checks": [], "tabs": [{"label": _t("All", locale), "count": 0}],
+                "summary": {"open": 0, "passed": 0}}
+    return _build_review(run.result.get("rows", []), doc.filename or "document", locale)
+
+
+class LineItemEdit(BaseModel):
+    value: float | None = None
+    formula: str = ""
+    period: str = "current"
+
+
+@router.patch("/{document_id}/line-items/{canonical_key:path}",
+              dependencies=[Depends(require(Permission.EXTRACTION_EDIT))])
+def edit_document_line_item(document_id: str, canonical_key: str, body: LineItemEdit,
+                            session: Session = Depends(db)) -> dict:
+    """Edit a value (and optional formula) on a real extraction. The override is persisted
+    onto the latest run so the statement, export and review all reflect it; the row is
+    flagged 'edited' while its original provenance is retained."""
+    from app.db.models import Document
+
+    if session.get(Document, document_id) is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        raise HTTPException(status_code=404, detail="No extraction run yet for this document")
+    result = dict(run.result)
+    rows = result.get("rows", [])
+    target = next((r for r in rows if r.get("canonical_key") == canonical_key), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Line item not found in this run")
+
+    values = target.get("values") or []
+    slot = next((v for v in values if v.get("period_label") == body.period), None)
+    if slot is None:
+        slot = {"period_label": body.period, "value": None, "provenance": None}
+        values.append(slot)
+        target["values"] = values
+    if body.value is None:
+        slot["value"] = None
+    else:
+        fv = float(body.value)
+        slot["value"] = str(int(fv)) if fv == int(fv) else str(fv)
+    target["formula"] = body.formula or None
+    target["edited"] = True
+
+    result["rows"] = rows
+    run.result = result
+    flag_modified(run, "result")
+    session.commit()
+    return {"ok": True, "canonical_key": canonical_key, "period": body.period,
+            "value": slot["value"], "formula": target.get("formula"), "status": "edited"}
 
 
 @router.get("/{document_id}/export", dependencies=[Depends(require(Permission.EXPORT_RUN))])
@@ -466,12 +617,13 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     def item_row(key: str, label: str, r: dict) -> dict:
         cur, prior = _cur_prior(r)
         cat, pct = _conf_cat(r.get("mapping_confidence"))
+        edited = bool(r.get("edited"))
         return {
             "id": key, "label": label or r.get("source_label"),
             "source_label": r.get("source_label"), "kind": "item",
-            "note": r.get("note"), "note2": None, "status": None,
-            "confidence": {"cat": cat, "pct": pct}, "editable": False,
-            "formula": None, "inspector": _inspector(r, cur),
+            "note": r.get("note"), "note2": None, "status": "edited" if edited else None,
+            "confidence": {"cat": cat, "pct": pct}, "editable": True,
+            "formula": r.get("formula"), "inspector": _inspector(r, cur),
             "v1": _to_num((cur or {}).get("value")), "v2": _to_num((prior or {}).get("value")),
         }
 
@@ -534,6 +686,74 @@ def get_document_statement(
         return _build_statement([], None, statement, doc.filename or "document")
     template_def = _template_for_run(session, run)
     return _build_statement(run.result.get("rows", []), template_def, statement, doc.filename or "document")
+
+
+def _note_no(raw) -> int | None:
+    """Parse a note reference to an int; the notes index/detail key on numbers."""
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _rows_by_note(rows: list[dict]) -> dict[int, list[dict]]:
+    grouped: dict[int, list[dict]] = {}
+    for r in rows:
+        n = _note_no(r.get("note"))
+        if n is not None:
+            grouped.setdefault(n, []).append(r)
+    return grouped
+
+
+@router.get("/{document_id}/notes", dependencies=[Depends(current_principal)])
+def get_document_notes(document_id: str, session: Session = Depends(db)) -> dict:
+    """All-notes index for a real document: the notes referenced by extracted line items,
+    each linked to the face items that cite it. Built from the extraction, not the demo."""
+    from app.db.models import Document
+
+    if session.get(Document, document_id) is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        return {"notes": [], "count": 0, "linked": 0}
+    grouped = _rows_by_note(run.result.get("rows", []))
+    notes = [{"no": n, "title": f"Note {n}", "conf": "med"} for n in sorted(grouped)]
+    linked = sum(len(v) for v in grouped.values())
+    return {"notes": notes, "count": len(notes), "linked": linked}
+
+
+@router.get("/{document_id}/notes/{note_no}", dependencies=[Depends(current_principal)])
+def get_document_note(document_id: str, note_no: int, session: Session = Depends(db)) -> dict:
+    """One note's detail for a real document: the face line items referencing it, with their
+    values and the page they were extracted from. (Note-table sub-parsing is not available
+    for arbitrary uploads, so there is no note-vs-face reconciliation here.)"""
+    from app.db.models import Document
+
+    if session.get(Document, document_id) is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    run = _latest_run(session, document_id)
+    grouped = _rows_by_note(run.result.get("rows", [])) if run and run.result else {}
+    refs = grouped.get(note_no, [])
+    first = refs[0] if refs else None
+    prov = None
+    if first:
+        cur, _ = _cur_prior(first)
+        prov = (cur or {}).get("provenance")
+    detail_rows = []
+    for r in refs:
+        cur, prior = _cur_prior(r)
+        detail_rows.append({
+            "label": r.get("source_label", ""),
+            "v1": _to_num((cur or {}).get("value")) or 0,
+            "v2": _to_num((prior or {}).get("value")) or 0,
+        })
+    return {
+        "no": note_no, "title": f"Note {note_no}",
+        "page": (prov.get("page_index", 0) + 1) if prov else 0,
+        "linked_line": first.get("canonical_key") if first else "",
+        "linked_label": first.get("source_label") if first else "",
+        "rows": detail_rows, "reconciliation": None,
+    }
 
 
 @router.get("/{document_id}")

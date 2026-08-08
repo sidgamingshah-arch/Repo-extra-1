@@ -8,7 +8,7 @@ import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/u
 import { EmptyState } from "../components/EmptyState";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
 import type { Basis, StatementResponse, StatementRow } from "../types";
-import { useDocumentStatement, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
+import { useDocumentStatement, useEditDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
 import { SCREENS } from "./config";
@@ -315,13 +315,14 @@ export default function WorkspaceScreen() {
   };
   const activeDocumentId = useUI((s) => s.activeDocumentId);
   const usingReal = !!activeDocumentId;
-  const editable = !usingReal;   // the real workspace is read-only (edits are demo-only for now)
+  const editable = true;   // both the demo and the real workspace support value editing
   const loaded = useProjectLoaded();
   const realQ = useDocumentStatement(activeDocumentId ?? undefined, statement, dataset);
   const demoQ = useStatement(statement, dataset, locale, !usingReal);
   const data = usingReal ? realQ.data : demoQ.data;
   const isPending = usingReal ? realQ.isPending : demoQ.isPending;
   const editMut = useEditLineItem();
+  const realEditMut = useEditDocumentLineItem(activeDocumentId ?? undefined);
 
   if (!usingReal && !loaded) return <EmptyState />;
   if (usingReal && realQ.isError) return <EmptyState />;   // uploaded but not extracted yet
@@ -639,7 +640,8 @@ export default function WorkspaceScreen() {
                 key={selRowObj.id}
                 row={selRowObj}
                 onSave={(value, formula) => {
-                  editMut.mutate({ id: selRowObj.id, value, formula });
+                  if (usingReal) realEditMut.mutate({ key: selRowObj.id, value, formula });
+                  else editMut.mutate({ id: selRowObj.id, value, formula });
                   stopEditing();
                 }}
                 onCancel={cancelEdit}
