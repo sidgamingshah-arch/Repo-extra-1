@@ -78,7 +78,10 @@ class LlmSettings(BaseModel):
 
 
 class OcrSettings(BaseModel):
-    engine: str = "stub"              # paddleocr | tesseract | stub
+    # docling = recommended free, pip-only engine (layout + OCR + tables, no system binary);
+    # paddleocr / tesseract are alternatives. Default stays "stub" so the app runs offline
+    # with zero external services; set to "docling" (and install the extra) for scanned docs.
+    engine: str = "stub"              # docling | paddleocr | tesseract | stub
     languages: list[str] = Field(default_factory=lambda: ["en"])
     dpi: int = 300
 

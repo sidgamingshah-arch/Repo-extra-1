@@ -25,6 +25,8 @@ dependencies = [
 # Heavy / optional engines — kept out of the core install so the pipeline core and
 # API can run (and be tested) without pulling large ML wheels.
 pdf = ["pdfplumber>=0.11"]
+# Recommended free OCR: pip-only, no system binary, no cloud (layout + OCR + tables).
+docling = ["docling>=2.0", "Pillow>=10.2"]
 ocr = ["paddleocr>=2.7", "opencv-python-headless>=4.9", "Pillow>=10.2"]
 embeddings = ["sentence-transformers>=2.6"]
 llm = ["anthropic>=0.25"]
