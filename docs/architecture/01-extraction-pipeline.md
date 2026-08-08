@@ -87,8 +87,13 @@ centre** by a simple rule: **the LLM references facts, it never emits values.**
      inputs. The recommended **free** engine is **Docling** (`ocr.engine = "docling"`,
      `pip install -e ".[docling]"`) — pip-only, no system binary and no cloud, doing layout
      + OCR + table structure; `adapters/docling_ocr.py` maps its text items to word-level
-     tokens with normalized top-left bboxes. `paddleocr` is an alternative behind `.[ocr]`.
-     The default stays `stub` so the app runs offline with zero external services.
+     tokens with normalized top-left bboxes. For a **cloud** option, **Azure AI Document
+     Intelligence** (`ocr.engine = "azure"`, `adapters/azure_doc_intelligence.py`) runs the
+     `prebuilt-layout` model over REST (analyze + poll) and maps its word polygons to the
+     same normalized-bbox contract; endpoint/model are config, the key is read from the env
+     var named by `ocr.azure_api_key_env` (never in config/UI). `paddleocr` is another
+     alternative behind `.[ocr]`. The default stays `stub` so the app runs offline with zero
+     external services — every engine is swappable via `ocr.engine` with no pipeline change.
 2. Mapping then decides *which canonical concept* each fact is, by meaning. In
    `per_statement` mode (`extraction.mapping_scope`, the default) the LLM sees the whole
    statement's captions **by `item_id`** plus the candidate concepts + policies, and
