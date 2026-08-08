@@ -42,23 +42,83 @@ completion so all findings and partial results are available.
 11. **Confidence + validate** (`stages/confidence.py`, scaffold; combination
     implemented on `ConfidenceVector`) — run rules → review-queue items.
 
-## Mapping ensemble (semantic / description / similarity)
+## Mapping — a combination of methods, LLM as the key driver
 
-`services/mapping.py` — mapping a printed label to a canonical key is a *tiered
-ensemble*, ordered cheap→expensive, each tunable per key in the ontology:
+`services/mapping.py` — mapping a printed label to a canonical concept is a **combination
+of methods, none forced out**; the LLM is a *key driver*, not the sole authority. Each
+method contributes and they corroborate one another:
 
-1. **Exact / normalized lexical** (description) — high precision, early-exit.
-2. **Rule-based** — `regex_hints` + `keyword_hints`, minus `exclude_hints`.
-3. **Similarity / fuzzy** — `rapidfuzz` token-set; absorbs typos / word-order / OCR noise.
-4. **Semantic embeddings** — cosine vs alias embeddings; a multilingual model enables
-   cross-lingual matching (zh/ar/fr label → en canonical key).
-5. **Semantic + contextual LLM** — residual only, constrained to top-k candidates +
-   amount corroboration.
+1. **Exact / normalized lexical** — identity alias match; short-circuits (free, no tokens).
+2. **Rule / fuzzy / embedding** — every method runs and contributes candidate evidence
+   (and pre-shortlists concepts for the LLM when the ontology exceeds
+   `extraction.llm_candidate_cap`).
+3. **LLM semantic decision** (`extraction.llm_mapping`, default on) — the driver: shown
+   the caption plus candidate concepts *with their criteria* (definition, include /
+   exclude, confusable-with, value_scope) and the ontology's global policies + worked
+   examples, it chooses by **meaning**. So "Amounts due from customers" → `trade_receivables`
+   with no matching alias, and repeated "Others" captions disambiguate by section context.
 
-**Combination:** early-exit on a confident exact/rule hit; otherwise pool candidate
-scores and accept the best **only if it clears a margin over the runner-up**
-(`FINEX_MAPPING_MARGIN`) — a narrow margin routes to the review queue instead of
-guessing. Winning method + per-strategy scores are recorded on the confidence vector.
+**Combination policy:** exact wins outright; otherwise the LLM makes the call but is
+**corroborated by the deterministic methods** — agreement nudges confidence up; a strong
+lexical disagreement lowers it and flags review; the methods that agreed are recorded
+(`MappingResult.agreement`). When no LLM is configured or it abstains, the deterministic
+ensemble decides with the margin-over-runner-up accept policy. Every value also carries an
+`allocation_status` (direct / child / residual / …) so parent-child handling is auditable.
+
+Per-line LLM token usage accumulates on the pipeline context and is recorded on the
+extraction run's audit-log entry. Winning method, confidence and per-strategy scores are
+stored on the confidence vector; anything short of a confident, corroborated decision goes
+to review, not a guess.
+
+## Values & provenance — grounded extraction (LLM references, never transcribes)
+
+Value-level provenance (click-to-source) is kept trustworthy **even with the LLM at the
+centre** by a simple rule: **the LLM references facts, it never emits values.**
+
+1. The source is parsed deterministically into atomic facts, each with its exact origin:
+   - **Excel** (`services/excel_extract.py`): every numeric row → a `LineItem` whose
+     `ExtractedValue.provenance` points at the precise **sheet + cell** (e.g. `P&L!C14`).
+   - **Native PDF** (`services/pdf_extract.py` via PyMuPDF text layer): positioned words →
+     rows → line items with **page + normalized bbox** provenance; note refs ("Note 15")
+     captured, not mistaken for values.
+   - **Scanned PDF** (same path): the page is rasterized and sent to the configured **OCR
+     provider** (`ocr.engine`, e.g. `paddleocr` behind the `.[ocr]` extra); OCR words come
+     back with normalized bboxes and feed the *same* `row_reconstruct` logic (source_kind
+     `ocr`). No OCR/LLM is needed for native inputs.
+2. Mapping then decides *which canonical concept* each fact is, by meaning. In
+   `per_statement` mode (`extraction.mapping_scope`, the default) the LLM sees the whole
+   statement's captions **by `item_id`** plus the candidate concepts + policies, and
+   returns `{item_id → canonical_key, allocation_status, confidence}`. It references ids
+   and keys; the **numbers and their sheet/cell (or page/bbox) come from step 1**, so a
+   value can always be traced back and verified. `per_line` maps each caption
+   independently (less context, cheaper).
+
+This is how accuracy (full-statement LLM context for containment/residual/"Others") and
+hard value-level provenance coexist: the model does the semantics, the deterministic layer
+owns the numbers and their location.
+
+**In the UI.** An uploaded document's extraction is shown at `/documents/:id`
+(`ExtractionView`): each value's provenance is a click-to-source chip, and the source panel
+adapts to the source kind:
+- **PDF** — clicking renders that page, server-rasterized to PNG via
+  `GET /documents/{id}/pages/{n}/image` (PyMuPDF), and draws the value's normalized bbox as
+  an overlay (percent-positioned, so it survives any display scale).
+- **Excel** — clicking a `Sheet!Cell` chip fetches a window of surrounding cells via
+  `GET /documents/{id}/cell-context?sheet=&cell=` (`services/excel_extract.cell_context`)
+  and renders a mini spreadsheet grid with the exact origin cell highlighted — the
+  spreadsheet analogue of the PDF overlay, so click-to-source is uniform across formats.
+
+The run is mapped against the seeded reference ontology (`app/sample/reference.py` upserts
+the HKFRS template + ontology at startup), so the "mapped to" column populates — via the
+LLM when reachable, else the deterministic alias tier offline.
+
+**Row reconstruction robustness.** `services/row_reconstruct.py` groups positioned words
+(native text layer *or* OCR) into visual rows, then folds a **wrapped label** — a label
+that breaks across two tightly-spaced, left-aligned lines (e.g. "Property, plant and" /
+"equipment 12,500") — back into one line item so the caption isn't truncated to its last
+fragment. The merge is deliberately conservative (paragraph-tight vertical gap + label-
+column alignment, with an ALL-CAPS/`:`-suffixed section-header guard) so headings are never
+swallowed into the item below them.
 
 ## Adapter ports
 

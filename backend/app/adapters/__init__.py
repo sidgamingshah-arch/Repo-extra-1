@@ -33,6 +33,20 @@ def register_builtins() -> None:
 
     registry.register("llm", "anthropic", AnthropicLlmProvider)
 
+    # OpenAI-compatible adapter (OpenAI, TokenRouter, OpenRouter, vLLM, …) — selected
+    # when llm.provider = "openai" / "openai_compatible". Uses httpx at call time; the
+    # base_url + model come from config.toml [llm], the key from llm.api_key_env.
+    from .openai_llm import OpenAiLlmProvider
+
+    registry.register("llm", "openai", OpenAiLlmProvider)
+    registry.register("llm", "openai_compatible", OpenAiLlmProvider)
+
+    # Real OCR adapter (scanned pages) — registered under its id so it's available when
+    # ocr.engine = "paddleocr". Lazy: needs the 'ocr' extra + models only on first use.
+    from .paddle_ocr import PaddleOcrProvider
+
+    registry.register("ocr", "paddleocr", PaddleOcrProvider)
+
     registry.register(
         "object_store", "local",
         lambda: LocalObjectStore(settings.object_store_root),

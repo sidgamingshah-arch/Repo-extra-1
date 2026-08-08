@@ -73,7 +73,9 @@ class OntologyVersion(Base):
 class ExtractionRun(Base):
     __tablename__ = "extraction_runs"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # Human-readable id: entity-slug + timestamp (see services.audit.make_run_id);
+    # widened past a bare UUID to hold the entity prefix.
+    id: Mapped[str] = mapped_column(String(96), primary_key=True, default=_uuid)
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"))
     template_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     ontology_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

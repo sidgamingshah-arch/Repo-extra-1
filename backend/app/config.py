@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from pydantic_settings import (
@@ -52,6 +53,14 @@ class FeatureSettings(BaseModel):
     # Localize the whole UI (not just extracted financial output). Startup default;
     # an admin can flip it at runtime from the Settings screen.
     ui_localization: bool = False
+    # Require a second-person reviewer SIGN-OFF on the analyst's output. When False the
+    # workflow closes at the analyst (they finalize & export directly). This governs the
+    # sign-off/hand-off only — the human-in-the-loop Review Queue (checks + low-confidence
+    # QA) stays available to the analyst either way. Admin-flippable at runtime.
+    review_required: bool = True
+    # Load the seeded sample project at startup. Off by default → the app starts
+    # greenfield (empty); an admin can load/clear the sample at runtime from Settings.
+    seed_demo: bool = False
     default_output_locale: str = "en"
     supported_locales: list[str] = Field(default_factory=lambda: ["en", "zh", "ar", "fr"])
 
@@ -95,6 +104,17 @@ class ExtractionSettings(BaseModel):
     auto_accept_confidence: float = 0.80
     recon_abs_tolerance: float = 1.0
     recon_rel_tolerance: float = 0.005
+    # Mapping strategy. When an LLM provider is configured, mapping is DESCRIPTION-BASED:
+    # the model chooses the canonical concept by meaning (using each candidate's
+    # description), not string similarity. The lexical/fuzzy tiers only pre-shortlist
+    # candidates. Set false to force the deterministic ensemble even with an LLM present.
+    llm_mapping: bool = True
+    llm_candidate_cap: int = 40   # max candidate concepts shown to the LLM per line
+    # Mapping granularity. "per_statement" (default, most accurate) maps all of a
+    # statement's lines in ONE LLM call so cross-line judgements — parent/child
+    # containment, residualisation, "Others" handling — have full context. "per_line"
+    # maps each line independently (cheaper, less context-aware).
+    mapping_scope: Literal["per_statement", "per_line"] = "per_statement"
 
 
 class Settings(BaseSettings):

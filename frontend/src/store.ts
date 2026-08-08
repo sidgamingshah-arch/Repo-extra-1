@@ -12,13 +12,14 @@
 import { create } from "zustand";
 
 import { getToken, setStoredToken } from "./lib/api";
-import type { Basis, ExportFmt, Locale, StatementKey } from "./types";
+import type { Basis, ExportFmt, ExtractMode, Locale, StatementKey } from "./types";
 
 interface UIState {
   locale: Locale; // output/data language
   uiLocalization: boolean; // admin flag: localize whole UI (from /settings)
   token: string | null; // session token
 
+  extractMode: ExtractMode; // chosen at upload: auto-extract vs confirm page scope
   dataset: Basis;
   statement: StatementKey;
   sel: string; // selected line-item id in the workspace
@@ -31,6 +32,7 @@ interface UIState {
   setLocale: (l: Locale) => void;
   setUiLocalization: (v: boolean) => void;
   setToken: (t: string | null) => void;
+  setExtractMode: (m: ExtractMode) => void;
   setDataset: (b: Basis) => void;
   setStatement: (s: StatementKey) => void;
   selRow: (id: string) => void;
@@ -48,6 +50,7 @@ export const useUI = create<UIState>((set) => ({
   locale: "en",
   uiLocalization: false,
   token: getToken(),
+  extractMode: "auto",
   dataset: "consolidated",
   statement: "balance_sheet",
   sel: "trade_recv",
@@ -63,6 +66,7 @@ export const useUI = create<UIState>((set) => ({
     setStoredToken(token);
     set({ token });
   },
+  setExtractMode: (extractMode) => set({ extractMode }),
   setDataset: (dataset) => set({ dataset }),
   setStatement: (statement) => set({ statement, sel: "" }),
   selRow: (sel) => set({ sel, editing: false }),

@@ -41,9 +41,13 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 import type {
   AppSettings,
+  AuditEntry,
+  AuditResponse,
   Basis,
+  CellContext,
   Commentary,
   DemoUser,
+  ExtractionRunResponse,
   ExportFmt,
   IntegrityResponse,
   Locale,
@@ -51,9 +55,12 @@ import type {
   Me,
   NoteDetail,
   NotesResponse,
+  OntologyRef,
   PagesResponse,
-  Project,
+  ProjectResponse,
   ReviewResponse,
+  TemplateRef,
+  SettingsPatch,
   SourceDoc,
   StatementKey,
   StatementResponse,
@@ -73,11 +80,52 @@ export const api = {
   me: () => req<Me>(`/me`),
   // --- settings ---
   settings: () => req<AppSettings>(`/settings`),
-  patchSettings: (body: { ui_localization?: boolean }) =>
+  patchSettings: (body: SettingsPatch) =>
     req<AppSettings>(`/settings`, { method: "PATCH", body: JSON.stringify(body) }),
+  submitForReview: () =>
+    req<{ ok: boolean; entry: AuditEntry }>(`/projects/${PROJECT}/submit-review`, { method: "POST" }),
   commentary: (locale: Locale = "en") =>
     req<Commentary>(`/projects/${PROJECT}/commentary?locale=${locale}`),
-  project: () => req<{ project: Project; documents: SourceDoc[] }>(`/projects/${PROJECT}`),
+  audit: () => req<AuditResponse>(`/projects/${PROJECT}/audit`),
+  runAnalysis: () =>
+    req<{ entry: AuditEntry; result: unknown }>(`/projects/${PROJECT}/analysis`, { method: "POST" }),
+  project: () => req<ProjectResponse>(`/projects/${PROJECT}`),
+  documents: () => req<{ documents: SourceDoc[] }>(`/documents`),
+  ontologies: () => req<OntologyRef[]>(`/ontologies`),
+  templates: () => req<TemplateRef[]>(`/templates`),
+  runExtraction: (
+    documentId: string,
+    body: { ontology_version_id?: string; template_version_id?: string } = {},
+  ) =>
+    req<ExtractionRunResponse>(`/documents/${documentId}/extractions`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /** A window of spreadsheet cells around a value's origin — the Excel click-to-source
+   * backdrop (mirrors fetchPageImage for PDFs). */
+  cellContext: (documentId: string, sheet: string, cell: string) =>
+    req<CellContext>(
+      `/documents/${documentId}/cell-context?sheet=${encodeURIComponent(sheet)}&cell=${encodeURIComponent(cell)}`,
+    ),
+  /** PNG of a PDF page (auth'd fetch → blob), used as the click-to-source backdrop. */
+  fetchPageImage: async (documentId: string, pageIndex: number): Promise<Blob> => {
+    const res = await fetch(`${BASE}/documents/${documentId}/pages/${pageIndex}/image`, {
+      headers: { ...authHeader() },
+    });
+    if (!res.ok) throw new ApiError(res.status, `${res.status} ${res.statusText}`);
+    return res.blob();
+  },
+  uploadDocument: async (file: File): Promise<{ id: string; page_count: number; integrity_report: unknown }> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    // No JSON Content-Type — let the browser set the multipart boundary.
+    const res = await fetch(`${BASE}/documents`, { method: "POST", headers: { ...authHeader() }, body: fd });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`);
+    }
+    return res.json();
+  },
   integrity: (locale: Locale = "en") =>
     req<IntegrityResponse>(`/projects/${PROJECT}/integrity?locale=${locale}`),
   pages: (locale: Locale = "en") =>

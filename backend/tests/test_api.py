@@ -27,6 +27,23 @@ def test_upload_document_returns_integrity_and_pages(client):
     assert r2.json()["duplicate_of"] is not None
 
 
+def test_documents_upload_gated_and_listed(anon_client, auth):
+    pdf_bytes = make_native_pdf()
+    # Analyst may upload (documents:manage) …
+    r = anon_client.post("/api/v1/documents", files={"file": ("g.pdf", pdf_bytes, "application/pdf")},
+                         headers=auth("analyst"))
+    assert r.status_code == 201, r.text
+    # … but a reviewer may not.
+    r2 = anon_client.post("/api/v1/documents", files={"file": ("g2.pdf", pdf_bytes, "application/pdf")},
+                          headers=auth("reviewer"))
+    assert r2.status_code == 403
+    # The uploaded document shows up in the real documents list.
+    listed = anon_client.get("/api/v1/documents", headers=auth("analyst")).json()["documents"]
+    assert any(d["name"] == "g.pdf" and d["ext"] == "PDF" for d in listed)
+    # Listing requires a session.
+    assert anon_client.get("/api/v1/documents").status_code == 401
+
+
 def test_template_and_ontology_create_and_language_parity(client):
     template = {
         "template_key": "api_tpl",
@@ -67,3 +84,29 @@ def test_ontology_rejects_unknown_template(client):
     ontology = {"ontology_key": "orphan", "target_template_key": "nope", "mappings": []}
     r = client.post("/api/v1/ontologies", json={"definition": ontology}, headers={"X-Role": "admin"})
     assert r.status_code == 422
+
+
+def test_extraction_confirm_scope_defaults_to_auto(client):
+    """confirm_scope defaults to False (auto mode) and round-trips when set."""
+    pdf_bytes = make_native_pdf()
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("bs.pdf", pdf_bytes, "application/pdf")}
+    ).json()["id"]
+
+    # Default: no confirm_scope in body → auto mode (False).
+    r = client.post(f"/api/v1/documents/{doc_id}/extractions", json={})
+    assert r.status_code == 202, r.text
+    run_id = r.json()["run_id"]
+    from app.db.base import SessionLocal
+    from app.db.models import ExtractionRun
+
+    with SessionLocal() as s:
+        assert s.get(ExtractionRun, run_id).options["confirm_scope"] is False
+
+    # Explicit confirm mode round-trips.
+    r = client.post(
+        f"/api/v1/documents/{doc_id}/extractions", json={"confirm_scope": True}
+    )
+    assert r.status_code == 202, r.text
+    with SessionLocal() as s:
+        assert s.get(ExtractionRun, r.json()["run_id"]).options["confirm_scope"] is True

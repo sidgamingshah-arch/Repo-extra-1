@@ -69,6 +69,30 @@ in-memory session store with a shared, persistent one (Redis / signed JWT); back
 seeded users with a real user store or an IdP (OIDC/SAML). None of this changes the
 permission matrix or the API contract.
 
+## LLM provider selection
+
+`config.toml [llm].provider` chooses the adapter the registry hands out (`app/adapters`):
+
+- **`anthropic`** — Anthropic Messages API via the official SDK (`anthropic_llm.py`).
+- **`openai` / `openai_compatible`** — the OpenAI **Chat Completions** wire format
+  (`openai_llm.py`, via `httpx`), so any compatible gateway works — OpenAI, TokenRouter,
+  OpenRouter, a self-hosted vLLM — with a `vendor/model` id (e.g. `moonshotai/kimi-k3-free`).
+  Set `base_url` to the gateway (ending in `/v1`) and point `api_key_env` at the key's env var.
+- **`stub` / `local`** — offline / no-op.
+
+Both real adapters get structured output the same model-agnostic way (JSON Schema embedded
+in the system prompt, Pydantic-validated — shared in `adapters/_structured.py`) and return
+input/output token usage in `LlmMeta` for the audit log. Keys are read from the environment
+at call time, never from `config.toml`.
+
+**Editable at runtime.** An admin can change the LLM configuration (provider, model,
+base_url, temperature, max_tokens, timeout, and the *name* of the key's env var) live from
+the Settings screen — `PATCH /settings {"llm": {…}}`. `settings_state.set_llm_config`
+applies the edit onto the process-wide `Settings.llm` so the provider registry and adapters
+pick it up immediately (in-memory, per-process; resets on restart). The **API key itself is
+never accepted from the UI** — only `api_key_env` is editable; the snapshot reports whether
+that env var is currently populated (`key_configured`).
+
 ## Frontend flow
 
 `frontend/src/lib/api.ts` sends the stored bearer token on every request and exposes

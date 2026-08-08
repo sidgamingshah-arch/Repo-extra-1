@@ -28,51 +28,67 @@ class Role(str, Enum):
 
 
 class Permission(str, Enum):
-    # configuration — admin-controlled
-    CONFIG_TEMPLATE = "config:template"
+    # configuration & oversight — admin-controlled
+    CONFIG_TEMPLATE = "config:template"     # author/edit templates
     CONFIG_ONTOLOGY = "config:ontology"
     CONFIG_SCOPE = "config:scope"
     CONFIG_EXPORT = "config:export"
-    CONFIG_SETTINGS = "config:settings"   # LLM / feature-flag / interface settings
-    DOCUMENTS_MANAGE = "documents:manage"
-    ADMIN_USERS = "admin:users"
+    CONFIG_SETTINGS = "config:settings"     # LLM config / feature flags / interface / review toggle
+    DOCUMENTS_MANAGE = "documents:manage"   # upload source documents
+    ADMIN_USERS = "admin:users"             # manage users
+    AUDIT_VIEW = "audit:view"               # inspect the run/token audit log
     # working permissions
+    TEMPLATE_SELECT = "template:select"     # choose an existing output template (not author)
+    PIPELINE_RUN = "pipeline:run"           # run the extraction pipeline end to end
     EXTRACTION_VIEW = "extraction:view"
     EXTRACTION_EDIT = "extraction:edit"
     REVIEW_VIEW = "review:view"
     REVIEW_RESOLVE = "review:resolve"
+    REVIEW_SUBMIT = "review:submit"         # analyst sends final output for review
+    REVIEW_FINALIZE = "review:finalize"     # reviewer finalizes the output
     NOTES_VIEW = "notes:view"
     COMMENTARY_VIEW = "commentary:view"
+    ANALYSIS_RUN = "analysis:run"           # trigger a live LLM financial-analysis run
     EXPORT_RUN = "export:run"
     INTEGRITY_VIEW = "integrity:view"
 
 
 _ALL = set(Permission)
 
+# Base role→permission map. The three roles model a linear workflow:
+#   Analyst  — upload, pick a template, run the pipeline end to end, submit for review.
+#   Reviewer — review, correct and finalize the output, then deliver it.
+#   Admin    — configuration (templates/ontology/LLM/settings), users and audit logs.
+# EXPORT_RUN vs REVIEW_SUBMIT for the analyst is resolved at runtime by the
+# ``review_required`` flag (see ``effective_permissions``).
 PERMISSIONS: dict[Role, set[Permission]] = {
     Role.ADMIN: set(_ALL),
     Role.REVIEWER: {
         Permission.EXTRACTION_VIEW, Permission.EXTRACTION_EDIT,
-        Permission.REVIEW_VIEW, Permission.REVIEW_RESOLVE,
-        Permission.NOTES_VIEW, Permission.COMMENTARY_VIEW,
+        Permission.REVIEW_VIEW, Permission.REVIEW_RESOLVE, Permission.REVIEW_FINALIZE,
+        Permission.NOTES_VIEW, Permission.COMMENTARY_VIEW, Permission.ANALYSIS_RUN,
         Permission.EXPORT_RUN, Permission.INTEGRITY_VIEW,
-        Permission.CONFIG_SCOPE,  # reviewers may adjust page scope, not template/ontology
     },
     Role.ANALYST: {
+        Permission.DOCUMENTS_MANAGE, Permission.TEMPLATE_SELECT, Permission.PIPELINE_RUN,
+        Permission.CONFIG_SCOPE,  # analysts confirm page scope as part of running the pipeline
         Permission.EXTRACTION_VIEW, Permission.EXTRACTION_EDIT,
-        Permission.REVIEW_VIEW, Permission.NOTES_VIEW,
-        Permission.COMMENTARY_VIEW, Permission.EXPORT_RUN,
-        Permission.INTEGRITY_VIEW,
+        Permission.NOTES_VIEW, Permission.COMMENTARY_VIEW, Permission.ANALYSIS_RUN,
+        Permission.INTEGRITY_VIEW, Permission.REVIEW_SUBMIT, Permission.EXPORT_RUN,
     },
 }
 
-# Which screens each role sees (drives the frontend nav; the analyst flow is lean).
+# Which screens each role sees (drives the frontend nav). The Review Queue is the
+# human-in-the-loop QA surface (balance/subtotal/sign checks + low-confidence items) and
+# is available to everyone who works an extraction — the analyst included — independent
+# of the ``review_required`` flag. That flag governs only the second-person reviewer
+# SIGN-OFF (analyst submits vs. finalizes), never the QA screen itself.
 SCREENS_BY_ROLE: dict[Role, list[str]] = {
     Role.ADMIN: ["upload", "integrity", "scope", "workspace", "notes", "review",
                  "commentary", "template", "settings", "export"],
-    Role.REVIEWER: ["upload", "integrity", "scope", "workspace", "notes", "review",
-                    "commentary", "export"],
-    Role.ANALYST: ["workspace", "notes", "commentary", "export"],
+    Role.REVIEWER: ["integrity", "workspace", "notes", "review", "commentary", "export"],
+    Role.ANALYST: ["upload", "integrity", "scope", "workspace", "notes", "review",
+                   "commentary", "export"],
 }
 
 
@@ -139,8 +155,34 @@ def permissions_for(role: Role) -> set[Permission]:
     return PERMISSIONS.get(role, set())
 
 
+def effective_permissions(role: Role) -> set[Permission]:
+    """Static role permissions adjusted for the runtime ``review_required`` flag.
+
+    When review is required the analyst *submits* the output for review and cannot
+    deliver it (no EXPORT_RUN); when review is disabled the workflow closes at the
+    analyst, who finalizes and exports directly (no REVIEW_SUBMIT). Other roles are
+    unaffected.
+    """
+    from app.services.settings_state import get_review_required
+
+    perms = set(permissions_for(role))
+    if role is Role.ANALYST:
+        if get_review_required():
+            perms.discard(Permission.EXPORT_RUN)
+        else:
+            perms.discard(Permission.REVIEW_SUBMIT)
+    return perms
+
+
+def screens_for(role: Role) -> list[str]:
+    """Screens visible to a role. The Review Queue (human-in-the-loop QA) is NOT gated
+    by ``review_required`` — that flag only affects the reviewer sign-off, handled via
+    ``effective_permissions`` (analyst submit vs. export)."""
+    return list(SCREENS_BY_ROLE.get(role, []))
+
+
 def has_permission(role: Role, perm: Permission) -> bool:
-    return perm in permissions_for(role)
+    return perm in effective_permissions(role)
 
 
 def require(perm: Permission):

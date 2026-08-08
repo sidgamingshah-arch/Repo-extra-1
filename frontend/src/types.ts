@@ -4,6 +4,11 @@ import type { ConfCat } from "./theme";
 export type Locale = "en" | "zh" | "ar" | "fr";
 export type Role = "admin" | "reviewer" | "analyst";
 export type Basis = "consolidated" | "standalone";
+/** How the pipeline proceeds after the integrity check:
+ *  - `auto`    — detect statement pages and extract in one pass (default).
+ *  - `confirm` — pause on the Page Scope screen so the user reviews/adjusts
+ *                the detected pages before extraction. */
+export type ExtractMode = "auto" | "confirm";
 
 export interface Me {
   authenticated: boolean;
@@ -57,9 +62,46 @@ export interface Commentary {
   basis: string;
 }
 
+/** One row of the audit log — a past LLM/extraction run and its token usage. */
+export interface AuditEntry {
+  run_id: string;
+  entity: string;
+  action: "analysis" | "extraction" | "submit_review" | string;
+  provider: string;
+  model: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  status: "succeeded" | "failed";
+  created_at: string;
+}
+export interface AuditResponse {
+  entries: AuditEntry[];
+}
+
+/** Editable (non-secret) LLM configuration fields — the API key is never sent. */
+export interface LlmConfigPatch {
+  provider?: string;
+  model?: string;
+  base_url?: string;
+  temperature?: number;
+  max_tokens?: number;
+  timeout_seconds?: number;
+  api_key_env?: string;
+}
+/** Runtime-mutable settings an admin can PATCH. */
+export interface SettingsPatch {
+  ui_localization?: boolean;
+  review_required?: boolean;
+  seed_demo?: boolean;
+  llm?: LlmConfigPatch;
+}
+
 export interface AppSettings {
   features: {
     ui_localization: boolean;
+    review_required: boolean;
+    seed_demo: boolean;
     default_output_locale: string;
     supported_locales: string[];
   };
@@ -157,10 +199,82 @@ export interface Project {
 }
 
 export interface SourceDoc {
+  id?: string;
   name: string;
   ext: string;
   meta: string;
   tag: "Mixed" | "Native" | "Scanned";
+}
+export interface ProjectResponse {
+  project: Project;
+  documents: SourceDoc[];
+  loaded: boolean;
+}
+
+/** Provenance of an extracted value — sheet+cell (Excel) or page+bbox (PDF). */
+export interface ExtractionProvenance {
+  source_kind: string;
+  page_index: number;
+  sheet: string | null;
+  cell: string | null;
+  label_cell: string | null;
+  bbox: { x0: number; y0: number; x1: number; y1: number } | null;
+  text_snippet: string | null;
+}
+export interface ExtractionValue {
+  period_label: string;
+  value: string | null;
+  provenance: ExtractionProvenance | null;
+}
+export interface ExtractionRow {
+  source_label: string;
+  canonical_key: string | null;
+  note: string | null;
+  role: string;
+  mapping_method: string | null;
+  mapping_confidence: number | null;
+  flags: string[];
+  values: ExtractionValue[];
+}
+export interface ExtractionResult {
+  locale: string;
+  format: string;
+  filename: string;
+  line_item_count: number;
+  notes: number;
+  rows: ExtractionRow[];
+}
+export interface ExtractionRunResponse {
+  run_id: string;
+  status: string;
+  result: ExtractionResult;
+}
+/** A window of spreadsheet cells around a value's origin (Excel click-to-source). */
+export interface CellContextCell {
+  ref: string;
+  value: string;
+  is_target: boolean;
+  numeric: boolean;
+}
+export interface CellContext {
+  sheet: string;
+  target: string;
+  col_letters: string[];
+  row_numbers: number[];
+  grid: CellContextCell[][];
+}
+export interface OntologyRef {
+  id: string;
+  ontology_key: string;
+  target_template_key: string;
+  version: number;
+}
+export interface TemplateRef {
+  id: string;
+  template_key: string;
+  name: string;
+  version: number;
+  is_published: boolean;
 }
 
 export interface IntegrityStat {

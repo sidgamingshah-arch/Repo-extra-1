@@ -22,6 +22,11 @@ class PipelineContext:
     raw_bytes: bytes | None = None            # original uploaded file
     logs: list[str] = field(default_factory=list)
     progress_cb: Callable[[str, float], None] | None = None
+    # LLM usage accumulated across stages (description-based mapping, …) for the audit log.
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+    llm_calls: int = 0
+    llm_model: str = ""
 
     def log(self, message: str) -> None:
         self.logs.append(message)

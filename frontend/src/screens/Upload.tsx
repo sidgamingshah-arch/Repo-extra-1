@@ -1,11 +1,13 @@
 /** Screen 1 — Documents & Template. Source docs dropzone + list, output template,
  * and ontology. Mirrors wireframe scrUpload verbatim. */
+import { useRef } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button, Card } from "../components/ui";
 import { color, font, radius } from "../theme";
-import type { SourceDoc } from "../types";
-import { useProject } from "../lib/queries";
+import type { ExtractMode, SourceDoc } from "../types";
+import { useDocuments, useProject, useUploadDocument } from "../lib/queries";
+import { useUI } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
 import { SCREENS } from "./config";
@@ -23,7 +25,7 @@ function tagColors(tag: SourceDoc["tag"]): { bg: string; fg: string } {
   return { bg: color.indigoTint2, fg: color.indigo };
 }
 
-function DocRow({ doc }: { doc: SourceDoc }) {
+function DocRow({ doc, onView }: { doc: SourceDoc; onView?: () => void }) {
   const ext = extColors(doc.ext);
   const tag = tagColors(doc.tag);
   return (
@@ -71,16 +73,119 @@ function DocRow({ doc }: { doc: SourceDoc }) {
       >
         {doc.tag}
       </span>
+      {onView && (
+        <button
+          onClick={onView}
+          style={{
+            fontSize: 11, fontWeight: 600, color: color.indigo, background: "none",
+            border: "none", cursor: "pointer", whiteSpace: "nowrap", padding: 0,
+          }}
+        >
+          View →
+        </button>
+      )}
     </div>
+  );
+}
+
+/** One selectable extraction-mode tile (radio semantics). */
+function ModeOption({
+  value,
+  selected,
+  onSelect,
+  glyph,
+  title,
+  desc,
+  badge,
+}: {
+  value: ExtractMode;
+  selected: boolean;
+  onSelect: (v: ExtractMode) => void;
+  glyph: string;
+  title: string;
+  desc: string;
+  badge?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={() => onSelect(value)}
+      style={{
+        flex: 1,
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 11,
+        textAlign: "start",
+        padding: 13,
+        borderRadius: 10,
+        cursor: "pointer",
+        fontFamily: font.sans,
+        background: selected ? color.indigoTint : "#fff",
+        border: `1.5px solid ${selected ? color.indigo : color.hairline3}`,
+      }}
+    >
+      {/* radio dot */}
+      <span
+        aria-hidden
+        style={{
+          marginTop: 2,
+          width: 16,
+          height: 16,
+          borderRadius: "50%",
+          flex: "0 0 auto",
+          border: `1.5px solid ${selected ? color.indigo : color.controlBorder}`,
+          background: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {selected && (
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: color.indigo }} />
+        )}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600 }}>
+            <span style={{ color: color.faint, marginInlineEnd: 6 }}>{glyph}</span>
+            {title}
+          </span>
+          {badge && (
+            <span
+              style={{
+                fontSize: 9.5,
+                fontWeight: 600,
+                padding: "2px 7px",
+                borderRadius: radius.pill,
+                background: color.greenBg2,
+                color: color.greenFg,
+              }}
+            >
+              {badge}
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: 11.5, color: color.sec2, lineHeight: 1.45 }}>{desc}</div>
+      </div>
+    </button>
   );
 }
 
 export default function UploadScreen() {
   const navigate = useNavigate();
   const t = useT();
-  const canTemplate = useCan("config:template");
+  const canTemplate = useCan("config:template"); // author/edit templates (admin)
+  const canSelectTemplate = useCan("template:select"); // choose an existing one (analyst)
   const canOntology = useCan("config:ontology");
+  const canUpload = useCan("documents:manage");
+  const extractMode = useUI((s) => s.extractMode);
+  const setExtractMode = useUI((s) => s.setExtractMode);
   const { data, isPending } = useProject();
+  const { data: docsData } = useDocuments();
+  const upload = useUploadDocument();
+  const fileRef = useRef<HTMLInputElement>(null);
 
   if (isPending || !data) {
     return (
@@ -88,8 +193,17 @@ export default function UploadScreen() {
     );
   }
 
-  const { project, documents } = data;
+  const { project } = data;
   const tpl = project.template;
+  // Real uploaded documents take precedence; fall back to the sample's docs when loaded.
+  const realDocs = docsData?.documents ?? [];
+  const documents: SourceDoc[] = realDocs.length ? realDocs : data.documents;
+
+  const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) upload.mutate(file);
+    e.target.value = ""; // allow re-selecting the same file
+  };
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto", padding: "26px 30px 60px" }}>
@@ -112,24 +226,67 @@ export default function UploadScreen() {
             <span style={{ fontWeight: 600, fontSize: 14 }}>{t("u.srcDocs")}</span>
             <span style={{ fontSize: 11, color: color.sec2 }}>{t("u.srcTypes")}</span>
           </div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".pdf,.xlsx,.xls,.png,.jpg,.jpeg,.tif,.tiff"
+            onChange={onPick}
+            style={{ display: "none" }}
+          />
           <div
+            role={canUpload ? "button" : undefined}
+            tabIndex={canUpload ? 0 : undefined}
+            onClick={() => canUpload && fileRef.current?.click()}
+            onKeyDown={(e) => {
+              if (canUpload && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fileRef.current?.click(); }
+            }}
+            onDragOver={(e) => canUpload && e.preventDefault()}
+            onDrop={(e) => {
+              if (!canUpload) return;
+              e.preventDefault();
+              const f = e.dataTransfer.files?.[0];
+              if (f) upload.mutate(f);
+            }}
             style={{
-              border: `1.5px dashed ${color.dashed}`,
+              border: `1.5px dashed ${upload.isError ? color.redFg : color.dashed}`,
               borderRadius: 10,
               background: color.rowAltBg,
               padding: 26,
               textAlign: "center",
               marginBottom: 14,
+              cursor: canUpload ? "pointer" : "not-allowed",
+              opacity: canUpload ? 1 : 0.6,
             }}
           >
             <div style={{ fontSize: 26, color: color.faint, marginBottom: 6 }}>⬍</div>
             <div style={{ fontWeight: 600, marginBottom: 3 }}>
-              {t("u.dropHere")} <span style={{ color: color.indigo }}>{t("u.browse")}</span>
+              {upload.isPending ? (
+                t("u.uploading")
+              ) : (
+                <>
+                  {t("u.dropHere")}{" "}
+                  <span style={{ color: color.indigo, textDecoration: "underline", textUnderlineOffset: 2 }}>
+                    {t("u.browse")}
+                  </span>
+                </>
+              )}
             </div>
             <div style={{ fontSize: 11.5, color: color.muted }}>{t("u.dropHint")}</div>
+            {upload.isError && (
+              <div style={{ fontSize: 11, color: color.redFg, marginTop: 8 }}>
+                {t("u.uploadFailed")}: {(upload.error as Error)?.message}
+              </div>
+            )}
+            {!canUpload && (
+              <div style={{ fontSize: 11, color: color.muted, marginTop: 8 }}>{t("u.uploadNoPerm")}</div>
+            )}
           </div>
           {documents.map((d) => (
-            <DocRow key={d.name} doc={d} />
+            <DocRow
+              key={d.id ?? d.name}
+              doc={d}
+              onView={d.id ? () => navigate(`/documents/${d.id}`) : undefined}
+            />
           ))}
         </Card>
 
@@ -171,20 +328,24 @@ export default function UploadScreen() {
               </div>
               <span style={{ fontSize: 11, color: color.indigo, fontWeight: 600 }}>{t("u.selected")}</span>
             </div>
-            {canTemplate && (
+            {(canSelectTemplate || canTemplate) && (
               <div style={{ display: "flex", gap: 8 }}>
+                {/* Analysts may choose an existing template… */}
                 <Button
                   variant="secondary"
                   style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
                 >
                   {t("u.chooseAnother")}
                 </Button>
-                <Button
-                  variant="ghost"
-                  style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
-                >
-                  {t("u.newTemplate")}
-                </Button>
+                {/* …but authoring a new template is an admin configuration action. */}
+                {canTemplate && (
+                  <Button
+                    variant="ghost"
+                    style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
+                  >
+                    {t("u.newTemplate")}
+                  </Button>
+                )}
               </div>
             )}
           </Card>
@@ -259,6 +420,33 @@ export default function UploadScreen() {
           </Card>
         </div>
       </div>
+
+      {/* 4 · Extraction mode — auto (default) vs confirm page scope */}
+      <Card style={{ marginTop: 18 }}>
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 3 }}>{t("u.mode")}</div>
+        <p style={{ margin: "0 0 12px", fontSize: 11.5, color: color.sec2, lineHeight: 1.5 }}>
+          {t("u.modeHint")}
+        </p>
+        <div role="radiogroup" aria-label={t("u.mode")} style={{ display: "flex", gap: 12 }}>
+          <ModeOption
+            value="auto"
+            selected={extractMode === "auto"}
+            onSelect={setExtractMode}
+            glyph="⚡"
+            title={t("u.autoTitle")}
+            desc={t("u.autoDesc")}
+            badge={t("u.autoRec")}
+          />
+          <ModeOption
+            value="confirm"
+            selected={extractMode === "confirm"}
+            onSelect={setExtractMode}
+            glyph="▦"
+            title={t("u.confirmTitle")}
+            desc={t("u.confirmDesc")}
+          />
+        </div>
+      </Card>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
         <Button variant="secondary" style={{ padding: "10px 18px" }}>

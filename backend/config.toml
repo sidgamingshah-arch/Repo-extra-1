@@ -43,6 +43,16 @@ session_ttl_minutes = 480
 # startup default.
 ui_localization = false
 
+# Require a second-person reviewer sign-off on the analyst's output. When false the
+# workflow closes at the analyst level (they finalize & export directly). This governs
+# the sign-off/hand-off only — the human-in-the-loop Review Queue (checks + low-confidence
+# QA) stays available to the analyst regardless. Startup default; admin-flippable.
+review_required = true
+
+# Load the seeded sample project at startup. False → the app starts greenfield
+# (empty); an admin can load or clear the sample at runtime from the Settings screen.
+seed_demo = false
+
 # Default output language for extracted financial data, and the set of languages the
 # app offers. Adding a language is a data/asset change, not a code change.
 default_output_locale = "en"
@@ -54,7 +64,11 @@ supported_locales = ["en", "zh", "ar", "fr"]
 # configures whichever adapter is selected.
 # ---------------------------------------------------------------------------
 [llm]
-provider = "anthropic"          # anthropic | openai | local | stub
+# anthropic          → Anthropic Messages API (SDK)
+# openai / openai_compatible → OpenAI Chat Completions wire format (OpenAI, TokenRouter,
+#                      OpenRouter, vLLM, …); set base_url + a vendor/model id below
+# local | stub       → offline / no-op
+provider = "anthropic"
 model = "claude-opus-4-8"       # default model id for the selected provider
 temperature = 0.0               # deterministic output for structured extraction
 max_tokens = 4096

@@ -9,10 +9,12 @@ from .rbac import (
     Role,
     current_principal,
     current_role,
+    effective_permissions,
     has_permission,
     parse_role,
     permissions_for,
     require,
+    screens_for,
 )
 from .session import (
     USERS,
@@ -27,8 +29,8 @@ from .session import (
 
 __all__ = [
     "PERMISSIONS", "SCREENS_BY_ROLE", "Permission", "Principal", "Role",
-    "current_principal", "current_role", "has_permission", "parse_role",
-    "permissions_for", "require",
+    "current_principal", "current_role", "effective_permissions", "has_permission",
+    "parse_role", "permissions_for", "require", "screens_for",
     "USERS", "Session", "User", "authenticate", "create_session", "demo_users",
     "destroy_session", "resolve_session",
 ]

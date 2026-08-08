@@ -1,7 +1,7 @@
 /** React Query hooks — the data layer each screen consumes. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { Basis, Locale, StatementKey } from "../types";
+import type { Basis, Locale, SettingsPatch, StatementKey } from "../types";
 import { useUI } from "../store";
 import { api } from "./api";
 
@@ -50,18 +50,88 @@ export function usePatchSettings() {
   const qc = useQueryClient();
   const setUiLocalization = useUI((s) => s.setUiLocalization);
   return useMutation({
-    mutationFn: (body: { ui_localization?: boolean }) => api.patchSettings(body),
+    mutationFn: (body: SettingsPatch) => api.patchSettings(body),
     onSuccess: (res) => {
       setUiLocalization(res.features.ui_localization);
       qc.setQueryData(["settings"], res);
+      // Role gating (/me) depends on review_required; refresh it.
+      qc.invalidateQueries({ queryKey: ["me"] });
     },
+  });
+}
+
+/** Analyst hands the final output to the reviewer; refreshes the audit log. */
+export function useSubmitForReview() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.submitForReview(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["audit"] }),
   });
 }
 
 // --- project data ---
 export const useCommentary = (locale: Locale = "en") =>
   useQuery({ queryKey: ["commentary", locale], queryFn: () => api.commentary(locale) });
+export const useAudit = () =>
+  useQuery({ queryKey: ["audit"], queryFn: api.audit });
+
+/** Trigger a live LLM analysis run; refreshes the audit log on completion. */
+export function useRunAnalysis() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.runAnalysis(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["audit"] }),
+  });
+}
 export const useProject = () => useQuery({ queryKey: ["project"], queryFn: api.project });
+/** Whether a project's data is loaded (false in greenfield until a sample/real run exists). */
+export const useProjectLoaded = () => useProject().data?.loaded ?? false;
+export const useDocuments = () => useQuery({ queryKey: ["documents"], queryFn: api.documents });
+
+export const useOntologies = () => useQuery({ queryKey: ["ontologies"], queryFn: api.ontologies });
+export const useTemplates = () => useQuery({ queryKey: ["templates"], queryFn: api.templates });
+
+/** Run (and fetch) the extraction for one uploaded document — its real line items with
+ * provenance, mapped against the given ontology/template. POSTs once per (doc, ontology)
+ * and caches the result. `enabled` gates the run until the ontology list has settled. */
+export const useExtraction = (
+  documentId: string | undefined,
+  ontologyId?: string,
+  templateId?: string,
+  enabled = true,
+) =>
+  useQuery({
+    queryKey: ["extraction", documentId, ontologyId ?? null, templateId ?? null],
+    queryFn: () => api.runExtraction(documentId as string, {
+      ontology_version_id: ontologyId, template_version_id: templateId,
+    }),
+    enabled: !!documentId && enabled,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+/** Cells around a value's spreadsheet origin — the Excel click-to-source backdrop.
+ * Enabled only once a spreadsheet cell has been picked. */
+export const useCellContext = (documentId: string, sheet?: string, cell?: string) =>
+  useQuery({
+    queryKey: ["cell-context", documentId, sheet ?? null, cell ?? null],
+    queryFn: () => api.cellContext(documentId, sheet as string, cell as string),
+    enabled: !!documentId && !!sheet && !!cell,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+/** Upload a source document; refreshes the documents list and project. */
+export function useUploadDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => api.uploadDocument(file),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: ["project"] });
+    },
+  });
+}
 export const useIntegrity = (locale: Locale = "en") =>
   useQuery({ queryKey: ["integrity", locale], queryFn: () => api.integrity(locale) });
 export const usePages = (locale: Locale = "en") =>

@@ -2,7 +2,8 @@
  * The stepper marks steps before the current pipeline position as done (green check). */
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { useProject } from "../../lib/queries";
+import { useMe, useProject } from "../../lib/queries";
+import { useUI } from "../../store";
 import { color } from "../../theme";
 import { useT } from "../../i18n";
 import { STEPPER, screenIdForPath } from "../../screens/config";
@@ -13,9 +14,17 @@ export function TopBar() {
   const nav = useNavigate();
   const loc = useLocation();
   const { data } = useProject();
+  const { data: me } = useMe();
   const t = useT();
+  const extractMode = useUI((s) => s.extractMode);
+  // In auto mode the pipeline skips the manual Page Scope confirmation, so the
+  // stepper collapses to Upload → Integrity → Extract → Review → Export. Also limit the
+  // stepper to steps the caller's role can actually reach (e.g. a reviewer has no upload).
+  const steps = STEPPER
+    .filter((s) => !(extractMode === "auto" && s.id === "scope"))
+    .filter((s) => !me || me.screens.includes(s.id));
   const activeId = screenIdForPath(loc.pathname);
-  const curIdx = STEPPER.findIndex((s) => s.id === activeId);
+  const curIdx = steps.findIndex((s) => s.id === activeId);
 
   return (
     <div
@@ -63,7 +72,7 @@ export function TopBar() {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto" }}>
-        {STEPPER.map((s, i) => {
+        {steps.map((s, i) => {
           const active = s.id === activeId;
           const done = curIdx !== -1 && i < curIdx;
           return (
@@ -94,7 +103,7 @@ export function TopBar() {
                   color: active || done ? "#fff" : color.muted,
                 }}
               >
-                {done ? "✓" : s.step}
+                {done ? "✓" : i + 1}
               </span>
               <span
                 style={{

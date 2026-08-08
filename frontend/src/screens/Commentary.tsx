@@ -2,10 +2,12 @@
  * headline + assessment, key ratios (tone-coded), and selected strengths / risks. */
 import { Card, ScreenHeader } from "../components/ui";
 import { useT } from "../i18n";
-import { useCommentary } from "../lib/queries";
+import { useAudit, useCommentary, useProjectLoaded, useRunAnalysis } from "../lib/queries";
+import { EmptyState } from "../components/EmptyState";
+import { useCan } from "../lib/rbac";
 import { useAppLocale } from "../store";
-import { color, fmtIN, font } from "../theme";
-import type { CommentaryMetric, CommentaryTrend } from "../types";
+import { color, fmtIN, font, radius } from "../theme";
+import type { AuditEntry, CommentaryMetric, CommentaryTrend } from "../types";
 
 function toneColors(tone: CommentaryMetric["tone"]): { fg: string; bg: string } {
   if (tone === "good") return { fg: color.greenFg, bg: color.greenBg };
@@ -81,11 +83,94 @@ function PointList({ title, points, accent }: { title: string; points: string[];
   );
 }
 
+/** Format a token count with grouping, or an em-dash when the run used no LLM. */
+function tok(n: number | null): string {
+  return n === null || n === undefined ? "—" : n.toLocaleString();
+}
+
+function AuditLog({ t }: { t: (k: string) => string }) {
+  const { data } = useAudit();
+  const entries = data?.entries ?? [];
+  const AUDIT_GRID = "1.7fr 1.1fr 0.8fr 1.3fr 0.9fr 0.9fr 0.8fr";
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "4px 2px 10px" }}>
+        <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, color: color.muted }}>
+          {t("cm.audit").toUpperCase()}
+        </span>
+        <span style={{ fontSize: 11, color: color.muted2 }}>{t("cm.auditHint")}</span>
+      </div>
+      <Card pad={0} style={{ overflow: "hidden" }}>
+        <div
+          style={{
+            display: "grid", gridTemplateColumns: AUDIT_GRID, gap: 10, padding: "10px 14px",
+            background: color.rowAltBg, borderBottom: `1px solid ${color.hairline2}`,
+            fontSize: 10, fontWeight: 600, letterSpacing: 0.3, color: color.muted,
+          }}
+        >
+          <span>{t("cm.col.run")}</span>
+          <span>{t("cm.col.time")}</span>
+          <span>{t("cm.col.action")}</span>
+          <span>{t("cm.col.model")}</span>
+          <span style={{ textAlign: "right" }}>{t("cm.col.inTok")}</span>
+          <span style={{ textAlign: "right" }}>{t("cm.col.outTok")}</span>
+          <span style={{ textAlign: "right" }}>{t("cm.col.totTok")}</span>
+        </div>
+        {entries.length === 0 && (
+          <div style={{ padding: "16px 14px", fontSize: 12, color: color.muted }}>{t("cm.auditEmpty")}</div>
+        )}
+        {entries.map((e: AuditEntry) => (
+          <div
+            key={e.run_id}
+            style={{
+              display: "grid", gridTemplateColumns: AUDIT_GRID, gap: 10, padding: "11px 14px",
+              alignItems: "center", borderBottom: `1px solid ${color.hairline2}`,
+              opacity: e.status === "failed" ? 0.6 : 1,
+            }}
+          >
+            <span style={{ fontFamily: font.mono, fontSize: 10.5, color: color.ink2, wordBreak: "break-all" }}>
+              {e.run_id}
+            </span>
+            <span style={{ fontSize: 11, color: color.sec2 }}>
+              {new Date(e.created_at).toLocaleString()}
+            </span>
+            <span style={{ fontSize: 11 }}>
+              <span
+                style={{
+                  fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: radius.pill,
+                  background: e.action === "analysis" ? color.indigoTint2 : color.greenBg2,
+                  color: e.action === "analysis" ? color.indigo : color.greenFg,
+                }}
+              >
+                {e.action}
+              </span>
+            </span>
+            <span style={{ fontFamily: font.mono, fontSize: 10.5, color: color.sec }}>{e.model}</span>
+            <span style={{ fontFamily: font.mono, fontSize: 11.5, textAlign: "right", color: color.ink }}>
+              {tok(e.input_tokens)}
+            </span>
+            <span style={{ fontFamily: font.mono, fontSize: 11.5, textAlign: "right", color: color.ink }}>
+              {tok(e.output_tokens)}
+            </span>
+            <span style={{ fontFamily: font.mono, fontSize: 11.5, fontWeight: 600, textAlign: "right", color: color.ink }}>
+              {tok(e.total_tokens)}
+            </span>
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
 export default function CommentaryScreen() {
   const t = useT();
   const locale = useAppLocale();
+  const loaded = useProjectLoaded();
   const { data, isPending } = useCommentary(locale);
+  const canGenerate = useCan("analysis:run");
+  const runAnalysis = useRunAnalysis();
 
+  if (!loaded) return <EmptyState />;
   if (isPending || !data) {
     return <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>;
   }
@@ -96,17 +181,47 @@ export default function CommentaryScreen() {
         title={t("cm.title")}
         subtitle={t("cm.subhead")}
         right={
-          <button
-            onClick={() => window.print()}
-            style={{
-              fontSize: 12, fontWeight: 600, color: color.ink2, background: "#fff",
-              border: `1px solid ${color.controlBorder}`, borderRadius: 8, padding: "8px 14px", cursor: "pointer",
-            }}
-          >
-            {t("cm.print")}
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {canGenerate && (
+              <button
+                onClick={() => runAnalysis.mutate()}
+                disabled={runAnalysis.isPending}
+                style={{
+                  fontSize: 12, fontWeight: 600, color: "#fff",
+                  background: runAnalysis.isPending ? color.faint : color.indigo,
+                  border: "none", borderRadius: 8, padding: "8px 14px",
+                  cursor: runAnalysis.isPending ? "default" : "pointer",
+                }}
+              >
+                {runAnalysis.isPending ? t("cm.generating") : `✦ ${t("cm.generate")}`}
+              </button>
+            )}
+            <button
+              onClick={() => window.print()}
+              style={{
+                fontSize: 12, fontWeight: 600, color: color.ink2, background: "#fff",
+                border: `1px solid ${color.controlBorder}`, borderRadius: 8, padding: "8px 14px", cursor: "pointer",
+              }}
+            >
+              {t("cm.print")}
+            </button>
+          </div>
         }
       />
+
+      {canGenerate && runAnalysis.isError && (
+        <div
+          style={{
+            marginBottom: 14, padding: "10px 13px", background: color.redBg,
+            border: `1px solid ${color.redBg}`, borderRadius: 9, fontSize: 12, color: color.redFg,
+          }}
+        >
+          <b>{t("cm.genFailed")}.</b>{" "}
+          <span style={{ fontFamily: font.mono, fontSize: 11 }}>
+            {(runAnalysis.error as Error)?.message}
+          </span>
+        </div>
+      )}
 
       {/* Headline + assessment */}
       <Card style={{ marginBottom: 16, borderLeft: `3px solid ${color.indigo}` }}>
@@ -153,6 +268,11 @@ export default function CommentaryScreen() {
         }}
       >
         <b>{t("cm.dataQuality")}.</b> {data.data_quality}
+      </div>
+
+      {/* Audit log — LLM/extraction runs with per-run input/output token usage */}
+      <div style={{ marginTop: 20 }}>
+        <AuditLog t={t} />
       </div>
     </div>
   );

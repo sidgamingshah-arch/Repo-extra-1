@@ -5,9 +5,10 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/ui";
+import { EmptyState } from "../components/EmptyState";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
 import type { Basis, StatementResponse, StatementRow } from "../types";
-import { useStatement, useEditLineItem } from "../lib/queries";
+import { useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
 import { SCREENS } from "./config";
@@ -86,11 +87,13 @@ function OutputRow({
   sel,
   onSelect,
   onEdit,
+  onOpenNote,
 }: {
   row: StatementRow;
   sel: string;
   onSelect: (id: string) => void;
   onEdit: (id: string) => void;
+  onOpenNote: (ref: string) => void;
 }) {
   const k = row.kind;
   const isSection = k === "section";
@@ -147,7 +150,11 @@ function OutputRow({
         </span>
         <StatusIcon status={row.status} />
       </div>
-      <div style={{ textAlign: "center" }}>{row.note ? <NoteChip>{row.note}</NoteChip> : null}</div>
+      <div style={{ textAlign: "center" }}>
+        {row.note ? (
+          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(row.note!); }}>{row.note}</NoteChip>
+        ) : null}
+      </div>
       {isItem ? (
         <span
           onClick={(e) => {
@@ -172,7 +179,11 @@ function OutputRow({
           {v1}
         </span>
       )}
-      <div style={{ textAlign: "center" }}>{note2 ? <NoteChip>{note2}</NoteChip> : null}</div>
+      <div style={{ textAlign: "center" }}>
+        {note2 ? (
+          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(note2!); }}>{note2}</NoteChip>
+        ) : null}
+      </div>
       <span style={{ textAlign: "right", fontFamily: font.mono, fontSize: 12, color: color.muted }}>{v2}</span>
       <div style={{ textAlign: "right" }}>
         {row.confidence ? <ConfidencePill cat={row.confidence.cat} /> : null}
@@ -292,11 +303,21 @@ function InspectorEditor({
 export default function WorkspaceScreen() {
   const navigate = useNavigate();
   const t = useT();
-  const { locale, dataset, setDataset, statement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing } =
+  const { locale, dataset, setDataset, statement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing, setNote } =
     useUI();
+  // Open a note reference: select it and jump to the All Notes screen.
+  const openNote = (ref: string) => {
+    const n = parseInt(ref, 10);
+    if (!Number.isNaN(n)) {
+      setNote(n);
+      navigate(SCREENS.notes.path);
+    }
+  };
+  const loaded = useProjectLoaded();
   const { data, isPending } = useStatement(statement, dataset, locale);
   const editMut = useEditLineItem();
 
+  if (!loaded) return <EmptyState />;
   if (isPending || !data) {
     return <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>;
   }
@@ -526,7 +547,7 @@ export default function WorkspaceScreen() {
           {/* scroll body */}
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {d.rows.map((r) => (
-              <OutputRow key={r.id} row={r} sel={sel} onSelect={selRow} onEdit={selForEdit} />
+              <OutputRow key={r.id} row={r} sel={sel} onSelect={selRow} onEdit={selForEdit} onOpenNote={openNote} />
             ))}
           </div>
 

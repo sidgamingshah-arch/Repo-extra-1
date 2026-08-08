@@ -2,10 +2,12 @@
 import { useNavigate } from "react-router-dom";
 
 import { Button, Card } from "../components/ui";
+import { EmptyState } from "../components/EmptyState";
 import { color, font, radius } from "../theme";
 import type { IntegrityIssue, IntegrityStat } from "../types";
-import { useIntegrity } from "../lib/queries";
-import { useAppLocale } from "../store";
+import { useIntegrity, useProjectLoaded } from "../lib/queries";
+import { useAppLocale, useUI } from "../store";
+import { SCREENS } from "./config";
 import { useT } from "../i18n";
 
 const GRID = "26px 1.7fr 90px 1fr 110px";
@@ -28,8 +30,11 @@ export default function IntegrityScreen() {
   const navigate = useNavigate();
   const t = useT();
   const locale = useAppLocale();
+  const extractMode = useUI((s) => s.extractMode);
+  const loaded = useProjectLoaded();
   const { data, isPending } = useIntegrity(locale);
 
+  if (!loaded) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>
@@ -188,7 +193,11 @@ export default function IntegrityScreen() {
         <Button variant="secondary" onClick={() => navigate("/upload")}>
           ← {t("i.back")}
         </Button>
-        <Button onClick={() => navigate("/scope")}>{t("i.detect")} →</Button>
+        {extractMode === "auto" ? (
+          <Button onClick={() => navigate(SCREENS.workspace.path)}>{t("i.extractNow")} →</Button>
+        ) : (
+          <Button onClick={() => navigate(SCREENS.scope.path)}>{t("i.detect")} →</Button>
+        )}
       </div>
     </div>
   );

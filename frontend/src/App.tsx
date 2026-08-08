@@ -11,6 +11,7 @@ import { useAppLocale, useUI } from "./store";
 import { color } from "./theme";
 import CommentaryScreen from "./screens/Commentary";
 import ExportScreen from "./screens/Export";
+import ExtractionView from "./screens/ExtractionView";
 import IntegrityScreen from "./screens/Integrity";
 import NotesScreen from "./screens/Notes";
 import ReviewScreen from "./screens/Review";
@@ -45,6 +46,7 @@ function Shell() {
           <Routes>
             <Route path="/" element={<Navigate to="/workspace" replace />} />
             <Route path="/upload" element={<RequireScreen screen="upload"><UploadScreen /></RequireScreen>} />
+            <Route path="/documents/:id" element={<RequireScreen screen="upload"><ExtractionView /></RequireScreen>} />
             <Route path="/integrity" element={<RequireScreen screen="integrity"><IntegrityScreen /></RequireScreen>} />
             <Route path="/scope" element={<RequireScreen screen="scope"><ScopeScreen /></RequireScreen>} />
             <Route path="/workspace" element={<RequireScreen screen="workspace"><WorkspaceScreen /></RequireScreen>} />

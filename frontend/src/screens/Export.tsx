@@ -1,5 +1,6 @@
 /** Screen 8: Export — deliver the extracted, reviewed and reconciled dataset. */
-import { useExportOptions } from "../lib/queries";
+import { useExportOptions, useProjectLoaded, useSubmitForReview } from "../lib/queries";
+import { EmptyState } from "../components/EmptyState";
 import { downloadExport } from "../lib/api";
 import { useUI } from "../store";
 import { useT } from "../i18n";
@@ -194,11 +195,16 @@ function JsonPreview() {
 export default function ExportScreen() {
   const t = useT();
   const canConfig = useCan("config:export");
+  const canExport = useCan("export:run");
+  const canSubmit = useCan("review:submit");
+  const submitReview = useSubmitForReview();
+  const loaded = useProjectLoaded();
   const { data, isPending } = useExportOptions();
   const exportFmt = useUI((s) => s.exportFmt);
   const setFmt = useUI((s) => s.setFmt);
   const isExcel = exportFmt === "excel";
 
+  if (!loaded) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 40, textAlign: "center", color: color.muted }}>Loading…</div>
@@ -292,29 +298,46 @@ export default function ExportScreen() {
             <span style={{ fontSize: 11.5, color: color.muted }}>
               148 {t("e.footer.lineitems")} · 48 {t("e.footer.notes")} · 12 {t("e.footer.flagged")}
             </span>
-            <button
-              onClick={() =>
-                downloadExport({
-                  format: exportFmt,
-                  basis: "consolidated",
-                  currency: "INR",
-                  units: "crore",
-                  include: {},
-                })
-              }
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: "#fff",
-                background: color.indigo,
-                border: "none",
-                borderRadius: 9,
-                padding: "10px 22px",
-                cursor: "pointer",
-              }}
-            >
-              {t("e.download")} {isExcel ? ".xlsx" : ".json"}
-            </button>
+            {canExport ? (
+              // Reviewer/admin, or analyst when the review step is off: deliver the file.
+              <button
+                onClick={() =>
+                  downloadExport({
+                    format: exportFmt,
+                    basis: "consolidated",
+                    currency: "INR",
+                    units: "crore",
+                    include: {},
+                  })
+                }
+                style={{
+                  fontSize: 13, fontWeight: 600, color: "#fff", background: color.indigo,
+                  border: "none", borderRadius: 9, padding: "10px 22px", cursor: "pointer",
+                }}
+              >
+                {t("e.download")} {isExcel ? ".xlsx" : ".json"}
+              </button>
+            ) : canSubmit ? (
+              // Analyst with the review step on: hand the final output to the reviewer.
+              submitReview.isSuccess ? (
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: color.greenFg }}>
+                  ✓ {t("e.submitted")}
+                </span>
+              ) : (
+                <button
+                  onClick={() => submitReview.mutate()}
+                  disabled={submitReview.isPending}
+                  style={{
+                    fontSize: 13, fontWeight: 600, color: "#fff",
+                    background: submitReview.isPending ? color.faint : color.indigo,
+                    border: "none", borderRadius: 9, padding: "10px 22px",
+                    cursor: submitReview.isPending ? "default" : "pointer",
+                  }}
+                >
+                  {submitReview.isPending ? t("e.sending") : `${t("e.sendForReview")} →`}
+                </button>
+              )
+            ) : null}
           </div>
         </Card>
       </div>

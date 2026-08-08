@@ -2,18 +2,35 @@
 
 ## Role-based access control
 
-Three roles with a permission matrix (`backend/app/security/rbac.py`). Configuration is
-**admin-controlled**; the analyst gets a deliberately **simple flow**.
+Three roles with a permission matrix (`backend/app/security/rbac.py`), modelling a linear
+workflow: **Analyst → (Reviewer) → deliver**, with **Admin** owning configuration and oversight.
 
-| Role | Sees (screens) | Can configure |
+| Role | Workflow responsibility | Sees (screens) |
 |---|---|---|
-| **admin** | all 10 screens incl. Template & Ontology and **Settings** | templates, ontology, page scope, export inclusions, documents, **settings** |
-| **reviewer** | upload, integrity, scope, workspace, notes, review, commentary, export | page scope only; resolves review items |
-| **analyst** | workspace, notes, commentary, export | nothing — view/edit values, run export |
+| **analyst** | Upload a document, **choose** an output template, run the pipeline end to end (integrity → scope → extract → QA in the Review Queue), then **submit the final output for review**. | upload, integrity, scope, workspace, notes, **review (QA)**, commentary, export |
+| **reviewer** | **Review & finalize** the analyst's output, then deliver it. | integrity, workspace, notes, review, commentary, export |
+| **admin** | Configuration (templates, ontology, **LLM config**, feature flags, the review toggle), users, and the **audit log**. | all 10 screens incl. Template & Ontology and **Settings** |
 
-Permissions (e.g. `config:template`, `config:ontology`, `config:scope`, `config:export`,
-`config:settings`, `extraction:edit`, `review:resolve`, `export:run`, `commentary:view`)
-are granted per role.
+Representative permissions: `documents:manage`, `template:select` (analyst *chooses* a
+template) vs `config:template` (admin *authors* one), `pipeline:run`, `extraction:edit`,
+`review:submit` (analyst hand-off) vs `review:finalize` (reviewer), `export:run`,
+`config:settings`, `audit:view`.
+
+### Reviewer sign-off toggle (`review_required`)
+
+Admin-controlled feature flag (Settings screen; default **on**). It governs the
+**second-person sign-off only**:
+
+- **On** — the analyst *submits* the output for review (`review:submit`, no `export:run`);
+  the reviewer reviews, finalizes and delivers.
+- **Off** — the workflow **closes at the analyst**, who finalizes and exports directly
+  (`export:run`, no `review:submit`).
+
+Crucially, this flag never removes the **human-in-the-loop Review Queue** (balance/subtotal/
+sign checks + low-confidence items). That QA screen stays available to the analyst in both
+modes — the flag only changes who performs the final sign-off/hand-off. Implemented as
+`effective_permissions(role)` (adjusts the analyst's export vs submit at runtime); screen
+visibility is unaffected by the flag.
 
 **Enforcement** — `require(permission)` is a FastAPI dependency on every config/mutating
 endpoint (create template/ontology, edit/revert line item, template config data, export,
@@ -67,3 +84,17 @@ A one-page, data-driven commentary derived from the *extracted* statements
 The frontend renders it as a printable one-pager (`frontend/src/screens/Commentary.tsx`):
 headline + assessment, a tone-coded metric grid, a **year-on-year trends grid**, and
 strengths/risks columns.
+
+## Audit log & LLM runs
+
+The Analysis screen also carries an **audit log** (`GET /projects/{id}/audit`) — a table of
+LLM/extraction runs showing **input and output token usage separately** (plus the total),
+the model, action and timestamp. Each run's id combines the **entity name + date/time**
+(`services/audit.make_run_id`, e.g. `reliance-industries-ltd-20260807-021455`), which is also
+the `ExtractionRun` primary key.
+
+The run is **analyst-driven** — analyst, reviewer and admin hold `analysis:run` and can
+trigger a live **`POST /projects/{id}/analysis`**: it calls the configured LLM provider on
+the project's figures (`services/analysis_llm.py`) and records a real audit entry with the
+provider's token usage. Viewing the log needs only `commentary:view`. Runs against an
+unconfigured/unreachable provider are recorded as `failed` (tokens shown as "—").

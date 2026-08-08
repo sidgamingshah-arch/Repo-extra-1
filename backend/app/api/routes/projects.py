@@ -9,6 +9,7 @@ from copy import deepcopy
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
+from app.config import get_settings
 from app.sample.demo import CONF_PCT, DEMO, localize_label
 from app.sample.i18n_data import tr
 from app.security import Permission, current_principal, require
@@ -22,6 +23,26 @@ router = APIRouter(prefix="/projects", tags=["projects"],
 
 # In-memory edit overrides: {line_item_id: {"value": int, "formula": str}}.
 _OVERRIDES: dict[str, dict] = {}
+
+
+def _active() -> bool:
+    """Whether the seeded sample project is loaded. Off = greenfield (empty app)."""
+    from app.services.settings_state import get_seed_demo
+
+    return get_seed_demo()
+
+
+# Greenfield placeholder project meta — shape-compatible with the demo project so the
+# shell renders, but carrying no data. Screens short-circuit to an empty state via the
+# `loaded` flag returned by GET /projects/{id}.
+_EMPTY_PROJECT = {
+    "id": "demo", "entity": "", "title": "No project yet", "filename": "",
+    "pages": 0, "standard": "", "currency": "", "currency_symbol": "", "units": "",
+    "periods": ["", ""], "bases": ["consolidated", "standalone"],
+    "progress": {"pct": 0, "line_items": 0, "in_review": 0},
+    "template": {"key": "", "name": "— none selected —", "line_items": 0},
+    "ontology": {"file": "— none —", "rules": 0, "aliases": 0, "status": "none"},
+}
 
 _STD_SCALE = 0.88
 _VIEWER = {
@@ -50,11 +71,15 @@ _VIEWER = {
 def get_project(project_id: str) -> dict:
     if project_id != "demo":
         raise HTTPException(404, "Unknown project")
-    return {"project": DEMO["project"], "documents": DEMO["documents"]}
+    if _active():
+        return {"project": DEMO["project"], "documents": DEMO["documents"], "loaded": True}
+    return {"project": _EMPTY_PROJECT, "documents": [], "loaded": False}
 
 
 @router.get("/{project_id}/integrity")
 def get_integrity(project_id: str, locale: str = Query("en")) -> dict:
+    if not _active():
+        return {"score": 0, "grade": "", "summary": "", "stats": [], "issues": []}
     data = deepcopy(DEMO["integrity"])
     if locale != "en":
         data["grade"] = tr(data["grade"], locale)
@@ -72,6 +97,8 @@ def get_integrity(project_id: str, locale: str = Query("en")) -> dict:
 
 @router.get("/{project_id}/pages")
 def get_pages(project_id: str, locale: str = Query("en")) -> dict:
+    if not _active():
+        return {"pages": [], "filters": [], "focused": 0, "total": 0, "skipped": 0}
     pages = deepcopy(DEMO["pages"])
     filters = deepcopy(DEMO["page_filters"])
     if locale != "en":
@@ -93,6 +120,10 @@ def _scale(v, basis: str):
 def get_statement(project_id: str, statement: str,
                   basis: str = Query("consolidated"),
                   locale: str = Query("en")) -> dict:
+    if not _active():
+        return {"statement": statement, "label": "", "basis": basis, "periods": ["", ""],
+                "currency": "", "currency_symbol": "", "units": "", "rows": [],
+                "viewer": {"company": "", "subtitle": "", "chips": [], "callout": ""}}
     st = DEMO["statements"].get(statement)
     if st is None:
         raise HTTPException(404, f"Unknown statement {statement!r}")
@@ -157,6 +188,8 @@ def revert_line_item(project_id: str, item_id: str) -> dict:
 
 @router.get("/{project_id}/notes")
 def get_notes(project_id: str, locale: str = Query("en")) -> dict:
+    if not _active():
+        return {"notes": [], "count": 0, "linked": 0}
     notes = deepcopy(DEMO["notes_index"])
     if locale != "en":
         for n in notes:
@@ -166,6 +199,8 @@ def get_notes(project_id: str, locale: str = Query("en")) -> dict:
 
 @router.get("/{project_id}/notes/{note_no}")
 def get_note(project_id: str, note_no: int, locale: str = Query("en")) -> dict:
+    if not _active():
+        return {"no": note_no, "title": "", "rows": [], "reconciliation": None}
     detail = DEMO["note_detail"].get(note_no)
     if detail is None:
         idx = next((n for n in DEMO["notes_index"] if n["no"] == note_no), None)
@@ -184,6 +219,8 @@ def get_note(project_id: str, note_no: int, locale: str = Query("en")) -> dict:
 
 @router.get("/{project_id}/review")
 def get_review(project_id: str, locale: str = Query("en")) -> dict:
+    if not _active():
+        return {"checks": [], "tabs": [], "summary": {"open": 0, "resolved": 0, "total": 0}}
     checks = deepcopy(DEMO["review"])
     tabs = deepcopy(DEMO["review_tabs"])
     if locale != "en":
@@ -201,6 +238,8 @@ def get_review(project_id: str, locale: str = Query("en")) -> dict:
 @router.get("/{project_id}/template",
             dependencies=[Depends(require(Permission.CONFIG_TEMPLATE))])
 def get_template_tree(project_id: str, locale: str = Query("en")) -> dict:
+    if not _active():
+        return {"tree": [], "node_config": {}, "template": _EMPTY_PROJECT["template"]}
     tree = deepcopy(DEMO["template_tree"])
     node_config = deepcopy(DEMO["node_config"])
     if locale != "en":
@@ -224,6 +263,9 @@ def get_export_options(project_id: str) -> dict:
 @router.get("/{project_id}/commentary",
             dependencies=[Depends(require(Permission.COMMENTARY_VIEW))])
 def get_commentary(project_id: str, locale: str = Query("en")) -> dict:
+    if not _active():
+        return {"headline": "", "assessment": "", "metrics": [], "trends": [],
+                "strengths": [], "weaknesses": [], "data_quality": "", "basis": ""}
     from app.services.commentary import build_commentary
 
     c = build_commentary(open_review_items=DEMO["review_summary"]["open"])
@@ -239,6 +281,77 @@ def get_commentary(project_id: str, locale: str = Query("en")) -> dict:
         for tnd in c.get("trends", []):
             tnd["label"] = tr(tnd["label"], locale)
     return c
+
+
+@router.get("/{project_id}/audit",
+            dependencies=[Depends(require(Permission.COMMENTARY_VIEW))])
+def get_audit(project_id: str) -> dict:
+    """Audit trail of LLM/extraction runs for the project, with per-run token usage."""
+    from app.services import audit as audit_svc
+
+    seeded = deepcopy(DEMO["audit"]) if (project_id == "demo" and _active()) else []
+    live = [e.to_dict() for e in audit_svc.recorded(project_id)]
+    entries = live + seeded
+    entries.sort(key=lambda e: e.get("created_at", ""), reverse=True)
+    return {"entries": entries}
+
+
+@router.post("/{project_id}/analysis",
+             dependencies=[Depends(require(Permission.ANALYSIS_RUN))])
+def run_project_analysis(project_id: str) -> dict:
+    """Run a live LLM financial analysis via the configured provider and record it to
+    the audit log with the model's input/output token usage. The run id is derived from
+    the entity name + timestamp. Analyst-driven (analysts/reviewers/admin)."""
+    from app.ports.registry import registry as reg
+    from app.services import audit as audit_svc
+    from app.services.analysis_llm import build_demo_payload, run_analysis
+
+    settings = get_settings()
+    entity = DEMO["project"]["entity"]
+    run_id = audit_svc.make_run_id(entity)
+    provider_id = settings.llm.provider
+
+    def _fail(detail: str):
+        audit_svc.record(project_id, audit_svc.AuditEntry(
+            run_id=run_id, entity=entity, action="analysis", provider=provider_id,
+            model=settings.llm.model, input_tokens=None, output_tokens=None, status="failed",
+        ))
+        raise HTTPException(status_code=502, detail=detail)
+
+    try:
+        provider = reg.get("llm", provider_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        result, meta = run_analysis(provider, build_demo_payload(), max_tokens=settings.llm.max_tokens)
+    except Exception as exc:  # provider not configured / unreachable / bad response
+        _fail(f"LLM analysis failed: {exc}")
+
+    entry = audit_svc.record(project_id, audit_svc.AuditEntry(
+        run_id=run_id, entity=entity, action="analysis", provider=provider_id,
+        model=meta.get("model", settings.llm.model),
+        input_tokens=meta.get("input_tokens"), output_tokens=meta.get("output_tokens"),
+        status="succeeded",
+    ))
+    return {"entry": entry.to_dict(), "result": result.model_dump(mode="json")}
+
+
+@router.post("/{project_id}/submit-review",
+             dependencies=[Depends(require(Permission.REVIEW_SUBMIT))])
+def submit_for_review(project_id: str) -> dict:
+    """Analyst hands the final output to the reviewer. Recorded to the audit log.
+
+    The REVIEW_SUBMIT permission is only granted to the analyst while the review step
+    is enabled (see security.effective_permissions), so this 403s once review is off."""
+    from app.services import audit as audit_svc
+
+    entity = DEMO["project"]["entity"]
+    entry = audit_svc.record(project_id, audit_svc.AuditEntry(
+        run_id=audit_svc.make_run_id(entity), entity=entity, action="submit_review",
+        provider="—", model="—", input_tokens=None, output_tokens=None, status="succeeded",
+    ))
+    return {"ok": True, "entry": entry.to_dict()}
 
 
 class ExportBody(BaseModel):
