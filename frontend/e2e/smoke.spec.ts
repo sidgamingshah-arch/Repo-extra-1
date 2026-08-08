@@ -45,8 +45,10 @@ test("analyst uploads a document and views its extracted data with provenance", 
   await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.pdf");
   await expect(page.getByText("sample.pdf")).toBeVisible({ timeout: 15_000 });
 
-  // Open the real extraction view for the uploaded document.
-  await page.getByRole("button", { name: "View →" }).first().click();
+  // Open the extraction view for *this* document (select by filename — the docs list
+  // persists across runs, so "the first row" is not necessarily the one just uploaded).
+  await page.getByTestId("doc-row").filter({ hasText: "sample.pdf" })
+    .getByRole("button", { name: "View →" }).click();
   await expect(page).toHaveURL(/\/documents\//);
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   // Real extracted line item + click-to-source provenance from the native PDF.
@@ -62,7 +64,8 @@ test("analyst uploads a spreadsheet and gets Excel cell-level click-to-source", 
   await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.xlsx");
   await expect(page.getByText("sample.xlsx")).toBeVisible({ timeout: 15_000 });
 
-  await page.getByRole("button", { name: "View →" }).first().click();
+  await page.getByTestId("doc-row").filter({ hasText: "sample.xlsx" })
+    .getByRole("button", { name: "View →" }).click();
   await expect(page).toHaveURL(/\/documents\//);
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Trade receivables").first()).toBeVisible();
@@ -70,4 +73,26 @@ test("analyst uploads a spreadsheet and gets Excel cell-level click-to-source", 
   // Click a Sheet!Cell chip → the surrounding cells render with the target highlighted.
   await page.getByText(/!B\d/).first().click();
   await expect(page.getByTestId("cell-target")).toBeVisible({ timeout: 15_000 });
+});
+
+test("analyst can reach the template screen and select a template for a run", async ({ page }) => {
+  await loginAs(page, "analyst");
+
+  // The template menu is present in the nav for the analyst (was admin-only before) and
+  // navigates to the template screen without being redirected away.
+  await page.goto("/workspace", DCL);
+  await page.getByText("Template & Ontology").click();
+  await expect(page).toHaveURL(/\/template/);
+  // Authoring is admin-only → the analyst gets no "add line item" control.
+  await expect(page.getByText("+ Add line item")).toHaveCount(0);
+
+  // On the Documents & Template screen the analyst can open the picker and select a template.
+  await page.goto("/upload", DCL);
+  await expect(page.getByText("Selected")).toBeVisible({ timeout: 15_000 }); // a template is active
+  await page.getByRole("button", { name: "Choose another" }).click();
+  const options = page.getByTestId("tpl-option");
+  await expect(options.first()).toBeVisible({ timeout: 15_000 });            // real templates listed
+  await options.first().click();
+  // Selecting closes the picker (button returns to "Choose another") — selection is wired.
+  await expect(page.getByRole("button", { name: "Choose another" })).toBeVisible();
 });

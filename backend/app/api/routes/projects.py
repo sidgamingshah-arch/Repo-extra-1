@@ -236,8 +236,11 @@ def get_review(project_id: str, locale: str = Query("en")) -> dict:
 
 
 @router.get("/{project_id}/template",
-            dependencies=[Depends(require(Permission.CONFIG_TEMPLATE))])
+            dependencies=[Depends(current_principal)])
 def get_template_tree(project_id: str, locale: str = Query("en")) -> dict:
+    # Viewing the template structure is reference information any authenticated worker
+    # needs (the analyst selects into it). Authoring/editing stays admin-only, enforced
+    # on the write endpoints (POST /templates, CONFIG_TEMPLATE).
     if not _active():
         return {"tree": [], "node_config": {}, "template": _EMPTY_PROJECT["template"]}
     tree = deepcopy(DEMO["template_tree"])

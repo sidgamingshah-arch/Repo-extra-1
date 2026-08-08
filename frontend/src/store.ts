@@ -27,6 +27,7 @@ interface UIState {
   note: number; // selected note (All Notes)
   openCheck: string; // expanded review check
   tplSel: string; // selected template node
+  selectedTemplateKey: string | null; // active output template for the next run (null = default)
   exportFmt: ExportFmt;
 
   setLocale: (l: Locale) => void;
@@ -43,6 +44,7 @@ interface UIState {
   setNote: (n: number) => void;
   toggleCheck: (id: string) => void;
   setTpl: (id: string) => void;
+  setSelectedTemplateKey: (k: string | null) => void;
   setFmt: (f: ExportFmt) => void;
 }
 
@@ -58,6 +60,7 @@ export const useUI = create<UIState>((set) => ({
   note: 12,
   openCheck: "bs",
   tplSel: "trade_recv",
+  selectedTemplateKey: null,
   exportFmt: "excel",
 
   setLocale: (locale) => set({ locale }),
@@ -77,6 +80,7 @@ export const useUI = create<UIState>((set) => ({
   setNote: (note) => set({ note }),
   toggleCheck: (id) => set((s) => ({ openCheck: s.openCheck === id ? "" : id })),
   setTpl: (tplSel) => set({ tplSel }),
+  setSelectedTemplateKey: (selectedTemplateKey) => set({ selectedTemplateKey }),
   setFmt: (exportFmt) => set({ exportFmt }),
 }));
 

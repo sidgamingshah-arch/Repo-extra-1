@@ -9,6 +9,7 @@ import { Card } from "../components/ui";
 import { useT } from "../i18n";
 import { api } from "../lib/api";
 import { useCellContext, useExtraction, useOntologies, useTemplates } from "../lib/queries";
+import { useUI } from "../store";
 import { SCREENS } from "./config";
 import { color, font } from "../theme";
 import type { ExtractionProvenance, ExtractionRow } from "../types";
@@ -232,8 +233,14 @@ export default function ExtractionView() {
 
   const ontQ = useOntologies();
   const tplQ = useTemplates();
+  const selectedTemplateKey = useUI((s) => s.selectedTemplateKey);
   const ready = ontQ.isFetched && tplQ.isFetched;   // don't POST until the lists settle
-  const ont = ontQ.data?.find((o) => o.ontology_key === "hkfrs_hk_china_v1") ?? ontQ.data?.[0];
+  // Prefer the ontology targeting the template the analyst selected on the Upload screen;
+  // fall back to the shipped HK reference ontology, then whatever is first.
+  const ont =
+    (selectedTemplateKey && ontQ.data?.find((o) => o.target_template_key === selectedTemplateKey)) ||
+    ontQ.data?.find((o) => o.ontology_key === "hkfrs_hk_china_v1") ||
+    ontQ.data?.[0];
   const tpl = ont ? tplQ.data?.find((tt) => tt.template_key === ont.target_template_key) : undefined;
   const { data, isPending, isError, error } = useExtraction(id, ont?.id, tpl?.id, ready);
 

@@ -6,6 +6,7 @@ import { useAppLocale, useUI } from "../store";
 import { color, font, radius } from "../theme";
 import type { NodeConfig } from "../types";
 import { useTemplate } from "../lib/queries";
+import { useCan } from "../lib/rbac";
 import { useT } from "../i18n";
 
 const SIGN_OPTIONS: { key: string; labelKey: string }[] = [
@@ -85,6 +86,7 @@ export default function TemplateScreen() {
   const { data } = useTemplate(locale);
   const tplSel = useUI((s) => s.tplSel);
   const setTpl = useUI((s) => s.setTpl);
+  const canEdit = useCan("config:template"); // authoring is admin-only; analysts view/select
 
   if (!data) {
     return (
@@ -95,7 +97,20 @@ export default function TemplateScreen() {
   }
 
   const { tree, node_config, template } = data;
-  const cfg: NodeConfig = node_config[tplSel] ?? node_config["trade_recv"];
+  const cfg: NodeConfig | undefined =
+    node_config[tplSel] ?? node_config["trade_recv"] ?? Object.values(node_config)[0];
+
+  // Greenfield (no project loaded yet): the template tree is empty. Show guidance rather
+  // than crashing on a missing node config.
+  if (!tree.length || !cfg) {
+    return (
+      <div style={{ maxWidth: 560, margin: "60px auto", textAlign: "center", color: color.muted, padding: "0 24px" }}>
+        <div style={{ fontSize: 28, marginBottom: 10 }}>◆</div>
+        <h1 style={{ fontSize: 18, fontWeight: 600, color: color.ink, marginBottom: 8 }}>{t("tp.emptyTitle")}</h1>
+        <p style={{ fontSize: 12.5, lineHeight: 1.6 }}>{t("tp.emptyHint")}</p>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
@@ -167,32 +182,42 @@ export default function TemplateScreen() {
           })}
         </div>
 
-        <div style={{ flex: "0 0 auto", padding: "11px 14px", borderTop: `1px solid ${color.hairline3}` }}>
-          <button
-            style={{
-              width: "100%",
-              fontSize: 12,
-              fontWeight: 600,
-              color: color.indigo,
-              background: "#fff",
-              border: `1px dashed ${color.indigoBorder2}`,
-              borderRadius: radius.control,
-              padding: 9,
-              cursor: "pointer",
-            }}
-          >
-            {t("tp.addLineItem")}
-          </button>
-        </div>
+        {canEdit && (
+          <div style={{ flex: "0 0 auto", padding: "11px 14px", borderTop: `1px solid ${color.hairline3}` }}>
+            <button
+              style={{
+                width: "100%",
+                fontSize: 12,
+                fontWeight: 600,
+                color: color.indigo,
+                background: "#fff",
+                border: `1px dashed ${color.indigoBorder2}`,
+                borderRadius: radius.control,
+                padding: 9,
+                cursor: "pointer",
+              }}
+            >
+              {t("tp.addLineItem")}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* RIGHT: node editor */}
       <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 30px" }}>
         <div style={{ maxWidth: 680 }}>
           <div style={{ fontSize: 11, color: color.muted, marginBottom: 3 }}>{cfg.breadcrumb}</div>
-          <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 3 }}>{cfg.label}</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 3 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>{cfg.label}</h1>
+            {!canEdit && (
+              <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: radius.pill,
+                             background: color.rowAltBg, color: color.muted, border: `1px solid ${color.hairline3}` }}>
+                {t("tp.viewOnly")}
+              </span>
+            )}
+          </div>
           <p style={{ margin: "0 0 20px", color: color.sec2, fontSize: 12.5 }}>
-            {t("tp.editorSubhead")}
+            {canEdit ? t("tp.editorSubhead") : t("tp.viewOnlyHint")}
           </p>
 
           {/* Description aliases */}
@@ -211,21 +236,23 @@ export default function TemplateScreen() {
                     color: color.indigo,
                   }}
                 >
-                  {a} <span style={{ opacity: 0.5, cursor: "pointer" }}>×</span>
+                  {a}{canEdit && <span style={{ opacity: 0.5, cursor: "pointer" }}> ×</span>}
                 </span>
               ))}
-              <span
-                style={{
-                  fontSize: 11.5,
-                  padding: "5px 11px",
-                  borderRadius: radius.pill,
-                  border: `1px dashed ${color.dashed}`,
-                  color: color.muted,
-                  cursor: "pointer",
-                }}
-              >
-                {t("tp.addAlias")}
-              </span>
+              {canEdit && (
+                <span
+                  style={{
+                    fontSize: 11.5,
+                    padding: "5px 11px",
+                    borderRadius: radius.pill,
+                    border: `1px dashed ${color.dashed}`,
+                    color: color.muted,
+                    cursor: "pointer",
+                  }}
+                >
+                  {t("tp.addAlias")}
+                </span>
+              )}
             </div>
           </Card>
 
