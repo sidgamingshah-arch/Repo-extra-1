@@ -47,6 +47,7 @@ def extract_pdf(data: bytes, doc, ctx: PipelineContext) -> int:
     if not targets:
         targets = list(doc.pages)
 
+    number_format = _resolve_number_format(ctx, doc)
     ocr = None
     added = 0
     ordinal = len(doc.line_items)
@@ -82,7 +83,7 @@ def extract_pdf(data: bytes, doc, ctx: PipelineContext) -> int:
             continue
         items, ordinal = build_line_items(
             words, page_index=ps.index, document_id=doc.content_hash,
-            source_kind=source_kind, ordinal_start=ordinal)
+            source_kind=source_kind, ordinal_start=ordinal, number_format=number_format)
         doc.line_items.extend(items)
         added += len(items)
     ctx.log(f"extract:pdf_line_items={added} note_tables={len(doc.notes)}")
@@ -116,6 +117,21 @@ def extract_image(data: bytes, doc, ctx: PipelineContext) -> int:
     doc.line_items.extend(items)
     ctx.log(f"extract:image_line_items={len(items)}")
     return len(items)
+
+
+def _resolve_number_format(ctx: PipelineContext, doc):
+    """The locale ``NumberFormat`` for value parsing: the ontology's per-locale format keyed
+    by the document's detected locale. Returns None for English or an unset locale so the fast
+    US regex path is used unchanged — locale-aware parsing (EU decimal-comma, Indian grouping)
+    activates only for a non-English document that has a declared format."""
+    loc = doc.locale
+    if not loc or loc == "en":
+        return None
+    ontology = getattr(ctx, "ontology", None)
+    if ontology is None:
+        return None
+    by_locale = getattr(ontology, "number_format_by_locale", None) or {}
+    return by_locale.get(loc)
 
 
 def _resolve_ocr(ctx: PipelineContext):

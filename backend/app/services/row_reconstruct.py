@@ -27,7 +27,16 @@ class Word:
     bbox: BBox   # normalized [0,1], page top-left origin
 
 
-def _num(t: str) -> Decimal | None:
+def _num(t: str, fmt=None) -> Decimal | None:
+    """Parse a token to a Decimal. With no ``fmt`` this uses the fast US-format path (comma
+    thousands, dot decimal) — unchanged behaviour. When a locale ``NumberFormat`` is supplied
+    it delegates to ``services.numbers.parse_number`` so EU decimal-comma (``1.234,56``),
+    Indian grouping (``1,23,456``) and Arabic-Indic digits parse correctly (Req 12)."""
+    if fmt is not None:
+        from app.services.numbers import parse_number
+
+        p = parse_number(t, fmt)
+        return p.value_raw if p.ok else None
     if not _NUM.match(t.strip()):
         return None
     s = t.strip().replace(",", "").replace("%", "")
@@ -61,7 +70,7 @@ def _group_rows(words: list[Word], y_tol: float = 0.012) -> list[list[Word]]:
     return rows
 
 
-def _scan_row(row: list[Word]) -> tuple[list[Word], str | None, list[Word]]:
+def _scan_row(row: list[Word], fmt=None) -> tuple[list[Word], str | None, list[Word]]:
     """Split one visual row into (label words, note-ref, value words).
 
     A "Note"/"Notes" token plus the *single* following number is a note reference, not a
@@ -74,11 +83,11 @@ def _scan_row(row: list[Word]) -> tuple[list[Word], str | None, list[Word]]:
     while i < len(row):
         tok = row[i].text.strip()
         if _NOTE.match(tok):
-            if i + 1 < len(row) and _num(row[i + 1].text) is not None:
+            if i + 1 < len(row) and _num(row[i + 1].text, fmt) is not None:
                 note_ref = row[i + 1].text.strip().strip(".")
                 i += 2
                 continue
-        if _num(tok) is not None:
+        if _num(tok, fmt) is not None:
             value_words.append(row[i])
         elif not value_words:   # text before any number is part of the label
             label_words.append(row[i])
@@ -106,7 +115,7 @@ def _looks_like_header(label_words: list[Word]) -> bool:
     return False
 
 
-def _merge_wrapped_labels(rows: list[list[Word]]) -> list[list[Word]]:
+def _merge_wrapped_labels(rows: list[list[Word]], fmt=None) -> list[list[Word]]:
     """Fold a label-only line into the following valued row when the two are clearly one
     wrapped label: tight vertical spacing *and* left-alignment inside the label column.
 
@@ -117,7 +126,7 @@ def _merge_wrapped_labels(rows: list[list[Word]]) -> list[list[Word]]:
     out: list[list[Word]] = []
     pending: list[Word] = []
     for idx, row in enumerate(rows):
-        label_words, note_ref, value_words = _scan_row(row)
+        label_words, note_ref, value_words = _scan_row(row, fmt)
         if value_words:
             out.append(pending + row if pending else row)
             pending = []
@@ -129,8 +138,8 @@ def _merge_wrapped_labels(rows: list[list[Word]]) -> list[list[Word]]:
             and label_words
             and note_ref is None
             and not _looks_like_header(label_words)
-            and _scan_row(nxt)[2]                       # next row actually carries values
-            and _wrap_adjacent(_row_box(row), _row_box(nxt), _scan_row(nxt)[0])
+            and _scan_row(nxt, fmt)[2]                  # next row actually carries values
+            and _wrap_adjacent(_row_box(row), _row_box(nxt), _scan_row(nxt, fmt)[0])
         )
         if is_wrap:
             pending = pending + row
@@ -185,18 +194,20 @@ def _basis_for(x: float, bands: list[tuple[Basis, float]]) -> Basis:
 
 
 def build_line_items(words: list[Word], *, page_index: int, document_id: str | None,
-                     source_kind: str, ordinal_start: int = 0) -> tuple[list[LineItem], int]:
+                     source_kind: str, ordinal_start: int = 0,
+                     number_format=None) -> tuple[list[LineItem], int]:
     """Reconstruct line items from positioned words. Returns (items, next_ordinal).
 
     Consolidated and standalone columns are extracted in one pass: a Consolidated/Standalone
     header band (if present) attributes each value column to its basis; within a basis,
-    left→right columns become current / prior periods."""
+    left→right columns become current / prior periods. ``number_format`` (a locale
+    ``NumberFormat``) makes value parsing locale-correct; omit for the US default."""
     items: list[LineItem] = []
     ordinal = ordinal_start
-    rows = _merge_wrapped_labels(_group_rows(words))
+    rows = _merge_wrapped_labels(_group_rows(words), number_format)
     bands = _basis_bands(rows)
     for row in rows:
-        label_words, note_ref, value_words = _scan_row(row)
+        label_words, note_ref, value_words = _scan_row(row, number_format)
 
         label = " ".join(w.text for w in label_words).strip()
         if not label or not value_words:
@@ -208,7 +219,7 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
         # Group value columns by basis (via the header band), then order within each basis.
         per_basis: dict[Basis, int] = {}
         for vw in sorted(value_words, key=lambda w: w.bbox.x0):
-            dec = _num(vw.text)
+            dec = _num(vw.text, number_format)
             if dec is None:
                 continue
             basis = _basis_for((vw.bbox.x0 + vw.bbox.x1) / 2, bands)
