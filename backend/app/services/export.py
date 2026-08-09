@@ -148,7 +148,7 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
                              note_details: list[dict] | None = None) -> bytes:
     """A formatted, statement-shaped workbook: one sheet per statement in the template, with
     its sections / subtotals / totals, localized line labels, and consolidated + standalone
-    columns side by side, plus derived Ratios / Disclosures / Notes sheets. Purely
+    columns side by side, plus Note details / Ratios / Disclosures sheets. Purely
     template-driven — the same code renders any template."""
     import openpyxl
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -233,10 +233,10 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
 
 def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
                          note_details: list[dict], locale: str) -> None:
-    """Note details / Ratios / Disclosures / Highlights sheets."""
-    from openpyxl.styles import Alignment, Font, PatternFill
+    """Note details / Ratios / Disclosures sheets."""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-    from app.services.derived import build_free_notes, compute_ratios
+    from app.services.derived import compute_ratios
 
     head_font = Font(bold=True, color="FFFFFF")
     head_fill = PatternFill("solid", fgColor="243044")
@@ -249,26 +249,46 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
         ws.freeze_panes = "A2"
 
     num_fmt = "#,##0;(#,##0)"
+    right = Alignment(horizontal="right")
 
-    # Note details — the extracted breakdown tables behind the face figures.
+    # Note details — the extracted breakdown tables behind the face figures, laid out
+    # note by note: each note's title on its own row, then its sub-items beneath it, with
+    # current + prior columns. Note 1 (and its detail), then Note 2, and so on.
     ws = wb.create_sheet("Note details")
-    _header(ws, ["Note", "Title", "Line item", "Current", "Prior", "Source"],
-            [8, 30, 40, 14, 14, 14])
+    _header(ws, [_col("Note", locale), _col("Current", locale), _col("Prior", locale)],
+            [52, 16, 16])
+    ws.cell(1, 2).alignment = right
+    ws.cell(1, 3).alignment = right
+    note_fill = PatternFill("solid", fgColor="EEF1F6")
+    note_border = Border(top=Side(style="thin", color="9AA4B2"))
+    ink = "1f2937"
     ri = 2
-    for note in note_details:
+
+    def _note_sort_key(note):
+        try:
+            return (0, int(str(note.get("no")).strip()))
+        except (TypeError, ValueError):
+            return (1, str(note.get("no")))
+
+    for note in sorted(note_details, key=_note_sort_key):
         title = note.get("title") or ""
+        heading = f"Note {note.get('no')}" + (f" — {title}" if title else "")
+        hc = ws.cell(ri, 1, heading); hc.font = Font(bold=True, color=ink)
+        for col in (1, 2, 3):
+            cell = ws.cell(ri, col)
+            cell.fill = note_fill
+            cell.border = note_border
+        ri += 1
         for row in note.get("rows", []):
             vals = row.get("values") or []
             by = {v.get("period_label"): v for v in vals}
             cur = (by.get("current") or (vals[0] if vals else {})) or {}
             prior = (by.get("prior") or (vals[1] if len(vals) > 1 else {})) or {}
-            ws.cell(ri, 1, f"Note {note.get('no')}")
-            ws.cell(ri, 2, title)
-            ws.cell(ri, 3, row.get("label", ""))
-            c = ws.cell(ri, 4, _num(cur.get("value"))); c.number_format = num_fmt
-            c = ws.cell(ri, 5, _num(prior.get("value"))); c.number_format = num_fmt
-            ws.cell(ri, 6, _prov_str(cur.get("provenance")))
+            lab = ws.cell(ri, 1, row.get("label", "")); lab.alignment = Alignment(indent=1)
+            c = ws.cell(ri, 2, _num(cur.get("value"))); c.number_format = num_fmt; c.alignment = right
+            c = ws.cell(ri, 3, _num(prior.get("value"))); c.number_format = num_fmt; c.alignment = right
             ri += 1
+        ri += 1                                          # blank spacer row between notes
     if ri == 2:
         ws.cell(2, 1, "No note detail tables were parsed for this document.")
 
@@ -277,7 +297,7 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
     _header(ws, ["Ratio", "Value", "Formula"], [26, 12, 52])
     for i, r in enumerate(compute_ratios(rows, locale=locale), start=2):
         ws.cell(i, 1, r["label"])
-        ws.cell(i, 2, r["display"]).alignment = Alignment(horizontal="right")
+        ws.cell(i, 2, r["display"]).alignment = right
         ws.cell(i, 3, r["formula"]).font = Font(size=9, color="6B7280")
 
     # Disclosures
@@ -288,13 +308,6 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
         ws.cell(i, 2, "Yes" if d.get("present") else "—")
         ws.cell(i, 3, d.get("page") or "")
         ws.cell(i, 4, d.get("snippet", "")).alignment = wrap
-
-    # Highlights — plain-language commentary generated from the extracted values.
-    ws = wb.create_sheet("Highlights")
-    _header(ws, ["Highlight", "Detail"], [26, 90])
-    for i, n in enumerate(build_free_notes(rows, locale=locale), start=2):
-        ws.cell(i, 1, n["title"]).font = Font(bold=True)
-        ws.cell(i, 2, n["text"]).alignment = wrap
 
 
 def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, locale, r,
