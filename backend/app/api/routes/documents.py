@@ -355,7 +355,12 @@ def _prov_label(prov: dict | None) -> str:
     return f"p.{(prov.get('page_index', 0) or 0) + 1}"
 
 
-_LOW_CONF = 0.75  # mapping confidence below this routes to review
+def _low_conf_threshold() -> float:
+    """Mapping confidence below which a line routes to review — the same threshold the mapper
+    uses to auto-accept, so the two never disagree."""
+    from app.config import get_settings
+
+    return get_settings().extraction.auto_accept_confidence
 
 
 def _row_value(rows: list[dict], key: str, basis: str = "consolidated", period: str = "current"):
@@ -453,7 +458,7 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                 ],
                 "fix": L(_UNMAPPED_FIX),
             })
-        elif "low_mapping_confidence" in flags or (isinstance(conf, (int, float)) and conf < _LOW_CONF):
+        elif "low_mapping_confidence" in flags or (isinstance(conf, (int, float)) and conf < _low_conf_threshold()):
             low_conf += 1
             checks.append({
                 "id": f"chk-lowconf-{i}", "type": "low_confidence", "icon": "!",
