@@ -37,6 +37,8 @@ def _credit_rows():
         _row("pl_profit_for_the_year", 2400),
         _row("cf_cash_flow_from_operating_activities__net_cash_from_operating_activities", 3500),
         _row("cf_cash_flow_from_investing_activities__purchase_of_property_plant_and_equipment", 1500),
+        _row("cf_cash_flow_from_financing_activities__interest_paid", 380),
+        _row("cf_cash_flow_from_financing_activities__repayment_of_borrowings", 600),
     ]
 
 
@@ -57,6 +59,13 @@ def test_credit_ratios_compute_expected_values():
     assert by_key["debt_service_coverage"]["value"] == round(4000 / (400 + 200 + 800), 2)  # 2.86×
     assert by_key["cfo_to_total_debt"]["value"] == round(3500 / 5000 * 100, 2)          # 70.0%
     assert by_key["fcf_to_total_debt"]["value"] == round((3500 - 1500) / 5000 * 100, 2) # 40.0%
+    # FFO = profit for the year + D&A = 2400 + 800; cash debt service = CFO / (interest paid + repayment).
+    assert by_key["ffo_to_total_debt"]["value"] == round((2400 + 800) / 5000 * 100, 2)  # 64.0%
+    assert by_key["cash_debt_service_coverage"]["value"] == round(3500 / (380 + 600), 2)
+
+    # Profitability — EBITDA margin and ROCE (capital employed = assets − current liabilities).
+    assert by_key["ebitda_margin"]["value"] == round(4000 / 20000 * 100, 2)             # 20.0%
+    assert by_key["return_on_capital_employed"]["value"] == round(3200 / (16614 - 3300) * 100, 2)
 
     # Liquidity
     assert by_key["cash_ratio"]["value"] == round(1204 / 3300, 2)

@@ -36,6 +36,8 @@ _CASH = [
 _EBITDA = [("pl_operating_profit_ebit", 1), ("pl_expenses__depreciation_and_amortisation_expense", 1, "opt")]
 _CFO = "cf_cash_flow_from_operating_activities__net_cash_from_operating_activities"
 _CAPEX = "cf_cash_flow_from_investing_activities__purchase_of_property_plant_and_equipment"
+_INTEREST_PAID = "cf_cash_flow_from_financing_activities__interest_paid"
+_REPAYMENT = "cf_cash_flow_from_financing_activities__repayment_of_borrowings"
 _EQUITY = "bs_equity__total_equity"
 _TCL = "bs_current_liabilities__total_current_liabilities"
 _INTEREST = "pl_non_operating_expenses__interest_expense"
@@ -148,6 +150,20 @@ _RATIOS = [
                     "fr": "Flux de trésorerie disponible / Dette totale"},
      "num": [(_CFO, 1), (_CAPEX, -1, "opt")], "den": list(_DEBT),
      "formula": "(Net cash from operations − Capex) / Total debt"},
+    {"key": "ffo_to_total_debt", "label": "Funds from operations to debt (FFO/debt)", "unit": "%",
+     "category": "Coverage",
+     "label_i18n": {"zh": "经营资金/总债务", "ar": "الأموال من العمليات إلى الدين",
+                    "fr": "Fonds provenant de l'exploitation / Dette totale"},
+     "num": [("pl_profit_for_the_year", 1),
+             ("pl_expenses__depreciation_and_amortisation_expense", 1, "opt")],
+     "den": list(_DEBT),
+     "formula": "(Profit for the year + depreciation & amortisation) / Total debt"},
+    {"key": "cash_debt_service_coverage", "label": "Cash debt-service coverage", "unit": "x",
+     "category": "Coverage",
+     "label_i18n": {"zh": "现金偿债保障倍数", "ar": "تغطية خدمة الدين النقدية",
+                    "fr": "Couverture du service de la dette par la trésorerie"},
+     "num": [(_CFO, 1)], "den": [(_INTEREST_PAID, 1), (_REPAYMENT, 1, "opt")],
+     "formula": "Net cash from operating activities / (Interest paid + repayment of borrowings)"},
 
     # ---- Efficiency (working-capital cycle) ------------------------------------------
     {"key": "working_capital_to_assets", "label": "Working capital / total assets", "unit": "%",
@@ -184,6 +200,17 @@ _RATIOS = [
      "label_i18n": {"zh": "营业利润率", "ar": "هامش التشغيل", "fr": "Marge opérationnelle"},
      "num": [("pl_operating_profit_ebit", 1)], "den": [("pl_income__revenue_from_operations", 1)],
      "formula": "Operating profit (EBIT) / Revenue"},
+    {"key": "ebitda_margin", "label": "EBITDA margin", "unit": "%", "category": "Profitability",
+     "label_i18n": {"zh": "EBITDA利润率", "ar": "هامش EBITDA", "fr": "Marge EBITDA"},
+     "num": list(_EBITDA), "den": [("pl_income__revenue_from_operations", 1)],
+     "formula": "EBITDA (EBIT + depreciation & amortisation) / Revenue"},
+    {"key": "return_on_capital_employed", "label": "Return on capital employed (ROCE)", "unit": "%",
+     "category": "Profitability",
+     "label_i18n": {"zh": "已运用资本回报率", "ar": "العائد على رأس المال المستخدم",
+                    "fr": "Rentabilité des capitaux engagés"},
+     "num": [("pl_operating_profit_ebit", 1)],
+     "den": [("bs_total_assets", 1), (_TCL, -1, "opt")],
+     "formula": "Operating profit (EBIT) / (Total assets − Total current liabilities)"},
     {"key": "return_on_equity", "label": "Return on equity", "unit": "%", "category": "Profitability",
      "label_i18n": {"zh": "净资产收益率", "ar": "العائد على حقوق الملكية", "fr": "Rentabilité des capitaux propres"},
      "num": [("pl_profit_for_the_year", 1)], "den": [(_EQUITY, 1)],
