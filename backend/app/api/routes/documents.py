@@ -437,6 +437,25 @@ def get_document_run(document_id: str, session: Session = Depends(db)) -> dict:
     return {"run_id": run.id, "status": run.status, "result": run.result}
 
 
+@router.get("/{document_id}/analysis", dependencies=[Depends(authorized_document)])
+def get_document_analysis(document_id: str, locale: str = Query("en"),
+                          session: Session = Depends(db)) -> dict:
+    """Derived analysis for a document, from its latest extraction: computed ratios and
+    plain-language notes (recomputed from the current values so edits show) plus the stored
+    disclosure scan. Empty (but valid) until the document has been extracted."""
+    from app.services.derived import build_free_notes, compute_ratios
+
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        return {"ratios": [], "disclosures": [], "notes": []}
+    rows = run.result.get("rows", [])
+    return {
+        "ratios": compute_ratios(rows, locale=locale),
+        "disclosures": run.result.get("disclosures", []),
+        "notes": build_free_notes(rows, locale=locale),
+    }
+
+
 @router.get("/{document_id}/review", dependencies=[Depends(authorized_document)])
 def get_document_review(document_id: str, locale: str = Query("en"),
                         session: Session = Depends(db)) -> dict:
@@ -577,7 +596,8 @@ def export_document(
     template_def = _template_for_run(session, run)
     if layout == "statement" and template_def:
         data = build_statement_workbook(rows, template_def, locale=locale,
-                                        filename=doc.filename or "document")
+                                        filename=doc.filename or "document",
+                                        disclosures=run.result.get("disclosures", []))
     else:
         data = build_rows_xlsx(rows, filename=doc.filename or "document")
     return Response(

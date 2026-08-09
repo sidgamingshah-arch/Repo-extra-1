@@ -93,10 +93,20 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             if ont_row is not None:
                 ontology = load_ontology(ont_row.definition)
 
-        doc_model, ctx = run_extraction(store.get(object_key), filename=filename, ontology=ontology)
+        data = store.get(object_key)
+        doc_model, ctx = run_extraction(data, filename=filename, ontology=ontology)
         run = session.get(ExtractionRun, run_id)
         if run is None:
             return
+
+        # Presence scan for qualitative disclosures (auditor qualification, contingent
+        # liabilities, guarantees, …) over the document text — stored on the run.
+        from app.services.derived import document_text, scan_disclosures
+        try:
+            disclosures = scan_disclosures(document_text(data, doc_model.fmt.value))
+        except Exception:  # noqa: BLE001 — a scan failure must not fail the extraction
+            disclosures = []
+
         run.result = {
             "locale": doc_model.locale,
             "format": doc_model.fmt.value,
@@ -105,6 +115,7 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             "line_item_count": len(doc_model.line_items),
             "notes": len(doc_model.notes),
             "rows": _serialize_rows(doc_model),
+            "disclosures": disclosures,
         }
         run.status = "succeeded"
         run.progress = {"phase": "done", "pct": 1.0}

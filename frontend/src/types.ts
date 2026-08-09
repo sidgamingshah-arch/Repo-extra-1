@@ -249,6 +249,33 @@ export interface ExtractionRunResponse {
   status: string;
   result: ExtractionResult;
 }
+/** Derived analysis from a real extraction: ratios, disclosure scan, free-form notes. */
+export interface Ratio {
+  key: string;
+  label: string;
+  unit: string;
+  formula: string;
+  value: number | null;
+  display: string;
+  available: boolean;
+}
+export interface Disclosure {
+  key: string;
+  label: string;
+  present: boolean;
+  page: number | null;
+  snippet: string;
+}
+export interface FreeNote {
+  title: string;
+  text: string;
+}
+export interface AnalysisResponse {
+  ratios: Ratio[];
+  disclosures: Disclosure[];
+  notes: FreeNote[];
+}
+
 /** A window of spreadsheet cells around a value's origin (Excel click-to-source). */
 export interface CellContextCell {
   ref: string;

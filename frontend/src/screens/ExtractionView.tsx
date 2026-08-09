@@ -8,11 +8,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "../components/ui";
 import { useT } from "../i18n";
 import { api } from "../lib/api";
-import { useCellContext, useExtraction, useOntologies, useTemplates } from "../lib/queries";
+import { useCellContext, useDocumentAnalysis, useExtraction, useOntologies, useTemplates } from "../lib/queries";
 import { useUI } from "../store";
 import { SCREENS } from "./config";
 import { color, font } from "../theme";
-import type { ExtractionProvenance, ExtractionRow } from "../types";
+import type { ExtractionProvenance, ExtractionRow, Locale } from "../types";
 
 /** A value's source location, resolved to what the Source panel needs to render it.
  *  PDF sources carry a page + bbox; spreadsheet sources carry a sheet + cell. */
@@ -225,10 +225,73 @@ function cellSt(target: boolean, header: boolean): React.CSSProperties {
   };
 }
 
+/** Derived analysis (computed from the extracted values): ratios, qualitative disclosures,
+ * and free-form notes — the on-screen twin of the export's Ratios/Disclosures/Notes sheets. */
+function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k: string) => string }) {
+  const q = useDocumentAnalysis(id, locale);
+  if (!q.data) return null;
+  const { ratios, disclosures, notes } = q.data;
+  const card: React.CSSProperties = { };
+  return (
+    <div style={{ marginTop: 22, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
+      <Card style={card}>
+        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: color.muted, marginBottom: 10 }}>
+          {t("ex.ratios")}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {ratios.map((r) => (
+            <div key={r.key} title={r.formula}
+                 style={{ border: `1px solid ${color.hairline3}`, borderRadius: 8, padding: "8px 10px",
+                          opacity: r.available ? 1 : 0.55 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, fontFamily: font.mono,
+                            color: r.available ? color.ink : color.faint }}>{r.display}</div>
+              <div style={{ fontSize: 10.5, color: color.sec2 }}>{r.label}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card style={card}>
+        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: color.muted, marginBottom: 10 }}>
+          {t("ex.notes")}
+        </div>
+        {notes.map((n, i) => (
+          <div key={i} style={{ marginBottom: 9 }}>
+            <div style={{ fontSize: 11.5, fontWeight: 600, color: color.ink }}>{n.title}</div>
+            <div style={{ fontSize: 11.5, color: color.sec2, lineHeight: 1.5 }}>{n.text}</div>
+          </div>
+        ))}
+      </Card>
+
+      <Card style={{ gridColumn: "1 / -1" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: color.muted, marginBottom: 10 }}>
+          {t("ex.disclosures")}
+        </div>
+        {disclosures.map((d) => (
+          <div key={d.key} style={{ display: "grid", gridTemplateColumns: "1.4fr 70px 2.5fr",
+                                    gap: 10, alignItems: "center", padding: "6px 0",
+                                    borderBottom: `1px solid ${color.hairline2}` }}>
+            <span style={{ fontSize: 12, color: color.ink }}>{d.label}</span>
+            <span style={{ fontSize: 10.5, fontWeight: 700,
+                           color: d.present ? color.greenFg : color.faint }}>
+              {d.present ? `p.${d.page}` : "—"}
+            </span>
+            <span style={{ fontSize: 11, color: color.muted, fontStyle: d.snippet ? "italic" : "normal",
+                           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {d.snippet || t("ex.notFound")}
+            </span>
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
 export default function ExtractionView() {
   const { id } = useParams();
   const nav = useNavigate();
   const t = useT();
+  const outputLocale = useUI((s) => s.locale);
   const [picked, setPicked] = useState<Picked | null>(null);
 
   const ontQ = useOntologies();
@@ -297,6 +360,7 @@ export default function ExtractionView() {
               <ExcelSourcePanel documentId={id} picked={picked?.kind === "xlsx" ? picked : null} t={t} />
             )}
           </div>
+          {id && <AnalysisSection id={id} locale={outputLocale} t={t} />}
         </>
       )}
     </div>

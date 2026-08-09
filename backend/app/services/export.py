@@ -144,10 +144,11 @@ def _bases_present(rows: list[dict]) -> list[str]:
 
 
 def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: str = "en",
-                             filename: str = "") -> bytes:
+                             filename: str = "", disclosures: list[dict] | None = None) -> bytes:
     """A formatted, statement-shaped workbook: one sheet per statement in the template, with
     its sections / subtotals / totals, localized line labels, and consolidated + standalone
-    columns side by side. Purely template-driven — the same code renders any template."""
+    columns side by side, plus derived Ratios / Disclosures / Notes sheets. Purely
+    template-driven — the same code renders any template."""
     import openpyxl
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
@@ -222,9 +223,52 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
         ws = wb.create_sheet("Extraction")
         ws.cell(1, 1, "No extracted line items for this document.")
 
+    _add_analysis_sheets(wb, rows, disclosures or [], locale)
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict], locale: str) -> None:
+    """Ratios / Disclosures / Notes sheets — all derived from the extracted values."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    from app.services.derived import build_free_notes, compute_ratios
+
+    head_font = Font(bold=True, color="FFFFFF")
+    head_fill = PatternFill("solid", fgColor="243044")
+    wrap = Alignment(wrap_text=True, vertical="top")
+
+    def _header(ws, names, widths):
+        for i, (n, w) in enumerate(zip(names, widths), start=1):
+            c = ws.cell(1, i, n); c.font = head_font; c.fill = head_fill
+            ws.column_dimensions[chr(64 + i)].width = w
+        ws.freeze_panes = "A2"
+
+    # Ratios
+    ws = wb.create_sheet("Ratios")
+    _header(ws, ["Ratio", "Value", "Formula"], [26, 12, 52])
+    for i, r in enumerate(compute_ratios(rows, locale=locale), start=2):
+        ws.cell(i, 1, r["label"])
+        ws.cell(i, 2, r["display"]).alignment = Alignment(horizontal="right")
+        ws.cell(i, 3, r["formula"]).font = Font(size=9, color="6B7280")
+
+    # Disclosures
+    ws = wb.create_sheet("Disclosures")
+    _header(ws, ["Disclosure", "Present", "Page", "Where found"], [30, 10, 8, 70])
+    for i, d in enumerate(disclosures, start=2):
+        ws.cell(i, 1, d.get("label", ""))
+        ws.cell(i, 2, "Yes" if d.get("present") else "—")
+        ws.cell(i, 3, d.get("page") or "")
+        ws.cell(i, 4, d.get("snippet", "")).alignment = wrap
+
+    # Notes
+    ws = wb.create_sheet("Notes")
+    _header(ws, ["Note", "Detail"], [26, 90])
+    for i, n in enumerate(build_free_notes(rows, locale=locale), start=2):
+        ws.cell(i, 1, n["title"]).font = Font(bold=True)
+        ws.cell(i, 2, n["text"]).alignment = wrap
 
 
 def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, locale, r,

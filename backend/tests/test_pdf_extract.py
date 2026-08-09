@@ -178,9 +178,10 @@ def test_dual_basis_statement_selects_by_basis(client):
     assert tr_value("standalone") == 3100        # different basis → different value, one pass
 
 
-def _extract_with_ontology(client, filename="bs.pdf"):
+def _extract_with_ontology(client, filename="bs.pdf", data=None):
     doc_id = client.post(
-        "/api/v1/documents", files={"file": (filename, make_native_pdf(), "application/pdf")}
+        "/api/v1/documents",
+        files={"file": (filename, data or make_native_pdf(), "application/pdf")},
     ).json()["id"]
     onts = client.get("/api/v1/ontologies").json()
     ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
@@ -206,6 +207,47 @@ def test_real_line_item_edit_persists_to_statement(client):
     row = next(x for x in st["rows"] if x["id"] == key)
     assert row["v1"] == 12345 and row["status"] == "edited" and row["formula"] == "=A+B"
     assert row["editable"] is True
+
+
+def test_derived_analysis_ratios_disclosures_notes(client):
+    """Ratios, disclosure scan, and free-form notes — all derived from the extraction."""
+    from tests.fixtures.generate import make_rich_pdf
+
+    doc_id = _extract_with_ontology(client, filename="rich.pdf", data=make_rich_pdf())
+    a = client.get(f"/api/v1/documents/{doc_id}/analysis").json()
+
+    # Ratios computed from extracted totals.
+    cr = next(r for r in a["ratios"] if r["key"] == "current_ratio")
+    assert cr["available"] and cr["value"] == 2.0 and cr["display"] == "2.0×"
+    # The full catalog is always returned (unavailable ones flagged, never fabricated).
+    assert any(not r["available"] for r in a["ratios"])
+
+    # Qualitative disclosures detected in the notes text, with a page.
+    disc = {d["key"]: d for d in a["disclosures"]}
+    assert disc["contingent_liabilities"]["present"] and disc["contingent_liabilities"]["page"] == 3
+    assert disc["auditor_qualification"]["present"] and disc["guarantees"]["present"]
+
+    # Free-form notes generated from the movements/ratios.
+    assert any("Trade receivables" in n["title"] for n in a["notes"])
+    assert any("Current ratio" in n["text"] for n in a["notes"])
+
+
+def test_analysis_and_export_sheets_present(client):
+    """The formatted export carries Ratios / Disclosures / Notes sheets alongside statements."""
+    import io as _io
+
+    import openpyxl
+
+    from tests.fixtures.generate import make_rich_pdf
+
+    doc_id = _extract_with_ontology(client, filename="rich.pdf", data=make_rich_pdf())
+    x = client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "excel", "layout": "statement"})
+    wb = openpyxl.load_workbook(_io.BytesIO(x.content))
+    assert {"Ratios", "Disclosures", "Notes"} <= set(wb.sheetnames)
+    ratios_text = " | ".join(str(v) for row in wb["Ratios"].iter_rows(values_only=True) for v in row if v)
+    assert "Current ratio" in ratios_text and "2.0×" in ratios_text
+    disc_text = " | ".join(str(v) for row in wb["Disclosures"].iter_rows(values_only=True) for v in row if v)
+    assert "Contingent liabilities" in disc_text
 
 
 def test_formatted_statement_export_is_template_driven(client):

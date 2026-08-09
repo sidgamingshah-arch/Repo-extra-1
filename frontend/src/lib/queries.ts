@@ -175,6 +175,15 @@ export const useDocumentReview = (documentId: string | undefined, locale: Locale
     retry: false,
   });
 
+/** Derived analysis (ratios / disclosures / notes) for a document. */
+export const useDocumentAnalysis = (documentId: string | undefined, locale: Locale = "en") =>
+  useQuery({
+    queryKey: ["document-analysis", documentId, locale],
+    queryFn: () => api.documentAnalysis(documentId as string, locale),
+    enabled: !!documentId,
+    retry: false,
+  });
+
 /** Real per-document notes index + one note's detail. */
 export const useDocumentNotes = (documentId: string | undefined) =>
   useQuery({

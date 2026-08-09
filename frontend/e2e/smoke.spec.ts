@@ -97,6 +97,9 @@ test("end-to-end: upload a new file â†’ Run integrity check shows real results â
   await expect(page).toHaveURL(/\/documents\//);
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Trade receivables").first()).toBeVisible();
+  // Derived analysis (ratios / disclosures / notes) renders from the extraction.
+  await expect(page.getByText("Ratios (computed)")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Disclosures")).toBeVisible();
 
   // Page Scope reads the REAL document's classified pages.
   await page.goto("/scope", DCL);

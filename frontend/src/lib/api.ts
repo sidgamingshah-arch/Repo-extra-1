@@ -54,6 +54,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 import type {
+  AnalysisResponse,
   AppSettings,
   AuditEntry,
   AuditResponse,
@@ -124,6 +125,9 @@ export const api = {
    * confidence). */
   documentReview: (documentId: string, locale: Locale = "en") =>
     req<ReviewResponse>(`/documents/${documentId}/review?locale=${locale}`),
+  /** Derived analysis for a document: computed ratios, disclosure scan, free-form notes. */
+  documentAnalysis: (documentId: string, locale: Locale = "en") =>
+    req<AnalysisResponse>(`/documents/${documentId}/analysis?locale=${locale}`),
   /** Real per-document notes index + detail, from line-item note references. */
   documentNotes: (documentId: string) =>
     req<NotesResponse>(`/documents/${documentId}/notes`),

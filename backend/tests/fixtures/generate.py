@@ -77,6 +77,61 @@ def make_dual_basis_pdf() -> bytes:
     return buf.getvalue()
 
 
+def make_rich_pdf() -> bytes:
+    """A fuller native PDF: BS totals + P&L headline + a notes page with qualitative
+    disclosures — so derived ratios, the disclosure scan, and free-form notes all populate."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _, height = A4
+
+    def rows(items, y):
+        c.setFont("Helvetica", 10)
+        for label, cur, pri in items:
+            c.drawString(72, y, label)
+            c.drawRightString(430, y, cur)
+            c.drawRightString(510, y, pri)
+            y -= 22
+        return y
+
+    c.setFont("Helvetica-Bold", 13); c.drawString(72, height - 60, "Balance Sheet")
+    y = rows([
+        ("Inventories", "2,000", "1,800"),
+        ("Trade receivables", "3,410", "2,900"),
+        ("Cash and cash equivalents", "1,204", "980"),
+        ("Total current assets", "6,614", "5,680"),
+        ("Total current liabilities", "3,300", "3,100"),
+        ("Total non-current liabilities", "1,200", "1,400"),
+        ("Total equity", "9,114", "7,180"),
+        ("Total assets", "13,614", "11,680"),
+    ], height - 90)
+    c.showPage()
+
+    c.setFont("Helvetica-Bold", 13); c.drawString(72, height - 60, "Statement of Profit or Loss")
+    rows([
+        ("Revenue from operations", "20,000", "18,000"),
+        ("Operating profit", "3,200", "2,700"),
+        ("Profit for the year", "2,400", "1,950"),
+    ], height - 90)
+    c.showPage()
+
+    c.setFont("Helvetica-Bold", 12); c.drawString(72, height - 60, "Notes to the Financial Statements")
+    c.setFont("Helvetica", 9)
+    for i, line in enumerate([
+        "The auditor has issued a qualified opinion in respect of inventory valuation.",
+        "Contingent liabilities: the Group is subject to legal proceedings estimated at 500.",
+        "The Company has provided financial guarantees to subsidiaries totalling 1,200.",
+        "Related party transactions with associates are disclosed in note 28.",
+        "Subsequent events: a dividend was declared after the reporting period.",
+    ]):
+        c.drawString(72, height - 90 - i * 18, line)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
 def make_multipage_pdf() -> bytes:
     """A 2-page native PDF: face on page 0, notes on page 1."""
     from reportlab.lib.pagesizes import A4
