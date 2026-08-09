@@ -253,6 +253,7 @@ export interface ExtractionRunResponse {
 export interface Ratio {
   key: string;
   label: string;
+  category: string;
   unit: string;
   formula: string;
   value: number | null;

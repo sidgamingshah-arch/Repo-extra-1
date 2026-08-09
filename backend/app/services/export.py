@@ -292,13 +292,25 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
     if ri == 2:
         ws.cell(2, 1, "No note detail tables were parsed for this document.")
 
-    # Ratios
+    # Ratios — grouped by category (Liquidity / Leverage / Coverage / Efficiency /
+    # Profitability), a category header row before each block. Credit metrics lead.
     ws = wb.create_sheet("Ratios")
-    _header(ws, ["Ratio", "Value", "Formula"], [26, 12, 52])
-    for i, r in enumerate(compute_ratios(rows, locale=locale), start=2):
-        ws.cell(i, 1, r["label"])
-        ws.cell(i, 2, r["display"]).alignment = right
-        ws.cell(i, 3, r["formula"]).font = Font(size=9, color="6B7280")
+    _header(ws, ["Ratio", "Value", "Formula"], [34, 12, 60])
+    cat_fill = PatternFill("solid", fgColor="EEF1F6")
+    ri = 2
+    last_cat = None
+    for r in compute_ratios(rows, locale=locale):
+        cat = r.get("category") or ""
+        if cat != last_cat:
+            hc = ws.cell(ri, 1, cat); hc.font = Font(bold=True, color="1f2937")
+            for c in (1, 2, 3):
+                ws.cell(ri, c).fill = cat_fill
+            last_cat = cat
+            ri += 1
+        ws.cell(ri, 1, r["label"]).alignment = Alignment(indent=1)
+        ws.cell(ri, 2, r["display"]).alignment = right
+        ws.cell(ri, 3, r["formula"]).font = Font(size=9, color="6B7280")
+        ri += 1
 
     # Disclosures
     ws = wb.create_sheet("Disclosures")

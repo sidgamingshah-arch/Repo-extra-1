@@ -225,33 +225,56 @@ function cellSt(target: boolean, header: boolean): React.CSSProperties {
   };
 }
 
+/** Localized heading for a ratio category (backend sends the English category name). */
+const CAT_KEY: Record<string, string> = {
+  Liquidity: "ex.cat.liquidity", Leverage: "ex.cat.leverage", Coverage: "ex.cat.coverage",
+  Efficiency: "ex.cat.efficiency", Profitability: "ex.cat.profitability",
+};
+
 /** Derived analysis (computed from the extracted values): ratios, qualitative disclosures,
  * and free-form notes — the on-screen twin of the export's Ratios/Disclosures/Notes sheets. */
 function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k: string) => string }) {
   const q = useDocumentAnalysis(id, locale);
   if (!q.data) return null;
   const { ratios, disclosures, notes } = q.data;
-  const card: React.CSSProperties = { };
+
+  // Group ratios by category, preserving the backend's category ordering.
+  const groups: { cat: string; items: typeof ratios }[] = [];
+  for (const r of ratios) {
+    const cat = r.category || "Profitability";
+    let g = groups.find((x) => x.cat === cat);
+    if (!g) { g = { cat, items: [] }; groups.push(g); }
+    g.items.push(r);
+  }
+
   return (
-    <div style={{ marginTop: 22, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-      <Card style={card}>
+    <div style={{ marginTop: 22, display: "grid", gap: 18 }}>
+      <Card>
         <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: color.muted, marginBottom: 10 }}>
           {t("ex.ratios")}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          {ratios.map((r) => (
-            <div key={r.key} title={r.formula}
-                 style={{ border: `1px solid ${color.hairline3}`, borderRadius: 8, padding: "8px 10px",
-                          opacity: r.available ? 1 : 0.55 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, fontFamily: font.mono,
-                            color: r.available ? color.ink : color.faint }}>{r.display}</div>
-              <div style={{ fontSize: 10.5, color: color.sec2 }}>{r.label}</div>
+        {groups.map((g) => (
+          <div key={g.cat} style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase",
+                          color: color.sec2, marginBottom: 6 }}>
+              {t(CAT_KEY[g.cat] || "") || g.cat}
             </div>
-          ))}
-        </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8 }}>
+              {g.items.map((r) => (
+                <div key={r.key} title={r.formula}
+                     style={{ border: `1px solid ${color.hairline3}`, borderRadius: 8, padding: "8px 10px",
+                              opacity: r.available ? 1 : 0.5 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, fontFamily: font.mono,
+                                color: r.available ? color.ink : color.faint }}>{r.display}</div>
+                  <div style={{ fontSize: 10.5, color: color.sec2 }}>{r.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
       </Card>
 
-      <Card style={card}>
+      <Card>
         <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: color.muted, marginBottom: 10 }}>
           {t("ex.highlights")}
         </div>
@@ -263,7 +286,7 @@ function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k:
         ))}
       </Card>
 
-      <Card style={{ gridColumn: "1 / -1" }}>
+      <Card>
         <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: color.muted, marginBottom: 10 }}>
           {t("ex.disclosures")}
         </div>

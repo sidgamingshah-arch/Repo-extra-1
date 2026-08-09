@@ -248,6 +248,10 @@ def test_analysis_and_export_sheets_present(client):
     assert "Highlights" not in wb.sheetnames
     ratios_text = " | ".join(str(v) for row in wb["Ratios"].iter_rows(values_only=True) for v in row if v)
     assert "Current ratio" in ratios_text and "2.0×" in ratios_text
+    # Credit-focused ratios and their category headers are present (listed even when a given
+    # input isn't extracted — the full catalog always shows).
+    assert "Leverage" in ratios_text and "Coverage" in ratios_text
+    assert "Net debt / EBITDA" in ratios_text and "Debt-service coverage (DSCR)" in ratios_text
     disc_text = " | ".join(str(v) for row in wb["Disclosures"].iter_rows(values_only=True) for v in row if v)
     assert "Contingent liabilities" in disc_text
 
