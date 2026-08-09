@@ -12,6 +12,8 @@ export const scope: Record<Locale, Record<string, string>> = {
     "sc.native": "NATIVE",
     "sc.back": "Back",
     "sc.extract": "Extract",
+    "sc.inScope": "in scope",
+    "sc.skipped": "skipped",
   },
   zh: {
     "sc.title": "报表页面检测",
@@ -24,6 +26,8 @@ export const scope: Record<Locale, Record<string, string>> = {
     "sc.native": "原生",
     "sc.back": "返回",
     "sc.extract": "提取",
+    "sc.inScope": "在范围内",
+    "sc.skipped": "已跳过",
   },
   ar: {
     "sc.title": "كشف صفحات القوائم المالية",
@@ -36,6 +40,8 @@ export const scope: Record<Locale, Record<string, string>> = {
     "sc.native": "أصلية",
     "sc.back": "رجوع",
     "sc.extract": "استخراج",
+    "sc.inScope": "ضمن النطاق",
+    "sc.skipped": "متخطّاة",
   },
   fr: {
     "sc.title": "Détection des pages d'états financiers",
@@ -48,5 +54,7 @@ export const scope: Record<Locale, Record<string, string>> = {
     "sc.native": "NATIF",
     "sc.back": "Retour",
     "sc.extract": "Extraire",
+    "sc.inScope": "dans le périmètre",
+    "sc.skipped": "ignorée",
   },
 };

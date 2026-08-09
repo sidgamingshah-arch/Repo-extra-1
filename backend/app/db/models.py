@@ -42,6 +42,12 @@ class Document(Base):
     locale: Mapped[str | None] = mapped_column(String(8), nullable=True)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     integrity_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Classified pages captured at upload (ingest→classify), so the Page Scope screen and
+    # scope editing reuse them instead of re-running the pre-flight pipeline on every request.
+    pages: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # User-chosen extraction scope: explicit list of INCLUDED page indices. None = default
+    # (all face/notes pages). Honoured by the extraction pipeline.
+    page_scope: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     runs: Mapped[list["ExtractionRun"]] = relationship(back_populates="document")

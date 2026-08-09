@@ -110,35 +110,63 @@ def _trend(key: str, kind: str, cur: float, prior: float, higher_is_better: bool
 
 
 def build_commentary(open_review_items: int = 12) -> dict:
+    """Demo-project commentary (seeded statements). Used by the project endpoint when demo
+    data is enabled; real uploaded documents use ``build_commentary_from_rows``."""
     bs, pl, cf = BALANCE_SHEET, PROFIT_AND_LOSS, CASH_FLOW
+    agg = {
+        "current_assets": _val(bs, "sub_ca"),
+        "current_liabs": _val(bs, "c_borrow") + _val(bs, "payables") + _val(bs, "ofl") + _val(bs, "prov_c"),
+        "equity": _val(bs, "esc") + _val(bs, "oe"),
+        "total_assets": _val(bs, "tot_assets"),
+        "debt": _val(bs, "nc_borrow") + _val(bs, "c_borrow"),
+        "cash": _val(bs, "cce"),
+        "goodwill": _val(bs, "goodwill"),
+        "receivables": _val(bs, "trade_recv"),
+        "revenue": _val(pl, "rev"),
+        "revenue_prev": _val(pl, "rev", "v2"),
+        "total_income": _val(pl, "tot_inc"),
+        "pbt": _val(pl, "pbt"),
+        "finance_costs": _val(pl, "fin"),
+        "wc_change": _val(cf, "cf_wc"),
+        # Prior-period (FY24) aggregates, for the year-on-year trend block.
+        "p_equity": _val(bs, "esc", "v2") + _val(bs, "oe", "v2"),
+        "p_total_assets": _val(bs, "tot_assets", "v2"),
+        "p_debt": _val(bs, "nc_borrow", "v2") + _val(bs, "c_borrow", "v2"),
+        "p_total_income": _val(pl, "tot_inc", "v2"),
+        "p_pbt": _val(pl, "pbt", "v2"),
+        "p_finance_costs": _val(pl, "fin", "v2"),
+        "op_cash": _val(cf, "cf_op_net"),
+        "p_op_cash": _val(cf, "cf_op_net", "v2"),
+    }
+    return _assemble(agg, open_review_items, "consolidated · FY25 vs FY24 · ₹ crore")
 
-    current_assets = _val(bs, "sub_ca")
-    current_liabs = _val(bs, "c_borrow") + _val(bs, "payables") + _val(bs, "ofl") + _val(bs, "prov_c")
-    equity = _val(bs, "esc") + _val(bs, "oe")
-    total_assets = _val(bs, "tot_assets")
-    debt = _val(bs, "nc_borrow") + _val(bs, "c_borrow")
-    cash = _val(bs, "cce")
-    goodwill = _val(bs, "goodwill")
-    receivables = _val(bs, "trade_recv")
 
-    revenue = _val(pl, "rev")
-    revenue_prev = _val(pl, "rev", "v2")
-    total_income = _val(pl, "tot_inc")
-    pbt = _val(pl, "pbt")
-    finance_costs = _val(pl, "fin")
-    wc_change = _val(cf, "cf_wc")
-
-    # Prior-period (FY24) aggregates, for the year-on-year trend block.
-    p_current_liabs = (_val(bs, "c_borrow", "v2") + _val(bs, "payables", "v2")
-                       + _val(bs, "ofl", "v2") + _val(bs, "prov_c", "v2"))
-    p_equity = _val(bs, "esc", "v2") + _val(bs, "oe", "v2")
-    p_total_assets = _val(bs, "tot_assets", "v2")
-    p_debt = _val(bs, "nc_borrow", "v2") + _val(bs, "c_borrow", "v2")
-    p_total_income = _val(pl, "tot_inc", "v2")
-    p_pbt = _val(pl, "pbt", "v2")
-    p_finance_costs = _val(pl, "fin", "v2")
-    op_cash = _val(cf, "cf_op_net")
-    p_op_cash = _val(cf, "cf_op_net", "v2")
+def _assemble(agg: dict, open_review_items: int, basis: str) -> dict:
+    """Build the commentary payload from period aggregates. Source-agnostic: the demo path and
+    the real-extraction path both compute the same aggregate dict and hand it here, so a real
+    uploaded document gets genuinely data-driven ratios, trends, strengths and weaknesses."""
+    current_assets = agg["current_assets"]
+    current_liabs = agg["current_liabs"]
+    equity = agg["equity"]
+    total_assets = agg["total_assets"]
+    debt = agg["debt"]
+    cash = agg["cash"]
+    goodwill = agg["goodwill"]
+    receivables = agg["receivables"]
+    revenue = agg["revenue"]
+    revenue_prev = agg["revenue_prev"]
+    total_income = agg["total_income"]
+    pbt = agg["pbt"]
+    finance_costs = agg["finance_costs"]
+    wc_change = agg["wc_change"]
+    p_equity = agg["p_equity"]
+    p_total_assets = agg["p_total_assets"]
+    p_debt = agg["p_debt"]
+    p_total_income = agg["p_total_income"]
+    p_pbt = agg["p_pbt"]
+    p_finance_costs = agg["p_finance_costs"]
+    op_cash = agg["op_cash"]
+    p_op_cash = agg["p_op_cash"]
 
     cur_margin = _safe(pbt, total_income) * 100
     prior_margin = _safe(p_pbt, p_total_income) * 100
@@ -236,5 +264,75 @@ def build_commentary(open_review_items: int = 12) -> dict:
         "strengths": strengths,
         "weaknesses": weaknesses,
         "data_quality": DATA_QUALITY,
-        "basis": "consolidated · FY25 vs FY24 · ₹ crore",
+        "basis": basis,
     }
+
+
+def build_commentary_from_rows(rows: list[dict], *, open_review_items: int = 0,
+                               basis: str = "consolidated", currency: str = "",
+                               units: str = "") -> dict:
+    """Commentary for a REAL extraction: the same ratios, trends, strengths and weaknesses as
+    the demo path, but every aggregate is read from the extracted canonical line items (current
+    vs prior period). Returns the empty shape when the headline figures needed for ratios were
+    not extracted, so the screen degrades honestly instead of fabricating an assessment."""
+    from app.services.derived import _CASH, _DEBT, _side, _value
+
+    by_key = {r["canonical_key"]: r for r in rows if r.get("canonical_key")}
+
+    def v(key: str, period: str = "current") -> float:
+        return _value(by_key, key, basis, period) or 0.0
+
+    def side(terms, period: str = "current") -> float:
+        return _side(by_key, terms, basis, period) or 0.0
+
+    # Working-capital movement = sum of the operating-activities increase/decrease lines.
+    def wc(period: str) -> float:
+        total = 0.0
+        for k, r in by_key.items():
+            if k.startswith("cf_cash_flow_from_operating_activities__increase_decrease_in_"):
+                total += _value({k: r}, k, basis, period) or 0.0
+        return total
+
+    _REV = "pl_income__revenue_from_operations"
+    _PBT = "pl_profit_before_tax"
+    _PROFIT = "pl_profit_for_the_year"
+    _FIN = "pl_non_operating_expenses__interest_expense"
+    _CFO = "cf_cash_flow_from_operating_activities__net_cash_from_operating_activities"
+
+    revenue = v(_REV)
+    # If the core figures for ratios/trends aren't present, don't invent a commentary.
+    if revenue == 0.0 and v("bs_total_assets") == 0.0:
+        return {"headline": "", "assessment": "", "metrics": [], "trends": [],
+                "strengths": [], "weaknesses": [], "data_quality": "", "basis": ""}
+
+    pbt = v(_PBT) or v(_PROFIT)
+    p_pbt = v(_PBT, "prior") or v(_PROFIT, "prior")
+    # Net margin denominator: revenue (standard); the demo uses total income, but a canonical
+    # "total income" line isn't guaranteed, so revenue keeps it well-defined and comparable.
+    agg = {
+        "current_assets": v("bs_current_assets__total_current_assets"),
+        "current_liabs": v("bs_current_liabilities__total_current_liabilities"),
+        "equity": v("bs_equity__total_equity"),
+        "total_assets": v("bs_total_assets"),
+        "debt": side(_DEBT),
+        "cash": side(_CASH),
+        "goodwill": v("bs_non_current_assets__goodwill"),
+        "receivables": v("bs_current_assets__trade_receivables"),
+        "revenue": revenue,
+        "revenue_prev": v(_REV, "prior"),
+        "total_income": revenue,
+        "pbt": pbt,
+        "finance_costs": v(_FIN),
+        "wc_change": wc("current"),
+        "p_equity": v("bs_equity__total_equity", "prior"),
+        "p_total_assets": v("bs_total_assets", "prior"),
+        "p_debt": side(_DEBT, "prior"),
+        "p_total_income": v(_REV, "prior"),
+        "p_pbt": p_pbt,
+        "p_finance_costs": v(_FIN, "prior"),
+        "op_cash": v(_CFO),
+        "p_op_cash": v(_CFO, "prior"),
+    }
+    label = " · ".join(p for p in [
+        basis, (f"{currency} {units}".strip() if (currency or units) else "")] if p)
+    return _assemble(agg, open_review_items, label or basis)

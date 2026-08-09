@@ -1,6 +1,8 @@
 """Document endpoints: upload (+ upfront integrity/classification) and fetch."""
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -191,6 +193,7 @@ async def upload_document(
     doc_model, _ctx = analyze_document(data, filename=file.filename or "")
     object_key = store.put_bytes(data)
 
+    pages_json = [p.model_dump(mode="json") for p in doc_model.pages]
     row = Document(
         owner=principal.username,
         filename=file.filename or "",
@@ -202,6 +205,8 @@ async def upload_document(
         locale=doc_model.locale,
         page_count=len(doc_model.pages),
         integrity_report=doc_model.integrity.model_dump(mode="json") if doc_model.integrity else None,
+        # Persist the classified pages so Page Scope / scope editing reuse them (no recompute).
+        pages=pages_json,
     )
     session.add(row)
     session.commit()
@@ -521,6 +526,49 @@ def get_document_analysis(document_id: str, locale: str = Query("en"),
     }
 
 
+def _localize_commentary(c: dict, locale: str) -> dict:
+    """Localize a commentary payload's fixed catalog strings (headline/assessment/points and
+    metric/trend labels) via the i18n table — the same table the demo path uses."""
+    from app.sample.i18n_data import tr
+
+    if locale == "en" or not c.get("metrics"):
+        return c
+    c["headline"] = tr(c["headline"], locale)
+    c["assessment"] = tr(c["assessment"], locale)
+    c["data_quality"] = tr(c["data_quality"], locale)
+    c["strengths"] = [tr(s, locale) for s in c["strengths"]]
+    c["weaknesses"] = [tr(w, locale) for w in c["weaknesses"]]
+    for mtr in c["metrics"]:
+        mtr["label"] = tr(mtr["label"], locale)
+    for tnd in c.get("trends", []):
+        tnd["label"] = tr(tnd["label"], locale)
+    return c
+
+
+@router.get("/{document_id}/commentary",
+            dependencies=[Depends(require(Permission.COMMENTARY_VIEW)), Depends(authorized_document)])
+def get_document_commentary(document_id: str, locale: str = Query("en"),
+                            basis: str = Query("consolidated"),
+                            session: Session = Depends(db)) -> dict:
+    """Data-driven financial commentary for a REAL document, computed from its latest
+    extraction (ratios, year-on-year trends, strengths/weaknesses) — not the demo project.
+    Open review items are counted from the same extraction so the assessment stays honest
+    about provisional figures. Empty (valid) shape until the document is extracted."""
+    from app.services.commentary import build_commentary_from_rows
+
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        return {"headline": "", "assessment": "", "metrics": [], "trends": [],
+                "strengths": [], "weaknesses": [], "data_quality": "", "basis": ""}
+    rows = run.result.get("rows", [])
+    review = _build_review(rows, "", locale, run.result.get("reconciliation", []))
+    units = run.result.get("units") or {}
+    c = build_commentary_from_rows(
+        rows, open_review_items=review["summary"]["open"], basis=basis,
+        currency=units.get("currency") or "", units=units.get("units_label") or "")
+    return _localize_commentary(c, locale)
+
+
 @router.get("/{document_id}/review", dependencies=[Depends(authorized_document)])
 def get_document_review(document_id: str, locale: str = Query("en"),
                         session: Session = Depends(db)) -> dict:
@@ -736,17 +784,25 @@ def _conf_cat(c) -> tuple[str, int]:
     return ("high" if c >= 0.85 else "med" if c >= 0.7 else "low"), pct
 
 
-def _build_pages(pages: list[dict]) -> dict:
-    """PagesResponse from the document's real classified pages — face/notes are included in
-    the extraction scope, everything else is skipped."""
+def _default_scope(pages: list[dict]) -> set[int]:
+    """Pages extraction would target by default — the classified face/notes pages."""
+    return {(p.get("index", 0) or 0) for p in pages if p.get("kind") in ("face", "notes")}
+
+
+def _build_pages(pages: list[dict], scope: list[int] | None = None) -> dict:
+    """PagesResponse from the document's real classified pages. Inclusion reflects the user's
+    persisted scope when set; otherwise the default (face/notes are in scope, the rest are
+    skipped)."""
+    chosen = set(scope) if scope is not None else _default_scope(pages)
     cards = []
     counts = {"face": 0, "notes": 0, "other": 0}
     for p in pages:
         kind = p.get("kind", "unknown")
-        included = kind in ("face", "notes")
+        idx = p.get("index", 0) or 0
+        included = idx in chosen
         cat, _ = _conf_cat(p.get("classification_confidence"))
         cards.append({
-            "no": (p.get("index", 0) or 0) + 1,
+            "no": idx + 1,
             "cls": _PAGE_CLS.get(kind, kind.title()),
             "sub": "in scope" if included else "skipped",
             "conf": cat,
@@ -755,7 +811,7 @@ def _build_pages(pages: list[dict]) -> dict:
         })
         counts[kind if kind in counts else "other"] = counts.get(kind if kind in counts else "other", 0) + 1
     total = len(cards)
-    focused = counts["face"] + counts["notes"]
+    focused = sum(1 for c in cards if c["included"])
     return {
         "pages": cards,
         "filters": [
@@ -768,26 +824,103 @@ def _build_pages(pages: list[dict]) -> dict:
     }
 
 
+def _document_pages(row, store: LocalObjectStore) -> list[dict]:
+    """The document's classified pages — the copy persisted at upload, recomputing (and
+    back-filling) only for legacy rows that predate page persistence."""
+    if row.pages:
+        return row.pages
+    doc_model, _ctx = analyze_document(store.get(row.object_key), filename=row.filename or "")
+    return [p.model_dump(mode="json") for p in doc_model.pages]
+
+
 @router.get("/{document_id}/pages", dependencies=[Depends(authorized_document)])
 def get_document_pages(
     document_id: str,
     session: Session = Depends(db),
     store: LocalObjectStore = Depends(object_store),
 ) -> dict:
-    """Real per-page classification for the Page Scope screen — recomputed from the stored
-    file so it's available even before extraction (the confirm-scope step)."""
+    """Real per-page classification for the Page Scope screen. Served from the pages captured
+    at upload (no recompute), with inclusion reflecting any persisted user scope."""
     from app.db.models import Document
 
     row = session.get(Document, document_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    doc_model, _ctx = analyze_document(store.get(row.object_key), filename=row.filename or "")
-    return _build_pages([p.model_dump(mode="json") for p in doc_model.pages])
+    return _build_pages(_document_pages(row, store), row.page_scope)
 
 
+class ScopeEdit(BaseModel):
+    included_pages: list[int]
+
+
+@router.put("/{document_id}/scope",
+            dependencies=[Depends(require(Permission.PIPELINE_RUN)), Depends(authorized_document)])
+def set_document_scope(
+    document_id: str,
+    body: ScopeEdit,
+    session: Session = Depends(db),
+    store: LocalObjectStore = Depends(object_store),
+) -> dict:
+    """Persist the user's page selection for extraction (the Page Scope screen). Extraction
+    then restricts itself to these pages. Indices are validated against the document's pages;
+    an empty selection resets to the default (all face/notes pages)."""
+    from app.db.models import Document
+
+    row = session.get(Document, document_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    pages = _document_pages(row, store)
+    valid = {(p.get("index", 0) or 0) for p in pages}
+    chosen = sorted({i for i in body.included_pages if i in valid})
+    # Empty (or a selection matching the default) → clear the override so the default applies.
+    row.page_scope = chosen or None
+    if row.pages is None:
+        row.pages = pages          # back-fill persistence for legacy rows
+    session.commit()
+    return {"ok": True, "document_id": document_id,
+            "included_pages": chosen, "count": len(chosen)}
+
+
+# Fallback chrome for the reference statement types. The real label + canonical-key prefix
+# are derived from the run's template (see _stmt_label/_stmt_prefix), so a template that adds
+# a fourth statement (e.g. changes in equity) renders without code changes; these maps only
+# apply when the template omits a label or can't be resolved.
 _STMT_PREFIX = {"balance_sheet": "bs", "profit_and_loss": "pl", "cash_flow": "cf"}
 _STMT_LABEL = {"balance_sheet": "Balance sheet", "profit_and_loss": "Profit & loss",
                "cash_flow": "Cash flow"}
+
+
+def _stmt_node(template_def: dict | None, statement_type: str) -> dict | None:
+    return next((s for s in (template_def or {}).get("statements", [])
+                 if s.get("type") == statement_type), None)
+
+
+def _stmt_prefix(template_def: dict | None, statement_type: str) -> str:
+    """The canonical-key prefix for a statement (e.g. 'bs'), read from the template's own
+    keys so it isn't limited to the three reference statements."""
+    node = _stmt_node(template_def, statement_type)
+    if node:
+        for sec in node.get("sections", []):
+            for c in sec.get("children", []):
+                k = c.get("canonical_key") or ""
+                if "_" in k:
+                    return k.split("_", 1)[0]
+    if statement_type in _STMT_PREFIX:
+        return _STMT_PREFIX[statement_type]
+    return statement_type.split("_", 1)[0] if statement_type else ""
+
+
+def _stmt_label(template_def: dict | None, statement_type: str, locale: str) -> str:
+    """The statement's display label in the output locale — from the template node's
+    label_i18n/label, falling back to the reference labels then a humanized type."""
+    node = _stmt_node(template_def, statement_type)
+    if node:
+        lbl = (node.get("label_i18n") or {}).get(locale) or node.get("label")
+        if lbl:
+            return lbl
+    if statement_type in _STMT_LABEL:
+        return _t(_STMT_LABEL[statement_type], locale)
+    return statement_type.replace("_", " ").title()
 
 
 def _to_num(v):
@@ -852,7 +985,7 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     Workspace grid renders real data with its provenance-backed values. Only rows that
     carry a value for the requested `basis` (consolidated / standalone) are shown. Labels are
     resolved in the output `locale` from the template's label_i18n (input=output parity)."""
-    prefix = _STMT_PREFIX.get(statement_type, "")
+    prefix = _stmt_prefix(template_def, statement_type)
     by_key: dict[str, dict] = {}
     for r in rows:
         k = r.get("canonical_key")
@@ -904,7 +1037,7 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     basis_label = _BASIS_LABEL_I18N.get(basis, {}).get(locale, basis.title())
     return {
         "statement": statement_type,
-        "label": _t(_STMT_LABEL.get(statement_type, statement_type), locale),
+        "label": _stmt_label(template_def, statement_type, locale),
         "basis": basis, "periods": [_t("Current", locale), _t("Prior", locale)],
         "currency": (units_ctx or {}).get("currency") or "",
         "currency_symbol": "", "units": (units_ctx or {}).get("units_label") or "",
@@ -964,6 +1097,20 @@ def _rows_by_note(rows: list[dict]) -> dict[int, list[dict]]:
 
 def _note_index(details: list[dict]) -> dict[int, dict]:
     return {n: d for d in details if (n := _note_no(d.get("no"))) is not None}
+
+
+def _note_row_kind(row: dict) -> str | None:
+    """Map a note-detail row's role to the frontend's emphasis kind: 'tot' for a total,
+    'sub' for a subtotal. Falls back to a label heuristic when the role is a plain line but
+    the caption clearly reads as a total."""
+    role = (row.get("role") or "line").lower()
+    if role == "total":
+        return "tot"
+    if role == "subtotal":
+        return "sub"
+    if role == "line" and re.match(r"\s*(total|net\b)", (row.get("label") or "").lower()):
+        return "tot"
+    return None
 
 
 def _fmt_amt(v) -> str:
@@ -1045,6 +1192,11 @@ def get_document_note(document_id: str, note_no: int, session: Session = Depends
                 "label": row.get("label", ""),
                 "v1": _to_num(cur.get("value")) or 0,
                 "v2": _to_num(prior.get("value")) or 0,
+                # Role → emphasis (subtotal/total) and mapping confidence → a per-row badge,
+                # so a real note detail shows the same role/confidence cues as the demo.
+                **({"kind": _note_row_kind(row)} if _note_row_kind(row) else {}),
+                **({"conf": _conf_cat(row.get("confidence"))[0]}
+                   if isinstance(row.get("confidence"), (int, float)) else {}),
             })
         return {
             "no": note_no, "title": d.get("title") or f"Note {note_no}", "page": d.get("page", 0),

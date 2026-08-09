@@ -268,6 +268,25 @@ export const useDocumentPages = (documentId: string | undefined) =>
     retry: false,
   });
 
+/** Persist the user's page selection for extraction; refreshes the pages view. */
+export function useSetDocumentScope(documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (includedPages: number[]) =>
+      api.setDocumentScope(documentId as string, includedPages),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["document-pages", documentId] }),
+  });
+}
+
+/** Data-driven commentary from a document's real extraction (Analysis screen, real mode). */
+export const useDocumentCommentary = (documentId: string | undefined, locale: Locale = "en") =>
+  useQuery({
+    queryKey: ["document-commentary", documentId, locale],
+    queryFn: () => api.documentCommentary(documentId as string, locale),
+    enabled: !!documentId,
+    retry: false,
+  });
+
 /** One statement of a document's real extraction (Workspace grid), labels in `locale`. */
 export const useDocumentStatement = (
   documentId: string | undefined, statement: StatementKey, basis: Basis, locale: Locale = "en") =>

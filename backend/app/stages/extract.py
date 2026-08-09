@@ -1,11 +1,14 @@
 """Row/value extraction stage.
 
-Turns reconstructed ``Table`` rows into ``LineItem``s: parses values (locale-aware,
-via ``services.numbers``), detects the two-level Consolidated/Standalone column
-header, captures note references, and records provenance for every value.
+Reconstructs tables and turns their rows into ``LineItem``s in one step, per source:
 
-Scaffold: the row-walking logic is TODO (depends on the reconstruct stage output);
-the number-parsing and note-ref primitives it will use already exist.
+* Excel — values + exact cell provenance read straight from the workbook.
+* Native PDF — the PyMuPDF text layer feeds the shared ``row_reconstruct`` logic
+  (locale-aware value parsing via ``services.numbers``, two-level
+  Consolidated/Standalone header detection, note-ref capture, bbox provenance).
+* Scanned PDF / image — the OCR port produces words that feed the same reconstruction.
+
+Notes pages route to note-detail tables; every other in-scope page yields face line items.
 """
 from __future__ import annotations
 

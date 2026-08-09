@@ -1,24 +1,31 @@
 /** Screen 3 — Statement page detection. Mirrors the wireframe's scrDetect(). */
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button, Toggle } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { SCREENS } from "./config";
-import { useDocumentPages, usePages, useProjectLoaded } from "../lib/queries";
+import {
+  useDocumentPages, usePages, useProjectLoaded, useSetDocumentScope,
+} from "../lib/queries";
 import { useAppLocale, useUI } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
 import { color, confStyle, font, layout, radius } from "../theme";
 import type { PageCard } from "../types";
 
-function PageCardTile({ p, t, canScope }: { p: PageCard; t: (key: string) => string; canScope: boolean }) {
+function PageCardTile(
+  { p, t, canScope, included, onToggle }:
+  { p: PageCard; t: (key: string) => string; canScope: boolean;
+    included: boolean; onToggle?: () => void },
+) {
   const cc = confStyle(p.conf);
   const scanned = p.scan === "scanned";
   return (
     <div
       style={{
         background: color.surface,
-        border: `1.5px solid ${p.included ? color.indigo : color.cardBorder}`,
+        border: `1.5px solid ${included ? color.indigo : color.cardBorder}`,
         borderRadius: radius.cardSm,
         overflow: "hidden",
       }}
@@ -76,15 +83,20 @@ function PageCardTile({ p, t, canScope }: { p: PageCard; t: (key: string) => str
             marginBottom: 5,
           }}
         >
-          <span style={{ fontSize: 11.5, fontWeight: 600, color: p.included ? color.ink : color.muted2 }}>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: included ? color.ink : color.muted2 }}>
             {p.cls}
           </span>
           <span style={{ fontSize: 10, fontFamily: font.mono, color: cc.fg }}>{cc.pct}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 10.5, color: color.muted2 }}>{p.sub}</span>
-          <span style={canScope ? undefined : { pointerEvents: "none", opacity: 0.5 }}>
-            <Toggle on={p.included} />
+          <span style={{ fontSize: 10.5, color: color.muted2 }}>
+            {included ? t("sc.inScope") : t("sc.skipped")}
+          </span>
+          <span
+            onClick={canScope && onToggle ? onToggle : undefined}
+            style={canScope && onToggle ? { cursor: "pointer" } : { pointerEvents: "none", opacity: 0.5 }}
+          >
+            <Toggle on={included} />
           </span>
         </div>
       </div>
@@ -104,6 +116,25 @@ export default function ScopeScreen() {
   const demoQ = usePages(locale, !usingReal);
   const data = usingReal ? realQ.data : demoQ.data;
   const isPending = usingReal ? realQ.isPending : demoQ.isPending;
+  const setScope = useSetDocumentScope(activeDocumentId ?? undefined);
+
+  // Local selection of INCLUDED page indices (0-based), synced from the fetched pages. On a
+  // real document, toggling persists the scope so extraction restricts itself to it.
+  const [selected, setSelected] = useState<Set<number> | null>(null);
+  useEffect(() => {
+    if (data) {
+      setSelected(new Set(data.pages.filter((p) => p.included).map((p) => p.no - 1)));
+    }
+  }, [data]);
+
+  const toggle = (idx: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev ?? []);
+      next.has(idx) ? next.delete(idx) : next.add(idx);
+      if (usingReal) setScope.mutate([...next]);
+      return next;
+    });
+  };
 
   if (!usingReal && !loaded) return <EmptyState />;
   if (usingReal && realQ.isError) return <EmptyState />;
@@ -112,6 +143,10 @@ export default function ScopeScreen() {
       <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>
     );
   }
+
+  // Focused = the live local selection (so counts move with the toggles); fall back to the
+  // server's figure until the first sync.
+  const focused = selected ? selected.size : data.focused;
 
   return (
     <div style={{ maxWidth: layout.screenMaxWide, margin: "0 auto", padding: "26px 30px 60px" }}>
@@ -130,9 +165,9 @@ export default function ScopeScreen() {
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 12.5, fontWeight: 600 }}>
-            {t("sc.focused")} <span style={{ color: color.indigo }}>{data.focused} of {data.total}</span> {t("sc.pages")}
+            {t("sc.focused")} <span style={{ color: color.indigo }}>{focused} of {data.total}</span> {t("sc.pages")}
           </div>
-          <div style={{ fontSize: 11, color: color.muted }}>{data.skipped} {t("sc.pagesSkipped")}</div>
+          <div style={{ fontSize: 11, color: color.muted }}>{data.total - focused} {t("sc.pagesSkipped")}</div>
         </div>
       </div>
 
@@ -169,7 +204,14 @@ export default function ScopeScreen() {
         }}
       >
         {data.pages.map((p) => (
-          <PageCardTile key={p.no} p={p} t={t} canScope={canScope} />
+          <PageCardTile
+            key={p.no}
+            p={p}
+            t={t}
+            canScope={canScope && usingReal}
+            included={selected ? selected.has(p.no - 1) : p.included}
+            onToggle={() => toggle(p.no - 1)}
+          />
         ))}
       </div>
 
@@ -179,7 +221,7 @@ export default function ScopeScreen() {
           ← {t("sc.back")}
         </Button>
         <Button onClick={() => nav(usingReal ? `/documents/${activeDocumentId}` : SCREENS.workspace.path)}>
-          {t("sc.extract")} {data.focused} {t("sc.pages")} →
+          {t("sc.extract")} {focused} {t("sc.pages")} →
         </Button>
       </div>
     </div>

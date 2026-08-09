@@ -151,6 +151,16 @@ export const api = {
   /** Real per-page classification for the Page Scope screen (available pre-extraction). */
   documentPages: (documentId: string) =>
     req<PagesResponse>(`/documents/${documentId}/pages`),
+  /** Persist the user's page selection for extraction (the Page Scope toggles). Extraction
+   * then restricts itself to these pages; an empty list resets to the default (all face/notes). */
+  setDocumentScope: (documentId: string, includedPages: number[]) =>
+    req<{ ok: boolean; included_pages: number[]; count: number }>(
+      `/documents/${documentId}/scope`,
+      { method: "PUT", body: JSON.stringify({ included_pages: includedPages }) },
+    ),
+  /** Data-driven commentary computed from a document's real extraction (not the demo). */
+  documentCommentary: (documentId: string, locale: Locale = "en") =>
+    req<Commentary>(`/documents/${documentId}/commentary?locale=${locale}`),
   /** One statement of a document's real extraction, grouped for the Workspace grid. */
   documentStatement: (documentId: string, statement: StatementKey, basis: Basis, locale: Locale = "en") =>
     req<StatementResponse>(

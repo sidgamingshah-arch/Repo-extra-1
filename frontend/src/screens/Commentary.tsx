@@ -2,10 +2,12 @@
  * headline + assessment, key ratios (tone-coded), and selected strengths / risks. */
 import { Card, ScreenHeader } from "../components/ui";
 import { useT } from "../i18n";
-import { useAudit, useCommentary, useProjectLoaded, useRunAnalysis } from "../lib/queries";
+import {
+  useAudit, useCommentary, useDocumentCommentary, useProjectLoaded, useRunAnalysis,
+} from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { useCan } from "../lib/rbac";
-import { useAppLocale } from "../store";
+import { useAppLocale, useUI } from "../store";
 import { color, fmtIN, font, radius } from "../theme";
 import type { AuditEntry, CommentaryMetric, CommentaryTrend } from "../types";
 
@@ -166,14 +168,26 @@ export default function CommentaryScreen() {
   const t = useT();
   const locale = useAppLocale();
   const loaded = useProjectLoaded();
-  const { data, isPending } = useCommentary(locale);
-  const canGenerate = useCan("analysis:run");
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const usingReal = !!activeDocumentId;
+  // A real uploaded document gets commentary computed from its OWN extraction; the demo
+  // project uses the seeded statements. Same shape, so the rest of the screen is unchanged.
+  const realC = useDocumentCommentary(activeDocumentId ?? undefined, locale);
+  const demoC = useCommentary(locale);
+  const data = usingReal ? realC.data : demoC.data;
+  const isPending = usingReal ? realC.isPending : demoC.isPending;
+  // The live-LLM run is a demo-only showcase; real-document commentary is deterministic and
+  // data-driven, so the "generate" button is offered only on the demo project.
+  const canGenerate = useCan("analysis:run") && !usingReal;
   const runAnalysis = useRunAnalysis();
 
-  if (!loaded) return <EmptyState />;
+  if (!usingReal && !loaded) return <EmptyState />;
   if (isPending || !data) {
     return <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>;
   }
+  // Before a real document is extracted the commentary is empty — show the empty state
+  // rather than a blank one-pager.
+  if (usingReal && !data.metrics.length) return <EmptyState />;
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "26px 30px 60px" }}>

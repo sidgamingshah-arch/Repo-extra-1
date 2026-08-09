@@ -47,6 +47,15 @@ def extract_pdf(data: bytes, doc, ctx: PipelineContext) -> int:
     if not targets:
         targets = list(doc.pages)
 
+    # Honour an explicit user page scope (from the Page Scope screen): keep only pages the
+    # user chose to include. An empty selection is treated as "no restriction" so a stray
+    # empty list can never silently extract nothing.
+    if ctx.included_pages:
+        scoped = [p for p in targets if p.index in ctx.included_pages]
+        if scoped:
+            targets = scoped
+            ctx.log(f"extract:page_scope_applied={sorted(ctx.included_pages)}")
+
     number_format = _resolve_number_format(ctx, doc)
     ocr = None
     added = 0

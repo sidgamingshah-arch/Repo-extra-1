@@ -91,7 +91,10 @@ def _serialize_notes(doc_model) -> list[dict]:
                 "value": (str(ev.value) if ev.value is not None else None),
                 "provenance": _prov_dict(ev.provenance),
             } for ev in it.values.values()]
-            rows.append({"label": it.raw_label, "values": values})
+            # Carry the row's role (line/subtotal/total) and mapping confidence so the notes
+            # detail renders subtotal/total emphasis and a per-row confidence badge.
+            rows.append({"label": it.raw_label, "role": it.role.value,
+                         "confidence": it.confidence.overall, "values": values})
         page = (nt.source_pages[0] if nt.source_pages else 0)
         notes.append({"no": nt.note_number, "title": nt.title, "page": page + 1, "rows": rows})
     return notes
@@ -112,7 +115,8 @@ class ExtractionOptions(BaseModel):
 
 
 def _run_extraction_task(run_id: str, object_key: str, filename: str, options: dict,
-                         entity: str, provider: str, model_fallback: str) -> None:
+                         entity: str, provider: str, model_fallback: str,
+                         included_pages: list[int] | None = None) -> None:
     """Run the pipeline off the request thread and record the outcome on the run row. Opens
     its own DB session + object store (the request's are gone by the time this executes)."""
     from app.config import get_settings
@@ -131,7 +135,8 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
                 ontology = load_ontology(ont_row.definition)
 
         data = store.get(object_key)
-        doc_model, ctx = run_extraction(data, filename=filename, ontology=ontology)
+        doc_model, ctx = run_extraction(data, filename=filename, ontology=ontology,
+                                        included_pages=included_pages)
         run = session.get(ExtractionRun, run_id)
         if run is None:
             return
@@ -232,7 +237,8 @@ def start_extraction(
     session.commit()
 
     background.add_task(_run_extraction_task, run_id, doc.object_key, doc.filename or "",
-                        body.model_dump(), entity, settings.llm.provider, settings.llm.model)
+                        body.model_dump(), entity, settings.llm.provider, settings.llm.model,
+                        doc.page_scope)
     return {"run_id": run_id, "status": "running",
             "stream_url": f"/api/v1/extractions/{run_id}/stream"}
 
