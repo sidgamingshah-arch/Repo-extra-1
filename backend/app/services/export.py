@@ -145,7 +145,8 @@ def _bases_present(rows: list[dict]) -> list[str]:
 
 def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: str = "en",
                              filename: str = "", disclosures: list[dict] | None = None,
-                             note_details: list[dict] | None = None) -> bytes:
+                             note_details: list[dict] | None = None,
+                             reconciliation: list[dict] | None = None) -> bytes:
     """A formatted, statement-shaped workbook: one sheet per statement in the template, with
     its sections / subtotals / totals, localized line labels, and consolidated + standalone
     columns side by side, plus Note details / Ratios / Disclosures sheets. Purely
@@ -224,19 +225,32 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
         ws = wb.create_sheet("Extraction")
         ws.cell(1, 1, "No extracted line items for this document.")
 
-    _add_analysis_sheets(wb, rows, disclosures or [], note_details or [], locale)
+    _add_analysis_sheets(wb, rows, disclosures or [], note_details or [], locale,
+                         reconciliation or [])
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
 
+def _recon_by_note(reconciliation: list[dict]) -> dict[str, dict]:
+    """First (consolidated/current-preferred) reconciliation entry per note number."""
+    out: dict[str, dict] = {}
+    for e in sorted(reconciliation, key=lambda e: (e.get("basis") != "consolidated",
+                                                    e.get("period_label") != "current")):
+        out.setdefault(str(e.get("note_number")), e)
+    return out
+
+
 def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
-                         note_details: list[dict], locale: str) -> None:
+                         note_details: list[dict], locale: str,
+                         reconciliation: list[dict] | None = None) -> None:
     """Note details / Ratios / Disclosures sheets."""
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     from app.services.derived import compute_ratios
+
+    recon = _recon_by_note(reconciliation or [])
 
     head_font = Font(bold=True, color="FFFFFF")
     head_fill = PatternFill("solid", fgColor="243044")
@@ -287,6 +301,16 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
             lab = ws.cell(ri, 1, row.get("label", "")); lab.alignment = Alignment(indent=1)
             c = ws.cell(ri, 2, _num(cur.get("value"))); c.number_format = num_fmt; c.alignment = right
             c = ws.cell(ri, 3, _num(prior.get("value"))); c.number_format = num_fmt; c.alignment = right
+            ri += 1
+        e = recon.get(str(note.get("no")))               # note→face reconciliation (§20)
+        if e is not None:
+            tie = ("ties to the face figure" if e.get("within_tolerance")
+                   else "does NOT tie to the face figure")
+            txt = f"Reconciliation: note total {tie} (residual {_num(e.get('residual')) or 0:,.0f})."
+            rc = ws.cell(ri, 1, txt)
+            rc.font = Font(italic=True, size=9,
+                           color=("2E7D52" if e.get("within_tolerance") else "C0362C"))
+            ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=3)
             ri += 1
         ri += 1                                          # blank spacer row between notes
     if ri == 2:

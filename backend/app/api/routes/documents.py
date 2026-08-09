@@ -598,7 +598,8 @@ def export_document(
         data = build_statement_workbook(rows, template_def, locale=locale,
                                         filename=doc.filename or "document",
                                         disclosures=run.result.get("disclosures", []),
-                                        note_details=run.result.get("note_details", []))
+                                        note_details=run.result.get("note_details", []),
+                                        reconciliation=run.result.get("reconciliation", []))
     else:
         data = build_rows_xlsx(rows, filename=doc.filename or "document")
     return Response(
@@ -829,6 +830,39 @@ def _note_index(details: list[dict]) -> dict[int, dict]:
     return {n: d for d in details if (n := _note_no(d.get("no"))) is not None}
 
 
+def _fmt_amt(v) -> str:
+    try:
+        return f"{float(v):,.0f}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _reconciliation_text(entries: list[dict], note_no: int) -> str | None:
+    """A human-readable note→face reconciliation summary for one note, from the reconcile
+    stage's entries. Prefers the consolidated / current-period entry."""
+    mine = [e for e in entries if _note_no(e.get("note_number")) == note_no]
+    if not mine:
+        return None
+    mine.sort(key=lambda e: (e.get("basis") != "consolidated", e.get("period_label") != "current"))
+    e = mine[0]
+    raw, sub, rec = e.get("raw_face"), e.get("subtracted"), e.get("reconciled")
+    resid, tie = e.get("residual"), e.get("within_tolerance")
+    parts: list[str] = []
+    try:
+        if abs(float(sub)) > 0:
+            parts.append(
+                f"Face figure {_fmt_amt(raw)} less {_fmt_amt(sub)} of note detail already "
+                f"carried as separate line items → reconciled {_fmt_amt(rec)}.")
+    except (TypeError, ValueError):
+        pass
+    if tie:
+        parts.append(f"The note total ties to the face figure (residual {_fmt_amt(resid)}).")
+    else:
+        parts.append(f"The note total does not tie to the face figure — residual {_fmt_amt(resid)} "
+                     f"(flagged for review).")
+    return " ".join(parts)
+
+
 @router.get("/{document_id}/notes", dependencies=[Depends(authorized_document)])
 def get_document_notes(document_id: str, session: Session = Depends(db)) -> dict:
     """All-notes index for a real document. Prefers the EXTRACTED note detail tables (the
@@ -879,7 +913,8 @@ def get_document_note(document_id: str, note_no: int, session: Session = Depends
         return {
             "no": note_no, "title": d.get("title") or f"Note {note_no}", "page": d.get("page", 0),
             "linked_line": linked_key, "linked_label": linked_label,
-            "rows": detail_rows, "reconciliation": None,
+            "rows": detail_rows,
+            "reconciliation": _reconciliation_text(result.get("reconciliation", []), note_no),
         }
 
     # Fallback: the face items that reference the note.

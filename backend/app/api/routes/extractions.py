@@ -136,6 +136,7 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
         except Exception:  # noqa: BLE001 — a scan failure must not fail the extraction
             disclosures = []
 
+        recon = doc_model.reconciliation
         run.result = {
             "locale": doc_model.locale,
             "format": doc_model.fmt.value,
@@ -146,6 +147,7 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             "rows": _serialize_rows(doc_model),
             "note_details": _serialize_notes(doc_model),
             "disclosures": disclosures,
+            "reconciliation": ([e.model_dump(mode="json") for e in recon.entries] if recon else []),
         }
         run.status = "succeeded"
         run.progress = {"phase": "done", "pct": 1.0}
