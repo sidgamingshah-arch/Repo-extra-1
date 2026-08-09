@@ -60,6 +60,35 @@ def _serialize_rows(doc_model) -> list[dict]:
     return rows
 
 
+def _prov_dict(p):
+    if p is None:
+        return None
+    return {
+        "source_kind": p.source_kind, "page_index": p.page_index,
+        "sheet": p.sheet, "cell": p.cell, "label_cell": p.label_cell,
+        "bbox": (p.bbox.model_dump() if p.bbox is not None else None),
+        "text_snippet": p.text_snippet,
+    }
+
+
+def _serialize_notes(doc_model) -> list[dict]:
+    """Extracted note detail tables → view/export shape: each note with its own breakdown
+    rows (label + period values) and provenance."""
+    notes = []
+    for nt in doc_model.notes:
+        rows = []
+        for it in nt.items:
+            values = [{
+                "period_label": ev.period_label, "basis": ev.basis.value,
+                "value": (str(ev.value) if ev.value is not None else None),
+                "provenance": _prov_dict(ev.provenance),
+            } for ev in it.values.values()]
+            rows.append({"label": it.raw_label, "values": values})
+        page = (nt.source_pages[0] if nt.source_pages else 0)
+        notes.append({"no": nt.note_number, "title": nt.title, "page": page + 1, "rows": rows})
+    return notes
+
+
 class ExtractionOptions(BaseModel):
     template_version_id: str | None = None
     ontology_version_id: str | None = None
@@ -115,6 +144,7 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             "line_item_count": len(doc_model.line_items),
             "notes": len(doc_model.notes),
             "rows": _serialize_rows(doc_model),
+            "note_details": _serialize_notes(doc_model),
             "disclosures": disclosures,
         }
         run.status = "succeeded"

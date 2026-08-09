@@ -233,7 +233,8 @@ def test_derived_analysis_ratios_disclosures_notes(client):
 
 
 def test_analysis_and_export_sheets_present(client):
-    """The formatted export carries Ratios / Disclosures / Notes sheets alongside statements."""
+    """The formatted export carries Note details / Ratios / Disclosures / Highlights sheets
+    alongside statements."""
     import io as _io
 
     import openpyxl
@@ -243,7 +244,7 @@ def test_analysis_and_export_sheets_present(client):
     doc_id = _extract_with_ontology(client, filename="rich.pdf", data=make_rich_pdf())
     x = client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "excel", "layout": "statement"})
     wb = openpyxl.load_workbook(_io.BytesIO(x.content))
-    assert {"Ratios", "Disclosures", "Notes"} <= set(wb.sheetnames)
+    assert {"Note details", "Ratios", "Disclosures", "Highlights"} <= set(wb.sheetnames)
     ratios_text = " | ".join(str(v) for row in wb["Ratios"].iter_rows(values_only=True) for v in row if v)
     assert "Current ratio" in ratios_text and "2.0×" in ratios_text
     disc_text = " | ".join(str(v) for row in wb["Disclosures"].iter_rows(values_only=True) for v in row if v)
@@ -320,6 +321,57 @@ def test_real_notes_index_and_detail(client):
     detail = client.get(f"/api/v1/documents/{doc_id}/notes/15").json()
     assert detail["no"] == 15 and detail["linked_label"]
     assert detail["rows"] and detail["reconciliation"] is None
+
+
+def test_note_detail_tables_extracted_from_notes_page():
+    """A notes page ("Note 14: Cash and cash equivalents" + its breakdown rows) is parsed
+    into a NotesTable with the detail line items behind the face figure."""
+    from app.services.documents import run_extraction
+    from tests.fixtures.generate import make_multipage_pdf
+
+    doc, _ = run_extraction(make_multipage_pdf(), filename="multi.pdf")
+    assert doc.notes, "expected a note detail table parsed from the notes page"
+    n14 = next(nt for nt in doc.notes if nt.note_number == "14")
+    assert "Cash" in n14.title
+    labels = {it.raw_label for it in n14.items}
+    assert any("Cash on hand" in lbl for lbl in labels)
+    assert any("Balances with banks" in lbl for lbl in labels)
+    # The detail values carry page provenance from the notes page (page index 1).
+    hand = next(it for it in n14.items if "Cash on hand" in it.raw_label)
+    ev = next(iter(hand.values.values()))
+    assert int(ev.value) == 204 and ev.provenance.page_index == 1
+
+
+def test_extracted_note_detail_served_and_exported(client):
+    """The extracted note breakdown flows to the All-Notes endpoint and the export's
+    'Note details' sheet — the real notes, not auto-generated commentary."""
+    import io as _io
+
+    import openpyxl
+
+    from tests.fixtures.generate import make_multipage_pdf
+
+    doc_id = _extract_with_ontology(client, filename="multi.pdf", data=make_multipage_pdf())
+
+    # All-Notes index prefers the extracted detail tables (high-confidence, with rows).
+    notes = client.get(f"/api/v1/documents/{doc_id}/notes").json()
+    assert any(n["no"] == 14 and n["conf"] == "high" for n in notes["notes"])
+
+    detail = client.get(f"/api/v1/documents/{doc_id}/notes/14").json()
+    assert detail["no"] == 14 and detail["page"] == 2       # notes page (1-based)
+    row_labels = {r["label"] for r in detail["rows"]}
+    assert any("Cash on hand" in lbl for lbl in row_labels)
+    hand = next(r for r in detail["rows"] if "Cash on hand" in r["label"])
+    assert hand["v1"] == 204
+
+    # The export's "Note details" sheet carries the same breakdown.
+    x = client.get(f"/api/v1/documents/{doc_id}/export",
+                   params={"fmt": "excel", "layout": "statement"})
+    wb = openpyxl.load_workbook(_io.BytesIO(x.content))
+    assert "Note details" in wb.sheetnames
+    text = " | ".join(str(v) for row in wb["Note details"].iter_rows(values_only=True)
+                       for v in row if v)
+    assert "Cash on hand" in text and "Balances with banks" in text
 
 
 def test_real_integrity_and_review_localized(client):

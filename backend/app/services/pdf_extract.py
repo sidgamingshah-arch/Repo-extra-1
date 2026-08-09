@@ -66,12 +66,21 @@ def extract_pdf(data: bytes, doc, ctx: PipelineContext) -> int:
 
         if not words:
             continue
+        # Notes pages → note detail tables (the breakdowns behind the face figures); every
+        # other page → face line items. Both keep page + bbox provenance.
+        if ps.kind == PageKind.NOTES:
+            from app.services.notes_extract import extract_note_tables
+
+            tables = extract_note_tables(words, page_index=ps.index,
+                                         document_id=doc.content_hash, source_kind=source_kind)
+            doc.notes.extend(tables)
+            continue
         items, ordinal = build_line_items(
             words, page_index=ps.index, document_id=doc.content_hash,
             source_kind=source_kind, ordinal_start=ordinal)
         doc.line_items.extend(items)
         added += len(items)
-    ctx.log(f"extract:pdf_line_items={added}")
+    ctx.log(f"extract:pdf_line_items={added} note_tables={len(doc.notes)}")
     return added
 
 

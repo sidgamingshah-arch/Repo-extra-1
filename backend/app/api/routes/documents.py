@@ -597,7 +597,8 @@ def export_document(
     if layout == "statement" and template_def:
         data = build_statement_workbook(rows, template_def, locale=locale,
                                         filename=doc.filename or "document",
-                                        disclosures=run.result.get("disclosures", []))
+                                        disclosures=run.result.get("disclosures", []),
+                                        note_details=run.result.get("note_details", []))
     else:
         data = build_rows_xlsx(rows, filename=doc.filename or "document")
     return Response(
@@ -824,53 +825,76 @@ def _rows_by_note(rows: list[dict]) -> dict[int, list[dict]]:
     return grouped
 
 
+def _note_index(details: list[dict]) -> dict[int, dict]:
+    return {n: d for d in details if (n := _note_no(d.get("no"))) is not None}
+
+
 @router.get("/{document_id}/notes", dependencies=[Depends(authorized_document)])
 def get_document_notes(document_id: str, session: Session = Depends(db)) -> dict:
-    """All-notes index for a real document: the notes referenced by extracted line items,
-    each linked to the face items that cite it. Built from the extraction, not the demo."""
-    from app.db.models import Document
-
-    if session.get(Document, document_id) is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    """All-notes index for a real document. Prefers the EXTRACTED note detail tables (the
+    breakdowns parsed from the notes pages); falls back to the notes referenced by face
+    line items when no detail tables were parsed."""
     run = _latest_run(session, document_id)
     if run is None or not run.result:
         return {"notes": [], "count": 0, "linked": 0}
+
+    details = _note_index(run.result.get("note_details", []))
+    if details:
+        notes = [{"no": n, "title": details[n].get("title") or f"Note {n}", "conf": "high"}
+                 for n in sorted(details)]
+        linked = sum(len(details[n].get("rows", [])) for n in details)
+        return {"notes": notes, "count": len(notes), "linked": linked}
+
     grouped = _rows_by_note(run.result.get("rows", []))
     notes = [{"no": n, "title": f"Note {n}", "conf": "med"} for n in sorted(grouped)]
-    linked = sum(len(v) for v in grouped.values())
-    return {"notes": notes, "count": len(notes), "linked": linked}
+    return {"notes": notes, "count": len(notes), "linked": sum(len(v) for v in grouped.values())}
 
 
 @router.get("/{document_id}/notes/{note_no}", dependencies=[Depends(authorized_document)])
 def get_document_note(document_id: str, note_no: int, session: Session = Depends(db)) -> dict:
-    """One note's detail for a real document: the face line items referencing it, with their
-    values and the page they were extracted from. (Note-table sub-parsing is not available
-    for arbitrary uploads, so there is no note-vs-face reconciliation here.)"""
-    from app.db.models import Document
-
-    if session.get(Document, document_id) is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    """One note's detail for a real document: its EXTRACTED breakdown rows (label + period
+    values) with the page they came from, plus the face line that cites it. Falls back to
+    the face line items referencing the note when no detail table was parsed."""
     run = _latest_run(session, document_id)
-    grouped = _rows_by_note(run.result.get("rows", [])) if run and run.result else {}
-    refs = grouped.get(note_no, [])
-    first = refs[0] if refs else None
-    prov = None
-    if first:
-        cur, _ = _cur_prior(first)
-        prov = (cur or {}).get("provenance")
+    result = run.result if run and run.result else {}
+    details = _note_index(result.get("note_details", []))
+    faces = _rows_by_note(result.get("rows", []))
+    linked_face = faces.get(note_no, [])
+    linked_label = linked_face[0].get("source_label") if linked_face else ""
+    linked_key = linked_face[0].get("canonical_key") if linked_face else ""
+
+    if note_no in details:
+        d = details[note_no]
+        detail_rows = []
+        for row in d.get("rows", []):
+            vals = row.get("values") or []
+            by = {v.get("period_label"): v for v in vals}
+            cur = by.get("current") or (vals[0] if vals else {})
+            prior = by.get("prior") or (vals[1] if len(vals) > 1 else {})
+            detail_rows.append({
+                "label": row.get("label", ""),
+                "v1": _to_num(cur.get("value")) or 0,
+                "v2": _to_num(prior.get("value")) or 0,
+            })
+        return {
+            "no": note_no, "title": d.get("title") or f"Note {note_no}", "page": d.get("page", 0),
+            "linked_line": linked_key, "linked_label": linked_label,
+            "rows": detail_rows, "reconciliation": None,
+        }
+
+    # Fallback: the face items that reference the note.
+    first = linked_face[0] if linked_face else None
+    prov = (_cur_prior(first)[0] or {}).get("provenance") if first else None
     detail_rows = []
-    for r in refs:
+    for r in linked_face:
         cur, prior = _cur_prior(r)
-        detail_rows.append({
-            "label": r.get("source_label", ""),
-            "v1": _to_num((cur or {}).get("value")) or 0,
-            "v2": _to_num((prior or {}).get("value")) or 0,
-        })
+        detail_rows.append({"label": r.get("source_label", ""),
+                            "v1": _to_num((cur or {}).get("value")) or 0,
+                            "v2": _to_num((prior or {}).get("value")) or 0})
     return {
         "no": note_no, "title": f"Note {note_no}",
         "page": (prov.get("page_index", 0) + 1) if prov else 0,
-        "linked_line": first.get("canonical_key") if first else "",
-        "linked_label": first.get("source_label") if first else "",
+        "linked_line": linked_key, "linked_label": linked_label,
         "rows": detail_rows, "reconciliation": None,
     }
 

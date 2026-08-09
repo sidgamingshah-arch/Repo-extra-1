@@ -144,7 +144,8 @@ def _bases_present(rows: list[dict]) -> list[str]:
 
 
 def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: str = "en",
-                             filename: str = "", disclosures: list[dict] | None = None) -> bytes:
+                             filename: str = "", disclosures: list[dict] | None = None,
+                             note_details: list[dict] | None = None) -> bytes:
     """A formatted, statement-shaped workbook: one sheet per statement in the template, with
     its sections / subtotals / totals, localized line labels, and consolidated + standalone
     columns side by side, plus derived Ratios / Disclosures / Notes sheets. Purely
@@ -223,15 +224,16 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
         ws = wb.create_sheet("Extraction")
         ws.cell(1, 1, "No extracted line items for this document.")
 
-    _add_analysis_sheets(wb, rows, disclosures or [], locale)
+    _add_analysis_sheets(wb, rows, disclosures or [], note_details or [], locale)
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
 
-def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict], locale: str) -> None:
-    """Ratios / Disclosures / Notes sheets — all derived from the extracted values."""
+def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
+                         note_details: list[dict], locale: str) -> None:
+    """Note details / Ratios / Disclosures / Highlights sheets."""
     from openpyxl.styles import Alignment, Font, PatternFill
 
     from app.services.derived import build_free_notes, compute_ratios
@@ -245,6 +247,30 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict], locale: 
             c = ws.cell(1, i, n); c.font = head_font; c.fill = head_fill
             ws.column_dimensions[chr(64 + i)].width = w
         ws.freeze_panes = "A2"
+
+    num_fmt = "#,##0;(#,##0)"
+
+    # Note details — the extracted breakdown tables behind the face figures.
+    ws = wb.create_sheet("Note details")
+    _header(ws, ["Note", "Title", "Line item", "Current", "Prior", "Source"],
+            [8, 30, 40, 14, 14, 14])
+    ri = 2
+    for note in note_details:
+        title = note.get("title") or ""
+        for row in note.get("rows", []):
+            vals = row.get("values") or []
+            by = {v.get("period_label"): v for v in vals}
+            cur = (by.get("current") or (vals[0] if vals else {})) or {}
+            prior = (by.get("prior") or (vals[1] if len(vals) > 1 else {})) or {}
+            ws.cell(ri, 1, f"Note {note.get('no')}")
+            ws.cell(ri, 2, title)
+            ws.cell(ri, 3, row.get("label", ""))
+            c = ws.cell(ri, 4, _num(cur.get("value"))); c.number_format = num_fmt
+            c = ws.cell(ri, 5, _num(prior.get("value"))); c.number_format = num_fmt
+            ws.cell(ri, 6, _prov_str(cur.get("provenance")))
+            ri += 1
+    if ri == 2:
+        ws.cell(2, 1, "No note detail tables were parsed for this document.")
 
     # Ratios
     ws = wb.create_sheet("Ratios")
@@ -263,9 +289,9 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict], locale: 
         ws.cell(i, 3, d.get("page") or "")
         ws.cell(i, 4, d.get("snippet", "")).alignment = wrap
 
-    # Notes
-    ws = wb.create_sheet("Notes")
-    _header(ws, ["Note", "Detail"], [26, 90])
+    # Highlights — plain-language commentary generated from the extracted values.
+    ws = wb.create_sheet("Highlights")
+    _header(ws, ["Highlight", "Detail"], [26, 90])
     for i, n in enumerate(build_free_notes(rows, locale=locale), start=2):
         ws.cell(i, 1, n["title"]).font = Font(bold=True)
         ws.cell(i, 2, n["text"]).alignment = wrap

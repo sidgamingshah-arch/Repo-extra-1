@@ -253,7 +253,7 @@ function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k:
 
       <Card style={card}>
         <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: color.muted, marginBottom: 10 }}>
-          {t("ex.notes")}
+          {t("ex.highlights")}
         </div>
         {notes.map((n, i) => (
           <div key={i} style={{ marginBottom: 9 }}>
