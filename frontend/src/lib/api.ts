@@ -205,6 +205,16 @@ export const api = {
     req<{ languages: { locale: string; name: string; rtl: boolean; supported: boolean }[]; fully_supported: string[] }>(
       `/languages`,
     ),
+  /** Author a template from the frontend: POST a template definition (validated + versioned
+   *  server-side). Returns the new version's id/key so it can be selected on Upload. */
+  createTemplate: (definition: unknown) =>
+    req<{ id: string; template_key: string; version: number }>(
+      `/templates`, { method: "POST", body: JSON.stringify({ definition }) }),
+  createOntology: (definition: unknown) =>
+    req<{ id: string; ontology_key: string; version: number }>(
+      `/ontologies`, { method: "POST", body: JSON.stringify({ definition }) }),
+  listTemplates: () =>
+    req<{ id: string; template_key: string; name: string; version: number }[]>(`/templates`),
 };
 
 /** POST the export request and trigger a browser download of the returned file. */
@@ -235,10 +245,11 @@ export async function downloadExport(body: {
 /** GET a REAL document's export (built from its latest extraction) and download it. Excel
  * uses the formatted, template-driven statement layout, localized to `locale`. */
 export async function downloadDocumentExport(
-  documentId: string, format: ExportFmt, locale: Locale = "en",
+  documentId: string, format: ExportFmt, locale: Locale = "en", include?: string[],
 ): Promise<void> {
+  const inc = include && format === "excel" ? `&include=${include.join(",")}` : "";
   const res = await fetch(
-    `${BASE}/documents/${documentId}/export?fmt=${format}&layout=statement&locale=${locale}`,
+    `${BASE}/documents/${documentId}/export?fmt=${format}&layout=statement&locale=${locale}${inc}`,
     { headers: { ...authHeader() } },
   );
   if (!res.ok) throw new Error(`Export failed: ${res.status}`);

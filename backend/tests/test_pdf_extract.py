@@ -543,3 +543,24 @@ def test_scanned_page_routes_through_ocr_port():
         assert ev.provenance.source_kind == "ocr" and ev.provenance.bbox is not None
     finally:
         settings.ocr.engine = prev
+
+
+def test_template_authoring_roundtrip(client):
+    """A template can be authored from the frontend: POST a definition, it is validated,
+    versioned, listed, and selectable to drive a run (Req 4)."""
+    tpls = client.get("/api/v1/templates").json()
+    hk = next(t for t in tpls if t["template_key"] == "hkfrs_hk_china_v1")
+    definition = client.get(f"/api/v1/templates/{hk['id']}").json()["definition"]
+
+    before = max(t["version"] for t in tpls if t["template_key"] == "hkfrs_hk_china_v1")
+    r = client.post("/api/v1/templates", json={"definition": definition})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["template_key"] == "hkfrs_hk_china_v1" and body["version"] == before + 1
+
+    listed = client.get("/api/v1/templates").json()
+    assert any(t["id"] == body["id"] for t in listed)
+    assert client.get(f"/api/v1/templates/{body['id']}").status_code == 200
+
+    bad = client.post("/api/v1/templates", json={"definition": {"not": "a template"}})
+    assert bad.status_code == 422

@@ -629,6 +629,7 @@ def export_document(
     fmt: str = Query("excel", pattern="^(excel|json)$"),
     layout: str = Query("statement", pattern="^(statement|flat)$"),
     locale: str = Query("en"),
+    include: str | None = Query(None),
     session: Session = Depends(db),
 ) -> Response:
     """Export a real document's extracted, mapped line items as Excel or JSON, built from
@@ -636,8 +637,9 @@ def export_document(
 
     Excel supports two layouts: ``statement`` (default) mirrors the run's template —
     sections, subtotals, totals, ordering, localized labels, consolidated + standalone
-    side by side; ``flat`` is one row per line item. JSON is always the structured-flat
-    shape for downstream systems."""
+    side by side; ``flat`` is one row per line item. ``include`` is a comma-separated set of
+    optional analysis sheets to add (note_details, ratios, disclosures) — omit for all. JSON
+    carries the line items with formulas plus a derived-analysis block."""
     from app.db.models import Document
     from app.services.export import build_rows_json, build_rows_xlsx, build_statement_workbook
 
@@ -649,8 +651,13 @@ def export_document(
         raise HTTPException(status_code=404, detail="No extraction run yet for this document")
     rows = run.result.get("rows", [])
     name = (doc.filename or "extract").rsplit(".", 1)[0]
+    include_set = ({p.strip() for p in include.split(",") if p.strip()}
+                   if include is not None else None)
     if fmt == "json":
-        data = build_rows_json(rows, filename=doc.filename or "document")
+        data = build_rows_json(rows, filename=doc.filename or "document",
+                               disclosures=run.result.get("disclosures", []),
+                               note_details=run.result.get("note_details", []),
+                               reconciliation=run.result.get("reconciliation", []), locale=locale)
         return Response(content=data, media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
 
@@ -660,7 +667,8 @@ def export_document(
                                         filename=doc.filename or "document",
                                         disclosures=run.result.get("disclosures", []),
                                         note_details=run.result.get("note_details", []),
-                                        reconciliation=run.result.get("reconciliation", []))
+                                        reconciliation=run.result.get("reconciliation", []),
+                                        include=include_set)
     else:
         data = build_rows_xlsx(rows, filename=doc.filename or "document")
     return Response(

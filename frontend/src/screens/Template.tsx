@@ -1,13 +1,71 @@
 /** Screen 7 — Template & Ontology. Left template tree + right node editor. */
 import type { CSSProperties } from "react";
+import { useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { Card } from "../components/ui";
 import { useAppLocale, useUI } from "../store";
 import { color, font, radius } from "../theme";
 import type { NodeConfig } from "../types";
 import { useTemplate } from "../lib/queries";
+import { api } from "../lib/api";
 import { useCan } from "../lib/rbac";
 import { useT } from "../i18n";
+
+/** Admin-only: create a template/ontology by importing a validated JSON definition. Persisted
+ *  and versioned server-side, then selectable on Upload — the frontend authoring path (Req 4). */
+function ImportTemplate() {
+  const t = useT();
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const def = JSON.parse(await f.text());
+      const isOntology = "target_template_key" in def || "mappings" in def;
+      const res = isOntology ? await api.createOntology(def) : await api.createTemplate(def);
+      const key = "template_key" in res ? res.template_key : res.ontology_key;
+      setMsg({ ok: true, text: t("tp.importOk").replace("{key}", key).replace("{v}", String(res.version)) });
+      qc.invalidateQueries({ queryKey: ["templates"] });
+      qc.invalidateQueries({ queryKey: ["ontologies"] });
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      setMsg({ ok: false, text: `${t("tp.importErr")} ${m}`.slice(0, 300) });
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  return (
+    <div style={{ flex: "0 0 auto", padding: "11px 14px", borderTop: `1px solid ${color.hairline3}` }}>
+      <input ref={fileRef} type="file" accept="application/json,.json" onChange={onFile} style={{ display: "none" }} />
+      <button
+        onClick={() => fileRef.current?.click()}
+        disabled={busy}
+        style={{
+          width: "100%", fontSize: 12, fontWeight: 600, color: color.indigo, background: "#fff",
+          border: `1px dashed ${color.indigoBorder2}`, borderRadius: radius.control, padding: 9,
+          cursor: busy ? "wait" : "pointer",
+        }}
+      >
+        {busy ? t("tp.importing") : t("tp.importTemplate")}
+      </button>
+      {msg && (
+        <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5,
+                      color: msg.ok ? color.greenFg : color.redFg }}>
+          {msg.text}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const SIGN_OPTIONS: { key: string; labelKey: string }[] = [
   { key: "as_reported", labelKey: "tp.sign.asReported" },
@@ -182,25 +240,7 @@ export default function TemplateScreen() {
           })}
         </div>
 
-        {canEdit && (
-          <div style={{ flex: "0 0 auto", padding: "11px 14px", borderTop: `1px solid ${color.hairline3}` }}>
-            <button
-              style={{
-                width: "100%",
-                fontSize: 12,
-                fontWeight: 600,
-                color: color.indigo,
-                background: "#fff",
-                border: `1px dashed ${color.indigoBorder2}`,
-                borderRadius: radius.control,
-                padding: 9,
-                cursor: "pointer",
-              }}
-            >
-              {t("tp.addLineItem")}
-            </button>
-          </div>
-        )}
+        {canEdit && <ImportTemplate />}
       </div>
 
       {/* RIGHT: node editor */}

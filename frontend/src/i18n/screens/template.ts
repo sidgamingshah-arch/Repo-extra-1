@@ -5,6 +5,10 @@ export const template: Record<Locale, Record<string, string>> = {
     "tp.structure": "Template structure",
     "tp.lineItems": "line items",
     "tp.addLineItem": "+ Add line item",
+    "tp.importTemplate": "Import template / ontology (JSON)",
+    "tp.importing": "Importing…",
+    "tp.importOk": "Created {key} v{v} — selectable on the Upload screen.",
+    "tp.importErr": "Import failed:",
     "tp.editorSubhead":
       "Ontology rules that tell the extractor which source descriptions map here, how to treat the sign, and how to net note detail against the face value.",
     "tp.viewOnly": "View only",
@@ -29,6 +33,10 @@ export const template: Record<Locale, Record<string, string>> = {
     "tp.structure": "模板结构",
     "tp.lineItems": "个项目",
     "tp.addLineItem": "+ 添加项目",
+    "tp.importTemplate": "导入模板 / 本体 (JSON)",
+    "tp.importing": "导入中…",
+    "tp.importOk": "已创建 {key} v{v} — 可在上传页选择。",
+    "tp.importErr": "导入失败：",
     "tp.editorSubhead":
       "本体规则告诉提取器哪些源描述映射到此处、如何处理正负号，以及如何将附注明细与账面金额进行净额抵销。",
     "tp.viewOnly": "仅查看",
@@ -53,6 +61,10 @@ export const template: Record<Locale, Record<string, string>> = {
     "tp.structure": "بنية القالب",
     "tp.lineItems": "بنود",
     "tp.addLineItem": "+ إضافة بند",
+    "tp.importTemplate": "استيراد قالب / أنطولوجيا (JSON)",
+    "tp.importing": "جارٍ الاستيراد…",
+    "tp.importOk": "تم إنشاء {key} v{v} — يمكن اختياره في صفحة الرفع.",
+    "tp.importErr": "فشل الاستيراد:",
     "tp.editorSubhead":
       "قواعد الأنطولوجيا التي تحدد للمُستخرِج أي أوصاف المصدر تُربط هنا، وكيفية معالجة الإشارة، وكيفية تسوية تفاصيل الإيضاح مقابل القيمة الاسمية.",
     "tp.viewOnly": "عرض فقط",
@@ -77,6 +89,10 @@ export const template: Record<Locale, Record<string, string>> = {
     "tp.structure": "Structure du modèle",
     "tp.lineItems": "postes",
     "tp.addLineItem": "+ Ajouter un poste",
+    "tp.importTemplate": "Importer un modèle / ontologie (JSON)",
+    "tp.importing": "Importation…",
+    "tp.importOk": "{key} v{v} créé — sélectionnable sur l\u2019écran Téléversement.",
+    "tp.importErr": "Échec de l\u2019importation :",
     "tp.editorSubhead":
       "Règles d'ontologie qui indiquent à l'extracteur quelles descriptions sources correspondent ici, comment traiter le signe et comment compenser le détail des notes avec la valeur nominale.",
     "tp.viewOnly": "Lecture seule",

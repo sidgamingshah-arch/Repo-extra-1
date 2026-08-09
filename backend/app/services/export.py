@@ -51,9 +51,15 @@ def _prov_str(prov: dict | None) -> str:
     return f"p.{(prov.get('page_index', 0) or 0) + 1}"
 
 
-def build_rows_json(rows: list[dict], *, filename: str) -> bytes:
-    """JSON export of a REAL extraction: every line item with its mapping, confidence and
-    the exact source location of each value (sheet/cell or page/bbox) for full provenance."""
+def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] | None = None,
+                    note_details: list[dict] | None = None, reconciliation: list[dict] | None = None,
+                    locale: str = "en") -> bytes:
+    """JSON export of a REAL extraction: every line item with its mapping, confidence, any
+    edited formula, and the exact source location of each value (sheet/cell or page/bbox),
+    plus a derived-analysis block (ratios / disclosures) and the note detail + reconciliation
+    — so the JSON carries the same information the UI and the Excel show."""
+    from app.services.derived import compute_ratios, localize_disclosures
+
     payload = {
         "source_document": filename,
         "line_item_count": len(rows),
@@ -65,14 +71,24 @@ def build_rows_json(rows: list[dict], *, filename: str) -> bytes:
                 "mapping_method": r.get("mapping_method"),
                 "mapping_confidence": r.get("mapping_confidence"),
                 "flags": r.get("flags") or [],
+                "formula": r.get("formula"),
+                "edited": bool(r.get("edited")),
                 "values": [
-                    {"period": v.get("period_label"), "value": v.get("value"),
-                     "source": _prov_str(v.get("provenance"))}
+                    {"period": v.get("period_label"), "basis": v.get("basis"),
+                     "value": v.get("value"), "source": _prov_str(v.get("provenance"))}
                     for v in (r.get("values") or [])
                 ],
             }
             for r in rows
         ],
+        "analysis": {
+            "ratios": [{"key": x["key"], "label": x["label"], "category": x.get("category"),
+                        "value": x["value"], "display": x["display"], "available": x["available"]}
+                       for x in compute_ratios(rows, locale=locale)],
+            "disclosures": localize_disclosures(disclosures or [], locale),
+        },
+        "note_details": note_details or [],
+        "reconciliation": reconciliation or [],
     }
     return json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
 
@@ -86,7 +102,7 @@ def build_rows_xlsx(rows: list[dict], *, filename: str) -> bytes:
     ws = wb.active
     ws.title = "Extraction"
     headers = ["#", "Line item", "Note", "Mapped to", "Method", "Confidence",
-               "Current", "Prior", "Source"]
+               "Current", "Prior", "Formula", "Source"]
     ws.append(headers)
     for i, r in enumerate(rows, start=1):
         values = r.get("values") or []
@@ -102,10 +118,11 @@ def build_rows_xlsx(rows: list[dict], *, filename: str) -> bytes:
             r.get("mapping_method") or "",
             f"{round(conf * 100)}%" if isinstance(conf, (int, float)) else "",
             current, prior,
+            r.get("formula") or "",                       # edited-item formula, if any
             _prov_str(values[0].get("provenance")) if values else "",
         ])
     ws.freeze_panes = "A2"
-    for col, width in zip("ABCDEFGHI", (5, 34, 8, 28, 12, 11, 14, 14, 16)):
+    for col, width in zip("ABCDEFGHIJ", (5, 34, 8, 28, 12, 11, 14, 14, 18, 16)):
         ws.column_dimensions[col].width = width
     buf = io.BytesIO()
     wb.save(buf)
@@ -148,7 +165,8 @@ def _bases_present(rows: list[dict]) -> list[str]:
 def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: str = "en",
                              filename: str = "", disclosures: list[dict] | None = None,
                              note_details: list[dict] | None = None,
-                             reconciliation: list[dict] | None = None) -> bytes:
+                             reconciliation: list[dict] | None = None,
+                             include: set[str] | None = None) -> bytes:
     """A formatted, statement-shaped workbook: one sheet per statement in the template, with
     its sections / subtotals / totals, localized line labels, and consolidated + standalone
     columns side by side, plus Note details / Ratios / Disclosures sheets. Purely
@@ -228,7 +246,7 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
         ws.cell(1, 1, "No extracted line items for this document.")
 
     _add_analysis_sheets(wb, rows, disclosures or [], note_details or [], locale,
-                         reconciliation or [])
+                         reconciliation or [], include)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -246,11 +264,16 @@ def _recon_by_note(reconciliation: list[dict]) -> dict[str, dict]:
 
 def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
                          note_details: list[dict], locale: str,
-                         reconciliation: list[dict] | None = None) -> None:
-    """Note details / Ratios / Disclosures sheets."""
+                         reconciliation: list[dict] | None = None,
+                         include: set[str] | None = None) -> None:
+    """Note details / Ratios / Disclosures sheets, each gated by the Include set (all on when
+    include is None)."""
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     from app.services.derived import compute_ratios, localize_disclosures
+
+    def on(key: str) -> bool:
+        return include is None or key in include
 
     recon = _recon_by_note(reconciliation or [])
     disclosures = localize_disclosures(disclosures, locale)
@@ -348,6 +371,12 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
         ws.cell(i, 3, d.get("page") or "")
         ws.cell(i, 4, d.get("snippet", "")).alignment = wrap
 
+    # Honor the Include selection: drop any analysis sheet the caller didn't ask for.
+    for key, name in (("note_details", "Note details"), ("ratios", "Ratios"),
+                      ("disclosures", "Disclosures")):
+        if not on(key) and name in wb.sheetnames:
+            wb.remove(wb[name])
+
 
 def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, locale, r,
                 section_fill, total_fill, thin_top, dbl_top, right, num_fmt, ink):
@@ -392,6 +421,11 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
             ws.cell(r, conf_col, f"{round(conf * 100)}%" if isinstance(conf, (int, float)) else "")
             vals = row.get("values") or []
             ws.cell(r, src_col, _prov_str(vals[0].get("provenance")) if vals else "")
+            # Edited items carry their formula into the workbook as a cell note (the value is
+            # the applied result; the formula is preserved for audit).
+            if row.get("edited") and row.get("formula"):
+                from openpyxl.comments import Comment
+                lab.comment = Comment(f"Edited · formula: {row['formula']}", "FinExtract")
 
         if role == "subtotal":
             for c in range(1, src_col + 1):

@@ -1,4 +1,5 @@
 /** Screen 8: Export — deliver the extracted, reviewed and reconciled dataset. */
+import { useState } from "react";
 import { useDocumentRun, useExportOptions, useProjectLoaded, useSubmitForReview } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { downloadDocumentExport, downloadExport } from "../lib/api";
@@ -266,6 +267,11 @@ export default function ExportScreen() {
   const setFmt = useUI((s) => s.setFmt);
   const outputLocale = useUI((s) => s.locale);
   const isExcel = exportFmt === "excel";
+  // Interactive Include selection for a real export — drives which analysis sheets are added.
+  const [inc, setInc] = useState<Record<string, boolean>>({
+    note_details: true, ratios: true, disclosures: true,
+  });
+  const includeKeys = Object.keys(inc).filter((k) => inc[k]);
 
   // No real document and no admin-seeded demo → greenfield guidance.
   if (!usingReal && !loaded) return <EmptyState />;
@@ -309,15 +315,37 @@ export default function ExportScreen() {
             </div>
           </Card>
 
-          {data?.options && (
-            <Card>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
-              <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
-                {data.options.map((o) => (
-                  <IncludeRow key={o.key} label={t(`e.opt.${o.key}`)} on={o.on} />
-                ))}
-              </div>
-            </Card>
+          {usingReal ? (
+            isExcel && (
+              <Card>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
+                <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
+                  {(["note_details", "ratios", "disclosures"] as const).map((k) => (
+                    <div key={k} onClick={() => setInc((s) => ({ ...s, [k]: !s[k] }))}
+                         style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 0", cursor: "pointer" }}>
+                      <span style={{ width: 15, height: 15, borderRadius: 4, flex: "0 0 auto",
+                                     border: `2px solid ${inc[k] ? color.indigo : color.dashed}`,
+                                     background: inc[k] ? color.indigo : "#fff", color: "#fff",
+                                     fontSize: 11, lineHeight: "11px", textAlign: "center" }}>
+                        {inc[k] ? "✓" : ""}
+                      </span>
+                      <span style={{ fontSize: 12 }}>{t(`e.sheet.${k}`)}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )
+          ) : (
+            data?.options && (
+              <Card>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
+                <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
+                  {data.options.map((o) => (
+                    <IncludeRow key={o.key} label={t(`e.opt.${o.key}`)} on={o.on} />
+                  ))}
+                </div>
+              </Card>
+            )
           )}
 
           {/* Presentation (currency/units) is a demo affordance; hide it on a real run
@@ -353,7 +381,7 @@ export default function ExportScreen() {
             }}
           >
             <span style={{ fontSize: 12.5, fontWeight: 600 }}>
-              {t("e.preview")} {isExcel ? "spread.xlsx" : "extract.json"}
+              {t("e.preview")} {isExcel ? "extract.xlsx" : "extract.json"}
             </span>
             <span style={{ fontSize: 11, color: color.muted }}>{t("e.previewMeta")}</span>
           </div>
@@ -385,7 +413,7 @@ export default function ExportScreen() {
               <button
                 onClick={() =>
                   usingReal && activeDocumentId
-                    ? downloadDocumentExport(activeDocumentId, exportFmt, outputLocale)
+                    ? downloadDocumentExport(activeDocumentId, exportFmt, outputLocale, includeKeys)
                     : downloadExport({
                         format: exportFmt,
                         basis: "consolidated",
