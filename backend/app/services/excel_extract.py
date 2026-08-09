@@ -67,8 +67,17 @@ def _to_decimal(v) -> Decimal | None:
     return None
 
 
+_NOTE_HEADER = re.compile(r"^\s*note", re.IGNORECASE)
+_NOTE_NUM = re.compile(r"(\d{1,3})")
+
+
 def extract_workbook(data: bytes, *, document_id: str | None = None) -> list[LineItem]:
-    """Read every sheet; emit a LineItem per labelled, numeric row with cell provenance."""
+    """Read every sheet; emit a LineItem per labelled, numeric row with cell provenance.
+
+    Reaches parity with the PDF path: a dedicated "Note"/"Note No." column is detected and
+    its number attributed as the row's note reference (not consumed as a value), and a
+    Consolidated / Standalone header band maps each value column to its basis so both are
+    extracted from one sheet."""
     import openpyxl
 
     wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
@@ -83,7 +92,11 @@ def extract_workbook(data: bytes, *, document_id: str | None = None) -> list[Lin
             label_col, value_cols = _detect_columns(rows)
             if label_col is None or not value_cols:
                 continue
+            note_col = _detect_note_col(rows, label_col, value_cols)
+            if note_col is not None and note_col in value_cols:
+                value_cols = [c for c in value_cols if c != note_col]
             headers = _period_headers(rows, value_cols)
+            basis_map = _detect_basis_bands(rows, value_cols)
             for r_idx, row in enumerate(rows):
                 if label_col >= len(row):
                     continue
@@ -91,13 +104,57 @@ def extract_workbook(data: bytes, *, document_id: str | None = None) -> list[Lin
                 if not isinstance(label, str) or not label.strip():
                     continue
                 li = _row_item(name, sheet_index, r_idx, label.strip(), row, label_col,
-                               value_cols, headers, document_id, ordinal)
+                               value_cols, headers, document_id, ordinal, note_col, basis_map)
                 if li is not None:
                     items.append(li)
                     ordinal += 1
     finally:
         wb.close()
     return items
+
+
+def _detect_note_col(rows: list[list], label_col: int, value_cols: list[int]) -> int | None:
+    """A column whose header cell reads "Note"/"Note No." — its numbers are note references,
+    not values. Checked against the text header rows (before the numbers start)."""
+    for row in rows[:8]:
+        for c in range(len(row)):
+            if c == label_col:
+                continue
+            v = row[c]
+            if isinstance(v, str) and _NOTE_HEADER.match(v) and len(v.strip()) <= 12:
+                return c
+    return None
+
+
+def _detect_basis_bands(rows: list[list], value_cols: list[int]) -> dict[int, Basis]:
+    """Map each value column to Consolidated/Standalone from a header band that names them
+    (a token applies to value columns at/after its own column, until the next token)."""
+    markers: list[tuple[int, Basis]] = []
+    for row in rows[:8]:
+        for c in range(len(row)):
+            v = row[c]
+            if not isinstance(v, str):
+                continue
+            low = v.strip().lower()
+            if "consolidated" in low:
+                markers.append((c, Basis.CONSOLIDATED))
+            elif "standalone" in low or "separate" in low or "company" == low:
+                markers.append((c, Basis.STANDALONE))
+        if markers:
+            break
+    if not markers:
+        return {}
+    markers.sort()
+    out: dict[int, Basis] = {}
+    for c in value_cols:
+        basis = markers[0][1]
+        for mc, mb in markers:
+            if mc <= c:
+                basis = mb
+            else:
+                break
+        out[c] = basis
+    return out
 
 
 def _detect_columns(rows: list[list]) -> tuple[int | None, list[int]]:
@@ -119,12 +176,19 @@ def _detect_columns(rows: list[list]) -> tuple[int | None, list[int]]:
     return label_col, value_cols
 
 
+_BASIS_TOKENS = ("consolidated", "standalone", "separate")
+
+
 def _period_headers(rows: list[list], value_cols: list[int]) -> dict[int, str]:
-    """Best-effort period label per value column, taken from the first text header row."""
+    """Best-effort period label per value column, taken from the first text header row. Rows
+    that name the basis (Consolidated/Standalone band) are skipped — those aren't periods."""
     for row in rows:
         if any(c < len(row) and isinstance(row[c], str) and row[c].strip() for c in value_cols):
             has_numbers = any(_to_decimal(row[c]) is not None for c in value_cols)
-            if not has_numbers:
+            is_basis_band = any(c < len(row) and isinstance(row[c], str)
+                                and any(tok in row[c].lower() for tok in _BASIS_TOKENS)
+                                for c in value_cols)
+            if not has_numbers and not is_basis_band:
                 return {c: (str(row[c]).strip() if c < len(row) and row[c] else f"col{c}")
                         for c in value_cols}
     # Fall back to positional labels (first value column = current period).
@@ -132,10 +196,29 @@ def _period_headers(rows: list[list], value_cols: list[int]) -> dict[int, str]:
             for i, c in enumerate(value_cols)}
 
 
+def _note_from_cell(v) -> str | None:
+    """Parse a note reference from a note-column cell: 14, 14.0, "Note 14", or "14"."""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return str(int(v))
+    if isinstance(v, str):
+        m = _NOTE_NUM.search(v)
+        return m.group(1) if m else None
+    return None
+
+
 def _row_item(sheet, sheet_index, r_idx, label, row, label_col, value_cols, headers,
-              document_id, ordinal) -> LineItem | None:
+              document_id, ordinal, note_col=None, basis_map=None) -> LineItem | None:
+    from app.core.models.line_item import NoteRef
+
     li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
                   source=ValueSource.MACHINE)
+    if note_col is not None and note_col < len(row):
+        note = _note_from_cell(row[note_col])
+        if note:
+            li.note_number = note
+            li.note_refs.append(NoteRef(raw=note, numbers=[note]))
     got = False
     for c in value_cols:
         if c >= len(row):
@@ -143,13 +226,14 @@ def _row_item(sheet, sheet_index, r_idx, label, row, label_col, value_cols, head
         dec = _to_decimal(row[c])
         if dec is None:
             continue
+        basis = (basis_map or {}).get(c, Basis.CONSOLIDATED)
         prov = Provenance(
             document_id=document_id, page_index=sheet_index, sheet=sheet,
             cell=f"{_col_letter(c + 1)}{r_idx + 1}",
             label_cell=f"{_col_letter(label_col + 1)}{r_idx + 1}",
             text_snippet=label, source_kind="spreadsheet", producer=_PRODUCER,
         )
-        ev = ExtractedValue(value_raw=dec, value=dec, basis=Basis.CONSOLIDATED,
+        ev = ExtractedValue(value_raw=dec, value=dec, basis=basis,
                             period_label=headers.get(c, f"col{c}"),
                             unit_ctx=UnitContext(), provenance=prov)
         li.set_value(ev)
