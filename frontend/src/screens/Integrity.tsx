@@ -226,9 +226,16 @@ export default function IntegrityScreen() {
         <Button variant="secondary" onClick={() => navigate("/upload")}>
           ← {t("i.back")}
         </Button>
-        <Button onClick={goNext}>
-          {usingReal || extractMode === "auto" ? t("i.extractNow") : t("i.detect")} →
-        </Button>
+        {(() => {
+          const blocked = (data.issues || []).some((i) => i.note === "BLOCKER");
+          return (
+            <Button onClick={goNext} disabled={blocked}
+                    title={blocked ? t("i.blocked") : undefined}>
+              {blocked ? t("i.blocked")
+                       : (usingReal || extractMode === "auto" ? t("i.extractNow") : t("i.detect"))} →
+            </Button>
+          );
+        })()}
       </div>
     </div>
   );

@@ -12,6 +12,7 @@ export const integrity: Record<Locale, Record<string, string>> = {
     "i.back": "Back",
     "i.detect": "Detect statement pages",
     "i.extractNow": "Extract now",
+    "i.blocked": "Blocked — cannot extract",
     "i.failed": "Could not load integrity",
   },
   zh: {
@@ -25,6 +26,7 @@ export const integrity: Record<Locale, Record<string, string>> = {
     "i.back": "返回",
     "i.detect": "检测报表页面",
     "i.extractNow": "立即提取",
+    "i.blocked": "已阻止 — 无法提取",
     "i.failed": "无法加载完整性检查",
   },
   ar: {
@@ -38,6 +40,7 @@ export const integrity: Record<Locale, Record<string, string>> = {
     "i.back": "رجوع",
     "i.detect": "اكتشاف صفحات القوائم",
     "i.extractNow": "استخرج الآن",
+    "i.blocked": "محظور — لا يمكن الاستخراج",
     "i.failed": "تعذّر تحميل فحص السلامة",
   },
   fr: {
@@ -51,6 +54,7 @@ export const integrity: Record<Locale, Record<string, string>> = {
     "i.back": "Retour",
     "i.detect": "Détecter les pages d'états",
     "i.extractNow": "Extraire maintenant",
+    "i.blocked": "Bloqué — extraction impossible",
     "i.failed": "Impossible de charger l'intégrité",
   },
 };
