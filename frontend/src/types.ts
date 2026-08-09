@@ -221,10 +221,18 @@ export interface ExtractionProvenance {
   bbox: { x0: number; y0: number; x1: number; y1: number } | null;
   text_snippet: string | null;
 }
+export interface ValueConfidence {
+  mapping: number;
+  validation: number | null;
+  overall: number;
+  weakest: number;
+  flags: string[];
+}
 export interface ExtractionValue {
   period_label: string;
   value: string | null;
   provenance: ExtractionProvenance | null;
+  confidence?: ValueConfidence;
 }
 export interface ExtractionRow {
   source_label: string;
@@ -236,6 +244,11 @@ export interface ExtractionRow {
   flags: string[];
   values: ExtractionValue[];
 }
+export interface SourceUnits {
+  currency: string;
+  scale_factor: number;
+  units_label: string | null;
+}
 export interface ExtractionResult {
   locale: string;
   format: string;
@@ -243,6 +256,7 @@ export interface ExtractionResult {
   line_item_count: number;
   notes: number;
   rows: ExtractionRow[];
+  units?: SourceUnits | null;
 }
 export interface ExtractionRunResponse {
   run_id: string;

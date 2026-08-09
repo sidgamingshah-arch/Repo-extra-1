@@ -246,10 +246,12 @@ export async function downloadExport(body: {
  * uses the formatted, template-driven statement layout, localized to `locale`. */
 export async function downloadDocumentExport(
   documentId: string, format: ExportFmt, locale: Locale = "en", include?: string[],
+  units?: string,
 ): Promise<void> {
   const inc = include && format === "excel" ? `&include=${include.join(",")}` : "";
+  const un = units ? `&units=${encodeURIComponent(units)}` : "";
   const res = await fetch(
-    `${BASE}/documents/${documentId}/export?fmt=${format}&layout=statement&locale=${locale}${inc}`,
+    `${BASE}/documents/${documentId}/export?fmt=${format}&layout=statement&locale=${locale}${inc}${un}`,
     { headers: { ...authHeader() } },
   );
   if (!res.ok) throw new Error(`Export failed: ${res.status}`);

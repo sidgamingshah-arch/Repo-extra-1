@@ -272,6 +272,10 @@ export default function ExportScreen() {
     note_details: true, ratios: true, disclosures: true,
   });
   const includeKeys = Object.keys(inc).filter((k) => inc[k]);
+  // Target presentation unit for a real export (empty = as reported). Conversion applies only
+  // when the document declared its source units, which the run reports.
+  const [targetUnits, setTargetUnits] = useState<string>("");
+  const srcUnits = usingReal ? runQ.data?.result.units ?? null : null;
 
   // No real document and no admin-seeded demo → greenfield guidance.
   if (!usingReal && !loaded) return <EmptyState />;
@@ -348,6 +352,33 @@ export default function ExportScreen() {
             )
           )}
 
+          {/* Real presentation control: convert figures to a chosen unit — enabled only when
+              the document declared its source units (otherwise we never guess a scale). */}
+          {usingReal && isExcel && (
+            <Card>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t("e.presentation")}</div>
+              <div style={{ fontSize: 11, color: color.muted, marginBottom: 8 }}>
+                {srcUnits && (srcUnits.units_label || srcUnits.currency)
+                  ? `${t("e.sourceUnits")}: ${srcUnits.currency || ""} ${srcUnits.units_label || ""}`.trim()
+                  : t("e.unitsAsReported")}
+              </div>
+              <select
+                value={targetUnits}
+                disabled={!canConfig || !srcUnits?.units_label}
+                onChange={(e) => setTargetUnits(e.target.value)}
+                style={{ width: "100%", fontSize: 12, padding: "7px 10px",
+                         borderRadius: radius.controlSm, border: `1px solid ${color.cardBorder}` }}
+              >
+                <option value="">{t("e.unitsAsReported")}</option>
+                <option value="absolute">{t("e.units.absolute")}</option>
+                <option value="thousands">{t("e.units.thousands")}</option>
+                <option value="millions">{t("e.units.millions")}</option>
+                <option value="lakh">{t("e.units.lakh")}</option>
+                <option value="crore">{t("e.units.crore")}</option>
+              </select>
+            </Card>
+          )}
+
           {/* Presentation (currency/units) is a demo affordance; hide it on a real run
               rather than show fabricated INR/Crore defaults. */}
           {!usingReal && (
@@ -413,7 +444,8 @@ export default function ExportScreen() {
               <button
                 onClick={() =>
                   usingReal && activeDocumentId
-                    ? downloadDocumentExport(activeDocumentId, exportFmt, outputLocale, includeKeys)
+                    ? downloadDocumentExport(activeDocumentId, exportFmt, outputLocale, includeKeys,
+                                             targetUnits || undefined)
                     : downloadExport({
                         format: exportFmt,
                         basis: "consolidated",

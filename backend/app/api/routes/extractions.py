@@ -41,11 +41,19 @@ def _serialize_rows(doc_model) -> list[dict]:
                     "bbox": (p.bbox.model_dump() if p.bbox is not None else None),
                     "text_snippet": p.text_snippet,
                 }
+            cv = ev.confidence
             values.append({
                 "period_label": ev.period_label,
                 "basis": ev.basis.value,
                 "value": (str(ev.value) if ev.value is not None else None),
                 "provenance": prov,
+                # Per-value confidence vector — the weakest signal and any flags let the UI
+                # colour and explain each number, not just the row.
+                "confidence": {
+                    "mapping": cv.mapping, "validation": cv.validation,
+                    "overall": cv.overall, "weakest": cv.weakest,
+                    "flags": list(cv.flags),
+                },
             })
         rows.append({
             "source_label": li.source_label,

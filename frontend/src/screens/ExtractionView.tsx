@@ -66,9 +66,19 @@ function RowLine({ row, t, onPick }: {
       <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {row.values.map((v, i) => {
           const picked = toPicked(v.provenance, row.source_label);
+          const conf = v.confidence;
+          // A value that participates in a failed check (balance / note tie) is flagged so a
+          // doubtful number reads at a glance — per value, not just per row.
+          const low = conf && (conf.flags.length > 0 || conf.overall < 0.75);
+          const tip = conf
+            ? `confidence ${Math.round(conf.overall * 100)}%${conf.flags.length ? " · " + conf.flags.join(", ") : ""}`
+            : undefined;
           return (
             <span key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-              <span style={{ fontSize: 11.5, fontFamily: font.mono, color: color.ink }}>{v.value ?? "—"}</span>
+              <span title={tip} style={{ fontSize: 11.5, fontFamily: font.mono,
+                            color: low ? color.amberFg : color.ink }}>
+                {v.value ?? "—"}{low ? " ⚠" : ""}
+              </span>
               <SourceChip p={v.provenance} onPick={picked ? () => onPick(picked) : undefined} />
             </span>
           );

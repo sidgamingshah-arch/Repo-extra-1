@@ -57,3 +57,31 @@ def test_confidence_stage_sets_validation_on_balance_mismatch():
     ev = next(iter(doc.line_items[0].values.values()))
     assert ev.confidence.validation == 0.4 and "balance_mismatch" in ev.confidence.flags
     assert ev.confidence.overall < ev.confidence.mapping   # validation caps overall
+
+
+def test_per_value_confidence_exposed(client):
+    """Each extracted value carries its own confidence vector (mapping/validation/overall/
+    weakest + flags), not just a single per-row number (Req 9)."""
+    import time
+
+    from tests.fixtures.generate import make_native_pdf
+
+    doc_id = client.post("/api/v1/documents",
+                         files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}).json()["id"]
+    onts = client.get("/api/v1/ontologies").json()
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    tpls = client.get("/api/v1/templates").json()
+    tpl = next((t for t in tpls if t["template_key"] == ont["target_template_key"]), tpls[0])
+    client.post(f"/api/v1/documents/{doc_id}/extractions",
+                json={"ontology_version_id": ont["id"], "template_version_id": tpl["id"]})
+    for _ in range(100):
+        if client.get(f"/api/v1/documents/{doc_id}/run").json().get("status") == "succeeded":
+            break
+        time.sleep(0.05)
+
+    rows = client.get(f"/api/v1/documents/{doc_id}/run").json()["result"]["rows"]
+    valued = next(r for r in rows if r.get("values"))
+    conf = valued["values"][0]["confidence"]
+    assert {"mapping", "validation", "overall", "weakest", "flags"} <= set(conf)
+    assert isinstance(conf["overall"], (int, float)) and 0.0 <= conf["overall"] <= 1.0
+    assert isinstance(conf["flags"], list)

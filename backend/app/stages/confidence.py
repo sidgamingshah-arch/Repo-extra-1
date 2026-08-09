@@ -31,6 +31,14 @@ class ConfidenceStage:
     name = "confidence"
 
     def run(self, doc: DocumentModel, ctx: PipelineContext) -> DocumentModel:
+        # Propagate the row's mapping confidence + method onto each of its values, so the
+        # confidence vector is complete per value (not just per row) and ``overall`` combines
+        # mapping with the validation signal set below.
+        for li in doc.line_items:
+            for ev in li.values.values():
+                ev.confidence.mapping = li.confidence.mapping
+                ev.confidence.method = li.confidence.method
+
         by_key: dict[str, object] = {}
         for li in doc.line_items:
             if li.canonical_key:
