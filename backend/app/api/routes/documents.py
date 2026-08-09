@@ -570,10 +570,35 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
         slot = {"period_label": body.period, "value": None, "provenance": None}
         values.append(slot)
         target["values"] = values
-    if body.value is None:
+
+    # A formula drives the value: evaluate it against the other line items (same period), so
+    # the edited cell shows a computed result — not a decorative string. Falls back to the
+    # explicit value if no formula is given; a bad formula is a 422, not a silent overwrite.
+    computed: float | None = None
+    if body.formula and body.formula.strip().lstrip("=").strip():
+        from app.services.formula import FormulaError, evaluate
+
+        def _resolve(name: str) -> float:
+            row = next((r for r in rows if r.get("canonical_key") == name), None)
+            if row is None:
+                raise KeyError(name)
+            v = next((x for x in (row.get("values") or [])
+                      if x.get("period_label") == body.period), None)
+            if v is None or v.get("value") is None:
+                raise KeyError(name)
+            return float(str(v["value"]).replace(",", ""))
+
+        try:
+            computed = evaluate(body.formula, _resolve)
+        except FormulaError as exc:
+            raise HTTPException(status_code=422,
+                                detail={"error": "bad_formula", "message": str(exc)}) from exc
+
+    new_val = computed if computed is not None else body.value
+    if new_val is None:
         slot["value"] = None
     else:
-        fv = float(body.value)
+        fv = float(new_val)
         slot["value"] = str(int(fv)) if fv == int(fv) else str(fv)
     target["formula"] = body.formula or None
     target["edited"] = True
