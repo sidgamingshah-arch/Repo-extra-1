@@ -220,12 +220,23 @@ def test_formatted_statement_export_is_template_driven(client):
     x = client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "excel", "layout": "statement"})
     assert x.status_code == 200 and x.content[:2] == b"PK"
     wb = openpyxl.load_workbook(_io.BytesIO(x.content))
-    assert "Balance Sheet" in wb.sheetnames
+    # A sheet per statement in the template.
+    assert {"Balance Sheet", "Profit & Loss", "Cash Flow"} <= set(wb.sheetnames)
     ws = wb["Balance Sheet"]
     joined = " | ".join(str(v) for row in ws.iter_rows(values_only=True) for v in row if v)
     assert "Current assets" in joined                 # a template section header
     assert "Total current assets" in joined           # a template subtotal (structural anchor)
     assert "Trade receivables" in joined              # an extracted, template-labelled line
+    assert "Inventories" in joined                    # a NON-extracted template line still appears
+
+    # The FULL template is written out — every line item, not just the extracted ones.
+    labelled = sum(
+        1
+        for name in wb.sheetnames
+        for row in wb[name].iter_rows(min_row=6, values_only=True)
+        if row and row[0]
+    )
+    assert labelled >= 150, f"expected the full template (~150+ rows), got {labelled}"
 
     # Localized (zh) labels come from the template's label_i18n.
     zh = client.get(f"/api/v1/documents/{doc_id}/export",

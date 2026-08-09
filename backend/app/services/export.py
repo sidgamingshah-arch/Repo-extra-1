@@ -179,10 +179,9 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
     any_sheet = False
     for stmt in statements:
         stype = stmt.get("type")
-        # Which of this statement's keys were actually extracted?
-        stmt_keys = _statement_keys(stmt)
-        if not (stmt_keys & set(by_key)):
-            continue
+        # The FULL template is written out — every section and every line item, in template
+        # order — with extracted values filled in and the rest left blank. The download is a
+        # complete, template-shaped statement, not just the lines we happened to find.
         any_sheet = True
         ws = wb.create_sheet(_STMT_SHEET.get(stype, stype)[:31])
 
@@ -228,19 +227,6 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
     return buf.getvalue()
 
 
-def _statement_keys(stmt: dict) -> set[str]:
-    keys: set[str] = set()
-
-    def walk(nodes):
-        for n in nodes:
-            if n.get("canonical_key"):
-                keys.add(n["canonical_key"])
-            walk(n.get("children", []))
-
-    walk(stmt.get("sections", []))
-    return keys
-
-
 def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, locale, r,
                 section_fill, total_fill, thin_top, dbl_top, right, num_fmt, ink):
     from openpyxl.styles import Alignment, Font
@@ -252,21 +238,16 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
         label = _label(node, locale)
 
         if role == "header":
-            children = node.get("children", [])
-            # Skip whole sections with nothing extracted, to keep the statement readable.
-            if not any(c.get("canonical_key") in by_key for c in children):
-                continue
             hc = ws.cell(r, 1, label)
             hc.font = Font(bold=True, color=ink)
             for c in range(1, src_col + 1):
                 ws.cell(r, c).fill = section_fill
             r += 1
-            # Show extracted lines + structural subtotals/totals.
-            for child in children:
-                if child.get("canonical_key") in by_key or child.get("role") in ("subtotal", "total"):
-                    r = _emit_nodes(ws, [child], by_key, period_cols, first_val, conf_col, src_col,
-                                    locale, r, section_fill, total_fill, thin_top, dbl_top, right,
-                                    num_fmt, ink)
+            # Emit EVERY child (all line items in the template), extracted or not.
+            for child in node.get("children", []):
+                r = _emit_nodes(ws, [child], by_key, period_cols, first_val, conf_col, src_col,
+                                locale, r, section_fill, total_fill, thin_top, dbl_top, right,
+                                num_fmt, ink)
             continue
 
         is_bold = role in ("subtotal", "total")
