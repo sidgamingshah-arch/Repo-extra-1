@@ -14,8 +14,11 @@ from app.core.stage import PipelineContext
 _FACE_TITLES = {
     PageKind.FACE: [
         r"balance sheet", r"statement of financial position",
-        r"statement of profit (and|&) loss", r"income statement",
-        r"cash flow", r"changes in equity",
+        # P&L is titled many ways — "profit or loss" is the canonical IFRS/HKFRS phrasing.
+        r"statement of profit (and|&|or) loss", r"profit or loss", r"income statement",
+        r"statement of operations",
+        r"(statement of )?comprehensive income",
+        r"cash flow", r"statement of cash flows", r"changes in equity",
     ],
 }
 _NOTES_TITLES = [r"notes to the (financial|consolidated) statements",

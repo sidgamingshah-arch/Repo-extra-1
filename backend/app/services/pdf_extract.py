@@ -37,8 +37,13 @@ def extract_pdf(data: bytes, doc, ctx: PipelineContext) -> int:
         ctx.log(f"extract:pdf_open_failed:{exc}")
         return 0
 
-    # Prefer statement pages (face + notes); fall back to all pages if unclassified.
-    targets = [p for p in doc.pages if p.kind in (PageKind.FACE, PageKind.NOTES)]
+    # Prefer statement pages (face + notes). Also include SCANNED pages even if they didn't
+    # classify — a scanned page has no text layer to match a title against, so it would
+    # otherwise be dropped before ever reaching the OCR path. Fall back to all pages if
+    # nothing was classified at all.
+    targets = [p for p in doc.pages
+               if p.kind in (PageKind.FACE, PageKind.NOTES)
+               or p.source_kind == PageSourceKind.SCANNED]
     if not targets:
         targets = list(doc.pages)
 

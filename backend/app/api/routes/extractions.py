@@ -197,6 +197,18 @@ def start_extraction(
     if doc is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    # Enforce the integrity gate at the API boundary: a document with BLOCKER findings
+    # (corrupt / encrypted / unreadable) cannot be extracted — refuse rather than return a
+    # misleading "succeeded" empty run.
+    report = doc.integrity_report or {}
+    blockers = [f for f in report.get("findings", []) if f.get("severity") == "blocker"]
+    if blockers:
+        raise HTTPException(status_code=422, detail={
+            "error": "integrity_blocked",
+            "message": "This document did not pass the integrity check and cannot be extracted.",
+            "blockers": [f.get("message") for f in blockers],
+        })
+
     entity = body.entity or Path(doc.filename or "").stem or "document"
     run_id = audit_svc.make_run_id(entity)
     run = ExtractionRun(
