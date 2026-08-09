@@ -503,7 +503,7 @@ def get_document_analysis(document_id: str, locale: str = Query("en"),
     """Derived analysis for a document, from its latest extraction: computed ratios and
     plain-language notes (recomputed from the current values so edits show) plus the stored
     disclosure scan. Empty (but valid) until the document has been extracted."""
-    from app.services.derived import build_free_notes, compute_ratios
+    from app.services.derived import build_free_notes, compute_ratios, localize_disclosures
 
     run = _latest_run(session, document_id)
     if run is None or not run.result:
@@ -511,7 +511,7 @@ def get_document_analysis(document_id: str, locale: str = Query("en"),
     rows = run.result.get("rows", [])
     return {
         "ratios": compute_ratios(rows, locale=locale),
-        "disclosures": run.result.get("disclosures", []),
+        "disclosures": localize_disclosures(run.result.get("disclosures", []), locale),
         "notes": build_free_notes(rows, locale=locale),
     }
 

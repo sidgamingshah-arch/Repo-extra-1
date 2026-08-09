@@ -398,6 +398,19 @@ def scan_disclosures(pages: list[tuple[int, str]], locale: str = "en") -> list[d
     return out
 
 
+def localize_disclosures(disclosures: list[dict], locale: str = "en") -> list[dict]:
+    """Re-label stored disclosure entries in the output locale (they are scanned/stored in
+    English). Keeps present/page/snippet; only the label is localized, by key."""
+    if locale == "en":
+        return disclosures
+    labels = {d["key"]: d.get("label_i18n", {}) for d in _DISCLOSURES}
+    out = []
+    for d in disclosures:
+        loc = labels.get(d.get("key"), {}).get(locale)
+        out.append({**d, "label": loc or d.get("label")})
+    return out
+
+
 def document_text(data: bytes, fmt: str) -> list[tuple[int, str]]:
     """Per-page (or per-sheet) plain text for the disclosure scan."""
     if fmt == "pdf":

@@ -1,8 +1,10 @@
 """Export renderers — formatted Excel (.xlsx) and JSON.
 
-Excel is produced with openpyxl and writes native SUM formulas for subtotal/total rows
-so the spreadsheet stays live, a confidence column, note references, and a separate
-All-notes sheet — matching the export screen's "Include" options.
+Excel is produced with openpyxl: a statement-shaped workbook (one sheet per statement in
+the template, with sections / subtotals / totals, consolidated + standalone columns, a
+confidence column and note references) plus Note details / Ratios / Disclosures sheets.
+Values are written as literals with their source cell/page recorded; subtotal and total
+rows are styled and, for the demo workbook, carry the template's figures.
 """
 from __future__ import annotations
 
@@ -248,9 +250,10 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
     """Note details / Ratios / Disclosures sheets."""
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-    from app.services.derived import compute_ratios
+    from app.services.derived import compute_ratios, localize_disclosures
 
     recon = _recon_by_note(reconciliation or [])
+    disclosures = localize_disclosures(disclosures, locale)
 
     head_font = Font(bold=True, color="FFFFFF")
     head_fill = PatternFill("solid", fgColor="243044")

@@ -231,6 +231,11 @@ def test_derived_analysis_ratios_disclosures_notes(client):
     assert any("Trade receivables" in n["title"] for n in a["notes"])
     assert any("Current ratio" in n["text"] for n in a["notes"])
 
+    # Disclosure labels localize in the output locale (Req 21).
+    fr = client.get(f"/api/v1/documents/{doc_id}/analysis", params={"locale": "fr"}).json()
+    fr_disc = {d["key"]: d["label"] for d in fr["disclosures"]}
+    assert fr_disc["contingent_liabilities"] == "Passifs éventuels"
+
 
 def test_analysis_and_export_sheets_present(client):
     """The formatted export carries Note details / Ratios / Disclosures sheets alongside
