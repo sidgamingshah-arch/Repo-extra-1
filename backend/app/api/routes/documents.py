@@ -571,10 +571,12 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
         values.append(slot)
         target["values"] = values
 
-    # A formula drives the value: evaluate it against the other line items (same period), so
-    # the edited cell shows a computed result — not a decorative string. Falls back to the
-    # explicit value if no formula is given; a bad formula is a 422, not a silent overwrite.
+    # A formula drives the value: evaluate it against the other line items (same period), so a
+    # real formula shows its computed result. If a formula is given alongside an explicit value
+    # and can't be evaluated (e.g. free-form references), the explicit value stands and the
+    # formula is kept as an annotation. A formula-ONLY edit that can't evaluate is a 422.
     computed: float | None = None
+    formula_error: str | None = None
     if body.formula and body.formula.strip().lstrip("=").strip():
         from app.services.formula import FormulaError, evaluate
 
@@ -591,10 +593,17 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
         try:
             computed = evaluate(body.formula, _resolve)
         except FormulaError as exc:
-            raise HTTPException(status_code=422,
-                                detail={"error": "bad_formula", "message": str(exc)}) from exc
+            formula_error = str(exc)
 
-    new_val = computed if computed is not None else body.value
+    if computed is not None:
+        new_val = computed
+    elif body.value is not None:
+        new_val = body.value            # explicit value stands; formula kept as annotation
+    elif formula_error is not None:
+        raise HTTPException(status_code=422,
+                            detail={"error": "bad_formula", "message": formula_error})
+    else:
+        new_val = None
     if new_val is None:
         slot["value"] = None
     else:
@@ -655,6 +664,7 @@ def export_document(
     layout: str = Query("statement", pattern="^(statement|flat)$"),
     locale: str = Query("en"),
     include: str | None = Query(None),
+    units: str | None = Query(None),
     session: Session = Depends(db),
 ) -> Response:
     """Export a real document's extracted, mapped line items as Excel or JSON, built from
@@ -666,7 +676,9 @@ def export_document(
     optional analysis sheets to add (note_details, ratios, disclosures) — omit for all. JSON
     carries the line items with formulas plus a derived-analysis block."""
     from app.db.models import Document
-    from app.services.export import build_rows_json, build_rows_xlsx, build_statement_workbook
+    from app.services.export import (
+        build_rows_json, build_rows_xlsx, build_statement_workbook, units_scale,
+    )
 
     doc = session.get(Document, document_id)
     if doc is None:
@@ -678,6 +690,11 @@ def export_document(
     name = (doc.filename or "extract").rsplit(".", 1)[0]
     include_set = ({p.strip() for p in include.split(",") if p.strip()}
                    if include is not None else None)
+    # Present in a chosen unit only when the source scale was detected (never guess).
+    src_units = run.result.get("units")
+    scale, unit_label = units_scale(src_units, units)
+    ccy = (src_units or {}).get("currency")
+    caption = (f"Amounts in {ccy + ' ' if ccy else ''}{unit_label}" if unit_label else None)
     if fmt == "json":
         data = build_rows_json(rows, filename=doc.filename or "document",
                                disclosures=run.result.get("disclosures", []),
@@ -693,9 +710,9 @@ def export_document(
                                         disclosures=run.result.get("disclosures", []),
                                         note_details=run.result.get("note_details", []),
                                         reconciliation=run.result.get("reconciliation", []),
-                                        include=include_set)
+                                        include=include_set, scale=scale, units_caption=caption)
     else:
-        data = build_rows_xlsx(rows, filename=doc.filename or "document")
+        data = build_rows_xlsx(rows, filename=doc.filename or "document", scale=scale)
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -824,7 +841,8 @@ def _loc(node: dict, locale: str) -> str:
 
 
 def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
-                     filename: str, basis: str = "consolidated", locale: str = "en") -> dict:
+                     filename: str, basis: str = "consolidated", locale: str = "en",
+                     units_ctx: dict | None = None) -> dict:
     """Group the real extracted rows into one statement (by the template's sections), so the
     Workspace grid renders real data with its provenance-backed values. Only rows that
     carry a value for the requested `basis` (consolidated / standalone) are shown. Labels are
@@ -883,7 +901,8 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         "statement": statement_type,
         "label": _t(_STMT_LABEL.get(statement_type, statement_type), locale),
         "basis": basis, "periods": [_t("Current", locale), _t("Prior", locale)],
-        "currency": "", "currency_symbol": "", "units": "",
+        "currency": (units_ctx or {}).get("currency") or "",
+        "currency_symbol": "", "units": (units_ctx or {}).get("units_label") or "",
         "rows": out,
         "viewer": {
             "company": filename, "subtitle": _t("Extracted statement", locale),
@@ -917,7 +936,8 @@ def get_document_statement(
     # Consolidated and standalone are extracted in one pass; the grid shows the requested
     # basis (empty if the source didn't present that basis).
     return _build_statement(run.result.get("rows", []), template_def, statement,
-                            doc.filename or "document", basis, locale)
+                            doc.filename or "document", basis, locale,
+                            run.result.get("units"))
 
 
 def _note_no(raw) -> int | None:

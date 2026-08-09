@@ -89,6 +89,35 @@ def extract_pdf(data: bytes, doc, ctx: PipelineContext) -> int:
     return added
 
 
+def extract_image(data: bytes, doc, ctx: PipelineContext) -> int:
+    """Extract line items from a standalone image (PNG/JPG/TIFF) by sending the bytes straight
+    to the configured OCR provider, then reconstructing rows exactly like a scanned PDF page.
+    With no OCR engine configured (the default ``stub``), logs a clear 'OCR not configured'
+    marker and adds nothing — never a silent empty success."""
+    ocr = _resolve_ocr(ctx)
+    if ocr is None:
+        ctx.log("extract:image_no_ocr(configure an OCR engine; default is stub)")
+        return 0
+    lang = (ctx.settings.ocr.languages or ["en"])[0]
+    try:
+        result = ocr.recognize(data, lang=lang)
+    except NotImplementedError:
+        ctx.log("extract:image_ocr_not_implemented")
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        ctx.log(f"extract:image_ocr_failed({exc})")
+        return 0
+    words = [Word(text=w["text"], bbox=w["bbox"]) for w in result.get("words", [])]
+    if not words:
+        ctx.log("extract:image_ocr_no_words")
+        return 0
+    items, _ = build_line_items(words, page_index=0, document_id=doc.content_hash,
+                                source_kind="ocr")
+    doc.line_items.extend(items)
+    ctx.log(f"extract:image_line_items={len(items)}")
+    return len(items)
+
+
 def _resolve_ocr(ctx: PipelineContext):
     engine = ctx.settings.ocr.engine
     if engine == "stub":

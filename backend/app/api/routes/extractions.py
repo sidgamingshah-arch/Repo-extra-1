@@ -148,6 +148,8 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             "note_details": _serialize_notes(doc_model),
             "disclosures": disclosures,
             "reconciliation": ([e.model_dump(mode="json") for e in recon.entries] if recon else []),
+            "units": (doc_model.unit_context.model_dump(mode="json")
+                      if doc_model.unit_context else None),
         }
         run.status = "succeeded"
         run.progress = {"phase": "done", "pct": 1.0}

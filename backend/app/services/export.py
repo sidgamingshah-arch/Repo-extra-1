@@ -93,10 +93,35 @@ def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] 
     return json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
 
 
-def build_rows_xlsx(rows: list[dict], *, filename: str) -> bytes:
+_TARGET_UNIT_SCALE = {"absolute": 1.0, "thousands": 1e3, "lakh": 1e5, "lakhs": 1e5,
+                      "millions": 1e6, "million": 1e6, "crore": 1e7, "crores": 1e7,
+                      "billions": 1e9, "billion": 1e9}
+
+
+def units_scale(source_units: dict | None, target: str | None) -> tuple[float, str | None]:
+    """Factor to present source-unit figures in `target` units, and the label to show.
+
+    Only converts when the source scale was actually detected AND a target is requested — we
+    never guess a scale for an undeclared document (that would silently corrupt figures)."""
+    label = (source_units or {}).get("units_label")
+    if not source_units or not target:
+        return 1.0, label
+    try:
+        src = float(source_units.get("scale_factor") or 1.0)
+    except (TypeError, ValueError):
+        src = 1.0
+    tgt = _TARGET_UNIT_SCALE.get(target.lower(), 1.0)
+    return (src / tgt if tgt else 1.0), target
+
+
+def build_rows_xlsx(rows: list[dict], *, filename: str, scale: float = 1.0) -> bytes:
     """Excel export of a REAL extraction — one row per extracted line item, with mapping,
     confidence, and the source cell/page of the first value for traceability."""
     import openpyxl
+
+    def _sc(v):
+        n = _num(v)
+        return round(n * scale) if (n is not None and scale != 1.0) else v
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -117,7 +142,7 @@ def build_rows_xlsx(rows: list[dict], *, filename: str) -> bytes:
             r.get("canonical_key") or "",
             r.get("mapping_method") or "",
             f"{round(conf * 100)}%" if isinstance(conf, (int, float)) else "",
-            current, prior,
+            _sc(current), _sc(prior),
             r.get("formula") or "",                       # edited-item formula, if any
             _prov_str(values[0].get("provenance")) if values else "",
         ])
@@ -166,7 +191,8 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
                              filename: str = "", disclosures: list[dict] | None = None,
                              note_details: list[dict] | None = None,
                              reconciliation: list[dict] | None = None,
-                             include: set[str] | None = None) -> bytes:
+                             include: set[str] | None = None,
+                             scale: float = 1.0, units_caption: str | None = None) -> bytes:
     """A formatted, statement-shaped workbook: one sheet per statement in the template, with
     its sections / subtotals / totals, localized line labels, and consolidated + standalone
     columns side by side, plus Note details / Ratios / Disclosures sheets. Purely
@@ -210,6 +236,8 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
 
         ws.cell(1, 1, filename).font = Font(size=9, color="8A94A6")
         ws.cell(2, 1, _STMT_TITLE.get(stype, {}).get(locale, stype)).font = Font(bold=True, size=13, color=ink)
+        if units_caption:
+            ws.cell(3, 1, units_caption).font = Font(size=9, italic=True, color="6B7280")
 
         # Header band (row 4: basis groups; row 5: column names).
         hb, hc = 4, 5
@@ -231,7 +259,7 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
         r = hc + 1
         r = _emit_nodes(ws, stmt.get("sections", []), by_key, period_cols, first_val, conf_col,
                         src_col, locale, r, section_fill, total_fill, thin_top, dbl_top, right,
-                        num_fmt, ink)
+                        num_fmt, ink, scale)
 
         ws.freeze_panes = ws.cell(hc + 1, 1)
         ws.column_dimensions["A"].width = 46
@@ -379,7 +407,7 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
 
 
 def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, locale, r,
-                section_fill, total_fill, thin_top, dbl_top, right, num_fmt, ink):
+                section_fill, total_fill, thin_top, dbl_top, right, num_fmt, ink, scale=1.0):
     from openpyxl.styles import Alignment, Font
 
     for node in nodes:
@@ -398,7 +426,7 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
             for child in node.get("children", []):
                 r = _emit_nodes(ws, [child], by_key, period_cols, first_val, conf_col, src_col,
                                 locale, r, section_fill, total_fill, thin_top, dbl_top, right,
-                                num_fmt, ink)
+                                num_fmt, ink, scale)
             continue
 
         is_bold = role in ("subtotal", "total")
@@ -410,6 +438,8 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
         for (b, p) in period_cols:
             ci = first_val + period_cols.index((b, p))
             val = _cell_value(row, b, p)
+            if val is not None and scale != 1.0:
+                val = round(val * scale)
             cell = ws.cell(r, ci, val)
             cell.number_format = num_fmt
             cell.alignment = right

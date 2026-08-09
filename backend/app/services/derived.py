@@ -438,12 +438,57 @@ def document_text(data: bytes, fmt: str) -> list[tuple[int, str]]:
 
 # --- 3. Free-format notes --------------------------------------------------
 _NOTE_LINES = [
-    ("bs_current_assets__trade_receivables", "Trade receivables"),
-    ("bs_current_assets__cash_and_cash_equivalents", "Cash and cash equivalents"),
-    ("bs_current_assets__inventories", "Inventories"),
-    ("pl_income__revenue_from_operations", "Revenue"),
-    ("pl_profit_for_the_year", "Profit for the year"),
+    ("bs_current_assets__trade_receivables", "Trade receivables",
+     {"zh": "应收账款", "ar": "الذمم المدينة", "fr": "Créances clients"}),
+    ("bs_current_assets__cash_and_cash_equivalents", "Cash and cash equivalents",
+     {"zh": "现金及现金等价物", "ar": "النقد وما في حكمه", "fr": "Trésorerie et équivalents"}),
+    ("bs_current_assets__inventories", "Inventories",
+     {"zh": "存货", "ar": "المخزون", "fr": "Stocks"}),
+    ("pl_income__revenue_from_operations", "Revenue",
+     {"zh": "收入", "ar": "الإيرادات", "fr": "Produits"}),
+    ("pl_profit_for_the_year", "Profit for the year",
+     {"zh": "年度利润", "ar": "ربح السنة", "fr": "Résultat de l'exercice"}),
 ]
+
+# Localized sentence templates for the generated highlights. {label},{dir},{d},{cur},{prior}.
+_NOTE_TR = {
+    "move": {
+        "en": "{label} {dir} {d:.1f}% to {cur} (prior period {prior}).",
+        "zh": "{label}{dir} {d:.1f}% 至 {cur}（上期 {prior}）。",
+        "ar": "{label} {dir} بنسبة {d:.1f}% إلى {cur} (الفترة السابقة {prior}).",
+        "fr": "{label} {dir} de {d:.1f} % à {cur} (période précédente {prior}).",
+    },
+    "up": {"en": "increased", "zh": "增长", "ar": "ارتفع", "fr": "en hausse"},
+    "down": {"en": "decreased", "zh": "下降", "ar": "انخفض", "fr": "en baisse"},
+    "flat": {
+        "en": "{label} was {cur} for the current period.",
+        "zh": "{label}本期为 {cur}。",
+        "ar": "{label} بلغ {cur} للفترة الحالية.",
+        "fr": "{label} s'élève à {cur} pour la période en cours.",
+    },
+    "liquidity": {"en": "Liquidity", "zh": "流动性", "ar": "السيولة", "fr": "Liquidité"},
+    "liquidity_txt": {
+        "en": "Current ratio of {v} indicates {stance} short-term liquidity.",
+        "zh": "流动比率为 {v}，表明短期流动性{stance}。",
+        "ar": "نسبة التداول {v} تشير إلى سيولة قصيرة الأجل {stance}.",
+        "fr": "Un ratio de liquidité de {v} indique une liquidité à court terme {stance}.",
+    },
+    "profitability": {"en": "Profitability", "zh": "盈利能力", "ar": "الربحية", "fr": "Rentabilité"},
+    "profitability_txt": {
+        "en": "Net profit margin was {v} of revenue.",
+        "zh": "净利率为收入的 {v}。",
+        "ar": "بلغ هامش صافي الربح {v} من الإيرادات.",
+        "fr": "La marge nette représente {v} du chiffre d'affaires.",
+    },
+    "stance_comfortable": {"en": "comfortable", "zh": "充裕", "ar": "مريحة", "fr": "confortable"},
+    "stance_adequate": {"en": "adequate", "zh": "尚可", "ar": "كافية", "fr": "adéquate"},
+    "stance_tight": {"en": "tight", "zh": "紧张", "ar": "متوترة", "fr": "tendue"},
+}
+
+
+def _tr(key: str, locale: str) -> str:
+    entry = _NOTE_TR[key]
+    return entry.get(locale, entry["en"])
 
 
 def _fmt(n: float | None) -> str:
@@ -456,32 +501,35 @@ def build_free_notes(rows: list[dict], *, basis: str = "consolidated", locale: s
     by_key = {r["canonical_key"]: r for r in rows if r.get("canonical_key")}
     notes: list[dict] = []
 
-    for key, label in _NOTE_LINES:
+    for key, label_en, label_i18n in _NOTE_LINES:
         cur = _value(by_key, key, basis, "current")
         if cur is None:
             continue
+        label = (label_i18n.get(locale) if locale != "en" else None) or label_en
         prior = _value(by_key, key, basis, "prior")
         if prior not in (None, 0):
             delta = (cur - prior) / abs(prior) * 100
-            direction = "increased" if delta >= 0 else "decreased"
+            direction = _tr("up" if delta >= 0 else "down", locale)
             notes.append({
                 "title": label,
-                "text": f"{label} {direction} {abs(delta):.1f}% to {_fmt(cur)} "
-                        f"(prior period {_fmt(prior)}).",
+                "text": _tr("move", locale).format(label=label, dir=direction, d=abs(delta),
+                                                    cur=_fmt(cur), prior=_fmt(prior)),
             })
         else:
-            notes.append({"title": label, "text": f"{label} was {_fmt(cur)} for the current period."})
+            notes.append({"title": label,
+                          "text": _tr("flat", locale).format(label=label, cur=_fmt(cur))})
 
     ratios = {r["key"]: r for r in compute_ratios(rows, basis=basis)}
     cr = ratios.get("current_ratio")
     if cr and cr["available"]:
-        stance = "comfortable" if cr["value"] >= 1.5 else "adequate" if cr["value"] >= 1 else "tight"
-        notes.append({"title": "Liquidity",
-                      "text": f"Current ratio of {cr['display']} indicates {stance} short-term liquidity."})
+        stance = _tr("stance_comfortable" if cr["value"] >= 1.5
+                     else "stance_adequate" if cr["value"] >= 1 else "stance_tight", locale)
+        notes.append({"title": _tr("liquidity", locale),
+                      "text": _tr("liquidity_txt", locale).format(v=cr["display"], stance=stance)})
     nm = ratios.get("net_margin")
     if nm and nm["available"]:
-        notes.append({"title": "Profitability",
-                      "text": f"Net profit margin was {nm['display']} of revenue."})
+        notes.append({"title": _tr("profitability", locale),
+                      "text": _tr("profitability_txt", locale).format(v=nm["display"])})
 
     if not notes:
         notes.append({"title": "Summary",

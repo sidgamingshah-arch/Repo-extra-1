@@ -39,5 +39,12 @@ class ExtractStage:
             extract_pdf(ctx.raw_bytes, doc, ctx)
             return doc
 
+        # Standalone image (scanned page as PNG/JPG/TIFF): OCR the bytes directly.
+        if doc.fmt == DocFormat.IMAGE and ctx.raw_bytes:
+            from app.services.pdf_extract import extract_image
+
+            extract_image(ctx.raw_bytes, doc, ctx)
+            return doc
+
         ctx.log("extract:no_source_bytes")
         return doc

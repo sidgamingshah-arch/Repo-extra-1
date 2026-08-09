@@ -16,7 +16,6 @@ from app.api.routes import (
     languages,
     ontologies,
     projects,
-    review,
     settings as settings_routes,
     templates,
 )
@@ -56,7 +55,6 @@ def create_app() -> FastAPI:
     application.include_router(templates.router, prefix=prefix)
     application.include_router(ontologies.router, prefix=prefix)
     application.include_router(languages.router, prefix=prefix)
-    application.include_router(review.router, prefix=prefix)
     application.include_router(projects.router, prefix=prefix)
     application.include_router(auth.router, prefix=prefix)
     application.include_router(settings_routes.router, prefix=prefix)
