@@ -41,6 +41,10 @@ _REPAYMENT = "cf_cash_flow_from_financing_activities__repayment_of_borrowings"
 _EQUITY = "bs_equity__total_equity"
 _TCL = "bs_current_liabilities__total_current_liabilities"
 _INTEREST = "pl_non_operating_expenses__interest_expense"
+# Cost base for the inventory/payables day-cycle: prefer the explicit cost-of-goods-sold line,
+# but many statement formats don't break it out — fall back to the total operating cost
+# subtotal (almost always present) so DIO/DPO/CCC still compute.
+_COST_BASE = ("pl_expenses__cost_of_goods_sold", "pl_expenses__total_operating_cost")
 
 _RATIOS = [
     # ---- Liquidity -------------------------------------------------------------------
@@ -182,14 +186,14 @@ _RATIOS = [
     {"key": "dio", "label": "Days inventory outstanding (DIO)", "unit": "days", "category": "Efficiency",
      "label_i18n": {"zh": "存货周转天数", "ar": "أيام بقاء المخزون", "fr": "Délai d'écoulement des stocks (jours)"},
      "num": [("bs_current_assets__inventories", 1)],
-     "den": [("pl_expenses__cost_of_goods_sold", 1)],
-     "formula": "Inventories / Cost of goods sold × 365"},
+     "den": [(_COST_BASE, 1)],
+     "formula": "Inventories / Cost of goods sold (or total operating cost) × 365"},
     {"key": "dpo", "label": "Days payables outstanding (DPO)", "unit": "days", "category": "Efficiency",
      "label_i18n": {"zh": "应付账款周转天数", "ar": "أيام سداد الذمم الدائنة",
                     "fr": "Délai de paiement fournisseurs (jours)"},
      "num": [("bs_current_liabilities__current_trade_payables", 1)],
-     "den": [("pl_expenses__cost_of_goods_sold", 1)],
-     "formula": "Trade payables / Cost of goods sold × 365"},
+     "den": [(_COST_BASE, 1)],
+     "formula": "Trade payables / Cost of goods sold (or total operating cost) × 365"},
 
     # ---- Profitability ---------------------------------------------------------------
     {"key": "net_margin", "label": "Net profit margin", "unit": "%", "category": "Profitability",
@@ -241,17 +245,31 @@ def _value(by_key: dict, key: str, basis: str, period: str) -> float | None:
     return None
 
 
+def _term_value(by_key, keyspec, basis, period) -> float | None:
+    """Resolve a term's value. ``keyspec`` is a single canonical key, or a tuple/list of
+    candidate keys tried in order (first one present wins) — used for a graceful fallback,
+    e.g. cost of goods sold → total operating cost when a filing doesn't break out COGS."""
+    if isinstance(keyspec, (tuple, list)):
+        for k in keyspec:
+            v = _value(by_key, k, basis, period)
+            if v is not None:
+                return v
+        return None
+    return _value(by_key, keyspec, basis, period)
+
+
 def _side(by_key, terms, basis, period) -> float | None:
     """Sum one side of a ratio. Each term is ``(key, sign)`` — required, missing => whole side
     None — or ``(key, sign, "opt")`` — optional component, missing => treated as 0 (so an
     aggregate like 'total debt' still computes when a company reports only some components).
-    The side is None if no term contributed a value at all (nothing to measure)."""
+    A term's key may itself be a tuple of fallback candidates (see ``_term_value``). The side
+    is None if no term contributed a value at all (nothing to measure)."""
     total = 0.0
     present = False
     for term in terms:
         key, sign = term[0], term[1]
         mode = term[2] if len(term) > 2 else "req"
-        val = _value(by_key, key, basis, period)
+        val = _term_value(by_key, key, basis, period)
         if val is None:
             if mode == "opt":
                 continue                     # optional component absent → contributes 0

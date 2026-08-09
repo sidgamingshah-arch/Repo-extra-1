@@ -95,6 +95,30 @@ def test_total_debt_aggregates_present_components_only():
     assert not g2["available"] and g2["display"] == "—"
 
 
+def test_dio_dpo_fall_back_to_total_operating_cost_when_cogs_absent():
+    """DIO/DPO prefer the explicit COGS line, but fall back to total operating cost when a
+    filing doesn't break out COGS — so the day-cycle still computes."""
+    base = [_row("bs_current_assets__inventories", 2000),
+            _row("bs_current_liabilities__current_trade_payables", 1500)]
+
+    # COGS present → used directly.
+    with_cogs = {r["key"]: r for r in compute_ratios(
+        base + [_row("pl_expenses__cost_of_goods_sold", 12000),
+                _row("pl_expenses__total_operating_cost", 15000)])}
+    assert with_cogs["dio"]["value"] == round(2000 / 12000 * 365, 2)
+    assert with_cogs["dpo"]["value"] == round(1500 / 12000 * 365, 2)
+
+    # COGS absent → fall back to total operating cost (15000).
+    no_cogs = {r["key"]: r for r in compute_ratios(
+        base + [_row("pl_expenses__total_operating_cost", 15000)])}
+    assert no_cogs["dio"]["available"] and no_cogs["dio"]["value"] == round(2000 / 15000 * 365, 2)
+    assert no_cogs["dpo"]["available"] and no_cogs["dpo"]["value"] == round(1500 / 15000 * 365, 2)
+
+    # Neither present → genuinely unavailable (never fabricated).
+    neither = {r["key"]: r for r in compute_ratios(base)}
+    assert not neither["dio"]["available"] and not neither["dpo"]["available"]
+
+
 def test_ratios_grouped_by_category_credit_first():
     cats = [r["category"] for r in compute_ratios(_credit_rows())]
     # Categories appear as contiguous blocks, credit-relevant ones first.
