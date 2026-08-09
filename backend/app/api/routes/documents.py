@@ -358,10 +358,68 @@ def _prov_label(prov: dict | None) -> str:
 _LOW_CONF = 0.75  # mapping confidence below this routes to review
 
 
-def _build_review(rows: list[dict], filename: str, locale: str = "en") -> dict:
-    """Derive the human-in-the-loop review queue from a real extraction: unmapped and
-    low-confidence line items become review checks (the QA the analyst works before
-    export). No demo data involved."""
+def _row_value(rows: list[dict], key: str, basis: str = "consolidated", period: str = "current"):
+    for r in rows:
+        if r.get("canonical_key") != key:
+            continue
+        for v in r.get("values") or []:
+            if (v.get("basis") or "consolidated") == basis and v.get("period_label") == period:
+                try:
+                    return float(str(v.get("value")).replace(",", ""))
+                except (TypeError, ValueError):
+                    return None
+    return None
+
+
+def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str) -> list[dict]:
+    """Failed accounting validations for the review queue (Req 11): the balance-sheet
+    identity and note→face ties. Computed from the real extracted values."""
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    checks: list[dict] = []
+    a = _row_value(rows, "bs_total_assets")
+    e = _row_value(rows, "bs_total_equity_and_liabilities")
+    if a is not None and e is not None and abs(a - e) > 1:
+        checks.append({
+            "id": "chk-balance", "type": "balance", "icon": "≠",
+            "title": L("Balance sheet does not balance"), "where": L("Balance sheet identity"),
+            "severity": L("Check failed"), "tone": "high", "delta": f"{a - e:,.0f}",
+            "target": "bs_total_assets",
+            "calc": [
+                [L("Total assets"), f"{a:,.0f}", False],
+                [L("Total equity and liabilities"), f"{e:,.0f}", True],
+                [L("Difference"), f"{a - e:,.0f}", False],
+            ],
+            "fix": L("Assets do not equal equity plus liabilities. Check the extracted totals "
+                     "and their components against the document."),
+        })
+    for ent in reconciliation:
+        if ent.get("within_tolerance"):
+            continue
+        note = ent.get("note_number")
+        checks.append({
+            "id": f"chk-note-{note}-{ent.get('basis')}-{ent.get('period_label')}",
+            "type": "note_tie", "icon": "≠",
+            "title": L("Note does not tie to the face figure"),
+            "where": f"Note {note} · {ent.get('basis')}/{ent.get('period_label')}",
+            "severity": L("Check failed"), "tone": "high",
+            "delta": f"{float(ent.get('residual') or 0):,.0f}", "target": f"note:{note}",
+            "calc": [
+                [L("Face figure"), f"{float(ent.get('raw_face') or 0):,.0f}", False],
+                [L("Residual vs note total"), f"{float(ent.get('residual') or 0):,.0f}", True],
+            ],
+            "fix": L("The note's detail rows do not sum to the face figure it supports. "
+                     "Verify the note breakdown and the face value."),
+        })
+    return checks
+
+
+def _build_review(rows: list[dict], filename: str, locale: str = "en",
+                  reconciliation: list[dict] | None = None) -> dict:
+    """Derive the human-in-the-loop review queue from a real extraction: failed accounting
+    checks (balance identity, note ties) plus unmapped and low-confidence line items become
+    review items (the QA the analyst works before export). No demo data involved."""
     def L(s: str) -> str:
         return _t(s, locale)
 
@@ -369,7 +427,8 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en") -> dict:
                      "line item, or add an alias so future runs map it automatically.")
     _LOWCONF_FIX = ("The mapping is uncertain. Confirm the concept is correct or reassign it; "
                     "the value and its source location are shown so you can verify against the document.")
-    checks: list[dict] = []
+    accounting = _accounting_checks(rows, reconciliation or [], locale)
+    checks: list[dict] = list(accounting)
     unmapped = low_conf = 0
     for i, r in enumerate(rows):
         key = r.get("canonical_key")
@@ -411,11 +470,12 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en") -> dict:
                 "fix": L(_LOWCONF_FIX),
             })
     total = len(checks)
-    passed = max(0, len(rows) - total)
+    passed = max(0, len(rows) - (unmapped + low_conf))
     return {
         "checks": checks,
         "tabs": [
             {"label": L("All"), "count": total},
+            {"label": L("Checks"), "count": len(accounting)},
             {"label": L("Unmapped"), "count": unmapped},
             {"label": L("Low confidence"), "count": low_conf},
         ],
@@ -469,7 +529,8 @@ def get_document_review(document_id: str, locale: str = Query("en"),
     if run is None or not run.result:
         return {"checks": [], "tabs": [{"label": _t("All", locale), "count": 0}],
                 "summary": {"open": 0, "passed": 0}}
-    return _build_review(run.result.get("rows", []), doc.filename or "document", locale)
+    return _build_review(run.result.get("rows", []), doc.filename or "document", locale,
+                         run.result.get("reconciliation", []))
 
 
 class LineItemEdit(BaseModel):
