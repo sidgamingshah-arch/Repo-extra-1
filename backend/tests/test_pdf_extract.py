@@ -299,6 +299,20 @@ def test_formatted_statement_export_is_template_driven(client):
     assert flat.status_code == 200 and flat.content[:2] == b"PK"
 
 
+def test_real_statement_localized_and_basis_echoed(client):
+    """The Workspace statement resolves labels in the output locale (label_i18n) and echoes
+    the requested basis (Req 21, 13)."""
+    doc_id = _extract_with_ontology(client)
+    zh = client.get(f"/api/v1/documents/{doc_id}/statement",
+                    params={"statement": "balance_sheet", "locale": "zh"}).json()
+    labels = " | ".join(r.get("label", "") for r in zh["rows"])
+    assert "流动资产" in labels          # "Current assets" section localized from label_i18n
+    # A standalone request echoes the requested basis (not hardcoded consolidated).
+    sa = client.get(f"/api/v1/documents/{doc_id}/statement",
+                    params={"statement": "balance_sheet", "basis": "standalone"}).json()
+    assert sa["basis"] == "standalone"
+
+
 def test_edit_then_revert_restores_original(client):
     doc_id = _extract_with_ontology(client)
     st0 = client.get(f"/api/v1/documents/{doc_id}/statement", params={"statement": "balance_sheet"}).json()

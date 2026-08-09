@@ -152,9 +152,9 @@ export const api = {
   documentPages: (documentId: string) =>
     req<PagesResponse>(`/documents/${documentId}/pages`),
   /** One statement of a document's real extraction, grouped for the Workspace grid. */
-  documentStatement: (documentId: string, statement: StatementKey, basis: Basis) =>
+  documentStatement: (documentId: string, statement: StatementKey, basis: Basis, locale: Locale = "en") =>
     req<StatementResponse>(
-      `/documents/${documentId}/statement?statement=${statement}&basis=${basis}`,
+      `/documents/${documentId}/statement?statement=${statement}&basis=${basis}&locale=${locale}`,
     ),
   /** A window of spreadsheet cells around a value's origin — the Excel click-to-source
    * backdrop (mirrors fetchPageImage for PDFs). */

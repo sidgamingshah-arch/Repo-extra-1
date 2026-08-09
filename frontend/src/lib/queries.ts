@@ -268,11 +268,12 @@ export const useDocumentPages = (documentId: string | undefined) =>
     retry: false,
   });
 
-/** One statement of a document's real extraction (Workspace grid). */
-export const useDocumentStatement = (documentId: string | undefined, statement: StatementKey, basis: Basis) =>
+/** One statement of a document's real extraction (Workspace grid), labels in `locale`. */
+export const useDocumentStatement = (
+  documentId: string | undefined, statement: StatementKey, basis: Basis, locale: Locale = "en") =>
   useQuery({
-    queryKey: ["document-statement", documentId, statement, basis],
-    queryFn: () => api.documentStatement(documentId as string, statement, basis),
+    queryKey: ["document-statement", documentId, statement, basis, locale],
+    queryFn: () => api.documentStatement(documentId as string, statement, basis, locale),
     enabled: !!documentId,
     retry: false,
   });

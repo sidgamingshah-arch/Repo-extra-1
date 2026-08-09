@@ -779,11 +779,23 @@ def _template_for_run(session: Session, run) -> dict | None:
     return tv.definition if tv else None
 
 
+_BASIS_LABEL_I18N = {
+    "consolidated": {"en": "Consolidated", "zh": "合并", "ar": "موحّد", "fr": "Consolidé"},
+    "standalone": {"en": "Standalone", "zh": "单独", "ar": "مستقل", "fr": "Individuel"},
+}
+
+
+def _loc(node: dict, locale: str) -> str:
+    """A template node's label in the output locale, from label_i18n (falls back to label)."""
+    return (node.get("label_i18n") or {}).get(locale) or node.get("label") or ""
+
+
 def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
-                     filename: str, basis: str = "consolidated") -> dict:
+                     filename: str, basis: str = "consolidated", locale: str = "en") -> dict:
     """Group the real extracted rows into one statement (by the template's sections), so the
     Workspace grid renders real data with its provenance-backed values. Only rows that
-    carry a value for the requested `basis` (consolidated / standalone) are shown."""
+    carry a value for the requested `basis` (consolidated / standalone) are shown. Labels are
+    resolved in the output `locale` from the template's label_i18n (input=output parity)."""
     prefix = _STMT_PREFIX.get(statement_type, "")
     by_key: dict[str, dict] = {}
     for r in rows:
@@ -817,32 +829,35 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                        if c.get("canonical_key") in by_key and has_basis(by_key[c["canonical_key"]])]
             if not matched:
                 continue
-            out.append({"id": f"sec_{sec.get('node_id', '')}", "label": sec.get("label", ""),
+            out.append({"id": f"sec_{sec.get('node_id', '')}", "label": _loc(sec, locale),
                         "kind": "section", "v1": None, "v2": None})
             for c in matched:
                 k = c["canonical_key"]
                 seen.add(k)
-                out.append(item_row(k, c.get("label", ""), by_key[k]))
+                out.append(item_row(k, _loc(c, locale), by_key[k]))
 
     extra = [r for r in rows
              if (r.get("canonical_key") or "").startswith(f"{prefix}_")
              and r["canonical_key"] not in seen and has_basis(r)]
     if extra:
-        out.append({"id": "sec_other", "label": "Other extracted items", "kind": "section",
-                    "v1": None, "v2": None})
+        out.append({"id": "sec_other", "label": _t("Other extracted items", locale),
+                    "kind": "section", "v1": None, "v2": None})
         for r in extra:
             out.append(item_row(r["canonical_key"], r.get("source_label", ""), r))
 
+    basis_label = _BASIS_LABEL_I18N.get(basis, {}).get(locale, basis.title())
     return {
-        "statement": statement_type, "label": _STMT_LABEL.get(statement_type, statement_type),
-        "basis": "consolidated", "periods": ["Current", "Prior"],
+        "statement": statement_type,
+        "label": _t(_STMT_LABEL.get(statement_type, statement_type), locale),
+        "basis": basis, "periods": [_t("Current", locale), _t("Prior", locale)],
         "currency": "", "currency_symbol": "", "units": "",
         "rows": out,
         "viewer": {
-            "company": filename, "subtitle": "Extracted statement",
-            "chips": [{"label": "Consolidated", "active": True}],
-            "callout": "Values are read deterministically from the source; mapping is by the "
-                       "ensemble. Open the extraction view for click-to-source provenance.",
+            "company": filename, "subtitle": _t("Extracted statement", locale),
+            "chips": [{"label": basis_label, "active": True}],
+            "callout": _t("Values are read deterministically from the source; mapping is by the "
+                          "ensemble. Open the extraction view for click-to-source provenance.",
+                          locale),
         },
     }
 
@@ -852,9 +867,11 @@ def get_document_statement(
     document_id: str,
     statement: str = Query("balance_sheet"),
     basis: str = Query("consolidated"),
+    locale: str = Query("en"),
     session: Session = Depends(db),
 ) -> dict:
-    """One statement of a document's real extraction, grouped for the Workspace grid."""
+    """One statement of a document's real extraction, grouped for the Workspace grid,
+    with labels resolved in the output `locale`."""
     from app.db.models import Document
 
     doc = session.get(Document, document_id)
@@ -867,7 +884,7 @@ def get_document_statement(
     # Consolidated and standalone are extracted in one pass; the grid shows the requested
     # basis (empty if the source didn't present that basis).
     return _build_statement(run.result.get("rows", []), template_def, statement,
-                            doc.filename or "document", basis)
+                            doc.filename or "document", basis, locale)
 
 
 def _note_no(raw) -> int | None:

@@ -317,7 +317,7 @@ export default function WorkspaceScreen() {
   const usingReal = !!activeDocumentId;
   const editable = true;   // both the demo and the real workspace support value editing
   const loaded = useProjectLoaded();
-  const realQ = useDocumentStatement(activeDocumentId ?? undefined, statement, dataset);
+  const realQ = useDocumentStatement(activeDocumentId ?? undefined, statement, dataset, locale);
   const demoQ = useStatement(statement, dataset, locale, !usingReal);
   const data = usingReal ? realQ.data : demoQ.data;
   const isPending = usingReal ? realQ.isPending : demoQ.isPending;
