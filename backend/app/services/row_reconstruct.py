@@ -19,6 +19,20 @@ from app.core.models.line_item import ExtractedValue, LineItem, NoteRef, UnitCon
 
 _NUM = re.compile(r"^\(?-?[\d,]*\.?\d+\)?%?$")
 _NOTE = re.compile(r"^note[s]?\.?$", re.IGNORECASE)
+# A column header for the note-reference column (English + Chinese). Real statements print it
+# once at the top; the cells beneath it hold bare note numbers, not monetary values.
+_NOTE_HDR = re.compile(r"^(notes?|附註|附注)$", re.IGNORECASE)
+
+
+def _is_note_number(t: str) -> bool:
+    """A bare 1–2 digit integer — the shape of a note reference (never a formatted amount)."""
+    return re.fullmatch(r"\d{1,2}", t.strip().strip(".")) is not None
+
+
+def _is_money_like(t: str, fmt=None) -> bool:
+    """A numeric token that is NOT a bare note number (has a separator/decimal/sign, or ≥3 digits
+    — i.e. a real amount). Used to confirm a leading small integer is a note ref, not a value."""
+    return _num(t, fmt) is not None and not _is_note_number(t)
 
 
 @dataclass
@@ -193,6 +207,51 @@ def _basis_for(x: float, bands: list[tuple[Basis, float]]) -> Basis:
     return min(bands, key=lambda b: abs(b[1] - x))[0]
 
 
+def _detect_note_column(rows: list[list[Word]]) -> float | None:
+    """The x-centre of the note-reference column, if the statement has one. Found from a
+    'Notes'/'附註' column header that is BACKED by a vertical run of bare note numbers beneath
+    it (≥2), so an inline 'Note 14' mention in prose isn't mistaken for a column. Returns None
+    when there's no such column (then a per-row heuristic handles a leading note number)."""
+    header_xs: list[float] = []
+    for row in rows:
+        for w in row:
+            if _NOTE_HDR.match(w.text.strip()):
+                header_xs.append((w.bbox.x0 + w.bbox.x1) / 2)
+    best, best_n = None, 0
+    for cx in header_xs:
+        n = 0
+        for row in rows:
+            if any(abs((w.bbox.x0 + w.bbox.x1) / 2 - cx) <= 0.03 and _is_note_number(w.text)
+                   for w in row):
+                n += 1
+        if n > best_n:
+            best, best_n = cx, n
+    return best if best_n >= 2 else None
+
+
+def _resolve_note_column(note_ref: str | None, value_words: list[Word],
+                         note_x: float | None, fmt=None) -> tuple[str | None, list[Word]]:
+    """Separate the note-reference cell from the monetary values. When a note column was detected,
+    a value token sitting in it (and shaped like a note number) is the reference. Otherwise, a
+    leading bare 1–2 digit integer followed by a real amount is treated as the note ref — the
+    common ``Revenue  6  45,230  40,110`` layout, where '6' is Note 6, not the current-year value."""
+    if note_ref is not None or not value_words:
+        return note_ref, value_words
+    if note_x is not None:
+        kept: list[Word] = []
+        for vw in value_words:
+            xc = (vw.bbox.x0 + vw.bbox.x1) / 2
+            if note_ref is None and abs(xc - note_x) <= 0.03 and _is_note_number(vw.text):
+                note_ref = vw.text.strip().strip(".")
+            else:
+                kept.append(vw)
+        return note_ref, kept
+    if (len(value_words) >= 2 and _is_note_number(value_words[0].text)
+            and any(_is_money_like(w.text, fmt) for w in value_words[1:])):
+        return value_words[0].text.strip().strip("."), value_words[1:]
+    return note_ref, value_words
+
+
 _MONTHS = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
            r"aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?")
 # A single word that can belong to a date-column header phrase.
@@ -260,8 +319,10 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
     rows = _merge_wrapped_labels(_group_rows(words), number_format)
     bands = _basis_bands(rows)
     period_bands = _period_bands(rows)          # real period-end dates for column headers, if any
+    note_x = _detect_note_column(rows)          # x of the note-ref column, so it isn't read as a value
     for row in rows:
         label_words, note_ref, value_words = _scan_row(row, number_format)
+        note_ref, value_words = _resolve_note_column(note_ref, value_words, note_x, number_format)
 
         label = " ".join(w.text for w in label_words).strip()
         if not label or not value_words:

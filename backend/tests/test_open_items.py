@@ -337,6 +337,37 @@ def test_maybe_cache_credit_narrative_is_guarded():
     assert cn is None or (cn.get("text") and cn.get("model"))
 
 
+# --- note-vs-value column: a note reference is not read as the current-year value ------------
+def test_note_column_not_read_as_value():
+    from app.core.models.geometry import BBox
+    from app.services.row_reconstruct import (
+        Word, _detect_note_column, _num, _resolve_note_column, _scan_row)
+
+    def W(t, x):
+        return Word(text=t, bbox=BBox(x0=x, y0=0.5, x1=x + 0.03, y1=0.52))
+
+    # Layout: Label | Notes | 2023 | 2022 — the note column holds bare note numbers.
+    header = [W("Notes", 0.55), W("2023", 0.72), W("2022", 0.88)]
+    r_rev = [W("Revenue", 0.10), W("6", 0.55), W("45,230", 0.72), W("40,110", 0.88)]
+    r_fin = [W("Finance", 0.10), W("costs", 0.15), W("7", 0.55), W("(1,200)", 0.72), W("(1,000)", 0.88)]
+    rows = [header, r_rev, r_fin]
+
+    note_x = _detect_note_column(rows)
+    assert note_x is not None and abs(note_x - 0.565) < 0.05
+
+    nr, vw = _resolve_note_column(*_scan_row(r_rev)[1:], note_x)
+    assert nr == "6"                                  # the note ref, not a value
+    vals = [_num(w.text) for w in vw]
+    assert [str(v) for v in vals] == ["45230", "40110"]  # the real amounts survive
+
+    # Fallback path (no detectable note column): a leading bare integer before real amounts.
+    nr2, vw2 = _resolve_note_column(None, [W("6", 0.5), W("45,230", 0.7)], None)
+    assert nr2 == "6" and len(vw2) == 1 and _num(vw2[0].text) == 45230
+    # A row of small integers with no money-like value is left alone (not a note column).
+    nr3, vw3 = _resolve_note_column(None, [W("3", 0.5), W("4", 0.7)], None)
+    assert nr3 is None and len(vw3) == 2
+
+
 # --- #9: Workspace statement rows carry a click-to-source location + doc shape ---------------
 def test_statement_rows_carry_source_and_format(client):
     doc_id = _upload(client, make_rich_pdf(), "srcstmt.pdf")
