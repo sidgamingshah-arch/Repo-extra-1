@@ -16,9 +16,10 @@ def test_login_issues_token_and_scopes_analyst(anon_client):
     me = anon_client.get("/api/v1/me", headers={"Authorization": f"Bearer {tok}"}).json()
     assert me["authenticated"] is True and me["role"] == "analyst" and me["via"] == "session"
     assert "workspace" in me["screens"] and "commentary" in me["screens"]
-    # The analyst sees the template screen (to view/select), but cannot author templates
-    # or reach admin settings.
-    assert "template" in me["screens"] and "settings" not in me["screens"]
+    # Configuration screens (Template & Ontology authoring, Settings) are admin-only. The
+    # analyst still selects a template on the Upload screen (template:select), but the
+    # authoring/config screen is hidden from their nav.
+    assert "template" not in me["screens"] and "settings" not in me["screens"]
     assert "template:select" in me["permissions"]
     assert "config:template" not in me["permissions"]
 

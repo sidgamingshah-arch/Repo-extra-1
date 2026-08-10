@@ -108,3 +108,18 @@ def test_detect_entity_name_none_when_absent():
     from app.services.derived import detect_entity_name
 
     assert detect_entity_name([(0, "Balance Sheet\nTotal assets 100")]) is None
+
+
+# --- admin template detail renders a REAL configured template (#13) -------------------------
+def test_template_detail_renders_real_template(client):
+    templates = client.get("/api/v1/templates").json()
+    assert templates, "the reference template should be seeded"
+    tid = templates[0]["id"]
+    detail = client.get(f"/api/v1/templates/{tid}/detail").json()
+    assert detail["tree"], "a configured template must render a non-empty tree"
+    assert detail["template"]["line_items"] > 0
+    # Leaf nodes carry per-node config (aliases from the paired ontology, a sign convention).
+    leaves = [n for n in detail["tree"] if n["lvl"] == 2]
+    assert leaves and all(n["id"] in detail["node_config"] for n in leaves)
+    some = detail["node_config"][leaves[0]["id"]]
+    assert {"breadcrumb", "label", "aliases", "sign", "netting"} <= set(some)

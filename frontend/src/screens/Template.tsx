@@ -1,13 +1,13 @@
 /** Screen 7 — Template & Ontology. Left template tree + right node editor. */
 import type { CSSProperties } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { Card } from "../components/ui";
 import { useAppLocale, useUI } from "../store";
 import { color, font, radius } from "../theme";
 import type { NodeConfig } from "../types";
-import { useTemplate } from "../lib/queries";
+import { useTemplateDetail, useTemplates } from "../lib/queries";
 import { api } from "../lib/api";
 import { useCan } from "../lib/rbac";
 import { useT } from "../i18n";
@@ -141,10 +141,30 @@ function NettingExpr({ expr }: { expr: string }) {
 export default function TemplateScreen() {
   const locale = useAppLocale();
   const t = useT();
-  const { data } = useTemplate(locale);
+  // Render the REAL configured template(s), not the demo project. Admin picks among the
+  // templates that exist; the detail (tree + per-node config) comes from that template and
+  // its paired ontology.
+  const tplList = useTemplates();
+  const [selId, setSelId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!selId && tplList.data && tplList.data.length) setSelId(tplList.data[0].id);
+  }, [selId, tplList.data]);
+  const { data } = useTemplateDetail(selId, locale);
   const tplSel = useUI((s) => s.tplSel);
   const setTpl = useUI((s) => s.setTpl);
-  const canEdit = useCan("config:template"); // authoring is admin-only; analysts view/select
+  const canEdit = useCan("config:template"); // authoring is admin-only
+
+  // No templates configured yet → guidance (also covers the initial load).
+  if (tplList.data && tplList.data.length === 0) {
+    return (
+      <div style={{ maxWidth: 560, margin: "60px auto", textAlign: "center", color: color.muted, padding: "0 24px" }}>
+        <div style={{ fontSize: 28, marginBottom: 10 }}>◆</div>
+        <h1 style={{ fontSize: 18, fontWeight: 600, color: color.ink, marginBottom: 8 }}>{t("tp.emptyTitle")}</h1>
+        <p style={{ fontSize: 12.5, lineHeight: 1.6 }}>{t("tp.emptyHint")}</p>
+        <div style={{ maxWidth: 320, margin: "18px auto 0" }}><ImportTemplate /></div>
+      </div>
+    );
+  }
 
   if (!data) {
     return (

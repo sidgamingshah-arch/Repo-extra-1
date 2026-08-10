@@ -93,8 +93,11 @@ SCREENS_BY_ROLE: dict[Role, list[str]] = {
     Role.ADMIN: ["upload", "integrity", "scope", "workspace", "notes", "review",
                  "commentary", "template", "settings", "export"],
     Role.REVIEWER: ["integrity", "workspace", "notes", "review", "commentary", "export"],
+    # Analysts run the operational pipeline; configuration surfaces (Template & Ontology
+    # authoring, Settings) are admin-only. Analysts still pick a template on the Upload
+    # screen (TEMPLATE_SELECT), they just don't get the authoring/config screen.
     Role.ANALYST: ["upload", "integrity", "scope", "workspace", "notes", "review",
-                   "commentary", "template", "export"],
+                   "commentary", "export"],
 }
 
 

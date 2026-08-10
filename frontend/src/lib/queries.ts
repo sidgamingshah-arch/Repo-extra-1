@@ -248,6 +248,13 @@ export const useNote = (no: number, locale: Locale = "en", enabled = true) =>
   useQuery({ queryKey: ["note", no, locale], queryFn: () => api.note(no, locale), enabled });
 export const useTemplate = (locale: Locale = "en") =>
   useQuery({ queryKey: ["template", locale], queryFn: () => api.template(locale) });
+/** A real configured template's structure (Template & Ontology screen, admin). */
+export const useTemplateDetail = (id: string | undefined, locale: Locale = "en") =>
+  useQuery({
+    queryKey: ["template-detail", id, locale],
+    queryFn: () => api.templateDetail(id as string, locale),
+    enabled: !!id,
+  });
 export const useExportOptions = () =>
   useQuery({ queryKey: ["export-options"], queryFn: api.exportOptions });
 export const useLanguages = () => useQuery({ queryKey: ["languages"], queryFn: api.languages });

@@ -211,6 +211,10 @@ export const api = {
   template: (locale: Locale = "en") => req<TemplateResponse>(`/projects/${PROJECT}/template?locale=${locale}`),
   exportOptions: () => req<{ options: ExportOption[] }>(`/projects/${PROJECT}/export-options`),
   exportUrl: () => `${BASE}/projects/${PROJECT}/export`,
+  /** A real configured template rendered into the tree + per-node config the Template &
+   *  Ontology screen shows (aliases/sign/netting from the paired ontology). */
+  templateDetail: (id: string, locale: Locale = "en") =>
+    req<TemplateResponse>(`/templates/${id}/detail?locale=${locale}`),
   languages: () =>
     req<{ languages: { locale: string; name: string; rtl: boolean; supported: boolean }[]; fully_supported: string[] }>(
       `/languages`,
