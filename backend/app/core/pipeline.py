@@ -49,6 +49,7 @@ def default_pipeline() -> Pipeline:
     from app.stages.reconcile import ReconcileStage
     from app.stages.confidence import ConfidenceStage
     from app.stages.structural import StructuralStage
+    from app.stages.prune_notes import PruneNotesStage
 
     # Table reconstruction is performed inside the extract stage (native pages via the
     # PyMuPDF text layer + shared row_reconstruct; scanned pages via the OCR port), so there
@@ -63,6 +64,9 @@ def default_pipeline() -> Pipeline:
         NormalizeStage(),
         LinkNotesStage(),
         ReconcileStage(),
+        # Only notes cited from the face of the statements are published — after reconcile,
+        # which needs every extracted note to check the note->face ties.
+        PruneNotesStage(),
         ConfidenceStage(),
         StructuralStage(),
     ])
