@@ -117,6 +117,16 @@
               }
             },
             {
+              "node_id": "bs_non_current_assets__interests_in_joint_ventures",
+              "canonical_key": "bs_non_current_assets__interests_in_joint_ventures",
+              "label": "Interests in joint ventures",
+              "role": "line",
+              "label_i18n": {
+                "en": "Interests in joint ventures",
+                "zh": "于合营公司的权益"
+              }
+            },
+            {
               "node_id": "bs_non_current_assets__equity_investments_designated_at_fair_value_through_other_comprehensive_income",
               "canonical_key": "bs_non_current_assets__equity_investments_designated_at_fair_value_through_other_comprehensive_income",
               "label": "Equity investments designated at fair value through other comprehensive income",
@@ -297,6 +307,56 @@
               "label_i18n": {
                 "en": "Others",
                 "zh": "其他"
+              }
+            },
+            {
+              "node_id": "bs_current_assets__properties_under_development",
+              "canonical_key": "bs_current_assets__properties_under_development",
+              "label": "Properties under development",
+              "role": "line",
+              "label_i18n": {
+                "en": "Properties under development",
+                "zh": "发展中物业"
+              }
+            },
+            {
+              "node_id": "bs_current_assets__completed_properties_held_for_sale",
+              "canonical_key": "bs_current_assets__completed_properties_held_for_sale",
+              "label": "Completed properties held for sale",
+              "role": "line",
+              "label_i18n": {
+                "en": "Completed properties held for sale",
+                "zh": "持作出售已落成物业"
+              }
+            },
+            {
+              "node_id": "bs_current_assets__restricted_cash",
+              "canonical_key": "bs_current_assets__restricted_cash",
+              "label": "Restricted cash",
+              "role": "line",
+              "label_i18n": {
+                "en": "Restricted cash",
+                "zh": "受限制现金"
+              }
+            },
+            {
+              "node_id": "bs_current_assets__due_from_related_parties",
+              "canonical_key": "bs_current_assets__due_from_related_parties",
+              "label": "Due from related parties",
+              "role": "line",
+              "label_i18n": {
+                "en": "Due from related parties",
+                "zh": "应收关联方款项"
+              }
+            },
+            {
+              "node_id": "bs_current_assets__prepaid_income_tax",
+              "canonical_key": "bs_current_assets__prepaid_income_tax",
+              "label": "Prepaid income tax",
+              "role": "line",
+              "label_i18n": {
+                "en": "Prepaid income tax",
+                "zh": "预付税项"
               }
             },
             {
@@ -699,6 +759,16 @@
               }
             },
             {
+              "node_id": "bs_current_liabilities__due_to_related_parties",
+              "canonical_key": "bs_current_liabilities__due_to_related_parties",
+              "label": "Due to related parties",
+              "role": "line",
+              "label_i18n": {
+                "en": "Due to related parties",
+                "zh": "应付关联方款项"
+              }
+            },
+            {
               "node_id": "bs_current_liabilities__total_current_liabilities",
               "canonical_key": "bs_current_liabilities__total_current_liabilities",
               "label": "Total current liabilities",
@@ -723,6 +793,40 @@
               }
             }
           ]
+        },
+        {
+          "node_id": "bs_net_current_assets_liabilities",
+          "canonical_key": "bs_net_current_assets_liabilities",
+          "label": "Net current assets/(liabilities)",
+          "role": "total",
+          "label_i18n": {
+            "en": "Net current assets/(liabilities)",
+            "zh": "流动资产／（负债）净额"
+          },
+          "rollup": {
+            "op": "diff",
+            "children": [
+              "bs_current_assets__total_current_assets",
+              "bs_current_liabilities__total_current_liabilities"
+            ]
+          }
+        },
+        {
+          "node_id": "bs_total_assets_less_current_liabilities",
+          "canonical_key": "bs_total_assets_less_current_liabilities",
+          "label": "Total assets less current liabilities",
+          "role": "total",
+          "label_i18n": {
+            "en": "Total assets less current liabilities",
+            "zh": "总资产减流动负债"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "bs_non_current_assets__total_non_current_assets",
+              "bs_net_current_assets_liabilities"
+            ]
+          }
         },
         {
           "node_id": "bs_total_assets",
@@ -906,6 +1010,16 @@
               }
             },
             {
+              "node_id": "pl_expenses__other_expenses",
+              "canonical_key": "pl_expenses__other_expenses",
+              "label": "Other expenses",
+              "role": "line",
+              "label_i18n": {
+                "en": "Other expenses",
+                "zh": "其他开支"
+              }
+            },
+            {
               "node_id": "pl_expenses__depreciation_and_amortisation_expense",
               "canonical_key": "pl_expenses__depreciation_and_amortisation_expense",
               "label": "Depreciation and Amortisation Expense",
@@ -934,6 +1048,7 @@
                   "pl_expenses__employee_benefits_expense",
                   "pl_expenses__purchases_of_stock_in_trade",
                   "pl_expenses__other_operating_costs",
+                  "pl_expenses__other_expenses",
                   "pl_expenses__depreciation_and_amortisation_expense"
                 ]
               }
@@ -1029,6 +1144,26 @@
               "label_i18n": {
                 "en": "share of profit of associates and JVs",
                 "zh": "应占联营及合营企业利润"
+              }
+            },
+            {
+              "node_id": "pl_exceptional_items__share_of_profits_and_losses_of_associates",
+              "canonical_key": "pl_exceptional_items__share_of_profits_and_losses_of_associates",
+              "label": "Share of profits and losses of associates",
+              "role": "line",
+              "label_i18n": {
+                "en": "Share of profits and losses of associates",
+                "zh": "应占联营公司溢利及亏损"
+              }
+            },
+            {
+              "node_id": "pl_exceptional_items__share_of_profits_and_losses_of_joint_ventures",
+              "canonical_key": "pl_exceptional_items__share_of_profits_and_losses_of_joint_ventures",
+              "label": "Share of profits and losses of joint ventures",
+              "role": "line",
+              "label_i18n": {
+                "en": "Share of profits and losses of joint ventures",
+                "zh": "应占合营公司溢利及亏损"
               }
             },
             {
@@ -1165,6 +1300,70 @@
           ]
         },
         {
+          "node_id": "pl_s6_profit_attributable_to",
+          "canonical_key": "pl_s6_profit_attributable_to",
+          "label": "Profit/(loss) attributable to",
+          "role": "header",
+          "label_i18n": {
+            "en": "Profit/(loss) attributable to",
+            "zh": "下列各项应占溢利／（亏损）"
+          },
+          "children": [
+            {
+              "node_id": "pl_profit_attributable_to__owners_of_the_parent",
+              "canonical_key": "pl_profit_attributable_to__owners_of_the_parent",
+              "label": "Owners of the parent",
+              "role": "line",
+              "label_i18n": {
+                "en": "Owners of the parent",
+                "zh": "母公司拥有人"
+              }
+            },
+            {
+              "node_id": "pl_profit_attributable_to__non_controlling_interests",
+              "canonical_key": "pl_profit_attributable_to__non_controlling_interests",
+              "label": "Non-controlling interests",
+              "role": "line",
+              "label_i18n": {
+                "en": "Non-controlling interests",
+                "zh": "非控股权益"
+              }
+            }
+          ]
+        },
+        {
+          "node_id": "pl_s7_total_comprehensive_income_attributable_to",
+          "canonical_key": "pl_s7_total_comprehensive_income_attributable_to",
+          "label": "Total comprehensive income/(loss) attributable to",
+          "role": "header",
+          "label_i18n": {
+            "en": "Total comprehensive income/(loss) attributable to",
+            "zh": "下列各项应占全面收益／（亏损）总额"
+          },
+          "children": [
+            {
+              "node_id": "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
+              "canonical_key": "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
+              "label": "Owners of the parent",
+              "role": "line",
+              "label_i18n": {
+                "en": "Owners of the parent",
+                "zh": "母公司拥有人"
+              }
+            },
+            {
+              "node_id": "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
+              "canonical_key": "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
+              "label": "Non-controlling interests",
+              "role": "line",
+              "label_i18n": {
+                "en": "Non-controlling interests",
+                "zh": "非控股权益"
+              }
+            }
+          ]
+        },
+        {
           "node_id": "pl_gross_profit",
           "canonical_key": "pl_gross_profit",
           "label": "Gross profit",
@@ -1250,6 +1449,33 @@
             "children": [
               "pl_profit_before_tax",
               "pl_tax_expense__total_tax_expense"
+            ]
+          }
+        },
+        {
+          "node_id": "pl_other_comprehensive_income_for_the_year",
+          "canonical_key": "pl_other_comprehensive_income_for_the_year",
+          "label": "Other comprehensive income/(loss) for the year",
+          "role": "subtotal",
+          "label_i18n": {
+            "en": "Other comprehensive income/(loss) for the year",
+            "zh": "年内其他全面收益／（亏损）"
+          }
+        },
+        {
+          "node_id": "pl_total_comprehensive_income_for_the_year",
+          "canonical_key": "pl_total_comprehensive_income_for_the_year",
+          "label": "Total comprehensive income/(loss) for the year",
+          "role": "total",
+          "label_i18n": {
+            "en": "Total comprehensive income/(loss) for the year",
+            "zh": "年内全面收益／（亏损）总额"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_profit_for_the_year",
+              "pl_other_comprehensive_income_for_the_year"
             ]
           }
         }

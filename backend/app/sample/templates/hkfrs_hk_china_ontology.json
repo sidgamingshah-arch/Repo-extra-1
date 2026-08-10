@@ -16,11 +16,17 @@
     "framework": "HKFRS",
     "version": "1.0",
     "source_template": "hkfrs_hk_china_v1",
-    "field_count": 143,
+    "field_count": 161,
     "changes": [
       "Initial HK/China ontology generated from the HKFRS/IFRS template.",
       "Added the 'Gross profit' (毛利) face subtotal concept (pl_gross_profit) with its accounting definition, inclusion/exclusion criteria and bilingual aliases.",
-      "Added plain HKFRS/IFRS face-line wordings and Traditional Chinese aliases used in HKEX filings (Revenue 收益, Cost of sales 銷售成本, Other income and gains 其他收入及收益, Selling and marketing expenses 銷售及營銷開支, Administrative expenses 行政開支, Finance costs 財務費用, Profit/(loss) before tax 除稅前溢利, Income tax expense 稅項開支, Loss for the year 年內虧損) to the existing profit-or-loss mappings."
+      "Added plain HKFRS/IFRS face-line wordings and Traditional Chinese aliases used in HKEX filings (Revenue 收益, Cost of sales 銷售成本, Other income and gains 其他收入及收益, Selling and marketing expenses 銷售及營銷開支, Administrative expenses 行政開支, Finance costs 財務費用, Profit/(loss) before tax 除稅前溢利, Income tax expense 稅項開支, Loss for the year 年內虧損) to the existing profit-or-loss mappings.",
+      "Coverage (HKEX property developer, China SCE AR2023): added the current-asset concepts Properties under development (發展中物業), Completed properties held for sale (持作出售已落成物業), Restricted cash (受限制現金), Due from related parties (應收關聯方款項) and Prepaid income tax (預付稅項), the current-liability mirror Due to related parties (應付關聯方款項), the non-current Interests in joint ventures (於合營公司的投資), and the face line Other expenses (其他開支) — whose absence had let administrative expenses absorb it.",
+      "Added the balance-sheet subtotals NET CURRENT ASSETS/(LIABILITIES) (流動資產╱（負債）淨額) and TOTAL ASSETS LESS CURRENT LIABILITIES (總資產減流動負債). The latter previously resolved to bs_current_liabilities__total_current_liabilities on token overlap; the two are now separated by their own aliases, by reciprocal confusable_with, by exclusion criteria naming the other line, and by regex_hints/exclude_hints so the rule tier can never cross-fire.",
+      "Split the profit-or-loss bottom line from the total-comprehensive bottom line: added pl_other_comprehensive_income_for_the_year (年內其他全面虧損) and pl_total_comprehensive_income_for_the_year (年內全面虧損總額). On a bilingual HKEX statement of comprehensive income the wrapped caption 'TOTAL COMPREHENSIVE / LOSS FOR THE YEAR' reaches the matcher as the bare fragment 'LOSS FOR THE YEAR'; the total-comprehensive concept is declared before pl_profit_for_the_year so that fragment resolves to it, while pl_profit_for_the_year carries bilingual anchors ('LOSS FOR THE YEAR 年內虧損') and keeps its own row. Both concepts state the other in exclude/confusable_with.",
+      "Added the attribution lines pl_profit_attributable_to__owners_of_the_parent (母公司擁有人) and pl_profit_attributable_to__non_controlling_interests (非控股權益) as period FLOWS, distinct from the balance-sheet equity NCI balance, and the separately-presented share of profits and losses of associates (應佔聯營公司損益) and of joint ventures (應佔合營公司損益) as children of the combined face line.",
+      "Added the total-comprehensive attribution lines (pl_total_comprehensive_income_attributable_to__owners_of_the_parent / __non_controlling_interests, HKAS 1.81B(b)) so the OCI attribution captions no longer fall onto the profit attribution lines — the two carry different amounts.",
+      "Total equity now also recognises the net-assets-format caption 'Net assets' (資產淨值) — the same reported amount under HKFRS — and 'Net current assets/(liabilities)' excludes it explicitly, so the two 淨額/淨值 lines cannot be confused."
     ]
   },
   "global_rules": {
@@ -313,15 +319,18 @@
     {
       "canonical_key": "bs_non_current_assets__investments_in_subsidiaries",
       "label": "Investments in subsidiaries",
-      "definition": "Investments in subsidiaries: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
-      "description": "Investments in subsidiaries: under 'Non-current assets' in the balance sheet.",
+      "definition": "Investments in subsidiaries: the cost (or fair value) of interests in entities the group CONTROLS, carried only in a stand-alone/company-only balance sheet — a consolidated HKFRS balance sheet eliminates them on consolidation and shows no such line.",
+      "description": "Investments in subsidiaries: the cost (or fair value) of interests in entities the group CONTROLS, carried only in a stand-alone/company-only balance sheet — a consolidated HKFRS balance sheet eliminates them on consolidation and shows no such line.",
       "value_scope": "exclusive_leaf",
       "extraction_mode": "extract",
       "include": [
+        "The carrying amount of investments in controlled entities in a company-only (unconsolidated) statement of financial position.",
         "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
       ],
       "exclude": [
-        "Amounts mapped to another dedicated concept.",
+        "'Investments in associates' (於聯營公司的投資) and 'Investments in joint ventures' (於合營公司的投資) — equity-accounted interests that share the words 'investments in' but are different concepts with their own lines.",
+        "Amounts due from subsidiaries, which are receivables.",
+        "Goodwill arising on the acquisition of subsidiaries.",
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
@@ -334,33 +343,164 @@
         "zh": [
           "于子公司的投资"
         ]
-      }
+      },
+      "confusable_with": [
+        "bs_non_current_assets__interests_in_associates",
+        "bs_non_current_assets__interests_in_joint_ventures",
+        "bs_non_current_assets__goodwill"
+      ],
+      "regex_hints": [
+        "investments? in subsidiar",
+        "於附屬公司的投資",
+        "于附属公司的投资",
+        "於子公司的投資",
+        "于子公司的投资"
+      ],
+      "exclude_hints": [
+        "associate",
+        "joint venture",
+        "聯營",
+        "联营",
+        "合營",
+        "合营",
+        "due from",
+        "應收",
+        "应收"
+      ]
     },
     {
       "canonical_key": "bs_non_current_assets__interests_in_associates",
       "label": "Interests in associates",
-      "definition": "Interests in associates: under 'Non-current assets' in the balance sheet (HKFRS/IFRS).",
-      "description": "Interests in associates: under 'Non-current assets' in the balance sheet.",
+      "definition": "Interests in associates: the group's investments in entities over which it has significant influence but neither control nor joint control, accounted for by the equity method (HKAS 28) — cost plus the group's post-acquisition share of results and other comprehensive income, less dividends received and any impairment.",
+      "description": "Interests in associates: the group's investments in entities over which it has significant influence but neither control nor joint control, accounted for by the equity method (HKAS 28) — cost plus the group's post-acquisition share of results and other comprehensive income, less dividends received and any impairment.",
       "value_scope": "exclusive_leaf",
       "extraction_mode": "extract",
       "include": [
+        "The equity-accounted carrying amount of associates, including any goodwill arising on their acquisition.",
         "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
       ],
       "exclude": [
-        "Amounts mapped to another dedicated concept.",
+        "Interests in JOINT VENTURES, which are jointly controlled and have their own concept.",
+        "Investments in SUBSIDIARIES, which are controlled and therefore consolidated — a consolidated balance sheet carries no such line.",
+        "Trading or funding balances due from associates, which are related-party receivables.",
+        "The profit-or-loss share of an associate's results for the period.",
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Interests in associates"
+        "Interests in associates",
+        "Investments in associates",
+        "Interest in an associate",
+        "Investment in associates",
+        "Interests in associated companies"
       ],
       "aliases_i18n": {
         "en": [
-          "Interests in associates"
+          "Interests in associates",
+          "Investments in associates",
+          "Interest in an associate",
+          "Investment in associates",
+          "Interests in associated companies"
         ],
         "zh": [
-          "于联营公司的权益"
+          "于联营公司的投资",
+          "於聯營公司的投資",
+          "於聯營公司的權益",
+          "于联营公司的权益",
+          "於聯營企業的權益",
+          "于联营企业的权益"
         ]
-      }
+      },
+      "confusable_with": [
+        "bs_non_current_assets__interests_in_joint_ventures",
+        "bs_non_current_assets__investments_in_subsidiaries",
+        "pl_exceptional_items__share_of_profits_and_losses_of_associates"
+      ],
+      "regex_hints": [
+        "investments? in associate",
+        "interests? in associate",
+        "於聯營公司的投資",
+        "于联营公司的投资"
+      ],
+      "exclude_hints": [
+        "joint venture",
+        "subsidiar",
+        "合營",
+        "合营",
+        "附屬",
+        "附属",
+        "應佔",
+        "应占",
+        "share of"
+      ]
+    },
+    {
+      "canonical_key": "bs_non_current_assets__interests_in_joint_ventures",
+      "label": "Interests in joint ventures",
+      "definition": "Interests in joint ventures: the group's investments in arrangements over which it has JOINT control, accounted for by the equity method (HKFRS 11 / HKAS 28) — cost plus the group's post-acquisition share of the joint venture's results and other comprehensive income, less dividends received and any impairment.",
+      "description": "Interests in joint ventures: the group's investments in arrangements over which it has JOINT control, accounted for by the equity method (HKFRS 11 / HKAS 28) — cost plus the group's post-acquisition share of the joint venture's results and other comprehensive income, less dividends received and any impairment.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "The equity-accounted carrying amount of jointly controlled entities, including any goodwill arising on their acquisition.",
+        "Quasi-equity long-term funding to a joint venture that the filing presents as part of the interest rather than as a receivable.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Interests in associates, where the group has significant influence but not joint control.",
+        "Investments in subsidiaries, which are controlled and therefore consolidated rather than equity-accounted.",
+        "Trading or funding balances due from joint ventures, which are related-party receivables.",
+        "The profit-or-loss share of a joint venture's results for the period.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "bs_non_current_assets__interests_in_associates",
+        "bs_non_current_assets__investments_in_subsidiaries",
+        "bs_current_assets__due_from_related_parties",
+        "pl_exceptional_items__share_of_profits_and_losses_of_joint_ventures"
+      ],
+      "aliases": [
+        "Interests in joint ventures",
+        "Investments in joint ventures",
+        "Interest in a joint venture",
+        "Investment in joint ventures",
+        "Interests in jointly controlled entities"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Interests in joint ventures",
+          "Investments in joint ventures",
+          "Interest in a joint venture",
+          "Investment in joint ventures",
+          "Interests in jointly controlled entities"
+        ],
+        "zh": [
+          "於合營公司的投資",
+          "于合营公司的投资",
+          "於合營企業的權益",
+          "于合营企业的权益",
+          "於合營公司的權益",
+          "于合营公司的权益",
+          "於共同控制實體的權益",
+          "于共同控制实体的权益"
+        ]
+      },
+      "regex_hints": [
+        "investments? in joint ventures",
+        "interests? in joint ventures",
+        "於合營公司的投資",
+        "于合营公司的投资"
+      ],
+      "exclude_hints": [
+        "associate",
+        "subsidiar",
+        "聯營",
+        "联营",
+        "附屬",
+        "附属",
+        "應佔",
+        "应占",
+        "share of"
+      ]
     },
     {
       "canonical_key": "bs_non_current_assets__equity_investments_designated_at_fair_value_through_other_comprehensive_income",
@@ -547,15 +687,18 @@
     {
       "canonical_key": "bs_current_assets__cash_and_cash_equivalents",
       "label": "Cash and cash equivalents",
-      "definition": "Cash and cash equivalents: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
-      "description": "Cash and cash equivalents: under 'Current assets' in the balance sheet.",
+      "definition": "Cash and cash equivalents: cash on hand, demand deposits and short-term highly liquid investments readily convertible to known amounts of cash and subject to insignificant risk of change in value (HKAS 7.6) — that is, balances the group can use freely.",
+      "description": "Cash and cash equivalents: cash on hand, demand deposits and short-term highly liquid investments readily convertible to known amounts of cash and subject to insignificant risk of change in value (HKAS 7.6) — that is, balances the group can use freely.",
       "value_scope": "exclusive_leaf",
       "extraction_mode": "extract",
       "include": [
+        "Cash on hand, bank balances repayable on demand and deposits with an original maturity of three months or less that are not restricted as to use.",
         "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
       ],
       "exclude": [
-        "Amounts mapped to another dedicated concept.",
+        "RESTRICTED cash — escrowed pre-sale proceeds, frozen or pledged balances — which is not available on demand and has its own concept (HKAS 7.48).",
+        "Pledged deposits and time deposits with an original maturity over three months.",
+        "Bank overdrafts, unless the filing itself presents them within cash and cash equivalents.",
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
@@ -568,7 +711,12 @@
         "zh": [
           "现金及现金等价物"
         ]
-      }
+      },
+      "confusable_with": [
+        "bs_current_assets__restricted_cash",
+        "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
+        "cf_closing_cash_and_cash_equivalents"
+      ]
     },
     {
       "canonical_key": "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
@@ -749,6 +897,274 @@
         ],
         "zh": [
           "其他"
+        ]
+      }
+    },
+    {
+      "canonical_key": "bs_current_assets__properties_under_development",
+      "label": "Properties under development",
+      "definition": "Properties under development: the work-in-progress property inventory of a property developer, held under 'Current assets' and measured at the lower of cost and net realisable value (HKAS 2). Cost comprises land use rights, construction and development expenditure and capitalised borrowing costs on properties being developed for sale in the ordinary course of business.",
+      "description": "Properties under development: the work-in-progress property inventory of a property developer, held under 'Current assets' and measured at the lower of cost and net realisable value (HKAS 2). Cost comprises land use rights, construction and development expenditure and capitalised borrowing costs on properties being developed for sale in the ordinary course of business.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Land use rights, construction and development costs and capitalised finance costs of properties being developed for sale in the ordinary course of business.",
+        "Any write-down of such properties to net realisable value, netted against the carrying amount.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Completed properties held for sale, which are finished inventory with their own concept.",
+        "Property under construction held to earn rentals or for capital appreciation, which is an investment property.",
+        "Construction in progress of owner-occupied property, plant and equipment.",
+        "The cash-flow-statement movement 'Increase in properties under development'.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "bs_current_assets__completed_properties_held_for_sale",
+        "bs_current_assets__inventories",
+        "bs_non_current_assets__construction_in_progress",
+        "bs_non_current_assets__investment_properties"
+      ],
+      "aliases": [
+        "Properties under development",
+        "Properties under development for sale",
+        "Property under development",
+        "Development properties",
+        "Properties in the course of development"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Properties under development",
+          "Properties under development for sale",
+          "Property under development",
+          "Development properties",
+          "Properties in the course of development"
+        ],
+        "zh": [
+          "發展中物業",
+          "发展中物业",
+          "開發中物業",
+          "开发中物业",
+          "在建開發產品",
+          "在建开发产品",
+          "發展中待售物業",
+          "发展中待售物业"
+        ]
+      }
+    },
+    {
+      "canonical_key": "bs_current_assets__completed_properties_held_for_sale",
+      "label": "Completed properties held for sale",
+      "definition": "Completed properties held for sale: the finished property inventory of a property developer — completed units and car parking spaces held for sale in the ordinary course of business, carried under 'Current assets' at the lower of cost and net realisable value (HKAS 2).",
+      "description": "Completed properties held for sale: the finished property inventory of a property developer — completed units and car parking spaces held for sale in the ordinary course of business, carried under 'Current assets' at the lower of cost and net realisable value (HKAS 2).",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Completed residential, commercial and car-parking units held for sale, net of any write-down to net realisable value.",
+        "Completed properties transferred out of properties under development on completion.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Properties still under development, which map to the properties-under-development concept.",
+        "Completed properties held to earn rentals or for capital appreciation, which are investment properties.",
+        "Completed properties transferred to owner-occupation, which are property, plant and equipment.",
+        "The cash-flow-statement movement 'Decrease in completed properties held for sale'.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "bs_current_assets__properties_under_development",
+        "bs_current_assets__inventories",
+        "bs_non_current_assets__investment_properties"
+      ],
+      "aliases": [
+        "Completed properties held for sale",
+        "Completed properties for sale",
+        "Properties held for sale",
+        "Completed properties"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Completed properties held for sale",
+          "Completed properties for sale",
+          "Properties held for sale",
+          "Completed properties"
+        ],
+        "zh": [
+          "持作出售已落成物業",
+          "持作出售已落成物业",
+          "已落成待售物業",
+          "已落成待售物业",
+          "持作銷售的已完工物業",
+          "持作销售的已完工物业",
+          "已完工待售物業",
+          "已完工待售物业"
+        ]
+      }
+    },
+    {
+      "canonical_key": "bs_current_assets__restricted_cash",
+      "label": "Restricted cash",
+      "definition": "Restricted cash: bank balances the group holds but cannot use freely — pre-sale proceeds held in PRC housing-fund supervision (escrow) accounts, balances pledged as security, and balances frozen by legal or regulatory restriction. Excluded from cash and cash equivalents because they are not available on demand (HKAS 7.48).",
+      "description": "Restricted cash: bank balances the group holds but cannot use freely — pre-sale proceeds held in PRC housing-fund supervision (escrow) accounts, balances pledged as security, and balances frozen by legal or regulatory restriction. Excluded from cash and cash equivalents because they are not available on demand (HKAS 7.48).",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Pre-sale proceeds held in designated supervision or escrow accounts and released only against certified construction progress.",
+        "Bank balances frozen, blocked or otherwise legally restricted as to use.",
+        "Restricted bank deposits presented within current assets.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Cash and bank balances freely available on demand, which are cash and cash equivalents.",
+        "Pledged deposits where the filing prints them as a separate caption.",
+        "Unrestricted time deposits with an original maturity over three months, which are bank balances other than cash and cash equivalents, or term deposits.",
+        "The cash-flow-statement movement 'Decrease/(increase) in restricted cash'.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "bs_current_assets__cash_and_cash_equivalents",
+        "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
+        "bs_non_current_assets__term_deposits"
+      ],
+      "aliases": [
+        "Restricted cash",
+        "Restricted bank balances",
+        "Restricted cash and bank balances",
+        "Restricted bank deposits",
+        "Restricted deposits"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Restricted cash",
+          "Restricted bank balances",
+          "Restricted cash and bank balances",
+          "Restricted bank deposits",
+          "Restricted deposits"
+        ],
+        "zh": [
+          "受限制現金",
+          "受限制现金",
+          "受限制銀行存款",
+          "受限制银行存款",
+          "受限制銀行結餘",
+          "受限制银行结余",
+          "受限制現金及銀行結餘",
+          "受限制现金及银行结余"
+        ]
+      }
+    },
+    {
+      "canonical_key": "bs_current_assets__due_from_related_parties",
+      "label": "Due from related parties",
+      "definition": "Due from related parties: balances receivable from related parties as defined by HKAS 24 — joint ventures, associates, non-controlling shareholders of subsidiaries and entities controlled by the controlling shareholder or directors. Typically unsecured, interest-free and repayable on demand, stated net of any expected-credit-loss allowance.",
+      "description": "Due from related parties: balances receivable from related parties as defined by HKAS 24 — joint ventures, associates, non-controlling shareholders of subsidiaries and entities controlled by the controlling shareholder or directors. Typically unsecured, interest-free and repayable on demand, stated net of any expected-credit-loss allowance.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Non-trade advances and funding balances receivable from joint ventures, associates and other related parties.",
+        "Amounts due from non-controlling shareholders of subsidiaries and from entities controlled by the controlling shareholder or directors.",
+        "The balance after deducting any impairment allowance recognised on those amounts.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts due TO related parties, which are a liability and map to the mirror due-to-related-parties concept — never net the two.",
+        "Trade receivables arising from contracts with third-party customers.",
+        "The equity-accounted carrying amount of interests in joint ventures and associates, which are investments rather than receivables.",
+        "Repayments from related parties reported in the cash-flow statement.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "bs_current_liabilities__due_to_related_parties",
+        "bs_current_assets__trade_receivables",
+        "bs_current_assets__prepayments_other_receivables_and_other_assets",
+        "bs_non_current_assets__interests_in_joint_ventures"
+      ],
+      "aliases": [
+        "Due from related parties",
+        "Amounts due from related parties",
+        "Amounts due from related companies",
+        "Due from related companies",
+        "Amounts due from fellow subsidiaries and related parties"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Due from related parties",
+          "Amounts due from related parties",
+          "Amounts due from related companies",
+          "Due from related companies",
+          "Amounts due from fellow subsidiaries and related parties"
+        ],
+        "zh": [
+          "應收關聯方款項",
+          "应收关联方款项",
+          "應收關連人士款項",
+          "应收关连人士款项",
+          "應收關聯公司款項",
+          "应收关联公司款项",
+          "應收關聯方賬款",
+          "应收关联方账款"
+        ]
+      },
+      "regex_hints": [
+        "due from related",
+        "應收關聯方",
+        "应收关联方"
+      ],
+      "exclude_hints": [
+        "due to related",
+        "應付關聯方",
+        "应付关联方"
+      ]
+    },
+    {
+      "canonical_key": "bs_current_assets__prepaid_income_tax",
+      "label": "Prepaid income tax",
+      "definition": "Prepaid income tax: current tax paid or withheld in excess of the liability due for the period, recognised as an asset (HKAS 12.12). For a PRC property developer this is mainly corporate income tax and land appreciation tax prepaid on pre-sale proceeds before the related revenue — and hence the related tax charge — is recognised.",
+      "description": "Prepaid income tax: current tax paid or withheld in excess of the liability due for the period, recognised as an asset (HKAS 12.12). For a PRC property developer this is mainly corporate income tax and land appreciation tax prepaid on pre-sale proceeds before the related revenue — and hence the related tax charge — is recognised.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Corporate income tax and land appreciation tax paid in advance of recognition of the related profit.",
+        "Income tax recoverable or refundable balances presented as a current asset.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Tax payable — the current income tax LIABILITY — which must not be netted against this asset unless the filing itself presents a net figure.",
+        "Deferred tax assets arising from temporary differences.",
+        "Prepayments of a non-tax nature (deposits, prepaid expenses), which belong to the prepayments and other receivables concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "bs_current_liabilities__current_income_tax_liabilities",
+        "bs_non_current_assets__deferred_income_tax_assets",
+        "bs_current_assets__prepayments_other_receivables_and_other_assets"
+      ],
+      "aliases": [
+        "Prepaid income tax",
+        "Prepaid tax",
+        "Prepaid taxation",
+        "Income tax recoverable",
+        "Tax recoverable",
+        "Prepaid corporate income tax"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Prepaid income tax",
+          "Prepaid tax",
+          "Prepaid taxation",
+          "Income tax recoverable",
+          "Tax recoverable",
+          "Prepaid corporate income tax"
+        ],
+        "zh": [
+          "預付稅項",
+          "预付税项",
+          "預付所得稅",
+          "预付所得税",
+          "預繳稅項",
+          "预缴税项",
+          "可收回稅項",
+          "可收回税项"
         ]
       }
     },
@@ -1015,28 +1431,45 @@
     {
       "canonical_key": "bs_equity__non_controlling_interests",
       "label": "Non-controlling interests",
-      "definition": "Non-controlling interests: under 'Equity' in the balance sheet (HKFRS/IFRS).",
-      "description": "Non-controlling interests: under 'Equity' in the balance sheet.",
+      "definition": "Non-controlling interests (equity): the CLOSING BALANCE of equity in subsidiaries not attributable, directly or indirectly, to the parent (HKAS 1.54(q) / HKFRS 10.22) — presented within total equity on the balance sheet.",
+      "description": "Non-controlling interests (equity): the CLOSING BALANCE of equity in subsidiaries not attributable, directly or indirectly, to the parent (HKAS 1.54(q) / HKFRS 10.22) — presented within total equity on the balance sheet.",
       "value_scope": "exclusive_leaf",
       "extraction_mode": "extract",
       "include": [
+        "The non-controlling-interests balance presented within equity on the statement of financial position.",
         "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
       ],
       "exclude": [
-        "Amounts mapped to another dedicated concept.",
+        "The non-controlling-interests share of PROFIT for the year, or of total comprehensive income — identical wording, but a period flow on the statement of profit or loss rather than an equity balance.",
+        "Dividends paid to, or capital contributed by, non-controlling shareholders, which are cash flows.",
+        "Equity attributable to owners of the parent.",
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Non-controlling interests"
+        "Non-controlling interests",
+        "Non-controlling interests in subsidiaries",
+        "Minority interests"
       ],
       "aliases_i18n": {
         "en": [
-          "Non-controlling interests"
+          "Non-controlling interests",
+          "Non-controlling interests in subsidiaries",
+          "Minority interests"
         ],
         "zh": [
-          "非控制性权益"
+          "非控制性权益",
+          "非控制性權益",
+          "非控股股東權益",
+          "非控股股东权益",
+          "少數股東權益",
+          "少数股东权益"
         ]
-      }
+      },
+      "confusable_with": [
+        "pl_profit_attributable_to__non_controlling_interests",
+        "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests",
+        "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests"
+      ]
     },
     {
       "canonical_key": "bs_equity__others",
@@ -1067,28 +1500,52 @@
     {
       "canonical_key": "bs_equity__total_equity",
       "label": "Total equity",
-      "definition": "Total equity: under 'Equity' in the balance sheet (HKFRS/IFRS).",
-      "description": "Total equity: under 'Equity' in the balance sheet.",
+      "definition": "Total equity: the residual interest in the assets of the group after deducting all of its liabilities (HKFRS Conceptual Framework 4.63) — the subtotal of all equity components including non-controlling interests. A balance sheet drawn up in the net-assets format prints the identical amount as 'Net assets' (資產淨值).",
+      "description": "Total equity: the residual interest in the assets of the group after deducting all of its liabilities (HKFRS Conceptual Framework 4.63) — the subtotal of all equity components including non-controlling interests. A balance sheet drawn up in the net-assets format prints the identical amount as 'Net assets' (資產淨值).",
       "value_scope": "not_applicable",
       "extraction_mode": "extract",
       "include": [
+        "The reported total-equity subtotal (權益總額), including non-controlling interests.",
+        "A 'Net assets' / 'Net asset value' caption, which under HKFRS is the same reported amount as total equity — one fact with two evidence references, not two additive values.",
         "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
       ],
       "exclude": [
-        "Amounts mapped to another dedicated concept.",
+        "Equity attributable to owners of the parent, which excludes non-controlling interests.",
+        "'Net current assets/(liabilities)' (流動資產╱（負債）淨額), which nets only the CURRENT sections against each other.",
+        "'Total assets less current liabilities', which is stated before non-current liabilities are deducted.",
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Total equity"
+        "Total equity",
+        "TOTAL EQUITY",
+        "Net assets",
+        "Net asset value",
+        "Total shareholders' equity"
       ],
       "aliases_i18n": {
         "en": [
-          "Total equity"
+          "Total equity",
+          "TOTAL EQUITY",
+          "Net assets",
+          "Net asset value",
+          "Total shareholders' equity"
         ],
         "zh": [
-          "权益总额"
+          "权益总额",
+          "權益總額",
+          "資產淨值",
+          "资产净值",
+          "淨資產",
+          "净资产",
+          "股東權益總額",
+          "股东权益总额"
         ]
-      }
+      },
+      "confusable_with": [
+        "bs_net_current_assets_liabilities",
+        "bs_total_assets_less_current_liabilities",
+        "bs_equity__non_controlling_interests"
+      ]
     },
     {
       "canonical_key": "bs_non_current_liabilities__non_current_borrowings",
@@ -1585,30 +2042,253 @@
       }
     },
     {
-      "canonical_key": "bs_current_liabilities__total_current_liabilities",
-      "label": "Total current liabilities",
-      "definition": "Total current liabilities: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
-      "description": "Total current liabilities: under 'Current liabilities' in the balance sheet.",
-      "value_scope": "not_applicable",
+      "canonical_key": "bs_current_liabilities__due_to_related_parties",
+      "label": "Due to related parties",
+      "definition": "Due to related parties: balances payable to related parties as defined by HKAS 24 — joint ventures, associates, non-controlling shareholders of subsidiaries and entities controlled by the controlling shareholder or directors. Typically unsecured, interest-free and repayable on demand, and therefore classified as current.",
+      "description": "Due to related parties: balances payable to related parties as defined by HKAS 24 — joint ventures, associates, non-controlling shareholders of subsidiaries and entities controlled by the controlling shareholder or directors. Typically unsecured, interest-free and repayable on demand, and therefore classified as current.",
+      "value_scope": "exclusive_leaf",
       "extraction_mode": "extract",
       "include": [
+        "Non-trade advances and funding balances payable to joint ventures, associates and other related parties.",
+        "Amounts due to non-controlling shareholders of subsidiaries and to entities controlled by the controlling shareholder or directors.",
         "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
       ],
       "exclude": [
-        "Amounts mapped to another dedicated concept.",
+        "Amounts due FROM related parties, which are an asset and map to the mirror due-from-related-parties concept — never net the two.",
+        "Trade and bills payables owed to third-party suppliers and contractors.",
+        "Interest-bearing loans from related parties where the filing presents them within borrowings.",
+        "The cash-flow-statement movement 'Increase/(decrease) in amounts due to related parties'.",
         "Gross parent totals that contain separately mapped children."
       ],
+      "confusable_with": [
+        "bs_current_assets__due_from_related_parties",
+        "bs_current_liabilities__current_trade_payables",
+        "bs_current_liabilities__current_borrowings"
+      ],
       "aliases": [
-        "Total current liabilities"
+        "Due to related parties",
+        "Amounts due to related parties",
+        "Amounts due to related companies",
+        "Due to related companies",
+        "Amounts due to fellow subsidiaries and related parties"
       ],
       "aliases_i18n": {
         "en": [
-          "Total current liabilities"
+          "Due to related parties",
+          "Amounts due to related parties",
+          "Amounts due to related companies",
+          "Due to related companies",
+          "Amounts due to fellow subsidiaries and related parties"
         ],
         "zh": [
-          "流动负债总额"
+          "應付關聯方款項",
+          "应付关联方款项",
+          "應付關連人士款項",
+          "应付关连人士款项",
+          "應付關聯公司款項",
+          "应付关联公司款项",
+          "應付關聯方賬款",
+          "应付关联方账款"
         ]
-      }
+      },
+      "regex_hints": [
+        "due to related",
+        "應付關聯方",
+        "应付关联方"
+      ],
+      "exclude_hints": [
+        "due from related",
+        "應收關聯方",
+        "应收关联方"
+      ]
+    },
+    {
+      "canonical_key": "bs_current_liabilities__total_current_liabilities",
+      "label": "Total current liabilities",
+      "definition": "Total current liabilities: the subtotal printed at the foot of the 'Current liabilities' section of the balance sheet — the sum of the current-liability components only.",
+      "description": "Total current liabilities: the subtotal printed at the foot of the 'Current liabilities' section of the balance sheet — the sum of the current-liability components only.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "The reported current-liabilities subtotal (流動負債總額).",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "'TOTAL ASSETS LESS CURRENT LIABILITIES' (總資產減流動負債) — a DIFFERENT line on the same page that shares the words 'total', 'current' and 'liabilities' but is a capital-employed subtotal: assets NET of current liabilities, and materially smaller than this figure.",
+        "'NET CURRENT ASSETS/(LIABILITIES)' (流動資產╱（負債）淨額), which is total current assets minus this figure.",
+        "Total non-current liabilities and total liabilities.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "aliases": [
+        "Total current liabilities",
+        "Current liabilities, total"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Total current liabilities",
+          "Current liabilities, total"
+        ],
+        "zh": [
+          "流动负债总额",
+          "流動負債總額",
+          "流動負債總計",
+          "流动负债总计"
+        ]
+      },
+      "confusable_with": [
+        "bs_total_assets_less_current_liabilities",
+        "bs_net_current_assets_liabilities",
+        "bs_non_current_liabilities__total_non_current_liabilities"
+      ],
+      "regex_hints": [
+        "total current liabilities",
+        "流動負債總額",
+        "流动负债总额",
+        "流動負債總計",
+        "流动负债总计"
+      ],
+      "exclude_hints": [
+        "assets less",
+        "總資產減",
+        "总资产减",
+        "資產總值減",
+        "资产总值减",
+        "net current",
+        "淨額",
+        "净额"
+      ]
+    },
+    {
+      "canonical_key": "bs_net_current_assets_liabilities",
+      "label": "Net current assets/(liabilities)",
+      "definition": "Net current assets/(liabilities): the balance-sheet subtotal 'total current assets LESS total current liabilities', printed on a HKFRS balance sheet drawn up in the net-current-assets format. A negative figure (net current liabilities) is a liquidity measure, not a liability of its own.",
+      "description": "Net current assets/(liabilities): the balance-sheet subtotal 'total current assets LESS total current liabilities', printed on a HKFRS balance sheet drawn up in the net-current-assets format. A negative figure (net current liabilities) is a liquidity measure, not a liability of its own.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "The reported subtotal of total current assets minus total current liabilities, whichever sign it carries.",
+        "The equivalent 'working capital' caption where a filing uses it for the same subtotal.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Total current assets and total current liabilities themselves, which are separately reported subtotals — this line is their difference, not either of them.",
+        "'Total assets less current liabilities' (總資產減流動負債), which adds total non-current assets to this figure.",
+        "'Net assets' / 'Net asset value' (資產淨值), which is TOTAL ASSETS less TOTAL liabilities and equals total equity — not current assets less current liabilities.",
+        "Working-capital movements reported in the cash-flow statement.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "bs_current_assets__total_current_assets",
+        "bs_current_liabilities__total_current_liabilities",
+        "bs_total_assets_less_current_liabilities",
+        "bs_equity__total_equity"
+      ],
+      "aliases": [
+        "NET CURRENT ASSETS/(LIABILITIES)",
+        "Net current assets/(liabilities)",
+        "Net current (liabilities)/assets",
+        "Net current assets",
+        "Net current liabilities",
+        "Net current assets/(net current liabilities)"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "NET CURRENT ASSETS/(LIABILITIES)",
+          "Net current assets/(liabilities)",
+          "Net current (liabilities)/assets",
+          "Net current assets",
+          "Net current liabilities",
+          "Net current assets/(net current liabilities)"
+        ],
+        "zh": [
+          "流動資產╱（負債）淨額",
+          "流动资产／（负债）净额",
+          "流動資產／（負債）淨額",
+          "流動負債淨額",
+          "流动负债净额",
+          "流動資產淨額",
+          "流动资产净额"
+        ]
+      },
+      "regex_hints": [
+        "net current (?:assets|liabilities)",
+        "流動(?:資產|負債).{0,10}淨額",
+        "流动(?:资产|负债).{0,10}净额"
+      ],
+      "exclude_hints": [
+        "^net assets",
+        "total assets less",
+        "總資產減",
+        "总资产减",
+        "attributable",
+        "應佔",
+        "应占"
+      ]
+    },
+    {
+      "canonical_key": "bs_total_assets_less_current_liabilities",
+      "label": "Total assets less current liabilities",
+      "definition": "Total assets less current liabilities: the HKFRS balance-sheet subtotal equal to TOTAL ASSETS minus TOTAL CURRENT LIABILITIES — equivalently total non-current assets plus net current assets/(liabilities). It is the capital-employed line against which non-current liabilities and equity are then presented.",
+      "description": "Total assets less current liabilities: the HKFRS balance-sheet subtotal equal to TOTAL ASSETS minus TOTAL CURRENT LIABILITIES — equivalently total non-current assets plus net current assets/(liabilities). It is the capital-employed line against which non-current liabilities and equity are then presented.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "The reported subtotal 'Total assets less current liabilities' (總資產減流動負債), i.e. total non-current assets plus net current assets/(liabilities).",
+        "The equivalent 'capital employed' caption where a filing uses it for the same subtotal.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "'Total current liabilities' (流動負債總額) — a DIFFERENT and much larger line on the same page which merely shares the words 'total', 'current' and 'liabilities'; it is the sum of the current-liability components, whereas this line is assets net of them.",
+        "'Total assets', which is stated before any liabilities are deducted.",
+        "'Net current assets/(liabilities)', which excludes total non-current assets.",
+        "Total non-current liabilities, total liabilities and total equity.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "bs_current_liabilities__total_current_liabilities",
+        "bs_total_assets",
+        "bs_net_current_assets_liabilities",
+        "bs_non_current_liabilities__total_non_current_liabilities"
+      ],
+      "aliases": [
+        "TOTAL ASSETS LESS CURRENT LIABILITIES",
+        "Total assets less current liabilities",
+        "Total assets less current liabilities (capital employed)",
+        "Capital employed"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "TOTAL ASSETS LESS CURRENT LIABILITIES",
+          "Total assets less current liabilities",
+          "Total assets less current liabilities (capital employed)",
+          "Capital employed"
+        ],
+        "zh": [
+          "總資產減流動負債",
+          "总资产减流动负债",
+          "資產總值減流動負債",
+          "资产总值减流动负债",
+          "總資產減流動負債後淨額",
+          "总资产减流动负债后净额",
+          "已動用資本",
+          "已动用资本"
+        ]
+      },
+      "regex_hints": [
+        "total assets less current liabilities",
+        "assets less current liabilities",
+        "總資產減流動負債",
+        "总资产减流动负债",
+        "資產總值減流動負債",
+        "资产总值减流动负债"
+      ],
+      "exclude_hints": [
+        "net current",
+        "流動資產.{0,10}淨額",
+        "attributable",
+        "應佔",
+        "应占"
+      ]
     },
     {
       "canonical_key": "bs_total_assets",
@@ -1894,6 +2574,9 @@
         "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
       ],
       "exclude": [
+        "'Other expenses' (其他開支) — a separate face line of residual operating charges; a filing that prints both must keep them apart.",
+        "Selling and marketing / distribution expenses.",
+        "Cost of sales, finance costs and income tax expense.",
         "Amounts mapped to another dedicated concept.",
         "Gross parent totals that contain separately mapped children."
       ],
@@ -1928,7 +2611,28 @@
           "行政及其他經營開支",
           "行政及其他经营开支"
         ]
-      }
+      },
+      "confusable_with": [
+        "pl_expenses__other_expenses",
+        "pl_expenses__selling_and_marketing_expenses",
+        "pl_expenses__other_operating_costs"
+      ],
+      "regex_hints": [
+        "administrative expenses",
+        "行政開支",
+        "行政开支",
+        "行政費用",
+        "行政费用",
+        "管理費用",
+        "管理费用"
+      ],
+      "exclude_hints": [
+        "other expenses",
+        "其他開支",
+        "其他开支",
+        "其他費用",
+        "其他费用"
+      ]
     },
     {
       "canonical_key": "pl_expenses__research_and_development_expenses",
@@ -2033,6 +2737,75 @@
           "其他营业成本"
         ]
       }
+    },
+    {
+      "canonical_key": "pl_expenses__other_expenses",
+      "label": "Other expenses",
+      "definition": "Other expenses: a face line of the statement of profit or loss carrying operating charges of the period that belong to no other dedicated expense caption. It is presented ALONGSIDE administrative expenses and selling and marketing expenses, and is not a synonym for either.",
+      "description": "Other expenses: a face line of the statement of profit or loss carrying operating charges of the period that belong to no other dedicated expense caption. It is presented ALONGSIDE administrative expenses and selling and marketing expenses, and is not a synonym for either.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Miscellaneous operating charges a filing groups under 'Other expenses' (其他開支) on the face of the statement of profit or loss.",
+        "Donations, penalties, sundry write-offs and other non-recurring operating charges where the filing includes them in this caption.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Administrative expenses (行政開支) — a separate face line; a filing that prints both must keep them apart, and neither may absorb the other merely because both are residual expense captions.",
+        "Selling and marketing / distribution expenses.",
+        "Cost of sales and other costs of the goods or services sold.",
+        "Finance costs and income tax expense, which sit below the operating lines.",
+        "Impairment losses, fair-value changes and disposal results, which have dedicated concepts.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_expenses__general_and_administrative_expenses",
+        "pl_expenses__other_operating_costs",
+        "pl_expenses__selling_and_marketing_expenses",
+        "pl_income__other_income"
+      ],
+      "aliases": [
+        "Other expenses",
+        "Other operating expenses",
+        "Other expense",
+        "Sundry expenses",
+        "Other charges"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Other expenses",
+          "Other operating expenses",
+          "Other expense",
+          "Sundry expenses",
+          "Other charges"
+        ],
+        "zh": [
+          "其他開支",
+          "其他开支",
+          "其他費用",
+          "其他费用",
+          "其他支出",
+          "其他營業開支",
+          "其他营业开支"
+        ]
+      },
+      "regex_hints": [
+        "other expenses",
+        "其他開支",
+        "其他开支",
+        "其他費用",
+        "其他费用"
+      ],
+      "exclude_hints": [
+        "administrative",
+        "行政",
+        "selling",
+        "銷售",
+        "销售",
+        "income",
+        "收入",
+        "收益"
+      ]
     },
     {
       "canonical_key": "pl_expenses__depreciation_and_amortisation_expense",
@@ -2267,6 +3040,152 @@
           "应占联营及合营企业利润"
         ]
       }
+    },
+    {
+      "canonical_key": "pl_exceptional_items__share_of_profits_and_losses_of_associates",
+      "label": "Share of profits and losses of associates",
+      "definition": "Share of profits and losses of associates: the group's equity-accounted share of the post-tax results of its associates for the period (HKAS 28.10), presented as a single line on the face of the statement of profit or loss. A share of losses is negative.",
+      "description": "Share of profits and losses of associates: the group's equity-accounted share of the post-tax results of its associates for the period (HKAS 28.10), presented as a single line on the face of the statement of profit or loss. A share of losses is negative.",
+      "value_scope": "exclusive_child",
+      "extraction_mode": "extract",
+      "include": [
+        "The group's share of the post-acquisition profit or loss of entities equity-accounted as associates.",
+        "Impairment of an interest in an associate where the filing presents it within this line.",
+        "The 'Associates' sub-caption printed under a 'Share of profits and losses of:' heading.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "The share of the results of JOINT VENTURES, which is the parallel but separate line.",
+        "The balance-sheet carrying amount 'Interests in associates', which is a balance and not a period result.",
+        "Gains or losses on DISPOSAL of associates, and dividends received from associates.",
+        "The combined 'share of profits and losses of associates and joint ventures' line when the filing reports only that single figure.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_exceptional_items__share_of_profits_and_losses_of_joint_ventures",
+        "pl_exceptional_items__share_of_profit_of_associates_and_jvs",
+        "bs_non_current_assets__interests_in_associates"
+      ],
+      "aliases": [
+        "Share of profits and losses of associates",
+        "Share of profit and loss of associates",
+        "Share of results of associates",
+        "Share of profits less losses of associates",
+        "Share of profits and losses of: Associates",
+        "Associates"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Share of profits and losses of associates",
+          "Share of profit and loss of associates",
+          "Share of results of associates",
+          "Share of profits less losses of associates",
+          "Share of profits and losses of: Associates",
+          "Associates"
+        ],
+        "zh": [
+          "應佔聯營公司溢利及虧損",
+          "应占联营公司溢利及亏损",
+          "應佔聯營公司損益",
+          "应占联营公司损益",
+          "應佔聯營公司業績",
+          "应占联营公司业绩",
+          "聯營公司",
+          "联营公司"
+        ]
+      },
+      "decomposition_rule": "The associates component of the combined 'share of profits and losses of associates and joint ventures' face line; when a filing reports only the combined figure, do not fabricate a split.",
+      "regex_hints": [
+        "share of (?:the )?(?:profits?|results?|losses)[^.]{0,40}associate",
+        "應佔聯營公司",
+        "应占联营公司"
+      ],
+      "exclude_hints": [
+        "joint venture",
+        "合營",
+        "合营",
+        "disposal",
+        "出售",
+        "dividend",
+        "股息",
+        "interests? in",
+        "投資",
+        "投资"
+      ]
+    },
+    {
+      "canonical_key": "pl_exceptional_items__share_of_profits_and_losses_of_joint_ventures",
+      "label": "Share of profits and losses of joint ventures",
+      "definition": "Share of profits and losses of joint ventures: the group's equity-accounted share of the post-tax results of its joint ventures for the period (HKFRS 11 / HKAS 28.10), presented as a single line on the face of the statement of profit or loss. A share of losses is negative.",
+      "description": "Share of profits and losses of joint ventures: the group's equity-accounted share of the post-tax results of its joint ventures for the period (HKFRS 11 / HKAS 28.10), presented as a single line on the face of the statement of profit or loss. A share of losses is negative.",
+      "value_scope": "exclusive_child",
+      "extraction_mode": "extract",
+      "include": [
+        "The group's share of the post-acquisition profit or loss of entities equity-accounted as joint ventures.",
+        "Impairment of an interest in a joint venture where the filing presents it within this line.",
+        "The 'Joint ventures' sub-caption printed under a 'Share of profits and losses of:' heading.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "The share of the results of ASSOCIATES, which is the parallel but separate line.",
+        "The balance-sheet carrying amount 'Interests in joint ventures', which is a balance and not a period result.",
+        "The share of OTHER COMPREHENSIVE income of joint ventures, which is reported outside profit or loss.",
+        "Gains or losses on DISPOSAL of joint ventures, and dividends received from them.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_exceptional_items__share_of_profits_and_losses_of_associates",
+        "pl_exceptional_items__share_of_profit_of_associates_and_jvs",
+        "bs_non_current_assets__interests_in_joint_ventures"
+      ],
+      "aliases": [
+        "Share of profits and losses of joint ventures",
+        "Share of profit and loss of joint ventures",
+        "Share of results of joint ventures",
+        "Share of profits less losses of joint ventures",
+        "Share of profits and losses of: Joint ventures",
+        "Joint ventures"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Share of profits and losses of joint ventures",
+          "Share of profit and loss of joint ventures",
+          "Share of results of joint ventures",
+          "Share of profits less losses of joint ventures",
+          "Share of profits and losses of: Joint ventures",
+          "Joint ventures"
+        ],
+        "zh": [
+          "應佔合營公司溢利及虧損",
+          "应占合营公司溢利及亏损",
+          "應佔合營公司損益",
+          "应占合营公司损益",
+          "應佔合營公司業績",
+          "应占合营公司业绩",
+          "合營公司",
+          "合营公司"
+        ]
+      },
+      "decomposition_rule": "The joint-ventures component of the combined 'share of profits and losses of associates and joint ventures' face line; when a filing reports only the combined figure, do not fabricate a split.",
+      "regex_hints": [
+        "share of (?:the )?(?:profits?|results?|losses)[^.]{0,40}joint venture",
+        "應佔合營公司",
+        "应占合营公司"
+      ],
+      "exclude_hints": [
+        "associate",
+        "聯營",
+        "联营",
+        "comprehensive",
+        "全面",
+        "disposal",
+        "出售",
+        "dividend",
+        "股息",
+        "interests? in",
+        "投資",
+        "投资"
+      ]
     },
     {
       "canonical_key": "pl_exceptional_items__gain_on_derecognition_of_financial_assets_at_amortised_cost",
@@ -2556,6 +3475,250 @@
       }
     },
     {
+      "canonical_key": "pl_profit_attributable_to__owners_of_the_parent",
+      "label": "Owners of the parent",
+      "definition": "Profit/(loss) for the year attributable to owners of the parent: the share of the period's consolidated profit or loss that belongs to the equity holders of the parent company (HKAS 1.81B(a)). It is an ATTRIBUTION of profit for the year, not a further component of it.",
+      "description": "Profit/(loss) for the year attributable to owners of the parent: the share of the period's consolidated profit or loss that belongs to the equity holders of the parent company (HKAS 1.81B(a)). It is an ATTRIBUTION of profit for the year, not a further component of it.",
+      "value_scope": "exclusive_child",
+      "extraction_mode": "extract",
+      "include": [
+        "The 'Owners of the parent' / 'Equity holders of the parent' line printed under a 'Profit/(loss) attributable to:' heading.",
+        "The equivalent 'attributable to shareholders of the Company' presentation.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "The non-controlling-interests share of the same profit or loss.",
+        "'Profit/(loss) for the year' itself, of which this line is one of two components — reporting both must not double count.",
+        "TOTAL COMPREHENSIVE income attributable to owners of the parent, which also carries their share of other comprehensive income.",
+        "Equity attributable to owners of the parent on the balance sheet, which is a balance and not a period result.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_profit_attributable_to__non_controlling_interests",
+        "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
+        "pl_profit_for_the_year",
+        "pl_total_comprehensive_income_for_the_year"
+      ],
+      "aliases": [
+        "Owners of the parent",
+        "Profit/(loss) attributable to owners of the parent",
+        "Profit attributable to owners of the parent",
+        "Loss attributable to owners of the parent",
+        "Equity holders of the parent",
+        "Attributable to owners of the parent",
+        "Owners of the Company"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Owners of the parent",
+          "Profit/(loss) attributable to owners of the parent",
+          "Profit attributable to owners of the parent",
+          "Loss attributable to owners of the parent",
+          "Equity holders of the parent",
+          "Attributable to owners of the parent",
+          "Owners of the Company"
+        ],
+        "zh": [
+          "母公司擁有人",
+          "母公司拥有人",
+          "本公司擁有人",
+          "本公司拥有人",
+          "母公司權益持有人",
+          "母公司权益持有人",
+          "本公司股東應佔",
+          "本公司股东应占"
+        ]
+      },
+      "decomposition_rule": "Profit for the year = owners of the parent + non-controlling interests. The two attribution lines are components of that total and are never added to it.",
+      "exclude_hints": [
+        "total comprehensive",
+        "全面",
+        "non-controlling",
+        "非控股",
+        "少數",
+        "少数"
+      ]
+    },
+    {
+      "canonical_key": "pl_profit_attributable_to__non_controlling_interests",
+      "label": "Non-controlling interests",
+      "definition": "Profit/(loss) for the year attributable to non-controlling interests: the share of the period's consolidated profit or loss that belongs to the owners of the minority shareholdings in subsidiaries (HKAS 1.81B(a) / HKFRS 10.B94). This is a FLOW for the period and is a different concept from the non-controlling-interests EQUITY BALANCE reported in the balance sheet, which is a closing amount.",
+      "description": "Profit/(loss) for the year attributable to non-controlling interests: the share of the period's consolidated profit or loss that belongs to the owners of the minority shareholdings in subsidiaries (HKAS 1.81B(a) / HKFRS 10.B94). This is a FLOW for the period and is a different concept from the non-controlling-interests EQUITY BALANCE reported in the balance sheet, which is a closing amount.",
+      "value_scope": "exclusive_child",
+      "extraction_mode": "extract",
+      "include": [
+        "The 'Non-controlling interests' line printed under a 'Profit/(loss) attributable to:' heading on the statement of profit or loss.",
+        "The equivalent 'Loss attributable to non-controlling interests' presentation.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "The non-controlling-interests balance within EQUITY on the balance sheet — same wording, different concept: that is a closing balance, this is the period's result.",
+        "'Profit/(loss) for the year' itself, of which this line is one of two components.",
+        "TOTAL COMPREHENSIVE income attributable to non-controlling interests, which also carries their share of other comprehensive income.",
+        "Dividends paid to, capital contributed by, or interests acquired from non-controlling shareholders, which are equity or cash-flow movements.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "bs_equity__non_controlling_interests",
+        "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
+        "pl_profit_attributable_to__owners_of_the_parent",
+        "pl_profit_for_the_year",
+        "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests"
+      ],
+      "aliases": [
+        "Non-controlling interests",
+        "Profit/(loss) attributable to non-controlling interests",
+        "Loss attributable to non-controlling interests",
+        "Profit attributable to non-controlling interests",
+        "Attributable to non-controlling interests",
+        "Non-controlling shareholders"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Non-controlling interests",
+          "Profit/(loss) attributable to non-controlling interests",
+          "Loss attributable to non-controlling interests",
+          "Profit attributable to non-controlling interests",
+          "Attributable to non-controlling interests",
+          "Non-controlling shareholders"
+        ],
+        "zh": [
+          "非控股權益",
+          "非控股权益",
+          "非控制性權益應佔",
+          "非控制性权益应占",
+          "少數股東損益",
+          "少数股东损益",
+          "非控股股東應佔溢利",
+          "非控股股东应占溢利"
+        ]
+      },
+      "decomposition_rule": "Profit for the year = owners of the parent + non-controlling interests. The two attribution lines are components of that total and are never added to it.",
+      "exclude_hints": [
+        "total comprehensive",
+        "全面",
+        "owners of the parent",
+        "母公司",
+        "dividend",
+        "股息",
+        "contribution",
+        "貢獻",
+        "贡献"
+      ]
+    },
+    {
+      "canonical_key": "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
+      "label": "Owners of the parent",
+      "definition": "Total comprehensive income/(loss) for the year attributable to owners of the parent: the share of the period's TOTAL COMPREHENSIVE income — profit or loss plus other comprehensive income — that belongs to the equity holders of the parent (HKAS 1.81B(b)(ii)).",
+      "description": "Total comprehensive income/(loss) for the year attributable to owners of the parent: the share of the period's TOTAL COMPREHENSIVE income — profit or loss plus other comprehensive income — that belongs to the equity holders of the parent (HKAS 1.81B(b)(ii)).",
+      "value_scope": "exclusive_child",
+      "extraction_mode": "extract",
+      "include": [
+        "The 'Owners of the parent' line printed under a 'Total comprehensive income/(loss) attributable to:' heading.",
+        "The equivalent 'total comprehensive loss attributable to shareholders of the Company' presentation.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "The owners-of-the-parent share of PROFIT for the year, which excludes other comprehensive income and is therefore a different (usually smaller in loss terms) figure printed further up the same statement.",
+        "The non-controlling-interests share of total comprehensive income.",
+        "'Total comprehensive income/(loss) for the year' itself, of which this line is one of two components.",
+        "Equity attributable to owners of the parent on the balance sheet, which is a balance.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_profit_attributable_to__owners_of_the_parent",
+        "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
+        "pl_total_comprehensive_income_for_the_year"
+      ],
+      "aliases": [
+        "Total comprehensive income attributable to owners of the parent",
+        "Total comprehensive loss attributable to owners of the parent",
+        "Total comprehensive income/(loss) attributable to owners of the parent",
+        "Total comprehensive income attributable to equity holders of the parent"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Total comprehensive income attributable to owners of the parent",
+          "Total comprehensive loss attributable to owners of the parent",
+          "Total comprehensive income/(loss) attributable to owners of the parent",
+          "Total comprehensive income attributable to equity holders of the parent"
+        ],
+        "zh": [
+          "下列各項應佔全面虧損總額 母公司擁有人",
+          "母公司擁有人應佔全面收益總額",
+          "母公司拥有人应占全面收益总额",
+          "母公司擁有人應佔全面虧損總額",
+          "母公司拥有人应占全面亏损总额",
+          "本公司擁有人應佔全面收益總額",
+          "本公司拥有人应占全面收益总额"
+        ]
+      },
+      "decomposition_rule": "Total comprehensive income for the year = owners of the parent + non-controlling interests. The two attribution lines are components of that total and are never added to it.",
+      "regex_hints": [
+        "total comprehensive (?:income|loss).{0,40}owners of the parent",
+        "total comprehensive (?:income|loss).{0,40}equity holders"
+      ],
+      "exclude_hints": [
+        "non-controlling",
+        "非控股",
+        "少數",
+        "少数"
+      ]
+    },
+    {
+      "canonical_key": "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
+      "label": "Non-controlling interests",
+      "definition": "Total comprehensive income/(loss) for the year attributable to non-controlling interests: the share of the period's TOTAL COMPREHENSIVE income — profit or loss plus other comprehensive income — that belongs to the owners of the minority shareholdings in subsidiaries (HKAS 1.81B(b)(i)). A period flow, not the equity balance.",
+      "description": "Total comprehensive income/(loss) for the year attributable to non-controlling interests: the share of the period's TOTAL COMPREHENSIVE income — profit or loss plus other comprehensive income — that belongs to the owners of the minority shareholdings in subsidiaries (HKAS 1.81B(b)(i)). A period flow, not the equity balance.",
+      "value_scope": "exclusive_child",
+      "extraction_mode": "extract",
+      "include": [
+        "The 'Non-controlling interests' line printed under a 'Total comprehensive income/(loss) attributable to:' heading.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "The non-controlling-interests share of PROFIT for the year, which excludes their share of other comprehensive income.",
+        "The non-controlling-interests balance within equity on the balance sheet.",
+        "'Total comprehensive income/(loss) for the year' itself, of which this line is one of two components.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_profit_attributable_to__non_controlling_interests",
+        "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
+        "bs_equity__non_controlling_interests",
+        "pl_total_comprehensive_income_for_the_year"
+      ],
+      "aliases": [
+        "Total comprehensive income attributable to non-controlling interests",
+        "Total comprehensive loss attributable to non-controlling interests",
+        "Total comprehensive income/(loss) attributable to non-controlling interests"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Total comprehensive income attributable to non-controlling interests",
+          "Total comprehensive loss attributable to non-controlling interests",
+          "Total comprehensive income/(loss) attributable to non-controlling interests"
+        ],
+        "zh": [
+          "非控股權益應佔全面收益總額",
+          "非控股权益应占全面收益总额",
+          "非控股權益應佔全面虧損總額",
+          "非控股权益应占全面亏损总额",
+          "少數股東應佔全面收益總額",
+          "少数股东应占全面收益总额"
+        ]
+      },
+      "decomposition_rule": "Total comprehensive income for the year = owners of the parent + non-controlling interests. The two attribution lines are components of that total and are never added to it.",
+      "regex_hints": [
+        "total comprehensive (?:income|loss).{0,40}non-controlling"
+      ],
+      "exclude_hints": [
+        "owners of the parent",
+        "母公司",
+        "equity holders"
+      ]
+    },
+    {
       "canonical_key": "pl_gross_profit",
       "label": "Gross profit",
       "definition": "Gross profit: the HKFRS/IFRS face subtotal struck immediately after revenue and cost of sales — revenue less the cost of sales (cost of goods sold, cost of services, cost of properties sold) for the same period. It measures the margin earned on the entity's core selling and servicing activity BEFORE selling and marketing expenses, administrative expenses, other income and gains, finance costs and tax. A negative amount is a gross loss and is carried with its reported sign. Being a subtotal, it is derived from the separately mapped revenue and cost-of-sales lines and must not be double-counted with them.",
@@ -2730,40 +3893,197 @@
       }
     },
     {
-      "canonical_key": "pl_profit_for_the_year",
-      "label": "Profit for the year",
-      "definition": "Profit for the year: a top-level line of the statement of profit or loss (HKFRS/IFRS).",
-      "description": "Profit for the year: a top-level line of the statement of profit or loss.",
+      "canonical_key": "pl_other_comprehensive_income_for_the_year",
+      "label": "Other comprehensive income/(loss) for the year",
+      "definition": "Other comprehensive income/(loss) for the year: the subtotal of items of income and expense recognised OUTSIDE profit or loss (HKAS 1.7) — exchange differences on translating foreign operations, the share of other comprehensive income of associates and joint ventures, fair-value movements on equity investments designated at FVOCI, and reserves released on disposal — net of tax, before profit for the year is added to reach total comprehensive income.",
+      "description": "Other comprehensive income/(loss) for the year: the subtotal of items of income and expense recognised OUTSIDE profit or loss (HKAS 1.7) — exchange differences on translating foreign operations, the share of other comprehensive income of associates and joint ventures, fair-value movements on equity investments designated at FVOCI, and reserves released on disposal — net of tax, before profit for the year is added to reach total comprehensive income.",
       "value_scope": "not_applicable",
       "extraction_mode": "extract",
       "include": [
+        "The reported subtotal 'Other comprehensive income/(loss) for the year' (年內其他全面收益／（虧損）), whether stated as income or as a loss.",
+        "A single OCI subtotal covering both the items that may and that will not be reclassified to profit or loss.",
         "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
       ],
       "exclude": [
+        "Profit or loss for the year, which is reported above the other-comprehensive-income section.",
+        "TOTAL comprehensive income for the year, which is profit or loss PLUS this subtotal.",
+        "The individual OCI components (exchange differences, share of OCI of joint ventures, FVOCI fair-value movements) where the filing also lists them — those are children of this subtotal and must not be added to it.",
+        "The other-comprehensive-income RESERVE within equity, which is a cumulative balance.",
+        "Other comprehensive income attributable to owners of the parent or to non-controlling interests, which are attributions of it.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_total_comprehensive_income_for_the_year",
+        "pl_profit_for_the_year",
+        "bs_equity__other_comprehensive_income_reserve"
+      ],
+      "aliases": [
+        "OTHER COMPREHENSIVE LOSS FOR THE YEAR",
+        "Other comprehensive loss for the year",
+        "OTHER COMPREHENSIVE INCOME FOR THE YEAR",
+        "Other comprehensive income for the year",
+        "Other comprehensive income/(loss) for the year",
+        "Other comprehensive income for the period",
+        "Other comprehensive loss, net of tax"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "OTHER COMPREHENSIVE LOSS FOR THE YEAR",
+          "Other comprehensive loss for the year",
+          "OTHER COMPREHENSIVE INCOME FOR THE YEAR",
+          "Other comprehensive income for the year",
+          "Other comprehensive income/(loss) for the year",
+          "Other comprehensive income for the period",
+          "Other comprehensive loss, net of tax"
+        ],
+        "zh": [
+          "年內其他全面虧損",
+          "年内其他全面亏损",
+          "年內其他全面收益",
+          "年内其他全面收益",
+          "年內其他全面收入",
+          "年内其他全面收入",
+          "年內其他全面收益／（虧損）",
+          "其他全面虧損",
+          "其他全面亏损",
+          "其他全面收益",
+          "其他全面收益总额"
+        ]
+      },
+      "regex_hints": [
+        "other comprehensive (?:income|loss).{0,40}for the (?:year|period)",
+        "年內其他全面(?:虧損|收益|收入)",
+        "年内其他全面(?:亏损|收益|收入)"
+      ],
+      "exclude_hints": [
+        "total comprehensive",
+        "全面(?:虧損|亏损|收益|收入).{0,10}總額",
+        "attributable",
+        "應佔",
+        "应占",
+        "reserve",
+        "儲備",
+        "储备"
+      ]
+    },
+    {
+      "canonical_key": "pl_total_comprehensive_income_for_the_year",
+      "label": "Total comprehensive income/(loss) for the year",
+      "definition": "Total comprehensive income/(loss) for the year: the bottom line of the statement of profit or loss and other comprehensive income — profit or loss for the year PLUS other comprehensive income/(loss) for the year (HKAS 1.106(a)). It is a DIFFERENT concept from 'profit/(loss) for the year', which stops at the profit-or-loss subtotal and is smaller by the amount of other comprehensive income.",
+      "description": "Total comprehensive income/(loss) for the year: the bottom line of the statement of profit or loss and other comprehensive income — profit or loss for the year PLUS other comprehensive income/(loss) for the year (HKAS 1.106(a)). It is a DIFFERENT concept from 'profit/(loss) for the year', which stops at the profit-or-loss subtotal and is smaller by the amount of other comprehensive income.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "The reported total-comprehensive figure for the period (年內全面收益／（虧損）總額), however captioned.",
+        "The wrapped continuation caption 'LOSS FOR THE YEAR' / 'INCOME FOR THE YEAR' printed immediately beneath 'TOTAL COMPREHENSIVE' on a bilingual HKEX statement of comprehensive income: the amount on that row is the total-comprehensive figure, not the profit-or-loss bottom line printed further up the same page.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "'Profit/(loss) for the year' (年內溢利╱（虧損）) — the profit-or-loss bottom line, printed ABOVE the other-comprehensive-income section; when both appear, the larger loss belongs here and the smaller one there.",
+        "'Other comprehensive income/(loss) for the year', which is only the OCI subtotal.",
+        "Total comprehensive income attributable to owners of the parent or to non-controlling interests, which are attributions of this total.",
+        "The other-comprehensive-income reserve within equity.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_profit_for_the_year",
+        "pl_other_comprehensive_income_for_the_year",
+        "pl_profit_attributable_to__owners_of_the_parent",
+        "pl_profit_attributable_to__non_controlling_interests",
+        "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
+        "pl_total_comprehensive_income_attributable_to__non_controlling_interests"
+      ],
+      "aliases": [
+        "TOTAL COMPREHENSIVE LOSS FOR THE YEAR",
+        "Total comprehensive loss for the year",
+        "TOTAL COMPREHENSIVE INCOME FOR THE YEAR",
+        "Total comprehensive income for the year",
+        "Total comprehensive income/(loss) for the year",
+        "Total comprehensive income for the period"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "TOTAL COMPREHENSIVE LOSS FOR THE YEAR",
+          "Total comprehensive loss for the year",
+          "TOTAL COMPREHENSIVE INCOME FOR THE YEAR",
+          "Total comprehensive income for the year",
+          "Total comprehensive income/(loss) for the year",
+          "Total comprehensive income for the period"
+        ],
+        "zh": [
+          "年內全面虧損總額",
+          "年内全面亏损总额",
+          "年內全面收益總額",
+          "年内全面收益总额",
+          "年內全面收入╱（虧損）總額",
+          "年内全面收入／（亏损）总额",
+          "全面虧損總額",
+          "全面亏损总额",
+          "全面收益總額",
+          "全面收益总额",
+          "TOTAL COMPREHENSIVE 年內全面虧損總額 LOSS FOR THE YEAR"
+        ]
+      },
+      "regex_hints": [
+        "total comprehensive (?:income|loss)",
+        "全面(?:虧損|收益|收入).{0,10}總額",
+        "全面(?:亏损|收益|收入).{0,10}总额"
+      ],
+      "exclude_hints": [
+        "attributable",
+        "應佔",
+        "应占",
+        "other comprehensive",
+        "其他全面",
+        "reserve",
+        "儲備",
+        "储备"
+      ]
+    },
+    {
+      "canonical_key": "pl_profit_for_the_year",
+      "label": "Profit for the year",
+      "definition": "Profit/(loss) for the year: the PROFIT-OR-LOSS bottom line for the period — result after tax and before any item of other comprehensive income. It stops at the profit-or-loss subtotal and is therefore NOT the same figure as total comprehensive income for the year.",
+      "description": "Profit/(loss) for the year: the PROFIT-OR-LOSS bottom line for the period — result after tax and before any item of other comprehensive income. It stops at the profit-or-loss subtotal and is therefore NOT the same figure as total comprehensive income for the year.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "The post-tax profit-or-loss result for the period, before other comprehensive income.",
+        "A combined 'profit and total comprehensive income for the year' caption used where there is no other comprehensive income at all.",
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "'TOTAL COMPREHENSIVE income/(loss) for the year' (年內全面虧損總額), which adds other comprehensive income — on a bilingual HKEX statement its wrapped caption reaches the matcher as the bare fragment 'LOSS FOR THE YEAR', and that row's amount belongs to the total-comprehensive concept, not here.",
+        "'Other comprehensive income/(loss) for the year'.",
+        "The attribution lines 'attributable to owners of the parent' and 'attributable to non-controlling interests', which are components of this figure.",
         "Amounts mapped to another dedicated concept.",
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
         "Profit for the year",
-        "LOSS FOR THE YEAR",
-        "Loss for the year",
         "PROFIT FOR THE YEAR",
+        "Loss for the year",
+        "LOSS FOR THE YEAR",
         "Profit/(loss) for the year",
+        "(Loss)/profit for the year",
         "Profit for the period",
         "Loss for the period",
         "Net profit for the year",
+        "Net loss for the year",
         "Profit and total comprehensive income for the year"
       ],
       "aliases_i18n": {
         "en": [
           "Profit for the year",
-          "LOSS FOR THE YEAR",
-          "Loss for the year",
           "PROFIT FOR THE YEAR",
+          "Loss for the year",
+          "LOSS FOR THE YEAR",
           "Profit/(loss) for the year",
+          "(Loss)/profit for the year",
           "Profit for the period",
           "Loss for the period",
           "Net profit for the year",
+          "Net loss for the year",
           "Profit and total comprehensive income for the year"
         ],
         "zh": [
@@ -2779,9 +4099,31 @@
           "本年度亏损",
           "年度虧損",
           "期內虧損",
-          "期内亏损"
+          "期内亏损",
+          "LOSS FOR THE YEAR 年內虧損",
+          "PROFIT FOR THE YEAR 年內溢利",
+          "PROFIT/(LOSS) FOR THE YEAR 年內溢利╱（虧損）"
         ]
-      }
+      },
+      "confusable_with": [
+        "pl_total_comprehensive_income_for_the_year",
+        "pl_other_comprehensive_income_for_the_year",
+        "pl_profit_attributable_to__owners_of_the_parent",
+        "pl_profit_attributable_to__non_controlling_interests"
+      ],
+      "regex_hints": [
+        "^(?:profit|loss)\\b.{0,15}\\bfor the (?:year|period)",
+        "年內(?:溢利|虧損)$",
+        "年内(?:溢利|亏损)$"
+      ],
+      "exclude_hints": [
+        "total comprehensive",
+        "other comprehensive",
+        "全面",
+        "attributable",
+        "應佔",
+        "应占"
+      ]
     },
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__profit_before_tax",
