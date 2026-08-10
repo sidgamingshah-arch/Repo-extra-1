@@ -311,6 +311,32 @@ def test_credit_narrative_endpoint_is_gated_and_coherent(client):
         assert r.json()["narrative"]
 
 
+# --- #49: auto-cache the credit narrative is best-effort (never disturbs a succeeded run) ----
+def test_maybe_cache_credit_narrative_is_guarded():
+    from app.api.routes.extractions import _maybe_cache_credit_narrative
+
+    class FakeSession:
+        def commit(self): pass
+        def rollback(self): pass
+
+    class FakeRun:
+        def __init__(self):
+            self.result = {
+                "rows": [
+                    _cval("bs_current_assets__total_current_assets", 300),
+                    _cval("bs_current_liabilities__total_current_liabilities", 100),
+                ],
+                "disclosures": [],
+            }
+
+    run = FakeRun()
+    # Must never raise regardless of provider/key state. If it does cache (a real provider is
+    # configured with a key), the cached shape is well-formed; otherwise it's simply absent.
+    _maybe_cache_credit_narrative(FakeSession(), run, "en", "Acme Ltd")
+    cn = run.result.get("credit_narrative")
+    assert cn is None or (cn.get("text") and cn.get("model"))
+
+
 # --- #9: Workspace statement rows carry a click-to-source location + doc shape ---------------
 def test_statement_rows_carry_source_and_format(client):
     doc_id = _upload(client, make_rich_pdf(), "srcstmt.pdf")

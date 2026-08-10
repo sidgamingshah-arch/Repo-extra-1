@@ -311,6 +311,11 @@ export interface CreditFlag {
   page: number | null;
   snippet: string;
 }
+export interface CreditNarrative {
+  text: string;
+  provider: string;
+  model: string;
+}
 export interface CreditAnalysis {
   stance: CreditStance;
   stance_label: string;
@@ -318,6 +323,7 @@ export interface CreditAnalysis {
   flags: CreditFlag[];
   summary: string;
   basis: string;
+  narrative?: CreditNarrative;  // cached LLM narrative, when present
 }
 export interface AnalysisResponse {
   ratios: Ratio[];

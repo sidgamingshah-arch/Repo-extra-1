@@ -547,12 +547,18 @@ def get_document_analysis(document_id: str, locale: str = Query("en"),
                 "credit": build_credit_analysis([], [], locale=locale)}
     rows = run.result.get("rows", [])
     disclosures = localize_disclosures(run.result.get("disclosures", []), locale)
+    credit = build_credit_analysis(rows, disclosures, locale=locale)
+    # Fold in the cached LLM narrative (auto-generated at extraction when a provider is
+    # configured, or produced on demand) so the Analysis screen shows it without a click.
+    narrative = run.result.get("credit_narrative")
+    if narrative and narrative.get("text"):
+        credit = {**credit, "narrative": narrative}
     return {
         "ratios": compute_ratios(rows, locale=locale),
         "disclosures": disclosures,
         "notes": build_free_notes(rows, locale=locale),
         # Credit view combines the extracted ratios with the report's narrative disclosures.
-        "credit": build_credit_analysis(rows, disclosures, locale=locale),
+        "credit": credit,
     }
 
 

@@ -24,6 +24,37 @@ from app.services.documents import run_extraction
 router = APIRouter(tags=["extractions"])
 
 
+def _maybe_cache_credit_narrative(session: Session, run, locale: str, entity: str | None) -> None:
+    """Auto-generate the LLM credit narrative once and cache it on the run, so the Analysis
+    screen / export show it without a manual click. Best-effort and fully guarded: it runs only
+    when a real LLM provider is configured, and any failure (no key, unreachable, thin data)
+    leaves the deterministic credit view untouched — the extraction has already succeeded."""
+    try:
+        from app.config import get_settings
+
+        settings = get_settings()
+        if settings.llm.provider == "stub":
+            return
+        from app.ports.registry import registry as reg
+        from app.services.analysis_llm import run_credit_narrative
+        from app.services.derived import build_credit_analysis, localize_disclosures
+
+        rows = run.result.get("rows", [])
+        disclosures = localize_disclosures(run.result.get("disclosures", []), locale)
+        credit = build_credit_analysis(rows, disclosures, locale=locale)
+        if not credit.get("factors") and not credit.get("flags"):
+            return
+        provider = reg.get("llm", settings.llm.provider)
+        result, meta = run_credit_narrative(provider, credit, entity=entity or "",
+                                            locale=locale, max_tokens=settings.llm.max_tokens)
+        run.result = {**run.result, "credit_narrative": {
+            "text": result.narrative, "provider": settings.llm.provider,
+            "model": meta.get("model", settings.llm.model)}}
+        session.commit()
+    except Exception:  # noqa: BLE001 — optional enrichment; never disturb a succeeded run
+        session.rollback()
+
+
 def _serialize_rows(doc_model) -> list[dict]:
     """Extracted line items in a view-friendly shape, each value with its provenance
     (sheet+cell for Excel, page+bbox for PDF) so the UI can show click-to-source."""
@@ -175,6 +206,8 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
         run.progress = {"phase": "done", "pct": 1.0}
         run.logs = "\n".join(ctx.logs)
         session.commit()
+
+        _maybe_cache_credit_narrative(session, run, doc_model.locale or "en", entity_name)
 
         used_llm = ctx.llm_calls > 0
         audit_svc.record(run.document_id, audit_svc.AuditEntry(

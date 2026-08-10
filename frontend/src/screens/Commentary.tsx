@@ -189,6 +189,8 @@ function CreditPanel({
 }) {
   const banner = creditTone(credit.stance);
   const narrative = useCreditNarrative();
+  // Prefer a freshly regenerated narrative; otherwise the cached one auto-generated at extraction.
+  const shown = narrative.data ?? credit.narrative;
   return (
     <Card style={{ marginBottom: 16, borderLeft: `3px solid ${banner.bar}` }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
@@ -204,7 +206,8 @@ function CreditPanel({
                 cursor: narrative.isPending ? "default" : "pointer",
               }}
             >
-              {narrative.isPending ? t("cm.creditGenerating") : t("cm.creditGenerate")}
+              {narrative.isPending ? t("cm.creditGenerating")
+                : shown ? t("cm.creditRegenerate") : t("cm.creditGenerate")}
             </button>
           )}
           <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: radius.pill,
@@ -216,15 +219,18 @@ function CreditPanel({
       <div style={{ fontSize: 11.5, color: color.muted, marginBottom: 12 }}>{t("cm.creditHint")}</div>
       <div style={{ fontSize: 12.5, color: color.sec, lineHeight: 1.6, marginBottom: 14 }}>{credit.summary}</div>
 
-      {/* Optional LLM narrative (grounded in the deterministic factors/flags above). */}
-      {narrative.data && (
+      {/* LLM narrative (grounded in the deterministic factors/flags above) — the cached one
+          auto-generated at extraction, or a freshly regenerated one. */}
+      {shown && (
         <div data-testid="credit-narrative"
              style={{ marginBottom: 14, padding: "12px 14px", background: color.indigoTint,
                       border: `1px solid ${color.indigoBorder}`, borderRadius: 9 }}>
           <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, color: color.indigo, marginBottom: 6 }}>
-            {t("cm.creditNarrative").toUpperCase()} · {narrative.data.model}
+            {t("cm.creditNarrative").toUpperCase()}{shown.model ? ` · ${shown.model}` : ""}
           </div>
-          <div style={{ fontSize: 12.5, color: color.ink, lineHeight: 1.6 }}>{narrative.data.narrative}</div>
+          <div style={{ fontSize: 12.5, color: color.ink, lineHeight: 1.6 }}>
+            {"narrative" in shown ? shown.narrative : shown.text}
+          </div>
         </div>
       )}
       {narrative.isError && (
