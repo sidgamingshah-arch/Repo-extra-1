@@ -857,7 +857,7 @@ def export_document(
                                note_details=run.result.get("note_details", []),
                                reconciliation=run.result.get("reconciliation", []), locale=locale,
                                credit_narrative=narrative,
-                               netting_rules=_netting_rules_for_run(session, run))
+                               netting_rules=run.result.get("netting") or [])
         return Response(content=data, media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
 
@@ -1259,7 +1259,9 @@ def get_document_statement(
                             run.result.get("units"), company=run.result.get("entity"),
                             doc_format=run.result.get("format") or doc.fmt or "",
                             page_count=run.result.get("page_count") or doc.page_count or 0,
-                            netting_rules=_netting_rules_for_run(session, run))
+                            # Apply only the netting the LLM confirmed for this document (cached at
+                            # extraction); the raw ontology policies are candidates, not results.
+                            netting_rules=run.result.get("netting") or [])
 
 
 def _note_no(raw) -> int | None:

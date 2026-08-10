@@ -40,6 +40,73 @@ def _label_for(rows_by_key: dict, key: str) -> str:
     return row.get("source_label") or key
 
 
+def build_netting_payload(rows: list[dict], rule, *, basis: str = "consolidated",
+                          period: str = "current") -> dict | None:
+    """The evidence an LLM needs to decide whether a containment policy applies: the target line
+    and the candidate contained lines (labels + values as extracted) plus the policy condition.
+    Returns None when the target or all candidates are absent (nothing to evaluate)."""
+    by_key = {r.get("canonical_key"): r for r in rows if r.get("canonical_key")}
+    target_key = getattr(rule, "target_key", None) or (rule.get("target_key") if isinstance(rule, dict) else None)
+    sub_keys = (getattr(rule, "subtract_keys", None)
+                if not isinstance(rule, dict) else rule.get("subtract_keys")) or []
+    add_keys = (getattr(rule, "add_keys", None)
+                if not isinstance(rule, dict) else rule.get("add_keys")) or []
+    condition = (getattr(rule, "condition", None)
+                 if not isinstance(rule, dict) else rule.get("condition")) or ""
+    label = (getattr(rule, "label", None) if not isinstance(rule, dict) else rule.get("label")) or ""
+
+    def lv(k: str) -> dict | None:
+        v = _value(by_key, k, basis, period)
+        if v is None:
+            return None
+        return {"key": k, "label": _label_for(by_key, k), "value": str(v)}
+
+    target = lv(target_key)
+    if target is None:
+        return None
+    subs = [c for c in (lv(k) for k in sub_keys) if c]
+    adds = [c for c in (lv(k) for k in add_keys) if c]
+    if not subs and not adds:
+        return None
+    return {"target": target, "subtract_candidates": subs, "add_candidates": adds,
+            "condition": condition, "policy": label}
+
+
+def resolve_netting(provider, rows: list[dict], rules, *, basis: str = "consolidated",
+                    period: str = "current", max_tokens: int = 400) -> list[dict]:
+    """LLM gate: for each generic netting policy, ask the provider whether it applies to THIS
+    statement and which candidate lines are truly contained. Returns the CONFIRMED, resolved rules
+    (concrete subtract/add keys the model selected) — safe to feed to compute_netting. A policy
+    that doesn't apply, or that the provider can't evaluate, is simply dropped."""
+    from app.services.analysis_llm import run_netting_evaluation
+
+    resolved: list[dict] = []
+    for rule in rules:
+        payload = build_netting_payload(rows, rule, basis=basis, period=period)
+        if payload is None:
+            continue
+        try:
+            decision, _meta = run_netting_evaluation(provider, payload, max_tokens=max_tokens)
+        except Exception:  # noqa: BLE001 — provider unreachable/misconfigured → don't net
+            continue
+        if not getattr(decision, "applies", False):
+            continue
+        cand_sub = {c["key"] for c in payload["subtract_candidates"]}
+        cand_add = {c["key"] for c in payload["add_candidates"]}
+        sub = [k for k in (decision.subtract_keys or []) if k in cand_sub]   # ground to candidates
+        add = [k for k in (decision.add_keys or []) if k in cand_add]
+        if not sub and not add:
+            continue
+        resolved.append({
+            "id": (getattr(rule, "id", None) or (rule.get("id") if isinstance(rule, dict) else "") or ""),
+            "target_key": payload["target"]["key"], "subtract_keys": sub, "add_keys": add,
+            "label": payload["policy"], "condition": payload["condition"],
+            "rationale": getattr(decision, "rationale", "") or "",
+            "confidence": float(getattr(decision, "confidence", 0.0) or 0.0),
+        })
+    return resolved
+
+
 def compute_netting(rows: list[dict], rules, *, basis: str = "consolidated",
                     period: str = "current") -> dict[str, dict]:
     """Per target key, the netted value + a human formula for one basis/period.

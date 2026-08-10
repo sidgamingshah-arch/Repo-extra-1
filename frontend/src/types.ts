@@ -466,10 +466,20 @@ export interface NodeConfig {
   aggregation: string;
   netting: { expr: string; explain: string };
 }
+export interface NettingRuleView {
+  id: string;
+  target_key: string;
+  target_label: string;
+  subtract: { key: string; label: string }[];
+  add: { key: string; label: string }[];
+  condition: string;
+  label: string;
+}
 export interface TemplateResponse {
   tree: TemplateNode[];
   node_config: Record<string, NodeConfig>;
   template: { key: string; name: string; line_items: number };
+  netting_rules?: NettingRuleView[];
 }
 
 export interface ExportOption {

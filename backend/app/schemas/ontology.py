@@ -103,19 +103,25 @@ class DecompositionRule(BaseModel):
 
 
 class NettingRule(BaseModel):
-    """A face line whose reported value already INCLUDES other lines, to be netted out when
-    showing the clean figure — e.g. a cost of sales that is stated inclusive of administrative
-    and selling/marketing expenses. The net value is computed with signed arithmetic
-    (``net = target − Σ subtract + Σ add``), so it works whether expenses are stored as
-    negatives or positives, and the formula is surfaced alongside the value. Deterministic,
-    non-destructive (the raw figure is kept and the adjustment is revertable), and admin-declared
-    per template — never auto-applied, since containment is an entity/presentation judgement."""
+    """A GENERIC containment-netting policy: a face line MAY be reported inclusive of other lines
+    (e.g. a cost of sales stated inclusive of administrative / selling & marketing expenses), and
+    when it is, the clean figure nets them out — ``net = target − Σ subtract + Σ add`` (signed, so
+    it works whether expenses are stored negative or positive), with the formula surfaced.
+
+    It is NOT applied unconditionally. ``condition`` is a natural-language test an LLM evaluates
+    against the actual document first; only when the model confirms the containment (and which of
+    the candidate lines are truly included) is the deterministic arithmetic applied. So the policy
+    can ship for every template yet stay silent on filings where it doesn't hold (e.g. a property
+    developer whose cost of sales excludes admin/S&M). ``subtract_keys``/``add_keys`` are the
+    CANDIDATE lines the model chooses from; the math itself stays deterministic and non-destructive
+    (the raw figure is retained for audit)."""
 
     id: str
     target_key: str
-    subtract_keys: list[str] = Field(default_factory=list)
+    subtract_keys: list[str] = Field(default_factory=list)   # candidate lines possibly contained
     add_keys: list[str] = Field(default_factory=list)
-    label: str = ""                         # human explanation of why the lines are contained
+    condition: str = ""                     # NL test the LLM evaluates before applying
+    label: str = ""                         # human explanation of the policy
 
 
 class GlobalRules(BaseModel):

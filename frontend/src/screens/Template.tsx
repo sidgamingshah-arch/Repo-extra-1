@@ -6,7 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Card } from "../components/ui";
 import { useAppLocale, useUI } from "../store";
 import { color, font, radius } from "../theme";
-import type { NodeConfig } from "../types";
+import type { NodeConfig, TemplateResponse } from "../types";
 import { useTemplateDetail, useTemplates } from "../lib/queries";
 import { api } from "../lib/api";
 import { useCan } from "../lib/rbac";
@@ -135,6 +135,56 @@ function NettingExpr({ expr }: { expr: string }) {
       <span style={{ color: color.indigo, fontWeight: 600 }}>{added}</span> −{" "}
       <span style={{ color: color.redFg, fontWeight: 600 }}>{subtracted}</span>
     </div>
+  );
+}
+
+/** Template-wide netting policies (LLM-gated): a target line net of the components it may
+ *  include, applied per-document only when the model confirms the containment. */
+function NettingRules({ rules, t }: {
+  rules: NonNullable<TemplateResponse["netting_rules"]>; t: (k: string) => string;
+}) {
+  return (
+    <Card style={{ marginTop: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{t("tp.nettingRules")}</span>
+        <span style={{ fontSize: 9.5, fontWeight: 600, padding: "2px 7px", borderRadius: radius.pill,
+                       background: color.amberBg, color: color.amberFg }}>{t("tp.nettingLLM")}</span>
+      </div>
+      <p style={{ margin: "0 0 12px", fontSize: 11.5, color: color.sec2, lineHeight: 1.55 }}>
+        {t("tp.nettingRulesHint")}
+      </p>
+      {rules.length === 0 ? (
+        <div style={{ fontSize: 12, color: color.muted }}>{t("tp.nettingNone")}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {rules.map((r) => (
+            <div key={r.id} data-testid="netting-rule"
+                 style={{ border: `1px solid ${color.hairline3}`, borderRadius: radius.control, padding: 12 }}>
+              <div style={{ fontFamily: font.mono, fontSize: 11.5, color: color.ink, marginBottom: 6,
+                            display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                <span style={{ fontWeight: 600, color: color.indigo }}>{r.target_label}</span>
+                <span style={{ color: color.muted }}>=</span>
+                <span style={{ color: color.muted }}>{r.target_label}</span>
+                {r.subtract.map((c) => (
+                  <span key={c.key}><span style={{ color: color.redFg, fontWeight: 600 }}>− {c.label}</span></span>
+                ))}
+                {r.add.map((c) => (
+                  <span key={c.key}><span style={{ color: color.greenFg, fontWeight: 600 }}>+ {c.label}</span></span>
+                ))}
+              </div>
+              {r.label && (
+                <div style={{ fontSize: 11.5, color: color.sec, lineHeight: 1.5 }}>{r.label}</div>
+              )}
+              {r.condition && (
+                <div style={{ fontSize: 11, color: color.muted, lineHeight: 1.5, marginTop: 6 }}>
+                  <b style={{ color: color.sec2 }}>{t("tp.nettingWhen")}:</b> {r.condition}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -371,6 +421,9 @@ export default function TemplateScreen() {
             </p>
             <NettingExpr expr={cfg.netting.expr} />
           </div>
+
+          {/* Template-wide containment-netting policies (LLM-gated). */}
+          {data.netting_rules && <NettingRules rules={data.netting_rules} t={t} />}
         </div>
       </div>
     </div>

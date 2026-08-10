@@ -100,10 +100,23 @@ def get_template_detail(template_id: str, locale: str = "en",
         .order_by(OntologyVersion.version.desc())
     ).scalars().first()
     by_key = {}
+    netting_rules: list[dict] = []
     if ont_row:
         try:
-            for m in load_ontology(ont_row.definition).mappings:
+            ont = load_ontology(ont_row.definition)
+            for m in ont.mappings:
                 by_key[m.canonical_key] = m
+            # Generic containment-netting policies (LLM-gated) — surfaced for the admin to review.
+            def _lbl(k: str) -> str:
+                mm = by_key.get(k)
+                return (mm.label if mm and mm.label else k.replace("_", " "))
+            for nr in ont.netting_rules:
+                netting_rules.append({
+                    "id": nr.id, "target_key": nr.target_key, "target_label": _lbl(nr.target_key),
+                    "subtract": [{"key": k, "label": _lbl(k)} for k in nr.subtract_keys],
+                    "add": [{"key": k, "label": _lbl(k)} for k in nr.add_keys],
+                    "condition": nr.condition, "label": nr.label,
+                })
         except Exception:  # noqa: BLE001 — a malformed ontology shouldn't blank the screen
             by_key = {}
 
@@ -137,5 +150,5 @@ def get_template_detail(template_id: str, locale: str = "en",
                     "netting": {"expr": "", "explain": decomp or "No note-decomposition rule for this concept."},
                 }
 
-    return {"tree": tree, "node_config": node_config,
+    return {"tree": tree, "node_config": node_config, "netting_rules": netting_rules,
             "template": {"key": row.template_key, "name": row.name, "line_items": leaves}}

@@ -53,6 +53,55 @@ def test_compute_netting_noops_without_components():
     assert compute_netting(rows, [rule]) == {}   # nothing to net → silently no-op
 
 
+def test_resolve_netting_is_llm_gated_and_grounded():
+    """The generic policy is only applied when the LLM confirms it for THIS document, and the
+    model's chosen keys are grounded to the declared candidates (no invented keys)."""
+    from app.schemas.ontology import NettingRule
+    from app.services.netting import resolve_netting
+
+    rows = [
+        _row("pl_cost_of_sales", "Cost of sales", -18330),
+        _row("pl_admin", "Administrative expenses", -1710),
+        _row("pl_sm", "Selling and marketing expenses", -802),
+    ]
+    rule = NettingRule(id="c", target_key="pl_cost_of_sales",
+                       subtract_keys=["pl_admin", "pl_sm"], condition="only if inclusive")
+
+    class Confirms:
+        id = "fake"
+
+        def complete_structured(self, *, system, messages, response_schema, temperature=0.0, max_tokens=2048):
+            # Includes a bogus key that is NOT a declared candidate — must be grounded out.
+            return response_schema(applies=True, subtract_keys=["pl_admin", "pl_bogus"],
+                                   rationale="the cost-of-sales note lists admin within it",
+                                   confidence=0.9), {"model": "fake"}
+
+    resolved = resolve_netting(Confirms(), rows, [rule])
+    assert len(resolved) == 1
+    assert resolved[0]["target_key"] == "pl_cost_of_sales"
+    assert resolved[0]["subtract_keys"] == ["pl_admin"]      # bogus key dropped
+    assert resolved[0]["rationale"]
+
+    class Declines:
+        id = "fake"
+
+        def complete_structured(self, **k):
+            return k["response_schema"](applies=False), {"model": "fake"}
+
+    assert resolve_netting(Declines(), rows, [rule]) == []   # not applied for this document
+
+
+def test_template_detail_exposes_netting_rules(client):
+    tpls = client.get("/api/v1/templates").json()
+    tid = tpls[0]["id"]
+    d = client.get(f"/api/v1/templates/{tid}/detail").json()
+    assert "netting_rules" in d
+    rule = next((r for r in d["netting_rules"]
+                 if r["target_key"] == "pl_expenses__cost_of_goods_sold"), None)
+    assert rule is not None
+    assert rule["subtract"] and rule["condition"] and rule["target_label"]
+
+
 def test_statement_applies_netting_with_formula():
     """The Workspace statement shows the netted value on the target row and carries the formula
     (non-destructive: the raw figure is retained in the inspector note)."""

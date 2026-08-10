@@ -84,6 +84,21 @@
       "instruction": "Do not subtract again."
     }
   ],
+  "netting_rules": [
+    {
+      "id": "cogs_inclusive_of_opex",
+      "target_key": "pl_expenses__cost_of_goods_sold",
+      "subtract_keys": [
+        "pl_expenses__selling_and_marketing_expenses",
+        "pl_expenses__general_and_administrative_expenses",
+        "pl_expenses__employee_benefits_expense",
+        "pl_expenses__depreciation_and_amortisation_expense"
+      ],
+      "add_keys": [],
+      "condition": "Apply ONLY if the statement or its notes show cost of sales / cost of goods sold is presented INCLUSIVE of these operating expenses (for example a cost-of-sales note that lists staff costs, depreciation, or selling/administrative expenses within it, or a by-nature presentation folded into cost of sales). If the statement presents these as separate expense lines outside cost of sales (the usual by-function case), the policy does NOT apply and nothing should be netted.",
+      "label": "Cost of sales may be reported inclusive of operating expenses (staff, depreciation, selling, administrative). Net them out only when the filing shows they are included."
+    }
+  ],
   "mappings": [
     {
       "canonical_key": "bs_non_current_assets__property_plant_and_equipment",

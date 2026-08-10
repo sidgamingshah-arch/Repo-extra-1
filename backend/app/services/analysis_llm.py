@@ -157,6 +157,40 @@ def build_credit_payload(credit: dict, *, entity: str = "", locale: str = "en") 
     }
 
 
+class NettingDecision(BaseModel):
+    applies: bool = Field(description="True only if the statement clearly shows the target line is "
+                                      "reported inclusive of the named candidate lines")
+    subtract_keys: list[str] = Field(default_factory=list,
+                                     description="candidate keys the target INCLUDES (subset of the input candidates)")
+    add_keys: list[str] = Field(default_factory=list)
+    rationale: str = ""
+    confidence: float = Field(default=0.0, ge=0, le=1)
+
+
+NETTING_SYSTEM = (
+    "You are a financial-statement analyst applying a containment-netting policy. A policy proposes "
+    "that a TARGET line may be reported INCLUSIVE of other lines; if so, the clean figure nets those "
+    "lines out. You are given the target line, a set of CANDIDATE lines (each with its label and "
+    "value as actually extracted), and a natural-language condition.\n"
+    "Decide whether, for THIS statement, the target is genuinely reported inclusive of each candidate. "
+    "Choose keys ONLY from the provided candidates. Be conservative: if there is no clear evidence in "
+    "the labels/values/condition that the target contains a candidate, do NOT include it. If none "
+    "apply, return applies=false with an empty list. Never guess or invent keys or numbers."
+)
+
+
+def run_netting_evaluation(provider: LlmProvider, payload: dict, *,
+                           max_tokens: int = 400) -> tuple[NettingDecision, LlmMeta]:
+    """Ask the provider whether a containment-netting policy applies to THIS statement, and which
+    candidate lines are actually contained. Returns (decision, token-usage meta)."""
+    result, meta = provider.complete_structured(
+        system=NETTING_SYSTEM,
+        messages=[{"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=2)}],
+        response_schema=NettingDecision, max_tokens=max_tokens,
+    )
+    return result, meta  # type: ignore[return-value]
+
+
 def run_credit_narrative(provider: LlmProvider, credit: dict, *, entity: str = "",
                          locale: str = "en", max_tokens: int = 700) -> tuple[CreditNarrative, LlmMeta]:
     """Call the provider for a grounded credit narrative; returns (narrative, token-usage meta)."""

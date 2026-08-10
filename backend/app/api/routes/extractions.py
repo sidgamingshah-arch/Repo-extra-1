@@ -55,6 +55,33 @@ def _maybe_cache_credit_narrative(session: Session, run, locale: str, entity: st
         session.rollback()
 
 
+def _maybe_cache_netting(session: Session, run, locale: str) -> None:
+    """Evaluate the ontology's generic containment-netting policies against THIS extraction once,
+    via the LLM, and cache the confirmed (resolved) rules on the run. The statement/export then
+    apply the deterministic math from the cached decision — so a policy nets only where the model
+    confirmed the containment, and per-request rendering stays fast. Best-effort and guarded."""
+    try:
+        from app.config import get_settings
+
+        settings = get_settings()
+        if settings.llm.provider == "stub":
+            return
+        from app.api.routes.documents import _netting_rules_for_run
+        rules = _netting_rules_for_run(session, run)
+        if not rules:
+            return
+        from app.ports.registry import registry as reg
+        from app.services.netting import resolve_netting
+
+        provider = reg.get("llm", settings.llm.provider)
+        resolved = resolve_netting(provider, run.result.get("rows", []), rules,
+                                   max_tokens=settings.llm.max_tokens)
+        run.result = {**run.result, "netting": resolved}
+        session.commit()
+    except Exception:  # noqa: BLE001 — optional; a succeeded extraction is never disturbed
+        session.rollback()
+
+
 def _serialize_rows(doc_model) -> list[dict]:
     """Extracted line items in a view-friendly shape, each value with its provenance
     (sheet+cell for Excel, page+bbox for PDF) so the UI can show click-to-source."""
@@ -208,6 +235,7 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
         session.commit()
 
         _maybe_cache_credit_narrative(session, run, doc_model.locale or "en", entity_name)
+        _maybe_cache_netting(session, run, doc_model.locale or "en")
 
         used_llm = ctx.llm_calls > 0
         audit_svc.record(run.document_id, audit_svc.AuditEntry(
