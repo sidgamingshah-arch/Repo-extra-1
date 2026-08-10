@@ -12,30 +12,7 @@ import { useDocumentAnalysis, useExtraction, useOntologies, useTemplates } from 
 import { useUI } from "../store";
 import { SCREENS } from "./config";
 import { color, font } from "../theme";
-import type { ExtractionProvenance, ExtractionRow, Locale } from "../types";
-
-function SourceChip({ p, onPick }: { p: ExtractionProvenance | null; onPick?: () => void }) {
-  if (!p) return <span style={{ color: color.faint }}>—</span>;
-  const clickable = !!onPick;
-  const label =
-    p.source_kind === "spreadsheet" && p.sheet
-      ? `${p.sheet}!${p.cell ?? ""}`
-      : `p.${p.page_index + 1}${p.bbox ? " ⤢" : ""}`;
-  return (
-    <span
-      onClick={onPick}
-      role={clickable ? "button" : undefined}
-      title={p.text_snippet ?? undefined}
-      style={{
-        fontFamily: font.mono, fontSize: 10.5, color: color.indigo,
-        background: color.indigoTint2, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap",
-        cursor: clickable ? "pointer" : "default",
-      }}
-    >
-      {label}
-    </span>
-  );
-}
+import type { ExtractionRow, Locale } from "../types";
 
 const GRID = "1.8fr 56px 1.3fr 1.1fr";
 
@@ -55,16 +32,37 @@ function RowLine({ row, t, onPick }: {
           // A value that participates in a failed check (balance / note tie) is flagged so a
           // doubtful number reads at a glance — per value, not just per row.
           const low = conf && (conf.flags.length > 0 || conf.overall < 0.75);
-          const tip = conf
+          const confTip = conf
             ? `confidence ${Math.round(conf.overall * 100)}%${conf.flags.length ? " · " + conf.flags.join(", ") : ""}`
-            : undefined;
+            : "";
+          const p = v.provenance;
+          // The figure itself is the click-to-source link — click the number to jump to it in
+          // the page image. A light page/cell ref sits beside it (no heavy chip).
+          const ref = p
+            ? p.source_kind === "spreadsheet" && p.sheet
+              ? `${p.sheet}!${p.cell ?? ""}`
+              : `p.${p.page_index + 1}`
+            : null;
+          const clickable = !!picked;
           return (
-            <span key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-              <span title={tip} style={{ fontSize: 11.5, fontFamily: font.mono,
-                            color: low ? color.amberFg : color.ink }}>
+            <span
+              key={i}
+              onClick={clickable ? () => onPick(picked!) : undefined}
+              role={clickable ? "button" : undefined}
+              title={[confTip, clickable ? "click to show in source" : ""].filter(Boolean).join(" · ") || undefined}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                       gap: 8, cursor: clickable ? "pointer" : "default" }}
+            >
+              <span style={{ fontSize: 11.5, fontFamily: font.mono, color: low ? color.amberFg : color.ink,
+                             borderBottom: clickable ? `1px dashed ${color.indigoBorder2}` : undefined }}>
                 {v.value ?? "—"}{low ? " ⚠" : ""}
               </span>
-              <SourceChip p={v.provenance} onPick={picked ? () => onPick(picked) : undefined} />
+              {ref && (
+                <span style={{ fontFamily: font.mono, fontSize: 10, color: clickable ? color.indigo : color.muted2,
+                               whiteSpace: "nowrap" }}>
+                  {ref}{p?.bbox ? " ⤢" : ""}
+                </span>
+              )}
             </span>
           );
         })}
@@ -92,7 +90,33 @@ const CAT_KEY: Record<string, string> = {
  * and free-form notes — the on-screen twin of the export's Ratios/Disclosures/Notes sheets. */
 function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k: string) => string }) {
   const q = useDocumentAnalysis(id, locale);
-  if (!q.data) return null;
+  // Reserve the section's footprint with a skeleton while the (separate) analysis query loads,
+  // so it fills in place instead of popping in below and pushing the layout.
+  if (!q.data) {
+    if (q.isError) return null;
+    const bar = (w: string, h = 12) => (
+      <div style={{ width: w, height: h, borderRadius: 5, background: color.rowAltBg }} />
+    );
+    return (
+      <div style={{ marginTop: 22, display: "grid", gap: 18 }} aria-hidden>
+        {[0, 1, 2].map((k) => (
+          <Card key={k}>
+            <div style={{ display: "grid", gap: 10 }}>
+              {bar("120px", 14)}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8 }}>
+                {[0, 1, 2, 3].map((j) => (
+                  <div key={j} style={{ border: `1px solid ${color.hairline3}`, borderRadius: 8,
+                                        padding: "8px 10px", display: "grid", gap: 6 }}>
+                    {bar("60%", 16)}{bar("80%", 10)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    );
+  }
   const { ratios, disclosures, notes } = q.data;
 
   // Group ratios by category, preserving the backend's category ordering.
