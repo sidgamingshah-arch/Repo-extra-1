@@ -158,6 +158,64 @@ def make_multipage_pdf() -> bytes:
     return buf.getvalue()
 
 
+def make_annual_report_pdf() -> bytes:
+    """A realistic HKEX/IFRS-shaped annual report: cover, an auditor's report (which mentions
+    face phrases in prose), three *consolidated* face statements, then a notes section that
+    opens WITHOUT a 'Notes to…' banner — straight into '1 General information' — followed by a
+    numbered continuation note that also mentions 'profit or loss' in prose. Ground truth:
+    the three statement pages are FACE, the auditor page is not FACE, and the two note pages
+    are NOTES (so their tables are extracted, not skipped)."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _, height = A4
+
+    def page(title, body_lines, title_size=14):
+        c.setFont("Helvetica-Bold", title_size)
+        c.drawString(72, height - 72, title)
+        c.setFont("Helvetica", 10)
+        y = height - 104
+        for ln in body_lines:
+            c.drawString(72, y, ln); y -= 20
+        c.showPage()
+
+    # 0: cover / contents (OTHER)
+    page("Annual Report 2024", ["Contents", "Corporate information", "Chairman's statement"])
+    # 1: independent auditor's report — prose mentions "profit or loss" / "cash flows" but is
+    #    NOT a statement face (and precedes the statements).
+    page("Independent Auditor's Report", [
+        "In our opinion the consolidated financial statements give a true and fair view.",
+        "We audited the statement of profit or loss and the statement of cash flows.",
+        "Key audit matters were addressed in forming our opinion."])
+    # 2-4: the three consolidated face statements (FACE)
+    page("Consolidated Statement of Profit or Loss", [
+        "Revenue      Note 5      45,230",
+        "Cost of sales      (28,110)",
+        "Profit for the year      6,120"])
+    page("Consolidated Statement of Financial Position", [
+        "Property, plant and equipment      Note 12      88,400",
+        "Trade receivables      Note 15      12,300",
+        "Cash and cash equivalents      Note 18      9,870",
+        "Total assets      143,900"])
+    page("Consolidated Statement of Cash Flows", [
+        "Net cash from operating activities      14,200",
+        "Net cash used in investing activities      (9,100)"])
+    # 5: notes section opens with a numbered heading, NO 'Notes to…' banner (exercises the
+    #    'first numbered note after the face statements' start rule).
+    page("1 General information", [
+        "The Company is incorporated in the Cayman Islands with limited liability.",
+        "Its shares are listed on The Stock Exchange of Hong Kong Limited."])
+    # 6: a numbered continuation note that mentions a face phrase in prose (must stay NOTES).
+    page("18 Cash and cash equivalents", [
+        "Cash at banks and on hand      9,870",
+        "Amounts are measured at amortised cost; see the statement of profit or loss for interest.",
+        "Short-term deposits      2,400"])
+    c.save()
+    return buf.getvalue()
+
+
 def make_xlsx() -> bytes:
     """A workbook with a negative-number format and a hidden sheet."""
     import openpyxl
