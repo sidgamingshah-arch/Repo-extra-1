@@ -48,9 +48,15 @@ function PageSlot({ documentId, index, picked, pickedRef }: {
   pickedRef: React.MutableRefObject<HTMLDivElement | null>;
 }) {
   const [url, setUrl] = useState<string | null>(null);
-  const [visible, setVisible] = useState(index < 2);   // eagerly load the first pages
-  const holder = useRef<HTMLDivElement | null>(null);
   const isPicked = picked?.page_index === index;
+  // Eagerly load the first pages; also load the picked page immediately (don't wait for the
+  // scroll→IntersectionObserver chain — that's what made far-page click-to-source look dead).
+  const [visible, setVisible] = useState(index < 2 || isPicked);
+  const holder = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (isPicked) setVisible(true);
+  }, [isPicked]);
 
   useEffect(() => {
     const el = holder.current;
@@ -72,12 +78,20 @@ function PageSlot({ documentId, index, picked, pickedRef }: {
     return () => { cancelled = true; if (objUrl) URL.revokeObjectURL(objUrl); };
   }, [visible, documentId, index]);
 
+  // Once the picked page's real image is in (its true height is known), re-center on it so the
+  // highlight lands in view — the first scroll only had the placeholder's height to go on.
+  useEffect(() => {
+    if (isPicked && url && holder.current) {
+      holder.current.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [isPicked, url]);
+
   const b = isPicked ? picked!.bbox : null;
   return (
     <div
       ref={(el) => { holder.current = el; if (isPicked) pickedRef.current = el; }}
       style={{
-        position: "relative", marginBottom: 10, minHeight: url ? undefined : 220,
+        position: "relative", marginBottom: 10,
         border: `1px solid ${isPicked ? color.amberFg : color.hairline3}`,
         borderRadius: 6, overflow: "hidden", background: "#fafbfc",
       }}
@@ -89,7 +103,9 @@ function PageSlot({ documentId, index, picked, pickedRef }: {
       </div>
       {url
         ? <img src={url} alt="" style={{ display: "block", width: "100%" }} />
-        : <div style={{ padding: 24, textAlign: "center", fontSize: 11, color: color.faint }}>…</div>}
+        // Reserve page-shaped space (A4 portrait ≈ 1:1.414) so the panel doesn't grow/shift as
+        // images stream in — a page slot occupies its final footprint before its PNG arrives.
+        : <div style={{ width: "100%", aspectRatio: "1 / 1.414", background: color.rowAltBg }} />}
       {url && b && (
         <div data-testid="prov-highlight" style={{
           position: "absolute",
