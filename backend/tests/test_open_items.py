@@ -311,6 +311,21 @@ def test_credit_narrative_endpoint_is_gated_and_coherent(client):
         assert r.json()["narrative"]
 
 
+# --- #9: Workspace statement rows carry a click-to-source location + doc shape ---------------
+def test_statement_rows_carry_source_and_format(client):
+    doc_id = _upload(client, make_rich_pdf(), "srcstmt.pdf")
+    _extract_and_wait(client, doc_id)
+    s = client.get(f"/api/v1/documents/{doc_id}/statement",
+                   params={"statement": "balance_sheet", "basis": "consolidated"}).json()
+    assert s["format"] == "pdf" and s["page_count"] >= 1
+    items = [r for r in s["rows"] if r.get("kind") == "item"]
+    assert items, "a balance sheet should have item rows"
+    # Every item row exposes its current-period value's provenance so the Workspace's live
+    # viewer can hyperlink it to the source page + bbox.
+    assert any(r.get("source") and r["source"].get("bbox") for r in items), \
+        "item rows should carry a page+bbox source location"
+
+
 # --- #5: native-PDF period-end date detection for column headers ----------------------------
 def test_period_bands_detects_dated_columns():
     from app.core.models.geometry import BBox

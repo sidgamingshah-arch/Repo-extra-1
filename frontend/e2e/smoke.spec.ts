@@ -111,8 +111,11 @@ test("end-to-end: upload a new file â†’ Run integrity check shows real results â
   // Workspace renders the REAL extracted statement (its own line items, real filename).
   await page.goto("/workspace", DCL);
   await expect(page.getByText("Trade receivables").first()).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByText("sample.pdf").first()).toBeVisible();               // real source in the viewer
   await expect(page.getByText("Reliance Industries Ltd")).toHaveCount(0);         // no demo leakage
+  // The left pane is the LIVE document viewer with click-to-source: selecting a row
+  // scrolls the real page in and highlights the value's bounding box.
+  await page.getByText("Trade receivables").first().click();
+  await expect(page.getByTestId("prov-highlight")).toBeVisible({ timeout: 15_000 });
 
   // All Notes reads the REAL document's note references (make_native_pdf cites Note 15).
   await page.goto("/notes", DCL);

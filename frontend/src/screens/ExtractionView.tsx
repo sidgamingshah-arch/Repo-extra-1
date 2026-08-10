@@ -2,32 +2,17 @@
  * provenance. Clicking a PDF value opens a Source panel that renders that page and
  * highlights the value's bounding box. Mapping is against the seeded reference ontology.
  * Distinct from the demo-driven workspace: this reads a live extraction run. */
-import React, { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card } from "../components/ui";
+import { ExcelSourcePanel, PagedSource, toPicked, type Picked } from "../components/SourceViewer";
 import { useT } from "../i18n";
-import { api } from "../lib/api";
-import { useCellContext, useDocumentAnalysis, useExtraction, useOntologies, useTemplates } from "../lib/queries";
+import { useDocumentAnalysis, useExtraction, useOntologies, useTemplates } from "../lib/queries";
 import { useUI } from "../store";
 import { SCREENS } from "./config";
 import { color, font } from "../theme";
 import type { ExtractionProvenance, ExtractionRow, Locale } from "../types";
-
-/** A value's source location, resolved to what the Source panel needs to render it.
- *  PDF sources carry a page + bbox; spreadsheet sources carry a sheet + cell. */
-type Picked =
-  | { kind: "pdf"; page_index: number; bbox: { x0: number; y0: number; x1: number; y1: number }; label: string }
-  | { kind: "xlsx"; sheet: string; cell: string; label: string };
-
-/** Resolve a provenance record to a Picked, or null if it isn't click-to-source-able. */
-function toPicked(p: ExtractionProvenance | null, label: string): Picked | null {
-  if (!p) return null;
-  if (p.source_kind === "spreadsheet" && p.sheet && p.cell)
-    return { kind: "xlsx", sheet: p.sheet, cell: p.cell, label };
-  if (p.bbox) return { kind: "pdf", page_index: p.page_index, bbox: p.bbox, label };
-  return null;
-}
 
 function SourceChip({ p, onPick }: { p: ExtractionProvenance | null; onPick?: () => void }) {
   if (!p) return <span style={{ color: color.faint }}>—</span>;
@@ -95,182 +80,6 @@ function RowLine({ row, t, onPick }: {
       </span>
     </div>
   );
-}
-
-type PdfPick = Extract<Picked, { kind: "pdf" }>;
-type XlsxPick = Extract<Picked, { kind: "xlsx" }>;
-
-/** Shared chrome for a source panel: sticky column with a heading and a card. */
-function PanelShell({ t, children }: { t: (k: string) => string; children: React.ReactNode }) {
-  return (
-    <div style={{ width: 420, flex: "0 0 420px", position: "sticky", top: 0, alignSelf: "flex-start" }}>
-      <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.3, color: color.muted, margin: "0 0 8px" }}>
-        {t("ex.col.source").toUpperCase()}
-      </div>
-      <Card pad={10}>{children}</Card>
-    </div>
-  );
-}
-
-/** One page slot in the scrollable document viewer. Lazily fetches its PNG when it nears
- *  the viewport (so a 200-page filing doesn't fetch every page at once), and draws the
- *  picked value's bounding box when the pick lands on this page. */
-function PageSlot({ documentId, index, picked, pickedRef }: {
-  documentId: string; index: number; picked: PdfPick | null;
-  pickedRef: React.MutableRefObject<HTMLDivElement | null>;
-}) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [visible, setVisible] = useState(index < 2);   // eagerly load the first pages
-  const holder = useRef<HTMLDivElement | null>(null);
-  const isPicked = picked?.page_index === index;
-
-  useEffect(() => {
-    const el = holder.current;
-    if (!el || visible) return;
-    const io = new IntersectionObserver((es) => {
-      if (es.some((e) => e.isIntersecting)) { setVisible(true); io.disconnect(); }
-    }, { rootMargin: "400px" });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [visible]);
-
-  useEffect(() => {
-    if (!visible) return;
-    let objUrl: string | null = null;
-    let cancelled = false;
-    api.fetchPageImage(documentId, index)
-      .then((blob) => { if (!cancelled) { objUrl = URL.createObjectURL(blob); setUrl(objUrl); } })
-      .catch(() => {});
-    return () => { cancelled = true; if (objUrl) URL.revokeObjectURL(objUrl); };
-  }, [visible, documentId, index]);
-
-  const b = isPicked ? picked!.bbox : null;
-  return (
-    <div
-      ref={(el) => { holder.current = el; if (isPicked) pickedRef.current = el; }}
-      style={{
-        position: "relative", marginBottom: 10, minHeight: url ? undefined : 220,
-        border: `1px solid ${isPicked ? color.amberFg : color.hairline3}`,
-        borderRadius: 6, overflow: "hidden", background: "#fafbfc",
-      }}
-    >
-      <div style={{ position: "absolute", top: 4, right: 6, zIndex: 1, fontFamily: font.mono,
-                    fontSize: 9.5, color: color.faint, background: "rgba(255,255,255,0.8)",
-                    borderRadius: 4, padding: "1px 5px" }}>
-        p.{index + 1}
-      </div>
-      {url
-        ? <img src={url} alt="" style={{ display: "block", width: "100%" }} />
-        : <div style={{ padding: 24, textAlign: "center", fontSize: 11, color: color.faint }}>…</div>}
-      {url && b && (
-        <div data-testid="prov-highlight" style={{
-          position: "absolute",
-          left: `${b.x0 * 100}%`, top: `${b.y0 * 100}%`,
-          width: `${(b.x1 - b.x0) * 100}%`, height: `${(b.y1 - b.y0) * 100}%`,
-          border: `2px solid ${color.amberFg}`, background: "rgba(217,164,65,0.22)",
-          borderRadius: 2, boxShadow: "0 0 0 1px rgba(0,0,0,0.05)",
-        }} />
-      )}
-    </div>
-  );
-}
-
-/** The full source document, rendered as a scrollable stack of pages (scroll end to end).
- *  Picking a value scrolls its page into view and highlights the value's bbox. */
-function PagedSource({ documentId, pageCount, picked, t }: {
-  documentId: string; pageCount: number; picked: PdfPick | null; t: (k: string) => string;
-}) {
-  const pickedRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (picked && pickedRef.current) {
-      pickedRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
-  }, [picked?.page_index, picked?.bbox.x0, picked?.bbox.y0]);
-
-  const n = Math.max(1, pageCount);
-  return (
-    <PanelShell t={t}>
-      <div style={{ fontSize: 11, color: color.sec2, marginBottom: 8 }}>
-        {picked ? `${picked.label} · p.${picked.page_index + 1}` : `${n} ${t("ex.pagesLabel")}`}
-      </div>
-      <div style={{ maxHeight: "78vh", overflowY: "auto", paddingRight: 4 }}>
-        {Array.from({ length: n }).map((_, i) => (
-          <PageSlot key={i} documentId={documentId} index={i} picked={picked} pickedRef={pickedRef} />
-        ))}
-      </div>
-    </PanelShell>
-  );
-}
-
-/** Spreadsheet click-to-source: renders a small window of cells around the value's origin
- * with the target cell highlighted — the Excel analogue of the PDF page overlay. */
-function ExcelSourcePanel({ documentId, picked, t }: { documentId: string; picked: XlsxPick | null; t: (k: string) => string }) {
-  const q = useCellContext(documentId, picked?.sheet, picked?.cell);
-  return (
-    <PanelShell t={t}>
-      {!picked && (
-        <div style={{ fontSize: 12, color: color.muted, padding: "24px 8px", textAlign: "center" }}>
-          {t("ex.pickHint")}
-        </div>
-      )}
-      {picked && q.isError && <div style={{ fontSize: 12, color: color.redFg }}>{t("ex.failed")}</div>}
-      {picked && q.isPending && !q.isError && (
-        <div style={{ fontSize: 12, color: color.muted, padding: "18px 8px" }}>{t("ex.running")}</div>
-      )}
-      {picked && q.data && (
-        <>
-          <div style={{ fontSize: 11, color: color.sec2, marginBottom: 8 }}>
-            {picked.label} · <span style={{ fontFamily: font.mono }}>{q.data.sheet}!{q.data.target}</span>
-          </div>
-          <div style={{ overflowX: "auto", border: `1px solid ${color.hairline3}`, borderRadius: 6 }}>
-            <table style={{ borderCollapse: "collapse", fontSize: 10.5, fontFamily: font.mono, width: "100%" }}>
-              <thead>
-                <tr>
-                  <th style={cellSt(false, true)}></th>
-                  {q.data.col_letters.map((c) => (
-                    <th key={c} style={cellSt(false, true)}>{c}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {q.data.grid.map((line, r) => (
-                  <tr key={r}>
-                    <td style={cellSt(false, true)}>{q.data!.row_numbers[r]}</td>
-                    {line.map((cell) => (
-                      <td key={cell.ref}
-                          data-testid={cell.is_target ? "cell-target" : undefined}
-                          title={cell.ref}
-                          style={{
-                            ...cellSt(cell.is_target, false),
-                            textAlign: cell.numeric ? "right" : "left",
-                          }}>
-                        {cell.value.length > 22 ? cell.value.slice(0, 21) + "…" : cell.value}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </PanelShell>
-  );
-}
-
-function cellSt(target: boolean, header: boolean): React.CSSProperties {
-  return {
-    border: `1px solid ${color.hairline2}`,
-    padding: "3px 6px",
-    whiteSpace: "nowrap",
-    maxWidth: 130,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    background: target ? "rgba(217,164,65,0.22)" : header ? color.rowAltBg : undefined,
-    color: header ? color.muted : color.ink,
-    fontWeight: target ? 700 : header ? 600 : 400,
-    outline: target ? `2px solid ${color.amberFg}` : undefined,
-  };
 }
 
 /** Localized heading for a ratio category (backend sends the English category name). */

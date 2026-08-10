@@ -1105,7 +1105,8 @@ def _period_labels(rows: list[dict], basis: str, locale: str) -> list[str]:
 
 def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
                      filename: str, basis: str = "consolidated", locale: str = "en",
-                     units_ctx: dict | None = None, company: str | None = None) -> dict:
+                     units_ctx: dict | None = None, company: str | None = None,
+                     doc_format: str = "", page_count: int = 0) -> dict:
     """Group the real extracted rows into one statement (by the template's sections), so the
     Workspace grid renders real data with its provenance-backed values. Only rows that
     carry a value for the requested `basis` (consolidated / standalone) are shown. Labels are
@@ -1131,6 +1132,9 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
             "confidence": {"cat": cat, "pct": pct}, "editable": True,
             "formula": r.get("formula"), "inspector": _inspector(r, cur),
             "v1": _to_num((cur or {}).get("value")), "v2": _to_num((prior or {}).get("value")),
+            # Structured source location of the current-period value, so the Workspace's live
+            # viewer can hyperlink this row to its page+bbox (PDF) or sheet+cell (Excel).
+            "source": (cur or {}).get("provenance"),
         }
 
     out: list[dict] = []
@@ -1166,6 +1170,8 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         "basis": basis, "periods": _period_labels(rows, basis, locale),
         "currency": (units_ctx or {}).get("currency") or "",
         "currency_symbol": "", "units": (units_ctx or {}).get("units_label") or "",
+        # Document shape so the Workspace picks the right live viewer (PDF pages vs Excel cells).
+        "format": doc_format, "page_count": page_count,
         "rows": out,
         "viewer": {
             "company": company or filename, "subtitle": _t("Extracted statement", locale),
@@ -1200,7 +1206,9 @@ def get_document_statement(
     # basis (empty if the source didn't present that basis).
     return _build_statement(run.result.get("rows", []), template_def, statement,
                             doc.filename or "document", basis, locale,
-                            run.result.get("units"), company=run.result.get("entity"))
+                            run.result.get("units"), company=run.result.get("entity"),
+                            doc_format=run.result.get("format") or doc.fmt or "",
+                            page_count=run.result.get("page_count") or doc.page_count or 0)
 
 
 def _note_no(raw) -> int | None:

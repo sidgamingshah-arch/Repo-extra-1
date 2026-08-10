@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 
 import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
+import { ExcelGrid, PageStack, toPicked, type Picked } from "../components/SourceViewer";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
 import type { Basis, StatementResponse, StatementRow } from "../types";
 import { useDocumentStatement, useEditDocumentLineItem, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
@@ -333,6 +334,8 @@ export default function WorkspaceScreen() {
   const editMut = useEditLineItem();
   const realEditMut = useEditDocumentLineItem(activeDocumentId ?? undefined);
   const realRevertMut = useRevertDocumentLineItem(activeDocumentId ?? undefined);
+  // The value's source location for the live viewer — set when a row is selected (real docs).
+  const [picked, setPicked] = useState<Picked | null>(null);
 
   if (!usingReal && !loaded) return <EmptyState />;
   if (usingReal && realQ.isError) return <EmptyState />;   // uploaded but not extracted yet
@@ -341,6 +344,16 @@ export default function WorkspaceScreen() {
   }
 
   const d: StatementResponse = data;
+  // Selecting a row also drives the live source viewer: resolve the row's provenance to a pick
+  // so the document scrolls to and highlights the value's page+bbox (PDF) or cell (Excel).
+  const handleSelect = (id: string) => {
+    selRow(id);
+    if (usingReal) {
+      const row = d.rows.find((r) => r.id === id);
+      const p = toPicked(row?.source ?? null, row?.label ?? "");
+      if (p) setPicked(p);
+    }
+  };
   const lowConfCount = d.rows.filter((r) => r.confidence?.cat === "low").length;
   const selRowObj = d.rows.find((r) => r.id === sel) ?? d.rows.find((r) => r.inspector);
   const insp = selRowObj?.inspector;
@@ -477,6 +490,17 @@ export default function WorkspaceScreen() {
               <span style={{ cursor: "pointer" }}>+</span>
             </div>
           </div>
+          {usingReal && d.format === "pdf" && activeDocumentId ? (
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12, background: "#e9ebef" }}>
+              <PageStack documentId={activeDocumentId} pageCount={d.page_count ?? 1}
+                         picked={picked?.kind === "pdf" ? picked : null} maxHeight="100%" />
+            </div>
+          ) : usingReal && (d.format === "xlsx" || d.format === "xls") && activeDocumentId ? (
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12, background: "#fff" }}>
+              <ExcelGrid documentId={activeDocumentId}
+                         picked={picked?.kind === "xlsx" ? picked : null} t={t} />
+            </div>
+          ) : (
           <div style={{ flex: 1, overflow: "auto", padding: 22, display: "flex", justifyContent: "center" }}>
             <div
               style={{
@@ -529,6 +553,7 @@ export default function WorkspaceScreen() {
               </div>
             </div>
           </div>
+          )}
         </div>
 
         {/* -------- RIGHT: output panel -------- */}
@@ -568,7 +593,7 @@ export default function WorkspaceScreen() {
           {/* scroll body */}
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {d.rows.map((r) => (
-              <OutputRow key={r.id} row={r} sel={sel} onSelect={selRow}
+              <OutputRow key={r.id} row={r} sel={sel} onSelect={handleSelect}
                          onEdit={editable ? selForEdit : () => {}} onOpenNote={openNote} />
             ))}
           </div>

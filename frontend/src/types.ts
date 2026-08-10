@@ -160,6 +160,7 @@ export interface StatementRow {
   inspector?: Inspector;
   v1: number | null;
   v2: number | null;
+  source?: ExtractionProvenance | null;  // real docs: current-period value's source location
 }
 
 export interface ViewerMeta {
@@ -179,6 +180,8 @@ export interface StatementResponse {
   units: string;
   rows: StatementRow[];
   viewer: ViewerMeta;
+  format?: string;       // real docs: "pdf" | "xlsx" | … → chooses the live source viewer
+  page_count?: number;   // real docs: page count for the PDF viewer
 }
 
 export interface Project {
