@@ -556,6 +556,66 @@ def get_document_analysis(document_id: str, locale: str = Query("en"),
     }
 
 
+@router.post("/{document_id}/credit-narrative",
+             dependencies=[Depends(require(Permission.ANALYSIS_RUN)), Depends(authorized_document)])
+def run_credit_narrative_endpoint(document_id: str, locale: str = Query("en"),
+                                  session: Session = Depends(db)) -> dict:
+    """Generate an LLM credit narrative that rationalises the deterministic credit view.
+
+    The numbers stay deterministic — the model is given the already-computed stance, rating
+    factors and report signals and only writes grounded prose (see analysis_llm.CREDIT_SYSTEM).
+    Requires a real LLM provider (config ``llm.provider``); returns 409 when none is configured
+    so the caller can keep using the deterministic summary. The run is written to the audit log."""
+    from app.config import get_settings
+    from app.ports.registry import registry as reg
+    from app.services import audit as audit_svc
+    from app.services.analysis_llm import run_credit_narrative
+    from app.services.derived import build_credit_analysis, localize_disclosures
+
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        raise HTTPException(status_code=404, detail="No extraction run yet for this document")
+
+    rows = run.result.get("rows", [])
+    disclosures = localize_disclosures(run.result.get("disclosures", []), locale)
+    credit = build_credit_analysis(rows, disclosures, locale=locale)
+    if not credit.get("factors") and not credit.get("flags"):
+        raise HTTPException(status_code=422,
+                            detail="Insufficient extracted data for a credit narrative")
+
+    settings = get_settings()
+    provider_id = settings.llm.provider
+    entity = run.result.get("entity") or run.result.get("filename") or ""
+    run_id = audit_svc.make_run_id(entity or "credit")
+    if provider_id == "stub":
+        raise HTTPException(
+            status_code=409,
+            detail="No LLM provider configured. Set llm.provider (e.g. 'anthropic') to enable "
+                   "the credit narrative; the deterministic credit summary remains available.")
+
+    try:
+        provider = reg.get("llm", provider_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        result, meta = run_credit_narrative(provider, credit, entity=entity, locale=locale,
+                                            max_tokens=settings.llm.max_tokens)
+    except Exception as exc:  # provider unreachable / no key / bad response
+        audit_svc.record(document_id, audit_svc.AuditEntry(
+            run_id=run_id, entity=entity, action="credit_narrative", provider=provider_id,
+            model=settings.llm.model, input_tokens=None, output_tokens=None, status="failed"))
+        raise HTTPException(status_code=502, detail=f"Credit narrative failed: {exc}") from exc
+
+    audit_svc.record(document_id, audit_svc.AuditEntry(
+        run_id=run_id, entity=entity, action="credit_narrative", provider=provider_id,
+        model=meta.get("model", settings.llm.model),
+        input_tokens=meta.get("input_tokens"), output_tokens=meta.get("output_tokens"),
+        status="succeeded"))
+    return {"narrative": result.narrative, "provider": provider_id,
+            "model": meta.get("model", settings.llm.model)}
+
+
 def _localize_commentary(c: dict, locale: str) -> dict:
     """Localize a commentary payload's fixed catalog strings (headline/assessment/points and
     metric/trend labels) via the i18n table — the same table the demo path uses."""

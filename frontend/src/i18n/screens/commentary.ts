@@ -32,6 +32,10 @@ export const commentary: Record<Locale, Record<string, string>> = {
     "cm.creditFlags": "Report signals",
     "cm.creditNoFlags": "No adverse narrative signals found in the report.",
     "cm.creditPage": "p.",
+    "cm.creditNarrative": "Narrative",
+    "cm.creditGenerate": "✦ Generate narrative",
+    "cm.creditGenerating": "Generating…",
+    "cm.creditNarrativeErr": "Couldn't generate the narrative",
   },
   zh: {
     "cm.title": "财务分析",
@@ -64,6 +68,10 @@ export const commentary: Record<Locale, Record<string, string>> = {
     "cm.creditFlags": "年报信号",
     "cm.creditNoFlags": "年报中未发现不利的叙述性信号。",
     "cm.creditPage": "第",
+    "cm.creditNarrative": "叙述评述",
+    "cm.creditGenerate": "✦ 生成叙述评述",
+    "cm.creditGenerating": "生成中…",
+    "cm.creditNarrativeErr": "无法生成叙述评述",
   },
   ar: {
     "cm.title": "التحليل المالي",
@@ -96,6 +104,10 @@ export const commentary: Record<Locale, Record<string, string>> = {
     "cm.creditFlags": "إشارات التقرير",
     "cm.creditNoFlags": "لم تُرصد إشارات سردية سلبية في التقرير.",
     "cm.creditPage": "ص.",
+    "cm.creditNarrative": "السرد التحليلي",
+    "cm.creditGenerate": "✦ توليد السرد",
+    "cm.creditGenerating": "جارٍ التوليد…",
+    "cm.creditNarrativeErr": "تعذّر توليد السرد",
   },
   fr: {
     "cm.title": "Analyse financière",
@@ -128,5 +140,9 @@ export const commentary: Record<Locale, Record<string, string>> = {
     "cm.creditFlags": "Signaux du rapport",
     "cm.creditNoFlags": "Aucun signal narratif défavorable trouvé dans le rapport.",
     "cm.creditPage": "p.",
+    "cm.creditNarrative": "Note narrative",
+    "cm.creditGenerate": "✦ Générer la note",
+    "cm.creditGenerating": "Génération…",
+    "cm.creditNarrativeErr": "Impossible de générer la note",
   },
 };

@@ -268,6 +268,49 @@ def test_analysis_endpoint_includes_credit(client):
     assert isinstance(a["credit"]["factors"], list)
 
 
+def test_credit_narrative_runner_grounds_on_factors():
+    """The LLM narrative pass feeds the deterministic factors/flags to the provider and
+    returns its prose — the numbers are never re-derived by the model."""
+    from app.services.analysis_llm import CreditNarrative, run_credit_narrative
+    from app.services.derived import build_credit_analysis
+
+    rows = [
+        _cval("bs_current_assets__total_current_assets", 300),
+        _cval("bs_current_liabilities__total_current_liabilities", 100),
+    ]
+    credit = build_credit_analysis(rows, [])
+
+    seen = {}
+
+    class FakeProvider:
+        id = "fake"
+
+        def complete_structured(self, *, system, messages, response_schema, temperature=0.0, max_tokens=2048):
+            seen["system"] = system
+            seen["user"] = messages[0]["content"]
+            return response_schema(narrative="Adequate liquidity underpins the profile."), {
+                "model": "fake-1", "input_tokens": 12, "output_tokens": 8}
+
+    result, meta = run_credit_narrative(FakeProvider(), credit, entity="Acme Ltd")
+    assert isinstance(result, CreditNarrative) and result.narrative
+    assert meta["model"] == "fake-1"
+    # The provider was handed the computed factor (Current ratio), not raw statements.
+    assert "Current ratio" in seen["user"]
+    assert "credit analyst" in seen["system"].lower()
+
+
+def test_credit_narrative_endpoint_is_gated_and_coherent(client):
+    # Environment-agnostic: a real provider + key → 200 with a narrative; a stub provider →
+    # 409; a configured-but-unreachable provider (no key) → 502; insufficient data → 422.
+    # The point is a clean, actionable status in every case — never a 500 or a permission error.
+    doc_id = _upload(client, make_rich_pdf(), "narr.pdf")
+    _extract_and_wait(client, doc_id)
+    r = client.post(f"/api/v1/documents/{doc_id}/credit-narrative")
+    assert r.status_code in (200, 409, 422, 502), r.status_code
+    if r.status_code == 200:
+        assert r.json()["narrative"]
+
+
 # --- Item B: delete uploaded documents ------------------------------------------------------
 def test_delete_document_removes_it_and_its_runs(client):
     doc_id = _upload(client, make_rich_pdf(), "to-delete.pdf")

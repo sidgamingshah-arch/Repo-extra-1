@@ -194,6 +194,10 @@ export const api = {
   },
   deleteDocument: (id: string) =>
     req<void>(`/documents/${id}`, { method: "DELETE" }),
+  /** Generate an LLM credit narrative that rationalises the deterministic credit view. */
+  creditNarrative: (id: string, locale: Locale = "en") =>
+    req<{ narrative: string; provider: string; model: string }>(
+      `/documents/${id}/credit-narrative?locale=${locale}`, { method: "POST" }),
   integrity: (locale: Locale = "en") =>
     req<IntegrityResponse>(`/projects/${PROJECT}/integrity?locale=${locale}`),
   pages: (locale: Locale = "en") =>

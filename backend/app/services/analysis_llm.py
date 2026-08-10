@@ -110,3 +110,62 @@ def run_analysis(provider: LlmProvider, data: dict, *, max_tokens: int = 4096) -
         system=SYSTEM, messages=messages, response_schema=Result, max_tokens=max_tokens,
     )
     return result, meta  # type: ignore[return-value]
+
+
+# --- Credit-narrative LLM pass ----------------------------------------------------------
+# A short qualitative narrative that RATIONALISES the already-computed deterministic credit
+# view (stance + rating factors + report signals). The model is told to ground itself only in
+# the supplied factors/flags and never invent figures — the numbers stay deterministic; the
+# LLM only writes the prose. Off unless a real provider is configured (see the endpoint).
+
+class CreditNarrative(BaseModel):
+    narrative: str = Field(description="A concise 3–5 sentence credit narrative grounded ONLY "
+                                       "in the supplied factors and report signals. No new numbers.")
+
+
+_LOCALE_NAME = {"en": "English", "zh": "Simplified Chinese", "ar": "Arabic", "fr": "French"}
+
+CREDIT_SYSTEM = (
+    "You are a credit analyst. You are given a company's already-computed credit assessment: "
+    "an overall stance, a set of rating factors (each with a value and a strong/adequate/weak "
+    "rating), and narrative signals scanned from its annual report (e.g. going concern, "
+    "qualified audit opinion, contingent liabilities, guarantees, litigation).\n"
+    "Write a concise 3–5 sentence credit narrative that explains the assessment: lead with the "
+    "overall stance, cite the main supporting and constraining factors by name, and call out any "
+    "report signals and their implication for creditworthiness.\n"
+    "Use ONLY the figures and facts provided — never invent line items, numbers, or events. Do "
+    "not give investment advice. Write plainly and objectively."
+)
+
+
+def build_credit_payload(credit: dict, *, entity: str = "", locale: str = "en") -> dict:
+    return {
+        "entity": entity or "the company",
+        "output_language": _LOCALE_NAME.get(locale, "English"),
+        "overall_stance": credit.get("stance_label"),
+        "deterministic_summary": credit.get("summary"),
+        "rating_factors": [
+            {"category": f.get("category"), "metric": f.get("label"),
+             "value": f.get("display"), "rating": f.get("tone_label")}
+            for f in credit.get("factors", [])
+        ],
+        "report_signals": [
+            {"signal": fl.get("label"), "implication": fl.get("implication"),
+             "report_page": fl.get("page")}
+            for fl in credit.get("flags", [])
+        ],
+    }
+
+
+def run_credit_narrative(provider: LlmProvider, credit: dict, *, entity: str = "",
+                         locale: str = "en", max_tokens: int = 700) -> tuple[CreditNarrative, LlmMeta]:
+    """Call the provider for a grounded credit narrative; returns (narrative, token-usage meta)."""
+    payload = build_credit_payload(credit, entity=entity, locale=locale)
+    messages = [{"role": "user", "content":
+                 "Write the credit narrative for the following assessment. Respond in "
+                 f"{payload['output_language']}.\n\n" + json.dumps(payload, indent=2, ensure_ascii=False)}]
+    result, meta = provider.complete_structured(
+        system=CREDIT_SYSTEM, messages=messages, response_schema=CreditNarrative,
+        max_tokens=max_tokens,
+    )
+    return result, meta  # type: ignore[return-value]

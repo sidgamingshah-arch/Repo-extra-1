@@ -157,6 +157,14 @@ export function useUploadDocument() {
   });
 }
 
+/** Generate an LLM credit narrative for a document (on-demand; the deterministic credit
+ * view is always available regardless). */
+export function useCreditNarrative() {
+  return useMutation({
+    mutationFn: ({ id, locale }: { id: string; locale: Locale }) => api.creditNarrative(id, locale),
+  });
+}
+
 /** Delete an uploaded document (owner/admin). Refreshes the list and clears the active
  * document when it's the one removed, so the pipeline steps fall back cleanly. */
 export function useDeleteDocument() {

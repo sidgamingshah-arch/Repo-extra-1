@@ -3,15 +3,15 @@
 import { Card, ScreenHeader } from "../components/ui";
 import { useT } from "../i18n";
 import {
-  useAudit, useCommentary, useDocumentAnalysis, useDocumentCommentary, useProjectLoaded,
-  useRunAnalysis,
+  useAudit, useCommentary, useCreditNarrative, useDocumentAnalysis, useDocumentCommentary,
+  useProjectLoaded, useRunAnalysis,
 } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { useCan } from "../lib/rbac";
 import { useAppLocale, useUI } from "../store";
 import { color, fmtIN, font, radius } from "../theme";
 import type {
-  AuditEntry, CommentaryMetric, CommentaryTrend, CreditAnalysis, CreditTone,
+  AuditEntry, CommentaryMetric, CommentaryTrend, CreditAnalysis, CreditTone, Locale,
 } from "../types";
 
 function toneColors(tone: CommentaryMetric["tone"]): { fg: string; bg: string } {
@@ -176,20 +176,64 @@ function creditTone(tone: CreditTone | "insufficient"): { fg: string; bg: string
 }
 
 /** Detailed credit view (#12): stance + rating factors from the extracted ratios, plus
- *  narrative signals scanned from the annual report. Shown only for a real document. */
-function CreditPanel({ credit, t }: { credit: CreditAnalysis; t: (k: string) => string }) {
+ *  narrative signals scanned from the annual report. Shown only for a real document. An
+ *  optional LLM narrative rationalises the deterministic view on demand. */
+function CreditPanel({
+  credit, docId, locale, canRun, t,
+}: {
+  credit: CreditAnalysis;
+  docId: string;
+  locale: Locale;
+  canRun: boolean;
+  t: (k: string) => string;
+}) {
   const banner = creditTone(credit.stance);
+  const narrative = useCreditNarrative();
   return (
     <Card style={{ marginBottom: 16, borderLeft: `3px solid ${banner.bar}` }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>{t("cm.credit")}</div>
-        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: radius.pill,
-                       background: banner.bg, color: banner.fg }}>
-          {t("cm.creditStance")}: {credit.stance_label}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {canRun && (
+            <button
+              onClick={() => narrative.mutate({ id: docId, locale })}
+              disabled={narrative.isPending}
+              style={{
+                fontSize: 11, fontWeight: 600, color: color.indigo, background: "#fff",
+                border: `1px solid ${color.indigoBorder2}`, borderRadius: 8, padding: "4px 10px",
+                cursor: narrative.isPending ? "default" : "pointer",
+              }}
+            >
+              {narrative.isPending ? t("cm.creditGenerating") : t("cm.creditGenerate")}
+            </button>
+          )}
+          <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: radius.pill,
+                         background: banner.bg, color: banner.fg }}>
+            {t("cm.creditStance")}: {credit.stance_label}
+          </span>
+        </div>
       </div>
       <div style={{ fontSize: 11.5, color: color.muted, marginBottom: 12 }}>{t("cm.creditHint")}</div>
       <div style={{ fontSize: 12.5, color: color.sec, lineHeight: 1.6, marginBottom: 14 }}>{credit.summary}</div>
+
+      {/* Optional LLM narrative (grounded in the deterministic factors/flags above). */}
+      {narrative.data && (
+        <div data-testid="credit-narrative"
+             style={{ marginBottom: 14, padding: "12px 14px", background: color.indigoTint,
+                      border: `1px solid ${color.indigoBorder}`, borderRadius: 9 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, color: color.indigo, marginBottom: 6 }}>
+            {t("cm.creditNarrative").toUpperCase()} · {narrative.data.model}
+          </div>
+          <div style={{ fontSize: 12.5, color: color.ink, lineHeight: 1.6 }}>{narrative.data.narrative}</div>
+        </div>
+      )}
+      {narrative.isError && (
+        <div style={{ marginBottom: 14, padding: "10px 13px", background: color.amberBg,
+                      border: `1px solid ${color.amberBg}`, borderRadius: 9, fontSize: 11.5, color: color.amberFg }}>
+          <b>{t("cm.creditNarrativeErr")}.</b>{" "}
+          <span style={{ fontFamily: font.mono, fontSize: 10.5 }}>{(narrative.error as Error)?.message}</span>
+        </div>
+      )}
 
       {credit.factors.length > 0 && (
         <>
@@ -264,7 +308,8 @@ export default function CommentaryScreen() {
   const isPending = usingReal ? realC.isPending : demoC.isPending;
   // The live-LLM run is a demo-only showcase; real-document commentary is deterministic and
   // data-driven, so the "generate" button is offered only on the demo project.
-  const canGenerate = useCan("analysis:run") && !usingReal;
+  const canRunLLM = useCan("analysis:run");
+  const canGenerate = canRunLLM && !usingReal;
   const runAnalysis = useRunAnalysis();
 
   if (!usingReal && !loaded) return <EmptyState />;
@@ -361,8 +406,10 @@ export default function CommentaryScreen() {
       </div>
 
       {/* Detailed credit analysis (real documents): ratios + annual-report signals */}
-      {usingReal && credit && (credit.factors.length > 0 || credit.flags.length > 0) && (
-        <CreditPanel credit={credit} t={t} />
+      {usingReal && activeDocumentId && credit &&
+        (credit.factors.length > 0 || credit.flags.length > 0) && (
+        <CreditPanel credit={credit} docId={activeDocumentId} locale={locale}
+                     canRun={canRunLLM} t={t} />
       )}
 
       {/* Data quality */}
