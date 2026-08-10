@@ -90,9 +90,13 @@ def extract_pdf(data: bytes, doc, ctx: PipelineContext) -> int:
                                          document_id=doc.content_hash, source_kind=source_kind)
             doc.notes.extend(tables)
             continue
+        # ``ps.statement`` (from the classifier) is what tells the reconstructor that a page is a
+        # component matrix rather than a two-column comparative; ``ctx.log`` records the cases
+        # where a matrix page could not be attributed and was skipped.
         items, ordinal = build_line_items(
             words, page_index=ps.index, document_id=doc.content_hash,
-            source_kind=source_kind, ordinal_start=ordinal, number_format=number_format)
+            source_kind=source_kind, ordinal_start=ordinal, number_format=number_format,
+            statement=ps.statement, log=ctx.log)
         doc.line_items.extend(items)
         added += len(items)
     ctx.log(f"extract:pdf_line_items={added} note_tables={len(doc.notes)}")

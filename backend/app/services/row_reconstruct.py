@@ -6,10 +6,19 @@ rows, separates label / note-ref / value columns, and emits ``LineItem``s whose
 ``ExtractedValue.provenance`` carries the page + normalized bbox — so click-to-source works
 identically whether the value came from a text layer or from OCR. Values are read here
 (deterministically); semantic mapping to canonical concepts happens later.
+
+Two layouts are handled. Most statement faces are *two-column comparatives* (current / prior,
+optionally × consolidated / standalone). A statement of changes in equity is a *matrix*: its
+columns are equity components (share capital, share premium, each reserve, retained profits,
+total, non-controlling interests, total equity) and its rows are movements. Reading a matrix
+with the two-column reconstruction produces nonsense — the columns are attributed to periods
+that do not exist and the movement date is read as a value — so it gets its own path
+(``_detect_matrix`` … ``_matrix_items``) that names every column from the header band.
 """
 from __future__ import annotations
 
 import re
+import statistics
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
@@ -281,11 +290,17 @@ def _merge_wrapped_labels(rows: list[list[Word]], fmt=None) -> list[list[Word]]:
     return out
 
 
-def _wrap_adjacent(cur: BBox, nxt: BBox, nxt_label: list[Word]) -> bool:
-    """True when `cur` sits directly above `nxt`'s label with paragraph-tight spacing."""
+def _tight_below(cur: BBox, nxt: BBox) -> bool:
+    """True when `nxt` is the next printed line of the same text block as `cur` — the vertical
+    half of the wrap test, also used to walk a stacked column-header band line by line."""
     gap = nxt.y0 - cur.y1
     line_h = max(cur.y1 - cur.y0, 1e-4)
-    if gap > 0.6 * line_h or gap < -0.5 * line_h:        # tight spacing (same text block)
+    return -0.5 * line_h <= gap <= 0.6 * line_h
+
+
+def _wrap_adjacent(cur: BBox, nxt: BBox, nxt_label: list[Word]) -> bool:
+    """True when `cur` sits directly above `nxt`'s label with paragraph-tight spacing."""
+    if not _tight_below(cur, nxt):                       # tight spacing (same text block)
         return False
     label_x0 = min((w.bbox.x0 for w in nxt_label), default=nxt.x0)
     return abs(cur.x0 - label_x0) <= 0.06                # left-aligned in the label column
@@ -421,15 +436,385 @@ def _period_for(x: float, bands: list[tuple[str, float]]) -> str | None:
     return min(bands, key=lambda b: abs(b[1] - x))[0]
 
 
+# ── Matrix statements (consolidated statement of changes in equity) ──────────────────────
+#
+# A matrix face has one value column per equity COMPONENT, captioned by a bilingual header band
+# ("Share" / "premium" / "account" / "股份" / "溢價賬" stacked over the column). Detection is
+# geometric so a mis-classified page still parses: ≥5 value columns on ≥3 rows is a layout no
+# two-column comparative produces (four columns is the maximum there — 2 bases × 2 periods).
+_MATRIX_MIN_COLS = 5
+_MATRIX_MIN_ROWS = 3
+# Value cells are RIGHT-aligned in a printed statement, so a column's right edge is its stable
+# anchor (a cell's centre drifts with the width of the number in it).
+_COL_TOL = 0.012
+# Footnote markers hang off reserve columns ("(3,596,236)*", "–*"). Left in place the token
+# simply fails to parse and the column silently loses its value.
+_FOOTMARK = re.compile(r"[*†#‡]+$")
+_NIL_CELL = re.compile(r"^[-–—−]$")
+# Header tokens that caption the units or the note reference for a column, not the component.
+_UNITS_TOKEN = re.compile(r"[’'`]0{3}|千元|百萬元|億元|亿元|thousands?|millions?|billions?|"
+                          r"lakhs?|crores?", re.IGNORECASE)
+_NOTE_TOKEN = re.compile(r"note|附註|附注", re.IGNORECASE)
+
+
+def _xc(w: Word) -> float:
+    return (w.bbox.x0 + w.bbox.x1) / 2
+
+
+def _median(xs: list[float]) -> float:
+    return statistics.median(xs) if xs else 0.0
+
+
+def _line_tol(words: list[Word]) -> float:
+    """Row-clustering tolerance for a matrix, derived from the page's own line height.
+
+    The default tolerance is deliberately generous so a slightly skewed scan still groups; in a
+    matrix that generosity merges *adjacent* movement lines, which interleaves two captions and
+    shifts every figure onto the wrong row. Half a line height keeps the lines apart.
+    """
+    hs = [w.bbox.y1 - w.bbox.y0 for w in words]
+    return max(0.45 * _median(hs), 0.001)
+
+
+def _cell_text(t: str) -> str:
+    return _FOOTMARK.sub("", t.strip())
+
+
+def _matrix_cells(row: list[Word], fmt=None) -> list[Word]:
+    """The value-shaped tokens of a row. A nil dash counts: it carries no amount but it does
+    mark a column position, which is what the column geometry is derived from."""
+    out: list[Word] = []
+    for w in row:
+        t = _cell_text(w.text)
+        if _NIL_CELL.match(t) or _num(t, fmt) is not None:
+            out.append(w)
+    return out
+
+
+def _strong_cells(cells: list[Word], fmt=None) -> int:
+    """How many cells are a real amount or a nil dash — i.e. not a bare 1–2 digit integer.
+    A footnote line that prints a figure one digit per glyph ("9 , 3 5 8 , 6 1 1 , 0 0 0",
+    as bilingual filings do) lands digits in the value columns; requiring a majority of real
+    amounts keeps that line out of the matrix."""
+    return sum(1 for w in cells
+               if _NIL_CELL.match(_cell_text(w.text))
+               or _is_money_like(_cell_text(w.text), fmt))
+
+
+@dataclass
+class _Matrix:
+    rows: list[list[Word]]
+    bands: list[tuple[float, float]]     # (left, right) x-extent of each component column
+    first_data: int                      # row index of the first movement row
+    pitch: float                         # median column pitch, the scale for header heuristics
+
+
+def _pitch(edges: list[float]) -> float:
+    return _median([edges[i + 1] - edges[i] for i in range(len(edges) - 1)]) or 1.0
+
+
+def _detect_matrix(rows: list[list[Word]], fmt=None) -> _Matrix | None:
+    """Geometry of a matrix face, or None when the page is not one.
+
+    Columns come from the value rows themselves (clustered right edges) rather than from the
+    header, because the header is what we then have to *attribute* to them — deriving both from
+    the header would let a missing caption invent a column.
+    """
+    data_idx: list[int] = []
+    cells_by_row: dict[int, list[Word]] = {}
+    for i, row in enumerate(rows):
+        cells = _matrix_cells(row, fmt)
+        if len(cells) >= _MATRIX_MIN_COLS and _strong_cells(cells, fmt) * 2 >= len(cells):
+            data_idx.append(i)
+            cells_by_row[i] = cells
+    if len(data_idx) < _MATRIX_MIN_ROWS:
+        return None
+
+    groups: list[list[float]] = []
+    for e in sorted(w.bbox.x1 for i in data_idx for w in cells_by_row[i]):
+        if groups and e - groups[-1][-1] <= _COL_TOL:
+            groups[-1].append(e)
+        else:
+            groups.append([e])
+    # A column of the matrix appears on most rows. A one-off cluster is a date fragment in a
+    # label ("At 1 January 2022") or an inline note reference, not a column.
+    min_support = max(2, (len(data_idx) + 2) // 3)
+    edges = [_median(g) for g in groups if len(g) >= min_support]
+    if len(edges) < _MATRIX_MIN_COLS:
+        return None
+    # Trim clusters standing off on their own — a note column, or label digits that happened to
+    # line up — so the value area is the evenly pitched run of component columns.
+    while len(edges) > _MATRIX_MIN_COLS and edges[1] - edges[0] > 2.5 * _pitch(edges):
+        edges.pop(0)
+    while len(edges) > _MATRIX_MIN_COLS and edges[-1] - edges[-2] > 2.5 * _pitch(edges):
+        edges.pop()
+    pitch = _pitch(edges)
+    bands = [(edges[0] - pitch if k == 0 else edges[k - 1], edges[k])
+             for k in range(len(edges))]
+    return _Matrix(rows=rows, bands=bands, first_data=data_idx[0], pitch=pitch)
+
+
+def _band_of(w: Word, bands: list[tuple[float, float]]) -> int | None:
+    """The component column this word sits in, by x-centre — the same banding idea
+    ``_period_bands``/``_basis_bands`` use for periods and bases."""
+    xc = _xc(w)
+    for k, (left, right) in enumerate(bands):
+        if left < xc <= right:
+            return k
+    return None
+
+
+def _x_runs(row: list[Word], gap: float) -> list[list[Word]]:
+    """Split a header row into horizontally contiguous phrases. A caption sits inside one
+    column with clear air on both sides; a *spanner* ("Attributable to owners of the parent")
+    is one tight phrase laid across several columns and must not be read as any of their names.
+    """
+    runs: list[list[Word]] = []
+    for w in row:
+        if runs and w.bbox.x0 - runs[-1][-1].bbox.x1 <= gap:
+            runs[-1].append(w)
+        else:
+            runs.append([w])
+    return runs
+
+
+def _caption_words(row: list[Word], m: _Matrix) -> dict[int, list[Word]]:
+    """The words of one header row that genuinely caption a single column, keyed by column."""
+    out: dict[int, list[Word]] = {}
+    # Word spacing scales with the column width, so the "clear air" that separates two captions
+    # is measured against the pitch rather than a fixed fraction of the page.
+    for run in _x_runs(row, max(0.004, 0.15 * m.pitch)):
+        spanned = {b for b in (_band_of(w, m.bands) for w in run) if b is not None}
+        if len(spanned) >= 2 and len(run) >= 3:      # a group spanner, not a column caption
+            continue
+        for w in run:
+            if w.bbox.x1 - w.bbox.x0 > m.pitch:      # too wide to belong to one column
+                continue
+            if _UNITS_TOKEN.search(w.text) or _NOTE_TOKEN.search(w.text):
+                continue
+            k = _band_of(w, m.bands)
+            if k is not None:
+                out.setdefault(k, []).append(w)
+    return out
+
+
+def _join_caption(parts: list[str]) -> str:
+    """Join caption fragments, honouring the hyphen a printed column header wraps on
+    ("Non-" / "controlling" / "interests" is one word plus two, not three)."""
+    text = ""
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if text and not text.endswith("-"):
+            text += " "
+        text += p
+    return text.strip()
+
+
+def _matrix_column_names(m: _Matrix) -> list[str] | None:
+    """Name every component column from the header band, or None if that cannot be done.
+
+    Returns None rather than a partial answer: a column we cannot name is a column whose figures
+    we cannot attribute, and a made-up or duplicated name would silently merge two components.
+    """
+    per_row = [_caption_words(m.rows[i], m) for i in range(m.first_data)]
+    # The header band is anchored by the rows that caption most columns at once (the last line
+    # of the English captions, the Chinese line, the units line).
+    anchor = [i for i, caps in enumerate(per_row)
+              if len(caps) >= max(3, (len(m.bands) + 1) // 2)]
+    if not anchor:
+        return None
+    start, end = min(anchor), max(anchor)
+    # A three-line caption ("Share" / "premium" / "account") puts its first line ABOVE the row
+    # that names every column, so extend upward through tightly spaced lines that caption
+    # something — but no further, or the statement title and the group spanner join the names.
+    while (start > 0 and per_row[start - 1]
+           and _tight_below(_row_box(m.rows[start - 1]), _row_box(m.rows[start]))):
+        start -= 1
+
+    names: list[str] = []
+    for k in range(len(m.bands)):
+        words = [w for i in range(start, end + 1) for w in per_row[i].get(k, [])]
+        latin = [w.text for w in words if re.search(r"[A-Za-z]", w.text)]
+        # Prefer the English caption as the key; a Chinese-only filing keeps its own wording.
+        name = _join_caption(latin) or _join_caption([w.text for w in words])
+        if not name:
+            return None
+        names.append(name)
+    return names if len(set(names)) == len(names) else None
+
+
+def _heads_indented_block(words: list[Word]) -> bool:
+    """A caption that HEADS the indented rows beneath it rather than wrapping into the next
+    valued row — "Other comprehensive income/(loss) for the year:" and its CJK twin ending in
+    the fullwidth colon. Gluing such a caption onto the first row below it corrupts that label.
+    """
+    if _looks_like_header(words):
+        return True
+    return " ".join(w.text for w in words).strip().endswith(("：", "﹕"))
+
+
+def _matrix_basis(words: list[Word]) -> Basis:
+    """One basis for the whole matrix. Its columns are components, so the Consolidated/Standalone
+    banding used for comparatives would read them as bases and split the row apart."""
+    text = " ".join(w.text for w in words)
+    if _STANDALONE.search(text) and not _CONSOL.search(text):
+        return Basis.STANDALONE
+    return Basis.CONSOLIDATED
+
+
+def _is_matrix_noise(label: str, row_text: str, vals: list) -> bool:
+    """A running header / page footer / statement title whose stray year landed in a value column.
+
+    Deliberately laxer than ``_is_noise_row`` in one respect: a period-only label is *not* noise
+    here, because "At 1 January 2023" / "於二零二三年一月一日" IS the opening-balance movement
+    row. Chrome is recognised instead from the whole printed line — the page footer's company
+    name sits in the label column while its "Annual Report 2023" sits over the value columns.
+    """
+    if _RUNNING_HDR.search(row_text):
+        return True
+    if not vals or not all(_is_date_ish(v) for v in vals):
+        return False
+    return bool(_HDR_LABEL.search(label)) or _is_period_only_label(label)
+
+
+def _matrix_items(m: _Matrix, names: list[str], *, page_index: int, document_id: str | None,
+                  source_kind: str, ordinal_start: int,
+                  fmt=None) -> tuple[list[LineItem], int]:
+    """One LineItem per MOVEMENT ROW, its values keyed by component-column name.
+
+    Why one item per row rather than one per cell: ``LineItem.values`` is already a dict keyed by
+    ``ValueKey(basis, period_end, period_label)``, so a single row holds as many named values as
+    it has columns, and ``_serialize_rows`` ships ``period_label`` + ``period_display`` per value
+    — the API and the statement view therefore render named component columns with no change
+    downstream (``excel_extract`` already puts real column-header text in ``period_label``).
+    One item per cell would multiply a 14-column statement into ~200 rows, destroy the row
+    ordering the statement view relies on, and flood mapping with duplicate labels.
+
+    The positional "current"/"prior" keys are deliberately NOT used: a component is not a period,
+    and labelling it so would feed equity components into period-over-period arithmetic.
+    """
+    items: list[LineItem] = []
+    ordinal = ordinal_start
+    basis = _matrix_basis([w for row in m.rows for w in row])
+    value_left = m.bands[0][0]
+    pending: list[Word] = []                 # label lines waiting for the row that has figures
+    tail: BBox | None = None                 # box of the LAST pending line, for the wrap test
+    for i in range(m.first_data, len(m.rows)):
+        row = m.rows[i]
+        label_words = [w for w in row if _xc(w) <= value_left]
+        cells = [w for w in _matrix_cells(row, fmt) if _band_of(w, m.bands) is not None]
+
+        # A movement in equity always touches at least its component and a total column, so a
+        # lone figure on a line is chrome (a page footer's year), not a row of the matrix.
+        if len(cells) < 2 or _strong_cells(cells, fmt) * 2 < len(cells):
+            # No amounts on this line. Either the first line of a wrapped movement caption, or
+            # a footnote whose glyph-split digits fell in the columns (cells but no amounts).
+            if cells or not label_words:
+                pending, tail = [], None
+                continue
+            box = _row_box(label_words)
+            # Only vertical adjacency is required: the label column of a matrix holds nothing
+            # else, and a bilingual continuation line is indented to sit under the *Chinese*
+            # caption ("十二月三十一日" beneath "於二零二三年"), so the left-edge test
+            # ``_wrap_adjacent`` applies to a two-column face would reject a genuine wrap.
+            if tail is not None and not _tight_below(tail, box):
+                pending = []                       # not a continuation, a new block
+            pending, tail = pending + label_words, box
+            if _heads_indented_block(pending):
+                pending, tail = [], None
+            continue
+
+        if tail is not None and not _tight_below(tail, _row_box(label_words or row)):
+            pending = []
+        label_words, pending, tail = pending + label_words, [], None
+        label = " ".join(w.text for w in label_words).strip()
+        if not label:
+            continue
+        vals = [d for d in (_num(_cell_text(w.text), fmt) for w in cells) if d is not None]
+        if _is_matrix_noise(label, " ".join(w.text for w in row), vals):
+            continue
+
+        li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
+                      source=ValueSource.MACHINE)
+        label_bbox = _union([w.bbox for w in label_words])
+        for cw in cells:
+            # A nil dash is printed for "no movement"; it is not a figure, so no value is
+            # emitted for it — the same reason the two-column path never invents a zero.
+            dec = _num(_cell_text(cw.text), fmt)
+            if dec is None:
+                continue
+            k = _band_of(cw, m.bands)
+            prov = Provenance(
+                document_id=document_id, page_index=page_index, bbox=cw.bbox,
+                value_bbox=cw.bbox, label_bbox=label_bbox, text_snippet=label,
+                source_kind=source_kind, producer=f"extract:{source_kind}@0.1.0",
+            )
+            li.set_value(ExtractedValue(
+                value_raw=dec, value=dec, basis=basis,
+                # The component name is both the key and the column header shown in the UI.
+                period_label=names[k], period_display=names[k],
+                unit_ctx=UnitContext(), provenance=prov,
+            ))
+        if li.values:
+            items.append(li)
+            ordinal += 1
+    return items, ordinal
+
+
+def _maybe_matrix(words: list[Word], *, statement: str | None,
+                  fmt=None) -> tuple[_Matrix | None, list[str] | None]:
+    """Matrix geometry + column names for a matrix page, else (None, None).
+
+    Skips the (re-)grouping entirely for pages that cannot be a matrix, so the two-column
+    reconstruction of every other statement face costs exactly what it did before.
+    """
+    if statement != "changes_in_equity":
+        numeric = sum(1 for w in words if _num(_cell_text(w.text), fmt) is not None
+                      or _NIL_CELL.match(_cell_text(w.text)))
+        if numeric < _MATRIX_MIN_COLS * _MATRIX_MIN_ROWS:
+            return None, None
+    m = _detect_matrix(_group_rows(words, _line_tol(words)), fmt)
+    if m is None:
+        return None, None
+    return m, _matrix_column_names(m)
+
+
 def build_line_items(words: list[Word], *, page_index: int, document_id: str | None,
                      source_kind: str, ordinal_start: int = 0,
-                     number_format=None) -> tuple[list[LineItem], int]:
+                     number_format=None, statement: str | None = None,
+                     log=None) -> tuple[list[LineItem], int]:
     """Reconstruct line items from positioned words. Returns (items, next_ordinal).
 
     Consolidated and standalone columns are extracted in one pass: a Consolidated/Standalone
     header band (if present) attributes each value column to its basis; within a basis,
     left→right columns become current / prior periods. ``number_format`` (a locale
-    ``NumberFormat``) makes value parsing locale-correct; omit for the US default."""
+    ``NumberFormat``) makes value parsing locale-correct; omit for the US default.
+
+    ``statement`` is the page classifier's verdict; ``"changes_in_equity"`` selects the matrix
+    path, which a matrix layout also selects on its own so a mis-classified page still parses.
+    ``log`` (``ctx.log``) records why a matrix page was skipped or fell back."""
+    matrix, names = _maybe_matrix(words, statement=statement, fmt=number_format)
+    if matrix is not None and names is not None:
+        if log:
+            log(f"extract:page={page_index}:equity_matrix_columns={len(names)}")
+        return _matrix_items(matrix, names, page_index=page_index, document_id=document_id,
+                             source_kind=source_kind, ordinal_start=ordinal_start,
+                             fmt=number_format)
+    if statement == "changes_in_equity":
+        # A named matrix we cannot attribute is worse than nothing: every figure would be filed
+        # under a period that does not exist. Report it and emit no rows for the page. A page
+        # with no matrix layout at all is a genuinely two-column equity statement (small
+        # entities present one), so that one falls through to the normal reconstruction.
+        if matrix is not None:
+            if log:
+                log(f"extract:page={page_index}:equity_matrix_unnamed_columns"
+                    f"={len(matrix.bands)}(skipped)")
+            return [], ordinal_start
+        if log:
+            log(f"extract:page={page_index}:equity_no_matrix_layout(two_column_path)")
+
     items: list[LineItem] = []
     ordinal = ordinal_start
     rows = _merge_wrapped_labels(_group_rows(words), number_format)
