@@ -142,10 +142,14 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             return
 
         # Presence scan for qualitative disclosures (auditor qualification, contingent
-        # liabilities, guarantees, …) over the document text — stored on the run.
-        from app.services.derived import document_text, scan_disclosures
+        # liabilities, guarantees, …) over the document text — stored on the run. The same
+        # page text yields the entity name shown at the top of the extraction/statement.
+        from app.services.derived import detect_entity_name, document_text, scan_disclosures
+        entity_name = None
         try:
-            disclosures = scan_disclosures(document_text(data, doc_model.fmt.value))
+            pages_text = document_text(data, doc_model.fmt.value)
+            disclosures = scan_disclosures(pages_text)
+            entity_name = detect_entity_name(pages_text)
         except Exception:  # noqa: BLE001 — a scan failure must not fail the extraction
             disclosures = []
 
@@ -154,7 +158,9 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             "locale": doc_model.locale,
             "format": doc_model.fmt.value,
             "filename": filename,
+            "entity": entity_name,
             "pages": [p.model_dump(mode="json") for p in doc_model.pages],
+            "page_count": len(doc_model.pages),
             "line_item_count": len(doc_model.line_items),
             "notes": len(doc_model.notes),
             "rows": _serialize_rows(doc_model),

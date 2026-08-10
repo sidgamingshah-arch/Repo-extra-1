@@ -411,6 +411,38 @@ def localize_disclosures(disclosures: list[dict], locale: str = "en") -> list[di
     return out
 
 
+# Company-name suffixes across the seed jurisdictions (HK/China, India, UK, US, EU, …).
+_ENTITY_SUFFIX = re.compile(
+    r"\b("
+    r"limited|ltd\.?|public limited company|plc|p\.l\.c\.|incorporated|inc\.?|"
+    r"corporation|corp\.?|company|co\.?|l\.?l\.?c\.?|l\.?l\.?p\.?|holdings?|group|"
+    r"berhad|bhd\.?|n\.?v\.?|s\.?a\.?|s\.?p\.?a\.?|gmbh|a\.?g\.?|pte\.?|sdn"
+    r")\b", re.I)
+_STATEMENTish = re.compile(
+    r"balance sheet|statement of|profit (and|or) loss|cash flow|comprehensive income|"
+    r"annual report|financial statements|notes to|independent auditor",
+    re.I)
+
+
+def detect_entity_name(pages: list[tuple[int, str]]) -> str | None:
+    """Best-effort entity name from the document's opening pages: the first prominent line
+    that carries a company-name suffix (Ltd / PLC / Inc / …) and isn't itself a statement
+    title. Deterministic and honest — returns None when nothing convincing is found rather
+    than guessing a heading. (An LLM extractor is the future upgrade.)"""
+    for _idx, text in pages[:3]:
+        for raw in text.splitlines():
+            line = re.sub(r"\s+", " ", raw).strip(" .-—·|")
+            if not (3 <= len(line) <= 90):
+                continue
+            if _STATEMENTish.search(line):
+                continue                          # a statement/section title, not the entity
+            if _ENTITY_SUFFIX.search(line) and re.search(r"[A-Za-z]", line):
+                # Avoid all-caps banners longer than a name and lines that are mostly digits.
+                if sum(c.isdigit() for c in line) <= 4:
+                    return line
+    return None
+
+
 def document_text(data: bytes, fmt: str) -> list[tuple[int, str]]:
     """Per-page (or per-sheet) plain text for the disclosure scan."""
     if fmt == "pdf":

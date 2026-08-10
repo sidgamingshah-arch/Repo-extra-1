@@ -2,6 +2,7 @@
  * output panel with a cell inspector (right). Full-height flex layout, not a padded page.
  * Mirrors wireframe scrExtract + OUTPUT + SELINFO verbatim, data-driven from useStatement. */
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/ui";
@@ -12,6 +13,10 @@ import { useDocumentStatement, useEditDocumentLineItem, useRevertDocumentLineIte
 import { useUI } from "../store";
 import { useT } from "../i18n";
 import { SCREENS } from "./config";
+
+/* Very light vertical column divider for the output grid (subtle table gridlines). */
+const COL_DIVIDER = "rgba(37,45,60,0.07)";
+const colDiv: CSSProperties = { borderLeft: `1px solid ${COL_DIVIDER}` };
 
 /* ---- toolbar labelled field chip (matches wireframe inline chip) ---- */
 function ToolChip({ label, value }: { label: string; value: string }) {
@@ -126,7 +131,7 @@ function OutputRow({
       style={{
         display: "grid",
         gridTemplateColumns: layout.gridCols,
-        alignItems: "center",
+        alignItems: "stretch",
         padding: "0 16px",
         height: h,
         borderBottom: `1px solid ${color.hairline}`,
@@ -150,7 +155,7 @@ function OutputRow({
         </span>
         <StatusIcon status={row.status} />
       </div>
-      <div style={{ textAlign: "center" }}>
+      <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {row.note ? (
           <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(row.note!); }}>{row.note}</NoteChip>
         ) : null}
@@ -163,29 +168,33 @@ function OutputRow({
           }}
           title="Click to edit value"
           style={{
-            textAlign: "right",
+            ...colDiv,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
             fontFamily: font.mono,
             fontSize: 12,
             fontWeight: vwt,
             color: vfg,
             cursor: "text",
-            borderBottom: `1px dashed ${selected ? color.indigo : "transparent"}`,
           }}
         >
-          {v1}
+          <span style={{ borderBottom: `1px dashed ${selected ? color.indigo : "transparent"}` }}>{v1}</span>
         </span>
       ) : (
-        <span style={{ textAlign: "right", fontFamily: font.mono, fontSize: 12, fontWeight: vwt, color: vfg }}>
+        <span style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end",
+                       fontFamily: font.mono, fontSize: 12, fontWeight: vwt, color: vfg }}>
           {v1}
         </span>
       )}
-      <div style={{ textAlign: "center" }}>
+      <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "center" }}>
         {note2 ? (
           <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(note2!); }}>{note2}</NoteChip>
         ) : null}
       </div>
-      <span style={{ textAlign: "right", fontFamily: font.mono, fontSize: 12, color: color.muted }}>{v2}</span>
-      <div style={{ textAlign: "right" }}>
+      <span style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end",
+                     fontFamily: font.mono, fontSize: 12, color: color.muted }}>{v2}</span>
+      <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
         {row.confidence ? <ConfidencePill cat={row.confidence.cat} /> : null}
       </div>
     </div>
@@ -549,11 +558,11 @@ export default function WorkspaceScreen() {
             }}
           >
             <span>{t("col.lineitem")}</span>
-            <span style={{ textAlign: "center" }}>{t("col.note")}</span>
-            <span style={{ textAlign: "right" }}>{d.periods[0]}</span>
-            <span style={{ textAlign: "center" }}>{t("col.note")}</span>
-            <span style={{ textAlign: "right" }}>{d.periods[1]}</span>
-            <span style={{ textAlign: "right" }}>{t("col.conf")}</span>
+            <span style={{ textAlign: "center", ...colDiv }}>{t("col.note")}</span>
+            <span style={{ textAlign: "right", ...colDiv }}>{d.periods[0]}</span>
+            <span style={{ textAlign: "center", ...colDiv }}>{t("col.note")}</span>
+            <span style={{ textAlign: "right", ...colDiv }}>{d.periods[1]}</span>
+            <span style={{ textAlign: "right", ...colDiv }}>{t("col.conf")}</span>
           </div>
 
           {/* scroll body */}

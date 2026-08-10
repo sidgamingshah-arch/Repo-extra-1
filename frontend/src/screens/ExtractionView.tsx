@@ -2,7 +2,7 @@
  * provenance. Clicking a PDF value opens a Source panel that renders that page and
  * highlights the value's bounding box. Mapping is against the seeded reference ontology.
  * Distinct from the demo-driven workspace: this reads a live extraction run. */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card } from "../components/ui";
@@ -112,54 +112,92 @@ function PanelShell({ t, children }: { t: (k: string) => string; children: React
   );
 }
 
-/** Renders a PDF page image (auth'd fetch → blob URL) with the picked value's bbox drawn. */
-function SourcePanel({ documentId, picked, t }: { documentId: string; picked: PdfPick | null; t: (k: string) => string }) {
+/** One page slot in the scrollable document viewer. Lazily fetches its PNG when it nears
+ *  the viewport (so a 200-page filing doesn't fetch every page at once), and draws the
+ *  picked value's bounding box when the pick lands on this page. */
+function PageSlot({ documentId, index, picked, pickedRef }: {
+  documentId: string; index: number; picked: PdfPick | null;
+  pickedRef: React.MutableRefObject<HTMLDivElement | null>;
+}) {
   const [url, setUrl] = useState<string | null>(null);
-  const [err, setErr] = useState(false);
+  const [visible, setVisible] = useState(index < 2);   // eagerly load the first pages
+  const holder = useRef<HTMLDivElement | null>(null);
+  const isPicked = picked?.page_index === index;
+
   useEffect(() => {
-    if (!picked) return;
+    const el = holder.current;
+    if (!el || visible) return;
+    const io = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) { setVisible(true); io.disconnect(); }
+    }, { rootMargin: "400px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
     let objUrl: string | null = null;
     let cancelled = false;
-    setErr(false);
-    api.fetchPageImage(documentId, picked.page_index)
-      .then((blob) => {
-        if (cancelled) return;
-        objUrl = URL.createObjectURL(blob);
-        setUrl(objUrl);
-      })
-      .catch(() => !cancelled && setErr(true));
+    api.fetchPageImage(documentId, index)
+      .then((blob) => { if (!cancelled) { objUrl = URL.createObjectURL(blob); setUrl(objUrl); } })
+      .catch(() => {});
     return () => { cancelled = true; if (objUrl) URL.revokeObjectURL(objUrl); };
-  }, [documentId, picked?.page_index]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visible, documentId, index]);
 
-  const b = picked?.bbox;
+  const b = isPicked ? picked!.bbox : null;
+  return (
+    <div
+      ref={(el) => { holder.current = el; if (isPicked) pickedRef.current = el; }}
+      style={{
+        position: "relative", marginBottom: 10, minHeight: url ? undefined : 220,
+        border: `1px solid ${isPicked ? color.amberFg : color.hairline3}`,
+        borderRadius: 6, overflow: "hidden", background: "#fafbfc",
+      }}
+    >
+      <div style={{ position: "absolute", top: 4, right: 6, zIndex: 1, fontFamily: font.mono,
+                    fontSize: 9.5, color: color.faint, background: "rgba(255,255,255,0.8)",
+                    borderRadius: 4, padding: "1px 5px" }}>
+        p.{index + 1}
+      </div>
+      {url
+        ? <img src={url} alt="" style={{ display: "block", width: "100%" }} />
+        : <div style={{ padding: 24, textAlign: "center", fontSize: 11, color: color.faint }}>…</div>}
+      {url && b && (
+        <div data-testid="prov-highlight" style={{
+          position: "absolute",
+          left: `${b.x0 * 100}%`, top: `${b.y0 * 100}%`,
+          width: `${(b.x1 - b.x0) * 100}%`, height: `${(b.y1 - b.y0) * 100}%`,
+          border: `2px solid ${color.amberFg}`, background: "rgba(217,164,65,0.22)",
+          borderRadius: 2, boxShadow: "0 0 0 1px rgba(0,0,0,0.05)",
+        }} />
+      )}
+    </div>
+  );
+}
+
+/** The full source document, rendered as a scrollable stack of pages (scroll end to end).
+ *  Picking a value scrolls its page into view and highlights the value's bbox. */
+function PagedSource({ documentId, pageCount, picked, t }: {
+  documentId: string; pageCount: number; picked: PdfPick | null; t: (k: string) => string;
+}) {
+  const pickedRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (picked && pickedRef.current) {
+      pickedRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [picked?.page_index, picked?.bbox.x0, picked?.bbox.y0]);
+
+  const n = Math.max(1, pageCount);
   return (
     <PanelShell t={t}>
-      {!picked && (
-        <div style={{ fontSize: 12, color: color.muted, padding: "24px 8px", textAlign: "center" }}>
-          {t("ex.pickHint")}
-        </div>
-      )}
-      {picked && err && <div style={{ fontSize: 12, color: color.redFg }}>{t("ex.failed")}</div>}
-      {picked && !err && (
-        <>
-          <div style={{ fontSize: 11, color: color.sec2, marginBottom: 8 }}>
-            {picked.label} · p.{picked.page_index + 1}
-          </div>
-          <div style={{ position: "relative", display: "inline-block", width: "100%",
-                        border: `1px solid ${color.hairline3}`, borderRadius: 6, overflow: "hidden" }}>
-            {url && <img src={url} alt="" style={{ display: "block", width: "100%" }} />}
-            {url && b && (
-              <div data-testid="prov-highlight" style={{
-                position: "absolute",
-                left: `${b.x0 * 100}%`, top: `${b.y0 * 100}%`,
-                width: `${(b.x1 - b.x0) * 100}%`, height: `${(b.y1 - b.y0) * 100}%`,
-                border: `2px solid ${color.amberFg}`, background: "rgba(217,164,65,0.22)",
-                borderRadius: 2, boxShadow: "0 0 0 1px rgba(0,0,0,0.05)",
-              }} />
-            )}
-          </div>
-        </>
-      )}
+      <div style={{ fontSize: 11, color: color.sec2, marginBottom: 8 }}>
+        {picked ? `${picked.label} · p.${picked.page_index + 1}` : `${n} ${t("ex.pagesLabel")}`}
+      </div>
+      <div style={{ maxHeight: "78vh", overflowY: "auto", paddingRight: 4 }}>
+        {Array.from({ length: n }).map((_, i) => (
+          <PageSlot key={i} documentId={documentId} index={i} picked={picked} pickedRef={pickedRef} />
+        ))}
+      </div>
     </PanelShell>
   );
 }
@@ -320,12 +358,18 @@ function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k:
   );
 }
 
+/** Known canonical-key prefixes → statement labels for the filter dropdown. */
+const STMT_LABELS: Record<string, string> = {
+  bs: "Balance sheet", pl: "Profit & loss", cf: "Cash flow", eq: "Changes in equity",
+};
+
 export default function ExtractionView() {
   const { id } = useParams();
   const nav = useNavigate();
   const t = useT();
   const outputLocale = useUI((s) => s.locale);
   const [picked, setPicked] = useState<Picked | null>(null);
+  const [stmt, setStmt] = useState<string>("all");   // statement filter (by canonical prefix)
 
   const ontQ = useOntologies();
   const tplQ = useTemplates();
@@ -357,16 +401,48 @@ export default function ExtractionView() {
         </div>
       )}
 
-      {data && (
+      {data && (() => {
+        const res = data.result;
+        const u = res.units;
+        // Statement filter options: the canonical-key prefixes actually present, plus
+        // All / Unmapped. Prefix-based so it tracks whatever template the run used.
+        const prefixes = Array.from(
+          new Set(res.rows.map((r) => r.canonical_key?.split("_")[0]).filter(Boolean) as string[]),
+        );
+        const shown = res.rows.filter((r) =>
+          stmt === "all" ? true
+            : stmt === "unmapped" ? !r.canonical_key
+              : r.canonical_key?.startsWith(`${stmt}_`));
+        return (
         <>
-          <div style={{ marginBottom: 16 }}>
-            <h1 style={{ fontSize: 19, fontWeight: 600, margin: "0 0 4px" }}>{t("ex.title")}</h1>
+          <div style={{ marginBottom: 14 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 4px" }}>
+              {res.entity || t("ex.title")}
+            </h1>
             <p style={{ margin: 0, color: color.sec2, fontSize: 12.5 }}>
-              <span style={{ fontFamily: font.mono }}>{data.result.filename}</span>
-              {"  ·  "}{data.result.format.toUpperCase()}
-              {"  ·  "}{data.result.line_item_count} {t("ex.count")}
+              <span style={{ fontFamily: font.mono }}>{res.filename}</span>
+              {"  ·  "}{res.format.toUpperCase()}
+              {"  ·  "}{res.line_item_count} {t("ex.count")}
+              {u?.currency && <>{"  ·  "}<b>{u.currency}</b></>}
+              {u?.units_label && <>{"  ·  "}{t("ex.inUnits")} {u.units_label}</>}
             </p>
           </div>
+
+          {/* Statement filter */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: 11, color: color.muted }}>{t("ex.statement")}</span>
+            <select value={stmt} onChange={(e) => setStmt(e.target.value)}
+                    style={{ fontSize: 12, padding: "5px 9px", borderRadius: 7,
+                             border: `1px solid ${color.controlBorder}`, background: "#fff", color: color.ink }}>
+              <option value="all">{t("ex.allStatements")}</option>
+              {prefixes.map((p) => (
+                <option key={p} value={p}>{STMT_LABELS[p] || p.toUpperCase()}</option>
+              ))}
+              <option value="unmapped">{t("ex.unmapped")}</option>
+            </select>
+            <span style={{ fontSize: 11, color: color.muted2 }}>{shown.length} / {res.rows.length}</span>
+          </div>
+
           <div style={{ display: "flex", gap: 18, alignItems: "flex-start" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <Card pad={0} style={{ overflow: "hidden" }}>
@@ -378,24 +454,26 @@ export default function ExtractionView() {
                   <span>{t("ex.col.value")} · {t("ex.col.source")}</span>
                   <span>{t("ex.col.mapping")}</span>
                 </div>
-                {data.result.rows.length === 0 && (
+                {shown.length === 0 && (
                   <div style={{ padding: "18px 14px", fontSize: 12.5, color: color.muted }}>{t("ex.empty")}</div>
                 )}
-                {data.result.rows.map((row, i) => (
+                {shown.map((row, i) => (
                   <RowLine key={i} row={row} t={t} onPick={setPicked} />
                 ))}
               </Card>
             </div>
-            {data.result.format === "pdf" && id && (
-              <SourcePanel documentId={id} picked={picked?.kind === "pdf" ? picked : null} t={t} />
+            {res.format === "pdf" && id && (
+              <PagedSource documentId={id} pageCount={res.page_count ?? 1}
+                           picked={picked?.kind === "pdf" ? picked : null} t={t} />
             )}
-            {(data.result.format === "xlsx" || data.result.format === "xls") && id && (
+            {(res.format === "xlsx" || res.format === "xls") && id && (
               <ExcelSourcePanel documentId={id} picked={picked?.kind === "xlsx" ? picked : null} t={t} />
             )}
           </div>
           {id && <AnalysisSection id={id} locale={outputLocale} t={t} />}
         </>
-      )}
+        );
+      })()}
     </div>
   );
 }

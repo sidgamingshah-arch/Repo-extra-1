@@ -253,6 +253,8 @@ export interface ExtractionResult {
   locale: string;
   format: string;
   filename: string;
+  entity?: string | null;
+  page_count?: number;
   line_item_count: number;
   notes: number;
   rows: ExtractionRow[];
@@ -343,6 +345,7 @@ export interface IntegrityResponse {
 
 export interface PageCard {
   no: number;
+  kind?: "face" | "notes" | "other";
   cls: string;
   sub: string;
   conf: ConfCat;

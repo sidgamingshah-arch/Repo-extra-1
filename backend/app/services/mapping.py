@@ -409,23 +409,38 @@ class OntologyMatcher:
                 )
 
         # 4. Deterministic decision (no LLM configured, or the LLM abstained).
+        #    Fuzzy is a LAST RESORT. A fuzzy score measures string overlap, not meaning, so
+        #    letting it auto-map floods the review queue with shaky guesses. Decide from the
+        #    "meaningful" methods first (exact already returned above; then rule, then
+        #    embedding). Only if they produce nothing do we consult fuzzy — and even then
+        #    only when the match is essentially an exact string hit (>= fuzzy_accept);
+        #    anything weaker is left unmapped for a human rather than guessed.
         if rule and rule.score >= 0.9:
             return MappingResult(rule.canonical_key, rule.method, rule.score, [rule], False,
                                  {**scores, "rule": rule.score}, allocation_status="direct_exclusive")
-        if not ranked:
-            return MappingResult(None, MappingMethod.UNMATCHED, 0.0, [], True, scores,
-                                 allocation_status="unmapped_review")
-        top = ranked[0]
-        runner = ranked[1].score if len(ranked) > 1 else 0.0
-        margin = top.score - runner
-        accept = (top.score >= s.extraction.fuzzy_accept
-                  and margin >= s.extraction.mapping_margin
-                  and top.score >= s.extraction.auto_accept_confidence)
-        return MappingResult(
-            canonical_key=top.canonical_key, method=top.method, confidence=top.score,
-            candidates=ranked[:5], needs_review=not accept, scores=scores,
-            allocation_status="direct_exclusive" if accept else "unmapped_review",
-        )
+
+        primary = [c for c in ranked if c.method in (MappingMethod.RULE, MappingMethod.EMBEDDING)]
+        if primary:
+            top = primary[0]
+            runner = primary[1].score if len(primary) > 1 else 0.0
+            accept = (top.score >= s.extraction.auto_accept_confidence
+                      and (top.score - runner) >= s.extraction.mapping_margin)
+            return MappingResult(
+                canonical_key=top.canonical_key, method=top.method, confidence=top.score,
+                candidates=primary[:5], needs_review=not accept, scores=scores,
+                allocation_status="direct_exclusive" if accept else "unmapped_review",
+            )
+
+        # Last resort: fuzzy only, and only when it is essentially certain.
+        fuzzy_top = fuzzy[0] if fuzzy else None
+        if fuzzy_top and fuzzy_top.score >= s.extraction.fuzzy_accept:
+            return MappingResult(
+                canonical_key=fuzzy_top.canonical_key, method=MappingMethod.FUZZY,
+                confidence=fuzzy_top.score, candidates=fuzzy[:5], needs_review=False,
+                scores=scores, allocation_status="direct_exclusive")
+        # Nothing confident — do NOT emit a low-confidence fuzzy guess; route to review unmapped.
+        return MappingResult(None, MappingMethod.UNMATCHED, 0.0, ranked[:5], True, scores,
+                             allocation_status="unmapped_review")
 
     def match_batch(self, items: list[tuple[str, str]]) -> dict[str, MappingResult]:
         """Per-statement mapping: decide ALL captions in one grounded LLM call so

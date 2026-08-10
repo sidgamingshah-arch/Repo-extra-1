@@ -121,6 +121,7 @@ export default function ScopeScreen() {
   // Local selection of INCLUDED page indices (0-based), synced from the fetched pages. On a
   // real document, toggling persists the scope so extraction restricts itself to it.
   const [selected, setSelected] = useState<Set<number> | null>(null);
+  const [filter, setFilter] = useState(0);   // active Face/Notes/Other filter chip (0 = All)
   useEffect(() => {
     if (data) {
       setSelected(new Set(data.pages.filter((p) => p.included).map((p) => p.no - 1)));
@@ -148,6 +149,12 @@ export default function ScopeScreen() {
   // server's figure until the first sync.
   const focused = selected ? selected.size : data.focused;
 
+  // Face / Notes / Other chips act as filters over the page grid. Filter index → page kind
+  // (0 = all). Cards without a kind (demo pages) are always shown.
+  const FILTER_KIND: (string | null)[] = [null, "face", "notes", "other"];
+  const activeKind = FILTER_KIND[Math.min(filter, FILTER_KIND.length - 1)];
+  const visiblePages = data.pages.filter((p) => !activeKind || !p.kind || p.kind === activeKind);
+
   return (
     <div style={{ maxWidth: layout.screenMaxWide, margin: "0 auto", padding: "26px 30px 60px" }}>
       {/* Header */}
@@ -174,10 +181,11 @@ export default function ScopeScreen() {
       {/* Filter chips */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         {data.filters.map((f, i) => {
-          const active = i === 0;
+          const active = i === filter;
           return (
             <span
               key={f.label}
+              onClick={() => setFilter(i)}
               style={{
                 fontSize: 11.5,
                 fontWeight: 600,
@@ -203,7 +211,7 @@ export default function ScopeScreen() {
           gap: 14,
         }}
       >
-        {data.pages.map((p) => (
+        {visiblePages.map((p) => (
           <PageCardTile
             key={p.no}
             p={p}

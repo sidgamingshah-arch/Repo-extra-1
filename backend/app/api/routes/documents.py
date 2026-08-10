@@ -803,6 +803,7 @@ def _build_pages(pages: list[dict], scope: list[int] | None = None) -> dict:
         cat, _ = _conf_cat(p.get("classification_confidence"))
         cards.append({
             "no": idx + 1,
+            "kind": kind if kind in ("face", "notes") else "other",
             "cls": _PAGE_CLS.get(kind, kind.title()),
             "sub": "in scope" if included else "skipped",
             "conf": cat,
@@ -978,9 +979,32 @@ def _loc(node: dict, locale: str) -> str:
     return (node.get("label_i18n") or {}).get(locale) or node.get("label") or ""
 
 
+def _disp_period(lbl: str | None, idx: int, locale: str) -> str:
+    """Display a period header: the source's own header (e.g. a year-end date like
+    '31 Mar 2025') when it captured one; otherwise the generic Current/Prior label."""
+    if not lbl or lbl in ("current",) or lbl.startswith("col"):
+        return _t("Current" if idx == 0 else "Prior", locale)
+    if lbl == "prior":
+        return _t("Prior", locale)
+    return lbl
+
+
+def _period_labels(rows: list[dict], basis: str, locale: str) -> list[str]:
+    """The two period-column headers for the statement. Uses the real headers the extractor
+    captured (Excel carries the year/date text); falls back to Current/Prior (e.g. native PDF,
+    where the column header date isn't yet detected)."""
+    for r in rows:
+        vals = _basis_values(r, basis)
+        if len(vals) >= 1:
+            labels = [v.get("period_label") for v in vals]
+            return [_disp_period(labels[0] if labels else None, 0, locale),
+                    _disp_period(labels[1] if len(labels) > 1 else None, 1, locale)]
+    return [_t("Current", locale), _t("Prior", locale)]
+
+
 def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
                      filename: str, basis: str = "consolidated", locale: str = "en",
-                     units_ctx: dict | None = None) -> dict:
+                     units_ctx: dict | None = None, company: str | None = None) -> dict:
     """Group the real extracted rows into one statement (by the template's sections), so the
     Workspace grid renders real data with its provenance-backed values. Only rows that
     carry a value for the requested `basis` (consolidated / standalone) are shown. Labels are
@@ -1038,12 +1062,12 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     return {
         "statement": statement_type,
         "label": _stmt_label(template_def, statement_type, locale),
-        "basis": basis, "periods": [_t("Current", locale), _t("Prior", locale)],
+        "basis": basis, "periods": _period_labels(rows, basis, locale),
         "currency": (units_ctx or {}).get("currency") or "",
         "currency_symbol": "", "units": (units_ctx or {}).get("units_label") or "",
         "rows": out,
         "viewer": {
-            "company": filename, "subtitle": _t("Extracted statement", locale),
+            "company": company or filename, "subtitle": _t("Extracted statement", locale),
             "chips": [{"label": basis_label, "active": True}],
             "callout": _t("Values are read deterministically from the source; mapping is by the "
                           "ensemble. Open the extraction view for click-to-source provenance.",
@@ -1075,7 +1099,7 @@ def get_document_statement(
     # basis (empty if the source didn't present that basis).
     return _build_statement(run.result.get("rows", []), template_def, statement,
                             doc.filename or "document", basis, locale,
-                            run.result.get("units"))
+                            run.result.get("units"), company=run.result.get("entity"))
 
 
 def _note_no(raw) -> int | None:
