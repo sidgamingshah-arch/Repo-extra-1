@@ -88,8 +88,8 @@ export const layout = {
   templateTree: 360,
   screenMax: 1120,
   screenMaxWide: 1180,
-  // Workspace output grid columns: LINE ITEM / NOTE / FY25 / NOTE / FY24 / CONF.
-  gridCols: "minmax(120px,1fr) 52px 90px 52px 90px 54px",
+  // Workspace output grid columns: LINE ITEM / NOTE / FY25 / FY24 / CONF.
+  gridCols: "minmax(140px,1.4fr) 56px 110px 110px 60px",
 } as const;
 
 /** Confidence category → badge colors + representative percentage. */

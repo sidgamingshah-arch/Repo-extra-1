@@ -1,19 +1,19 @@
 /** Screen 4 — Workspace. The core extraction screen: source viewer (left) + editable
  * output panel with a cell inspector (right). Full-height flex layout, not a padded page.
  * Mirrors wireframe scrExtract + OUTPUT + SELINFO verbatim, data-driven from useStatement. */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
-import type { Basis, StatementResponse, StatementRow } from "../types";
+import type { Basis, StatementKey, StatementResponse, StatementRow } from "../types";
 import { useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
 import { SCREENS } from "./config";
 
-/* ---- toolbar labelled field chip (matches wireframe inline chip) ---- */
+/* ---- toolbar display-only field chip (e.g. currency, which is source-derived) ---- */
 function ToolChip({ label, value }: { label: string; value: string }) {
   return (
     <div
@@ -26,18 +26,46 @@ function ToolChip({ label, value }: { label: string; value: string }) {
         border: `1px solid ${color.cardBorder}`,
         borderRadius: radius.control,
         padding: "6px 11px",
-        cursor: "pointer",
       }}
     >
       <span style={{ color: color.muted }}>{label}</span>
       <span style={{ fontWeight: 600 }}>{value}</span>
-      <span style={{ color: color.faint }}>▾</span>
     </div>
   );
 }
 
+/* ---- click-to-source chip on a value: drives the source viewer (left paper) to the
+ * matching line, mirroring the SourceChip affordance used on the extraction screen. ---- */
+function SourceChip({ onClick }: { onClick: (e: MouseEvent) => void }) {
+  return (
+    <span
+      onClick={onClick}
+      role="button"
+      title="View in source document"
+      style={{
+        fontFamily: font.mono,
+        fontSize: 10,
+        color: color.indigo,
+        background: color.indigoTint2,
+        borderRadius: 5,
+        padding: "1px 5px",
+        whiteSpace: "nowrap",
+        cursor: "pointer",
+      }}
+    >
+      ⤢
+    </span>
+  );
+}
+
 /* ---- left source-viewer "paper" row ---- */
-function PaperRow({ row, selected }: { row: StatementRow; selected: boolean }) {
+function PaperRow({ row, selected, pickTick }: { row: StatementRow; selected: boolean; pickTick: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Scroll the source paper to this line whenever it becomes selected, and re-scroll on
+  // every explicit source pick (pickTick) even if the same row is already selected.
+  useEffect(() => {
+    if (selected) ref.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [selected, pickTick]);
   const k = row.kind;
   const isHead = k === "section" || k === "total";
   const isBold = isHead || k === "subtotal";
@@ -48,6 +76,7 @@ function PaperRow({ row, selected }: { row: StatementRow; selected: boolean }) {
   const v2 = showV ? fmtIN(row.v2) : "";
   return (
     <div
+      ref={ref}
       style={{
         display: "grid",
         gridTemplateColumns: "1fr 78px 78px",
@@ -85,15 +114,19 @@ function PaperRow({ row, selected }: { row: StatementRow; selected: boolean }) {
 function OutputRow({
   row,
   sel,
+  unitScale,
   onSelect,
   onEdit,
   onOpenNote,
+  onPickSource,
 }: {
   row: StatementRow;
   sel: string;
+  unitScale: number;
   onSelect: (id: string) => void;
   onEdit: (id: string) => void;
   onOpenNote: (ref: string) => void;
+  onPickSource: (id: string) => void;
 }) {
   const k = row.kind;
   const isSection = k === "section";
@@ -116,9 +149,12 @@ function OutputRow({
   const vwt = isSt || isTot ? 600 : selected ? 600 : 400;
   const vfg = isTot ? color.indigo : color.ink;
   const showV = isItem || isSt || isTot;
-  const v1 = showV ? fmtIN(row.v1) : "";
-  const v2 = showV ? fmtIN(row.v2) : "";
-  const note2 = row.note2 != null ? row.note2 : row.note;
+  // Presentation-only magnitude: divide the raw stored value before formatting.
+  const scaled = (n: number | null): number | null => (n == null ? null : n / unitScale);
+  const v1 = showV ? fmtIN(scaled(row.v1)) : "";
+  const v2 = showV ? fmtIN(scaled(row.v2)) : "";
+  const note = row.note ?? row.note2;
+  const showChip = isItem && row.v1 != null;
 
   return (
     <div
@@ -151,39 +187,44 @@ function OutputRow({
         <StatusIcon status={row.status} />
       </div>
       <div style={{ textAlign: "center" }}>
-        {row.note ? (
-          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(row.note!); }}>{row.note}</NoteChip>
+        {note ? (
+          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(note!); }}>{note}</NoteChip>
         ) : null}
       </div>
       {isItem ? (
-        <span
-          onClick={(e) => {
-            e.stopPropagation();
-            onEdit(row.id);
-          }}
-          title="Click to edit value"
-          style={{
-            textAlign: "right",
-            fontFamily: font.mono,
-            fontSize: 12,
-            fontWeight: vwt,
-            color: vfg,
-            cursor: "text",
-            borderBottom: `1px dashed ${selected ? color.indigo : "transparent"}`,
-          }}
-        >
-          {v1}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6, minWidth: 0 }}>
+          {showChip && (
+            <SourceChip
+              onClick={(e) => {
+                e.stopPropagation();
+                onPickSource(row.id);
+              }}
+            />
+          )}
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit(row.id);
+            }}
+            title="Click to edit value"
+            style={{
+              textAlign: "right",
+              fontFamily: font.mono,
+              fontSize: 12,
+              fontWeight: vwt,
+              color: vfg,
+              cursor: "text",
+              borderBottom: `1px dashed ${selected ? color.indigo : "transparent"}`,
+            }}
+          >
+            {v1}
+          </span>
+        </div>
       ) : (
         <span style={{ textAlign: "right", fontFamily: font.mono, fontSize: 12, fontWeight: vwt, color: vfg }}>
           {v1}
         </span>
       )}
-      <div style={{ textAlign: "center" }}>
-        {note2 ? (
-          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(note2!); }}>{note2}</NoteChip>
-        ) : null}
-      </div>
       <span style={{ textAlign: "right", fontFamily: font.mono, fontSize: 12, color: color.muted }}>{v2}</span>
       <div style={{ textAlign: "right" }}>
         {row.confidence ? <ConfidencePill cat={row.confidence.cat} /> : null}
@@ -303,8 +344,17 @@ function InspectorEditor({
 export default function WorkspaceScreen() {
   const navigate = useNavigate();
   const t = useT();
-  const { locale, dataset, setDataset, statement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing, setNote } =
+  const { locale, dataset, setDataset, statement, setStatement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing, setNote } =
     useUI();
+  // Presentation-only display magnitude (does not touch stored/raw values). 1 = as reported.
+  const [unitScale, setUnitScale] = useState(1);
+  // Bumped on every source-chip click so the source viewer re-scrolls even for the
+  // already-selected row. Selecting a line also drives the source viewer via `sel`.
+  const [pickTick, setPickTick] = useState(0);
+  const pickSource = (id: string) => {
+    selRow(id);
+    setPickTick((n) => n + 1);
+  };
   // Open a note reference: select it and jump to the All Notes screen.
   const openNote = (ref: string) => {
     const n = parseInt(ref, 10);
@@ -350,9 +400,49 @@ export default function WorkspaceScreen() {
           value={dataset}
           onChange={setDataset}
         />
-        <ToolChip label={t("ws.statement")} value={d.label} />
+        <Segmented<StatementKey>
+          options={[
+            { value: "balance_sheet", label: t("ws.stmt.balanceSheet") },
+            { value: "profit_and_loss", label: t("ws.stmt.profitLoss") },
+            { value: "cash_flow", label: t("ws.stmt.cashFlow") },
+          ]}
+          value={statement}
+          onChange={setStatement}
+        />
         <ToolChip label={t("ws.currency")} value={`${d.currency} ${d.currency_symbol}`} />
-        <ToolChip label={t("ws.units")} value={d.units} />
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 12,
+            color: color.sec,
+            border: `1px solid ${color.cardBorder}`,
+            borderRadius: radius.control,
+            padding: "4px 9px",
+          }}
+        >
+          <span style={{ color: color.muted }}>{t("ws.units")}</span>
+          <select
+            value={unitScale}
+            onChange={(e) => setUnitScale(Number(e.target.value))}
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: font.sans,
+              color: color.ink,
+              border: "none",
+              background: "transparent",
+              outline: "none",
+              cursor: "pointer",
+            }}
+          >
+            <option value={1}>{t("ws.units.asReported")}</option>
+            <option value={1e3}>{t("ws.units.thousands")}</option>
+            <option value={1e6}>{t("ws.units.millions")}</option>
+            <option value={1e9}>{t("ws.units.billions")}</option>
+          </select>
+        </label>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9 }}>
           <span
             style={{
@@ -490,7 +580,7 @@ export default function WorkspaceScreen() {
                 <span>{d.periods[1]}</span>
               </div>
               {d.rows.map((r) => (
-                <PaperRow key={r.id} row={r} selected={r.id === sel} />
+                <PaperRow key={r.id} row={r} selected={r.id === sel} pickTick={pickTick} />
               ))}
               <div
                 style={{
@@ -539,7 +629,6 @@ export default function WorkspaceScreen() {
             <span>{t("col.lineitem")}</span>
             <span style={{ textAlign: "center" }}>{t("col.note")}</span>
             <span style={{ textAlign: "right" }}>{d.periods[0]}</span>
-            <span style={{ textAlign: "center" }}>{t("col.note")}</span>
             <span style={{ textAlign: "right" }}>{d.periods[1]}</span>
             <span style={{ textAlign: "right" }}>{t("col.conf")}</span>
           </div>
@@ -547,7 +636,16 @@ export default function WorkspaceScreen() {
           {/* scroll body */}
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {d.rows.map((r) => (
-              <OutputRow key={r.id} row={r} sel={sel} onSelect={selRow} onEdit={selForEdit} onOpenNote={openNote} />
+              <OutputRow
+                key={r.id}
+                row={r}
+                sel={sel}
+                unitScale={unitScale}
+                onSelect={selRow}
+                onEdit={selForEdit}
+                onOpenNote={openNote}
+                onPickSource={pickSource}
+              />
             ))}
           </div>
 
