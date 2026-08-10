@@ -1220,6 +1220,9 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         "basis": basis, "periods": _period_labels(rows, basis, locale),
         "currency": (units_ctx or {}).get("currency") or "",
         "currency_symbol": "", "units": (units_ctx or {}).get("units_label") or "",
+        # The detected source magnitude (e.g. 1000 for "in thousands"); the Workspace units
+        # selector converts relative to this so it never double-scales already-scaled figures.
+        "units_scale_factor": _to_num((units_ctx or {}).get("scale_factor")) or 1.0,
         # Document shape so the Workspace picks the right live viewer (PDF pages vs Excel cells).
         "format": doc_format, "page_count": page_count,
         "rows": out,

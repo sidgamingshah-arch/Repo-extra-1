@@ -88,7 +88,7 @@ export const layout = {
   templateTree: 360,
   screenMax: 1120,
   screenMaxWide: 1180,
-  // Workspace output grid columns: LINE ITEM / NOTE / FY25 / NOTE / FY24 / CONF.
+  // Workspace output grid columns: LINE ITEM / NOTE / period1 / period2 / CONF (one NOTE column).
   gridCols: "minmax(140px,1.4fr) 56px 110px 110px 60px",
 } as const;
 
