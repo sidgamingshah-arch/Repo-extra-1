@@ -461,7 +461,13 @@ export interface TemplateNode {
 export interface NodeConfig {
   breadcrumb: string;
   label: string;
+  /** The concept this node maps to — the key an ontology edit targets. */
+  canonical_key?: string;
+  /** Merged display set (this locale + English fallback, capped) — read-only. */
   aliases: string[];
+  /** RAW aliases stored for the requested locale — what the editor loads and saves back,
+   *  so saving one language's aliases can't absorb another's fallbacks. */
+  aliases_locale?: string[];
   sign: string;
   value_type: string;
   aggregation: string;
@@ -481,6 +487,9 @@ export interface TemplateResponse {
   node_config: Record<string, NodeConfig>;
   template: { key: string; name: string; line_items: number };
   netting_rules?: NettingRuleView[];
+  /** The ontology version whose rules this view shows — the target of inline edits.
+   *  Null when no ontology targets this template (nothing to edit). */
+  ontology?: { id: string; ontology_key: string; version: number; locale: string } | null;
 }
 
 export interface ExportOption {

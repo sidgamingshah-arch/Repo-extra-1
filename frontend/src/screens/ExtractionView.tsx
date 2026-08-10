@@ -12,7 +12,7 @@ import { useDocumentAnalysis, useExtraction, useOntologies, useTemplates } from 
 import { useUI } from "../store";
 import { SCREENS } from "./config";
 import { color, font } from "../theme";
-import type { ExtractionRow, Locale } from "../types";
+import type { ExtractionRow, Locale, OntologyRef } from "../types";
 
 const GRID = "1.8fr 56px 1.3fr 1.1fr";
 
@@ -191,6 +191,14 @@ function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k:
   );
 }
 
+/** Highest-version ontology among those matching `pred` (ontology edits publish new versions,
+ *  so "the ontology" always means the latest one, never the first row returned). */
+function latestOntology(rows: OntologyRef[] | undefined, pred: (o: OntologyRef) => boolean) {
+  const matches = (rows ?? []).filter(pred);
+  if (!matches.length) return undefined;
+  return matches.reduce((best, o) => (o.version > best.version ? o : best));
+}
+
 /** Known canonical-key prefixes → statement labels for the filter dropdown. */
 const STMT_LABELS: Record<string, string> = {
   bs: "Balance sheet", pl: "Profit & loss", cf: "Cash flow", eq: "Changes in equity",
@@ -209,11 +217,13 @@ export default function ExtractionView() {
   const selectedTemplateKey = useUI((s) => s.selectedTemplateKey);
   const ready = ontQ.isFetched && tplQ.isFetched;   // don't POST until the lists settle
   // Prefer the ontology targeting the template the analyst selected on the Upload screen;
-  // fall back to the shipped HK reference ontology, then whatever is first.
+  // fall back to the shipped HK reference ontology, then whatever is first. Inline ontology
+  // edits publish NEW versions, so always take the HIGHEST version among the candidates —
+  // picking the first match would silently keep extracting against a superseded rulebook.
   const ont =
-    (selectedTemplateKey && ontQ.data?.find((o) => o.target_template_key === selectedTemplateKey)) ||
-    ontQ.data?.find((o) => o.ontology_key === "hkfrs_hk_china_v1") ||
-    ontQ.data?.[0];
+    latestOntology(ontQ.data, (o) => o.target_template_key === selectedTemplateKey) ||
+    latestOntology(ontQ.data, (o) => o.ontology_key === "hkfrs_hk_china_v1") ||
+    latestOntology(ontQ.data, () => true);
   const tpl = ont ? tplQ.data?.find((tt) => tt.template_key === ont.target_template_key) : undefined;
   const { data, isPending, isError, error } = useExtraction(id, ont?.id, tpl?.id, ready);
 

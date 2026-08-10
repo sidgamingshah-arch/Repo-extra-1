@@ -155,3 +155,33 @@ test("analyst cannot reach the config template screen but can select a template"
   // Selecting closes the picker (button returns to "Choose another") — selection is wired.
   await expect(page.getByRole("button", { name: "Choose another" })).toBeVisible();
 });
+
+test("admin edits the ontology inline and the new version persists", async ({ page }) => {
+  await loginAs(page, "admin");
+  await page.goto("/template", DCL);
+
+  // The real configured template renders its tree; pick the first editable concept.
+  const nodes = page.getByTestId("tpl-node");
+  await expect(nodes.first()).toBeVisible({ timeout: 15_000 });
+  await nodes.first().click();
+
+  // Add an alias: type into the alias input and press Enter → it appears as a chip, and the
+  // unsaved-changes bar shows up (edits are real local state, not decoration).
+  const alias = `E2E alias ${Date.now()}`;
+  const input = page.getByPlaceholder("New alias");
+  await expect(input).toBeVisible();
+  await input.fill(alias);
+  await input.press("Enter");
+  await expect(page.getByText(alias)).toBeVisible();
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
+
+  // Save → the server publishes a NEW ontology version and reports it back.
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText(/Saved as v\d+/)).toBeVisible({ timeout: 15_000 });
+
+  // The edit survives a full reload (it is stored, not just in local state).
+  await page.reload(DCL);
+  await expect(nodes.first()).toBeVisible({ timeout: 15_000 });
+  await nodes.first().click();
+  await expect(page.getByText(alias)).toBeVisible({ timeout: 15_000 });
+});
