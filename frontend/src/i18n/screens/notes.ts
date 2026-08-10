@@ -14,6 +14,10 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.linked": "· linked to",
     "n.onFace": "on the face of the Balance Sheet",
     "n.reconciliation": "Note-to-face reconciliation.",
+    "n.sourcePage": "Source page",
+    "n.noSourcePage": "No source page for this note",
+    "n.pageFailed": "Couldn't load the page",
+    "n.loadingPage": "Loading page…",
   },
   zh: {
     "n.heading": "已提取附注",
@@ -28,6 +32,10 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.linked": "· 关联至",
     "n.onFace": "资产负债表表内项目",
     "n.reconciliation": "附注与表内核对。",
+    "n.sourcePage": "源页面",
+    "n.noSourcePage": "此附注没有源页面",
+    "n.pageFailed": "无法加载页面",
+    "n.loadingPage": "正在加载页面…",
   },
   ar: {
     "n.heading": "الإيضاحات المستخرجة",
@@ -42,6 +50,10 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.linked": "· مرتبط بـ",
     "n.onFace": "ضمن بنود قائمة المركز المالي",
     "n.reconciliation": "تسوية الإيضاح مع القائمة.",
+    "n.sourcePage": "صفحة المصدر",
+    "n.noSourcePage": "لا توجد صفحة مصدر لهذا الإيضاح",
+    "n.pageFailed": "تعذّر تحميل الصفحة",
+    "n.loadingPage": "جارٍ تحميل الصفحة…",
   },
   fr: {
     "n.heading": "Notes extraites",
@@ -56,5 +68,9 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.linked": "· liée à",
     "n.onFace": "au bilan",
     "n.reconciliation": "Rapprochement note-bilan.",
+    "n.sourcePage": "Page source",
+    "n.noSourcePage": "Aucune page source pour cette note",
+    "n.pageFailed": "Impossible de charger la page",
+    "n.loadingPage": "Chargement de la page…",
   },
 };

@@ -1,15 +1,20 @@
 /** Screen 6 — All Notes. Left index of extracted notes; right detail with a
- * particulars grid and a note-to-face reconciliation callout. */
+ * particulars grid and a note-to-face reconciliation callout. When a real uploaded
+ * annual-report PDF is available, the note's source page is rendered beside the
+ * detail by default (no toggle) — reusing the same auth'd page-image fetch the
+ * extraction Source panel uses. */
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Card } from "../components/ui";
 import { SCREENS } from "./config";
 import { useT } from "../i18n";
-import { useNote, useNotes, useProjectLoaded } from "../lib/queries";
+import { ApiError, api } from "../lib/api";
+import { useDocuments, useNote, useNotes, useProjectLoaded } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { useUI } from "../store";
 import { color, confStyle, fmtIN, font, radius } from "../theme";
-import type { NoteDetail, NoteDetailRow } from "../types";
+import type { NoteDetail, NoteDetailRow, SourceDoc } from "../types";
 
 const GRID = "1fr 120px 120px 64px";
 
@@ -133,6 +138,106 @@ function Detail({ detail }: { detail: NoteDetail }) {
   );
 }
 
+/** Side-by-side annual-report page for the selected note. Fetches the auth'd PDF page
+ * image (same endpoint as the extraction Source panel) for the note's 0-based `pageIndex`.
+ * A 404 means the note's page lies outside this document (e.g. a partial upload) — that
+ * is shown as a neutral "no source page" hint rather than a hard error. */
+function NotePageViewer({
+  documentId,
+  pageIndex,
+  t,
+}: {
+  documentId: string;
+  pageIndex: number;
+  t: (k: string) => string;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [status, setStatus] = useState<"loading" | "ok" | "missing" | "error">("loading");
+
+  useEffect(() => {
+    let objUrl: string | null = null;
+    let cancelled = false;
+    setStatus("loading");
+    setUrl(null);
+    api
+      .fetchPageImage(documentId, pageIndex)
+      .then((blob) => {
+        if (cancelled) return;
+        objUrl = URL.createObjectURL(blob);
+        setUrl(objUrl);
+        setStatus("ok");
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        // Out-of-range page (note references a page this document doesn't contain).
+        setStatus(e instanceof ApiError && e.status === 404 ? "missing" : "error");
+      });
+    return () => {
+      cancelled = true;
+      if (objUrl) URL.revokeObjectURL(objUrl);
+    };
+  }, [documentId, pageIndex]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+      <div
+        style={{
+          fontSize: 10.5,
+          fontWeight: 600,
+          letterSpacing: 0.3,
+          color: color.muted,
+          padding: "0 0 8px",
+        }}
+      >
+        {t("n.sourcePage").toUpperCase()}
+        <span style={{ fontFamily: font.mono, fontWeight: 500, marginInlineStart: 8 }}>
+          p.{pageIndex + 1}
+        </span>
+      </div>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: "auto",
+          background: color.rowAltBg,
+          border: `1px solid ${color.hairline3}`,
+          borderRadius: 8,
+          padding: 12,
+        }}
+      >
+        {status === "loading" && (
+          <div style={{ fontSize: 12, color: color.muted, padding: "24px 8px", textAlign: "center" }}>
+            {t("n.loadingPage")}
+          </div>
+        )}
+        {status === "missing" && (
+          <div style={{ fontSize: 12, color: color.muted, padding: "24px 8px", textAlign: "center" }}>
+            {t("n.noSourcePage")}
+          </div>
+        )}
+        {status === "error" && (
+          <div style={{ fontSize: 12, color: color.redFg, padding: "24px 8px", textAlign: "center" }}>
+            {t("n.pageFailed")}
+          </div>
+        )}
+        {status === "ok" && url && (
+          <img
+            src={url}
+            alt=""
+            style={{
+              display: "block",
+              width: "100%",
+              background: "#fff",
+              border: `1px solid ${color.hairline3}`,
+              borderRadius: 6,
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function NotesScreen() {
   const t = useT();
   const locale = useUI((s) => s.locale);
@@ -140,6 +245,13 @@ export default function NotesScreen() {
   const { data: notes } = useNotes(locale);
   const { note, setNote } = useUI();
   const { data: detail } = useNote(note, locale);
+  const { data: docsData } = useDocuments();
+
+  // The annual-report source: the first real uploaded PDF document (has an id).
+  const pdfDoc: SourceDoc | null =
+    docsData?.documents?.find((d) => !!d.id && d.ext.toUpperCase().startsWith("PDF")) ?? null;
+  // Default the viewer to the selected note's 1-based page (0/undefined = unknown).
+  const pageIndex = detail && detail.page > 0 ? detail.page - 1 : null;
 
   if (!loaded) return <EmptyState />;
   if (!notes) return <Loading />;
@@ -226,8 +338,27 @@ export default function NotesScreen() {
           })}
         </div>
       </div>
-      <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 34px" }}>
-        {detail ? <Detail detail={detail} /> : <Loading />}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", minHeight: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 34px" }}>
+          {detail ? <Detail detail={detail} /> : <Loading />}
+        </div>
+        {pdfDoc?.id && pageIndex != null && (
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              borderLeft: `1px solid ${color.cardBorder}`,
+              background: color.surface,
+              overflow: "hidden",
+              padding: "26px 24px",
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+            }}
+          >
+            <NotePageViewer documentId={pdfDoc.id} pageIndex={pageIndex} t={t} />
+          </div>
+        )}
       </div>
     </div>
   );
