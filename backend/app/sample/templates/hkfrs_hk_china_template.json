@@ -1165,6 +1165,16 @@
           ]
         },
         {
+          "node_id": "pl_gross_profit",
+          "canonical_key": "pl_gross_profit",
+          "label": "Gross profit",
+          "role": "total",
+          "label_i18n": {
+            "en": "Gross profit",
+            "zh": "毛利"
+          }
+        },
+        {
           "node_id": "pl_operating_profit_ebit",
           "canonical_key": "pl_operating_profit_ebit",
           "label": "Operating Profit / EBIT",

@@ -27,7 +27,9 @@ from .geometry import Provenance
 class UnitContext(BaseModel):
     """Detected scale + currency for a value, at its most-specific scope."""
 
-    currency: str = "INR"
+    # Empty when the document declares no currency — asserting one (this used to default to INR)
+    # mislabels every filing that isn't from that jurisdiction. Consumers render "" as unknown.
+    currency: str = ""
     scale_factor: Decimal = Decimal(1)   # lakh=1e5, crore=1e7, thousand=1e3, million=1e6
     units_label: str | None = None
     source_bbox_page: int | None = None

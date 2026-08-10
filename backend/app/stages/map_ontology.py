@@ -48,6 +48,16 @@ class MapOntologyStage:
                 return True
             return False
 
+        # Page -> statement, from the classifier. Mapping uses it to refuse concepts from a
+        # different statement (a P&L caption resolving to a cash-flow key, etc.).
+        stmt_by_page = {p.index: p.statement for p in doc.pages if p.statement}
+
+        def _statement_of(li) -> str | None:
+            for ev in li.values.values():
+                if ev.provenance is not None:
+                    return stmt_by_page.get(ev.provenance.page_index)
+            return None
+
         mapped = 0
         if scope == "per_statement":
             # One grounded LLM call per statement — grouped by source sheet/page so
@@ -59,13 +69,14 @@ class MapOntologyStage:
                 by_group.setdefault(pg, []).append(li)
             by_id = {str(li.id): li for li in doc.line_items}
             for group in by_group.values():
-                results = matcher.match_batch([(str(li.id), li.source_label) for li in group])
+                results = matcher.match_batch([(str(li.id), li.source_label) for li in group],
+                                              statement=_statement_of(group[0]))
                 for iid, res in results.items():
                     if _apply(by_id[iid], res):
                         mapped += 1
         else:
             for li in doc.line_items:
-                if _apply(li, matcher.match(li.source_label)):
+                if _apply(li, matcher.match(li.source_label, statement=_statement_of(li))):
                     mapped += 1
 
         # Roll the mapper's LLM usage up onto the context for the audit log.

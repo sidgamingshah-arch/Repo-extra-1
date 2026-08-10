@@ -35,6 +35,7 @@ from rapidfuzz import fuzz, process
 from app.config import Settings, get_settings
 from app.core.models.enums import MappingMethod
 from app.schemas.ontology import OntologyDefinition, OntologyMapping
+from app.services.han import has_han, to_simplified
 
 
 class LlmMappingDecision(BaseModel):
@@ -92,13 +93,40 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def normalize_label(text: str) -> str:
-    """Lowercase, strip accents/punctuation, collapse whitespace (locale-agnostic)."""
+    """Lowercase, strip accents/punctuation, collapse whitespace (locale-agnostic).
+
+    Han text is folded to Simplified so a Traditional caption from a Hong Kong or Taiwan
+    filing compares equal to a Simplified alias (and vice versa) — the same concept printed
+    in the other script would otherwise never match.
+    """
+    text = to_simplified(text)
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
     text = text.lower()
     text = re.sub(r"[^\w\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+# A bilingual filing prints one caption in both scripts: "REVENUE 收益",
+# "Cost of sales 銷售成本". Matching the concatenation dilutes every score (half the string is
+# always "wrong" for a single-language alias), so each script's run is also matched on its own
+# and the best segment wins.
+_HAN_RUN = re.compile(r"[㐀-䶿一-鿿豈-﫿]+(?:\s*[㐀-䶿一-鿿豈-﫿]+)*")
+
+
+def label_segments(text: str) -> list[str]:
+    """The caption plus its per-script halves (Latin-only and Han-only), longest first.
+
+    Returns just ``[text]`` for a single-script caption, so monolingual filings are unaffected.
+    """
+    if not text or not has_han(text):
+        return [text]
+    han = " ".join(_HAN_RUN.findall(text)).strip()
+    latin = _HAN_RUN.sub(" ", text)
+    latin = re.sub(r"\s+", " ", latin).strip()
+    out = [text] + [p for p in (latin, han) if p and p != text]
+    return list(dict.fromkeys(out))
 
 
 @dataclass
@@ -155,10 +183,18 @@ class OntologyMatcher:
         self._alias_vecs: list[tuple[str, list[float]]] | None = None
         for m in ontology.mappings:
             self._by_key[m.canonical_key] = m
-            aliases = m.aliases_for(self.locale)
+            # Index EVERY locale's aliases, not just the document's. A bilingual filing prints
+            # both scripts on the same line, so restricting the index to the detected locale
+            # makes a Chinese-only caption unmatchable in a document detected as English.
+            # Recognising the printed text is locale-independent; the locale still orders
+            # `aliases_for` for display/scoring preference.
+            aliases = list(dict.fromkeys(
+                m.aliases_for(self.locale)
+                + [a for locale_aliases in m.aliases_i18n.values() for a in locale_aliases]
+            ))
             self._alias_by_key[m.canonical_key] = [normalize_label(a) for a in aliases]
             for a in aliases:
-                self._alias_index[normalize_label(a)] = m.canonical_key
+                self._alias_index.setdefault(normalize_label(a), m.canonical_key)
 
     # -- individual tiers -------------------------------------------------
 
@@ -328,28 +364,76 @@ class OntologyMatcher:
 
     # -- orchestration ----------------------------------------------------
 
-    def match(self, raw_label: str, context: str | None = None) -> MappingResult:
+    # Canonical keys are namespaced by statement (bs_/pl_/cf_/eq_...), so the statement a
+    # caption was printed on constrains which concepts may win.
+    _STMT_PREFIX = {"balance_sheet": "bs", "profit_and_loss": "pl", "cash_flow": "cf",
+                    "changes_in_equity": "eq"}
+
+    def _in_statement(self, canonical_key: str, statement: str | None) -> bool:
+        """False only when the key clearly belongs to a DIFFERENT statement than the caption.
+
+        Unknown statements, and keys whose prefix isn't one of the known statement
+        namespaces, are always allowed — the constraint suppresses confident cross-statement
+        errors without silently dropping concepts it cannot place.
+        """
+        want = self._STMT_PREFIX.get(statement or "")
+        if not want:
+            return True
+        prefix = canonical_key.split("_", 1)[0]
+        if prefix not in set(self._STMT_PREFIX.values()):
+            return True
+        return prefix == want
+
+    @staticmethod
+    def _best_per_key(cands: list[Candidate]) -> list[Candidate]:
+        """Highest-scoring candidate per concept, best first (segments can both propose one)."""
+        best: dict[str, Candidate] = {}
+        for c in cands:
+            cur = best.get(c.canonical_key)
+            if cur is None or c.score > cur.score:
+                best[c.canonical_key] = c
+        return sorted(best.values(), key=lambda c: c.score, reverse=True)
+
+    def match(self, raw_label: str, context: str | None = None,
+              statement: str | None = None) -> MappingResult:
         """A COMBINATION of methods — no single one is authoritative:
 
         exact identity short-circuits (free); otherwise rule / fuzzy / embedding each
         contribute candidate evidence, the LLM makes the semantic, criteria-based call
         (the key driver), and cross-method agreement adjusts confidence and review routing.
         Falls back to the deterministic margin policy when no LLM is configured/abstains.
+
+        ``statement`` is the statement the caption was printed on (``balance_sheet``,
+        ``profit_and_loss``, ``cash_flow``, ``changes_in_equity``) when the page classifier
+        determined it. Concepts belonging to a *different* statement are then excluded: a
+        balance-sheet caption must not resolve to a cash-flow concept just because the words
+        overlap ("Finance costs" appears on both), which is otherwise a whole class of
+        confidently-wrong mapping.
         """
+        segments = label_segments(raw_label)
         norm = normalize_label(raw_label)
         s = self.settings
         scores: dict[str, float] = {}
 
-        # 1. Exact normalized-alias identity — unambiguous and free.
-        exact = self._exact(norm)
-        if exact:
-            return MappingResult(exact.canonical_key, exact.method, 1.0, [exact], False,
-                                 {"exact": 1.0}, allocation_status="direct_exclusive")
+        # 1. Exact normalized-alias identity — unambiguous and free. Tried on the caption and,
+        #    for a bilingual line, on each script's half (either alone can be an exact alias).
+        for seg in segments:
+            exact = self._exact(normalize_label(seg))
+            if exact and self._in_statement(exact.canonical_key, statement):
+                return MappingResult(exact.canonical_key, exact.method, 1.0, [exact], False,
+                                     {"exact": 1.0}, allocation_status="direct_exclusive")
 
         # 2. Deterministic evidence from every method (each contributes; none forced out).
-        rule = self._rule(raw_label)
-        fuzzy = self._fuzzy(norm)
+        #    Fuzzy/rule run per script segment and keep the best score per concept, so
+        #    "REVENUE 收益" scores as well as the monolingual "Revenue" would.
+        rule = next((r for r in (self._rule(seg) for seg in segments) if r), None)
+        fuzzy = self._best_per_key([c for seg in segments for c in self._fuzzy(normalize_label(seg))])
         emb = self._embedding(raw_label)
+        # Drop candidates belonging to another statement BEFORE they can win or shortlist.
+        if rule and not self._in_statement(rule.canonical_key, statement):
+            rule = None
+        fuzzy = [c for c in fuzzy if self._in_statement(c.canonical_key, statement)]
+        emb = [c for c in (emb or []) if self._in_statement(c.canonical_key, statement)]
         by_method: dict[str, set[str]] = {}
         pool: list[Candidate] = []
         if rule:
@@ -375,7 +459,8 @@ class OntologyMatcher:
         # 3. LLM semantic decision — the key driver, shown the deterministic shortlist
         #    (or every concept for a small ontology) plus each concept's criteria.
         if self.llm_enabled:
-            all_keys = self._extractable_keys()
+            all_keys = [k for k in self._extractable_keys()
+                        if self._in_statement(k, statement)]
             if len(all_keys) <= s.extraction.llm_candidate_cap:
                 shortlist = all_keys
             else:
@@ -442,7 +527,8 @@ class OntologyMatcher:
         return MappingResult(None, MappingMethod.UNMATCHED, 0.0, ranked[:5], True, scores,
                              allocation_status="unmapped_review")
 
-    def match_batch(self, items: list[tuple[str, str]]) -> dict[str, MappingResult]:
+    def match_batch(self, items: list[tuple[str, str]],
+                    statement: str | None = None) -> dict[str, MappingResult]:
         """Per-statement mapping: decide ALL captions in one grounded LLM call so
         cross-line judgements (containment, residual, 'Others') have full context. The
         model references the provided item_ids and candidate keys — it never invents a
@@ -452,9 +538,12 @@ class OntologyMatcher:
 
         ``items`` is a list of (item_id, source_label)."""
         if not self.llm_enabled or not items:
-            return {iid: self.match(label) for iid, label in items}
+            return {iid: self.match(label, statement=statement) for iid, label in items}
 
-        candidates = self._concept_payload(self._extractable_keys())
+        # Only concepts from THIS statement are offered, so the batch cannot place a caption
+        # in another statement (see `match`).
+        candidates = self._concept_payload(
+            [k for k in self._extractable_keys() if self._in_statement(k, statement)])
         user = json.dumps({
             "instruction": "Map each source_item to exactly one candidate canonical_key by "
                            "meaning, applying the policies. Reference item_id and canonical_key; "
@@ -470,7 +559,7 @@ class OntologyMatcher:
                 max_tokens=4096,
             )
         except Exception:
-            return {iid: self.match(label) for iid, label in items}
+            return {iid: self.match(label, statement=statement) for iid, label in items}
         self.usage["calls"] += 1
         self.usage["input_tokens"] += int(meta.get("input_tokens") or 0)
         self.usage["output_tokens"] += int(meta.get("output_tokens") or 0)
@@ -494,5 +583,5 @@ class OntologyMatcher:
         # Per-line fallback for any items the batch omitted.
         for iid, label in items:
             if iid not in out:
-                out[iid] = self.match(label)
+                out[iid] = self.match(label, statement=statement)
         return out

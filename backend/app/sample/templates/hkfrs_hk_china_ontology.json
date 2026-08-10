@@ -16,9 +16,11 @@
     "framework": "HKFRS",
     "version": "1.0",
     "source_template": "hkfrs_hk_china_v1",
-    "field_count": 142,
+    "field_count": 143,
     "changes": [
-      "Initial HK/China ontology generated from the HKFRS/IFRS template."
+      "Initial HK/China ontology generated from the HKFRS/IFRS template.",
+      "Added the 'Gross profit' (毛利) face subtotal concept (pl_gross_profit) with its accounting definition, inclusion/exclusion criteria and bilingual aliases.",
+      "Added plain HKFRS/IFRS face-line wordings and Traditional Chinese aliases used in HKEX filings (Revenue 收益, Cost of sales 銷售成本, Other income and gains 其他收入及收益, Selling and marketing expenses 銷售及營銷開支, Administrative expenses 行政開支, Finance costs 財務費用, Profit/(loss) before tax 除稅前溢利, Income tax expense 稅項開支, Loss for the year 年內虧損) to the existing profit-or-loss mappings."
     ]
   },
   "global_rules": {
@@ -1675,14 +1677,38 @@
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Revenue from operations"
+        "Revenue from operations",
+        "Revenue",
+        "REVENUE",
+        "Revenue from contracts with customers",
+        "Turnover",
+        "Sales",
+        "Sales revenue",
+        "Operating income"
       ],
       "aliases_i18n": {
         "en": [
-          "Revenue from operations"
+          "Revenue from operations",
+          "Revenue",
+          "REVENUE",
+          "Revenue from contracts with customers",
+          "Turnover",
+          "Sales",
+          "Sales revenue",
+          "Operating income"
         ],
         "zh": [
-          "营业收入"
+          "营业收入",
+          "收益",
+          "營業收入",
+          "客戶合約收益",
+          "客户合约收益",
+          "營業額",
+          "营业额",
+          "銷售收入",
+          "销售收入",
+          "主營業務收入",
+          "主营业务收入"
         ]
       }
     },
@@ -1701,14 +1727,33 @@
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Other income"
+        "Other income",
+        "Other income and gains",
+        "Other income and gains, net",
+        "Other income and other gains",
+        "Other gains",
+        "Other revenue and gains",
+        "Other operating income"
       ],
       "aliases_i18n": {
         "en": [
-          "Other income"
+          "Other income",
+          "Other income and gains",
+          "Other income and gains, net",
+          "Other income and other gains",
+          "Other gains",
+          "Other revenue and gains",
+          "Other operating income"
         ],
         "zh": [
-          "其他收入"
+          "其他收入",
+          "其他收入及收益",
+          "其他收入及收益净额",
+          "其他收入及收益淨額",
+          "其他收入及利得",
+          "其他收益",
+          "其他經營收入",
+          "其他经营收入"
         ]
       }
     },
@@ -1753,14 +1798,37 @@
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Cost of Goods Sold"
+        "Cost of Goods Sold",
+        "Cost of sales",
+        "COST OF SALES",
+        "Cost of goods sold",
+        "Cost of sales and services",
+        "Cost of services",
+        "Cost of properties sold",
+        "Cost of revenue"
       ],
       "aliases_i18n": {
         "en": [
-          "Cost of Goods Sold"
+          "Cost of Goods Sold",
+          "Cost of sales",
+          "COST OF SALES",
+          "Cost of goods sold",
+          "Cost of sales and services",
+          "Cost of services",
+          "Cost of properties sold",
+          "Cost of revenue"
         ],
         "zh": [
-          "销售成本"
+          "销售成本",
+          "銷售成本",
+          "銷貨成本",
+          "销货成本",
+          "已售物業成本",
+          "已售物业成本",
+          "服務成本",
+          "服务成本",
+          "主營業務成本",
+          "主营业务成本"
         ]
       }
     },
@@ -1779,14 +1847,39 @@
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Selling and Marketing Expenses"
+        "Selling and Marketing Expenses",
+        "Selling and marketing expenses",
+        "Selling and distribution expenses",
+        "Selling and distribution costs",
+        "Distribution costs",
+        "Distribution and selling expenses",
+        "Selling expenses",
+        "Marketing expenses"
       ],
       "aliases_i18n": {
         "en": [
-          "Selling and Marketing Expenses"
+          "Selling and Marketing Expenses",
+          "Selling and marketing expenses",
+          "Selling and distribution expenses",
+          "Selling and distribution costs",
+          "Distribution costs",
+          "Distribution and selling expenses",
+          "Selling expenses",
+          "Marketing expenses"
         ],
         "zh": [
-          "销售及市场推广费用"
+          "销售及市场推广费用",
+          "銷售及營銷開支",
+          "销售及营销开支",
+          "銷售及分銷開支",
+          "销售及分销开支",
+          "銷售及市場推廣費用",
+          "分銷成本",
+          "分销成本",
+          "銷售開支",
+          "销售开支",
+          "銷售費用",
+          "销售费用"
         ]
       }
     },
@@ -1805,14 +1898,35 @@
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "General and Administrative expenses"
+        "General and Administrative expenses",
+        "Administrative expenses",
+        "Administrative and other operating expenses",
+        "General and administrative expenses",
+        "Administrative costs",
+        "General administrative expenses",
+        "Other operating and administrative expenses"
       ],
       "aliases_i18n": {
         "en": [
-          "General and Administrative expenses"
+          "General and Administrative expenses",
+          "Administrative expenses",
+          "Administrative and other operating expenses",
+          "General and administrative expenses",
+          "Administrative costs",
+          "General administrative expenses",
+          "Other operating and administrative expenses"
         ],
         "zh": [
-          "一般及行政费用"
+          "一般及行政费用",
+          "行政開支",
+          "行政开支",
+          "一般及行政開支",
+          "行政費用",
+          "行政费用",
+          "管理費用",
+          "管理费用",
+          "行政及其他經營開支",
+          "行政及其他经营开支"
         ]
       }
     },
@@ -1987,14 +2101,40 @@
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Interest Expense"
+        "Interest Expense",
+        "Finance costs",
+        "FINANCE COSTS",
+        "Finance cost",
+        "Finance costs, net",
+        "Finance expenses",
+        "Interest expense",
+        "Interest expenses on bank and other borrowings",
+        "Interest on bank borrowings"
       ],
       "aliases_i18n": {
         "en": [
-          "Interest Expense"
+          "Interest Expense",
+          "Finance costs",
+          "FINANCE COSTS",
+          "Finance cost",
+          "Finance costs, net",
+          "Finance expenses",
+          "Interest expense",
+          "Interest expenses on bank and other borrowings",
+          "Interest on bank borrowings"
         ],
         "zh": [
-          "利息支出"
+          "利息支出",
+          "財務費用",
+          "财务费用",
+          "財務成本",
+          "财务成本",
+          "融資成本",
+          "融资成本",
+          "利息開支",
+          "利息开支",
+          "銀行及其他借款之利息開支",
+          "银行及其他借款之利息开支"
         ]
       }
     },
@@ -2377,14 +2517,87 @@
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Total tax expense"
+        "Total tax expense",
+        "Income tax expense",
+        "INCOME TAX EXPENSE",
+        "Income tax expenses",
+        "Income tax credit",
+        "Income tax",
+        "Tax expense",
+        "Taxation",
+        "Tax charge for the year"
       ],
       "aliases_i18n": {
         "en": [
-          "Total tax expense"
+          "Total tax expense",
+          "Income tax expense",
+          "INCOME TAX EXPENSE",
+          "Income tax expenses",
+          "Income tax credit",
+          "Income tax",
+          "Tax expense",
+          "Taxation",
+          "Tax charge for the year"
         ],
         "zh": [
-          "所得税费用总额"
+          "所得税费用总额",
+          "稅項開支",
+          "税项开支",
+          "所得稅開支",
+          "所得税开支",
+          "所得稅費用",
+          "所得税费用",
+          "稅項",
+          "税项",
+          "稅務開支",
+          "税务开支",
+          "年內稅項開支"
+        ]
+      }
+    },
+    {
+      "canonical_key": "pl_gross_profit",
+      "label": "Gross profit",
+      "definition": "Gross profit: the HKFRS/IFRS face subtotal struck immediately after revenue and cost of sales — revenue less the cost of sales (cost of goods sold, cost of services, cost of properties sold) for the same period. It measures the margin earned on the entity's core selling and servicing activity BEFORE selling and marketing expenses, administrative expenses, other income and gains, finance costs and tax. A negative amount is a gross loss and is carried with its reported sign. Being a subtotal, it is derived from the separately mapped revenue and cost-of-sales lines and must not be double-counted with them.",
+      "description": "Gross profit: a top-level subtotal of the statement of profit or loss (revenue − cost of sales).",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "The face subtotal captioned 'Gross profit', 'GROSS PROFIT', 'Gross profit/(loss)' or '毛利' / '毛利潤' presented directly below revenue and cost of sales, for the same entity, scope, period, currency and unit.",
+        "A reported gross loss ('Gross loss' / '毛損'), retained with its reported negative sign.",
+        "The consolidated figure where both consolidated and company-only columns are shown."
+      ],
+      "exclude": [
+        "Revenue and cost of sales themselves, which map to their own dedicated concepts and would double-count this subtotal.",
+        "Operating profit / EBIT, profit before tax and profit for the year, which are struck after further expenses, other income and tax.",
+        "Gross margin percentages, ratios or per-segment gross profit quoted in the management discussion or the segment note rather than on the face of the statement of profit or loss.",
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "aliases": [
+        "Gross profit",
+        "GROSS PROFIT",
+        "Gross profit/(loss)",
+        "Gross loss",
+        "Gross margin"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Gross profit",
+          "GROSS PROFIT",
+          "Gross profit/(loss)",
+          "Gross loss",
+          "Gross margin"
+        ],
+        "zh": [
+          "毛利",
+          "毛利潤",
+          "毛利润",
+          "毛利╱（毛損）",
+          "毛利／（毛損）",
+          "毛利／（毛损）",
+          "毛損",
+          "毛损"
         ]
       }
     },
@@ -2481,14 +2694,38 @@
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Profit before tax"
+        "Profit before tax",
+        "PROFIT/(LOSS) BEFORE TAX",
+        "Profit/(loss) before tax",
+        "Loss before tax",
+        "Profit before taxation",
+        "Loss before taxation",
+        "Profit before income tax",
+        "Profit/(loss) before taxation"
       ],
       "aliases_i18n": {
         "en": [
-          "Profit before tax"
+          "Profit before tax",
+          "PROFIT/(LOSS) BEFORE TAX",
+          "Profit/(loss) before tax",
+          "Loss before tax",
+          "Profit before taxation",
+          "Loss before taxation",
+          "Profit before income tax",
+          "Profit/(loss) before taxation"
         ],
         "zh": [
-          "税前利润"
+          "税前利润",
+          "除稅前溢利",
+          "除税前溢利",
+          "除稅前溢利╱（虧損）",
+          "除稅前溢利／（虧損）",
+          "除税前溢利／（亏损）",
+          "除稅前虧損",
+          "除税前亏损",
+          "除所得稅前溢利",
+          "稅前利潤",
+          "税前亏损"
         ]
       }
     },
@@ -2507,14 +2744,42 @@
         "Gross parent totals that contain separately mapped children."
       ],
       "aliases": [
-        "Profit for the year"
+        "Profit for the year",
+        "LOSS FOR THE YEAR",
+        "Loss for the year",
+        "PROFIT FOR THE YEAR",
+        "Profit/(loss) for the year",
+        "Profit for the period",
+        "Loss for the period",
+        "Net profit for the year",
+        "Profit and total comprehensive income for the year"
       ],
       "aliases_i18n": {
         "en": [
-          "Profit for the year"
+          "Profit for the year",
+          "LOSS FOR THE YEAR",
+          "Loss for the year",
+          "PROFIT FOR THE YEAR",
+          "Profit/(loss) for the year",
+          "Profit for the period",
+          "Loss for the period",
+          "Net profit for the year",
+          "Profit and total comprehensive income for the year"
         ],
         "zh": [
-          "年度利润"
+          "年度利润",
+          "年內虧損",
+          "年内亏损",
+          "年內溢利",
+          "年内溢利",
+          "年內溢利╱（虧損）",
+          "年內溢利／（虧損）",
+          "年内溢利／（亏损）",
+          "本年度虧損",
+          "本年度亏损",
+          "年度虧損",
+          "期內虧損",
+          "期内亏损"
         ]
       }
     },

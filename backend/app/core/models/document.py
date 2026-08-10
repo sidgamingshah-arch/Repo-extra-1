@@ -30,6 +30,10 @@ class PageSource(BaseModel):
     image_area_coverage: float = 0.0
     classification_confidence: float | None = None
     classification_evidence: list[str] = Field(default_factory=list)
+    # Which face statement this page belongs to (balance_sheet / profit_and_loss / cash_flow /
+    # changes_in_equity), when the classifier could tell. Constrains ontology mapping so a
+    # caption cannot resolve to a concept from a different statement. None = undetermined.
+    statement: str | None = None
 
 
 class DocumentModel(BaseModel):

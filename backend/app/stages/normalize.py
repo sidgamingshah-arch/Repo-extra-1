@@ -26,40 +26,91 @@ _ADD = re.compile(r"^\s*add\b|add:", re.IGNORECASE)
 
 # "Amounts in ₹ crore", "(RMB'000)", "in thousands of USD", "figures in HK$ million" …
 _UNIT_SCALE = {"thousand": Decimal(1_000), "lakh": Decimal(100_000), "lac": Decimal(100_000),
+               "ten thousand": Decimal(10_000),
                "million": Decimal(1_000_000), "mn": Decimal(1_000_000),
+               "hundred million": Decimal(100_000_000),
                "crore": Decimal(10_000_000), "cr": Decimal(10_000_000),
                "billion": Decimal(1_000_000_000), "bn": Decimal(1_000_000_000)}
-_UNIT_RE = re.compile(r"\b(thousands?|lakhs?|lacs?|millions?|mn|crores?|cr|billions?|bn)\b",
-                      re.IGNORECASE)
-_CCY = [("₹", "INR"), ("rs.", "INR"), ("inr", "INR"), ("hk$", "HKD"), ("hkd", "HKD"),
-        ("rmb", "CNY"), ("cny", "CNY"), ("us$", "USD"), ("usd", "USD"), ("$", "USD"),
-        ("€", "EUR"), ("eur", "EUR"), ("£", "GBP"), ("gbp", "GBP")]
+# Most real filings never spell the scale out: the statement column head simply reads
+# "RMB'000" / "HK$’000" / "人民幣千元". Those idioms ARE the declaration, so they are matched
+# alongside the spelled-out words — including the curly apostrophe, which is what a PDF text
+# layer almost always yields. Patterns are tried in order at the leftmost match, so the longer
+# idiom wins where two overlap ('000,000 over '000, 百萬 over 萬).
+_SCALE_PATTERNS = [
+    (re.compile(r"(?<![\d.])['’`]0{3}[,.]0{3}"), "million"),        # RMB'000,000
+    (re.compile(r"(?<![\d.])['’`]0{3}"), "thousand"),               # RMB'000, HK$’000, ₹'000
+    (re.compile(r"百萬|百万"), "million"),
+    (re.compile(r"千元"), "thousand"),        # 人民幣千元 — bare 千 is too weak to trust
+    (re.compile(r"億|亿"), "hundred million"),
+    (re.compile(r"萬|万"), "ten thousand"),
+    (re.compile(r"\b(thousands?|lakhs?|lacs?|millions?|mn|crores?|cr|billions?|bn)\b",
+                re.IGNORECASE), None),                              # label taken from the match
+]
+_CCY = [("₹", "INR"), ("rs.", "INR"), ("inr", "INR"),
+        ("hk$", "HKD"), ("hkd", "HKD"), ("港幣", "HKD"), ("港币", "HKD"), ("港元", "HKD"),
+        ("rmb", "CNY"), ("cny", "CNY"), ("人民幣", "CNY"), ("人民币", "CNY"),
+        ("us$", "USD"), ("usd", "USD"),
+        ("新台幣", "TWD"), ("新台币", "TWD"), ("日圓", "JPY"), ("日元", "JPY"),
+        ("$", "USD"), ("€", "EUR"), ("eur", "EUR"), ("£", "GBP"), ("gbp", "GBP")]
+# A statement-face count high enough to cover every face of a group annual report, but bounded
+# so a mis-classified 270-page document can't turn detection into a full-text scan.
+_MAX_FACE_SCAN = 12
 
 
-def _detect_units(ctx: PipelineContext, fmt: str) -> UnitContext | None:
-    """Detect a source scale + currency from a units declaration near the top of the document
-    (e.g. "Amounts in ₹ crore"). Returns None when nothing is declared — the caller then treats
-    values as reported rather than guessing a scale."""
+def _scan_scale(text: str) -> str | None:
+    """The scale label declared in `text`, preferring the earliest declaration in reading order."""
+    best: tuple[int, str] | None = None
+    for rx, label in _SCALE_PATTERNS:
+        m = rx.search(text)
+        if m is None:
+            continue
+        word = (label or m.group(1).rstrip("s")).lower()
+        if best is None or m.start() < best[0]:
+            best = (m.start(), word)
+    return best[1] if best else None
+
+
+def _detect_units(ctx: PipelineContext, fmt: str, doc: DocumentModel | None = None
+                  ) -> UnitContext | None:
+    """Detect a source scale + currency from a units declaration (e.g. "Amounts in ₹ crore").
+    Returns None when nothing is declared — the caller then treats values as reported rather
+    than guessing a scale.
+
+    In an annual report the declaration lives on the *statement* pages (p.100+), not the cover,
+    so the front matter is scanned first (a cover banner still wins when present) and then each
+    statement face. A chunk only ends the search once it yields a scale: a stray currency
+    mention in the front matter must not pre-empt the real "RMB'000" column head further in."""
     from app.services.derived import document_text
 
     try:
         pages = document_text(ctx.raw_bytes or b"", fmt)
     except Exception:  # noqa: BLE001
         return None
-    text = " ".join(t for _, t in pages[:2]).lower()
-    if not text:
+    by_index = dict(pages)
+    # (page index for provenance, text) chunks in scan order; front matter is one chunk so a
+    # scale and currency split across the first two pages still combine, as they always have.
+    chunks: list[tuple[int | None, str]] = [(None, " ".join(t for _, t in pages[:2]))]
+    for page in (doc.face_pages() if doc is not None else [])[:_MAX_FACE_SCAN]:
+        chunks.append((page.index, by_index.get(page.index, "")))
+
+    currency: str | None = None
+    for index, raw in chunks:
+        text = raw.lower()
+        if not text:
+            continue
+        # Remember the first currency seen: the face page declaring the scale may print only
+        # "'000" with the currency stated once, elsewhere.
+        currency = currency or next((code for tok, code in _CCY if tok in text), None)
+        scale_word = _scan_scale(text)
+        if scale_word is None:
+            continue
+        return UnitContext(currency=currency or "", units_label=scale_word,
+                           scale_factor=_UNIT_SCALE.get(scale_word, Decimal(1)),
+                           source_bbox_page=index)
+    if currency is None:
         return None
-    scale_word = None
-    m = _UNIT_RE.search(text)
-    if m:
-        key = m.group(1).rstrip("s").lower()
-        scale_word = key
-    currency = next((code for tok, code in _CCY if tok in text), None)
-    if scale_word is None and currency is None:
-        return None
-    scale = _UNIT_SCALE.get(scale_word, Decimal(1)) if scale_word else Decimal(1)
-    return UnitContext(currency=currency or "INR", scale_factor=scale,
-                       units_label=(scale_word or None))
+    # Currency without a scale: record it, but keep scale 1 — figures are as reported.
+    return UnitContext(currency=currency, scale_factor=Decimal(1), units_label=None)
 
 
 class NormalizeStage:
@@ -68,10 +119,11 @@ class NormalizeStage:
     def run(self, doc: DocumentModel, ctx: PipelineContext) -> DocumentModel:
         # Source units/currency ("Amounts in ₹ crore") — recorded so the UI/export can convert
         # to a chosen presentation unit knowing the base (and never guessing when undeclared).
-        detected = _detect_units(ctx, doc.fmt.value)
+        detected = _detect_units(ctx, doc.fmt.value, doc)
         if detected is not None:
             doc.unit_context = detected
-            ctx.log(f"normalize:units={detected.units_label or 'as_reported'}/{detected.currency}")
+            ctx.log(f"normalize:units={detected.units_label or 'as_reported'}"
+                    f"/{detected.currency or 'unknown_ccy'}")
 
         ontology = getattr(ctx, "ontology", None)
         sign_by_key: dict[str, list] = {}

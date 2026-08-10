@@ -35,6 +35,24 @@ _FACE_TITLES = [
     r"综合(收益|损益)表", r"全面(收益|損益)表", r"綜合(收益|損益)表",
     r"现金流量表", r"現金流量表", r"权益变动表", r"權益變動表",
 ]
+# Which face statement a title names. Ordered: the more specific title wins, because
+# "statement of profit or loss AND OTHER COMPREHENSIVE INCOME" also contains a bare
+# "comprehensive income", and a changes-in-equity title contains the word "equity" only.
+# Knowing the statement lets ontology mapping reject concepts from a different statement.
+_STATEMENT_TITLES: list[tuple[str, list[str]]] = [
+    ("changes_in_equity", [r"statement of changes in equity", r"changes in equity",
+                           r"权益变动表", r"權益變動表", r"股東權益變動表", r"股东权益变动表"]),
+    ("cash_flow", [r"statement of cash ?flows?", r"cash ?flow statement",
+                   r"现金流量表", r"現金流量表"]),
+    ("balance_sheet", [r"balance sheet", r"statement of financial position",
+                       r"资产负债表", r"資產負債表", r"财务状况表", r"財務狀況表"]),
+    ("profit_and_loss", [r"statement of profit (and|&|or) loss", r"profit or loss",
+                         r"income statement", r"statement of operations",
+                         r"(statement of )?comprehensive income",
+                         r"利润表", r"利潤表", r"损益表", r"損益表",
+                         r"综合(收益|损益)表", r"綜合(收益|損益)表",
+                         r"全面(收益|損益)表"]),
+]
 # Explicit markers that the notes section has begun (English + Chinese).
 _NOTES_HEADERS = [
     r"notes? to the (financial|consolidated|unconsolidated|standalone) statements",
@@ -120,6 +138,23 @@ def _title_matches(text: str, patterns: list[str]) -> bool:
     return False
 
 
+def _statement_at_top(text: str) -> str | None:
+    """Which face statement the page's heading names, or None when no title is present.
+
+    A continuation page ("CONSOLIDATED STATEMENT OF FINANCIAL POSITION" repeated, or no title
+    at all) is handled by the caller, which carries the last-seen statement forward.
+    """
+    zone = " ".join(_title_zone(text)).lower()
+    if _SUMMARY_CTX.search(zone):
+        return None
+    cands = [c.lower() for c in _title_candidates(_title_zone(text))]
+    for statement, patterns in _STATEMENT_TITLES:
+        for c in cands:
+            if any(re.search(rx, c) for rx in patterns):
+                return statement
+    return None
+
+
 def _face_title_at_top(text: str) -> bool:
     """A face-statement title as a heading beneath the running header — excluding the
     highlights / summary pages that quote a statement name without being one."""
@@ -150,6 +185,10 @@ class ClassifyStage:
         # note page that quotes a face phrase in prose isn't re-read as a face, and a highlights
         # page that quotes one isn't a false statement. Regions: pre → face → notes → post.
         region = "pre"
+        # The statement most recently named by a heading. Real filings run a statement across
+        # several pages and only title the first (or repeat the title), so a face page with no
+        # resolvable title inherits the previous one.
+        current_statement: str | None = None
         for page_src in doc.pages:
             if page_src.index >= len(pdf):
                 continue
@@ -171,8 +210,13 @@ class ClassifyStage:
 
             if region == "face":
                 kind, conf = PageKind.FACE, 0.72
+                named = _statement_at_top(text)
+                if named:
+                    current_statement = named
+                page_src.statement = current_statement
             elif region == "notes":
                 kind, conf = PageKind.NOTES, 0.75 if notes_header else 0.6
+                current_statement = None      # the face run has ended
             else:
                 kind, conf = PageKind.OTHER, 0.4
 
@@ -180,5 +224,7 @@ class ClassifyStage:
             page_src.classification_confidence = conf
 
         pdf.close()
-        ctx.log(f"classify:face={len(doc.face_pages())} notes={len(doc.notes_pages())}")
+        stmts = {p.statement for p in doc.face_pages() if p.statement}
+        ctx.log(f"classify:face={len(doc.face_pages())} notes={len(doc.notes_pages())} "
+                f"statements={sorted(stmts)}")
         return doc

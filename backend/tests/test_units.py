@@ -26,6 +26,39 @@ def _units_pdf() -> bytes:
     return buf.getvalue()
 
 
+def _late_declaration_pdf() -> bytes:
+    """An annual-report shape: front matter declaring nothing, the units only on the statement
+    face several pages in (real filings put "RMB'000" in the column head, never on the cover)."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _, h = A4
+    for front in ("Annual Report 2023", "Contents", "Chairman's Statement"):
+        c.setFont("Helvetica", 12); c.drawString(72, h - 72, front); c.showPage()
+    c.setFont("Helvetica-Bold", 13); c.drawString(72, h - 55, "CONSOLIDATED BALANCE SHEET")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(360, h - 75, "2023")
+    c.drawRightString(360, h - 88, "RMB’000")     # curly apostrophe, as PDF text layers give
+    c.setFont("Helvetica", 10)
+    c.drawString(72, h - 115, "Total assets"); c.drawRightString(360, h - 115, "1,204")
+    c.drawString(72, h - 135, "Total equity and liabilities")
+    c.drawRightString(360, h - 135, "1,204")
+    c.showPage(); c.save()
+    return buf.getvalue()
+
+
+def test_source_units_detected_on_a_late_statement_page():
+    from app.services.documents import run_extraction
+
+    doc, _ = run_extraction(_late_declaration_pdf(), filename="ar.pdf")
+    assert doc.unit_context is not None      # was None while only pages 1-2 were scanned
+    assert doc.unit_context.units_label == "thousand"
+    assert int(doc.unit_context.scale_factor) == 1_000
+    assert doc.unit_context.currency == "CNY"
+
+
 def _await(client, doc_id):
     for _ in range(100):
         if client.get(f"/api/v1/documents/{doc_id}/run").json().get("status") == "succeeded":

@@ -59,11 +59,50 @@ def _is_date_ish(d) -> bool:
     return 1 <= a <= 31 or 1990 <= a <= 2099
 
 
+# A period caption written in CJK numerals — "二零二三年" (2023), "二零二二年" (2022) — is how
+# HK/PRC filings head their comparative columns. Also the plain Arabic-numeral year.
+_PERIOD_TOKEN = re.compile(r"[〇零一二三四五六七八九十]{2,6}年|\b(19|20)\d{2}\b|"
+                           r"[〇零一二三四五六七八九十]{1,2}月|[〇零一二三四五六七八九十]{1,3}日")
+
+
+def _is_period_only_label(label: str) -> bool:
+    """True when the label is nothing but period captions (a column-header row).
+
+    "二零二三年 二零二二年" heads the comparative columns; it is not a line item, whatever
+    numbers happen to land on its baseline. Requires that removing the period tokens leaves
+    no substantive word, so "Profit for the year ended 2023" is never mistaken for a header.
+    """
+    if not label or not label.strip():
+        return False
+    rest = _PERIOD_TOKEN.sub(" ", label)
+    rest = re.sub(r"[\s\-–—/、,，.。()（）:：'\u2019\"]+", " ", rest).strip()
+    return not rest
+
+
+def _is_heading_with_note_only(label: str, vals: list) -> bool:
+    """A section heading whose only "value" is a note reference that drifted into the row.
+
+    Statement sections ("EQUITY HOLDERS OF THE PARENT", "NON-CURRENT ASSETS") carry no amount;
+    when the sole number on the line is note-sized, it is the note column, not a figure.
+    Restricted to labels with no lower-case letters so a real caption keeps its value.
+    """
+    if not vals or not label:
+        return False
+    letters = [c for c in label if c.isalpha() and c.isascii()]
+    if not letters or any(c.islower() for c in letters):
+        return False
+    return all(_is_date_ish(v) for v in vals)
+
+
 def _is_noise_row(label: str, vals: list) -> bool:
     """A title / running-header / period-caption line that leaked in as a row. Dropped only when
     the label is header-like AND every extracted value is a date fragment — so a genuine line that
     merely mentions a statement name (its value being a real amount) is never removed."""
     if _RUNNING_HDR.search(label):
+        return True
+    if _is_period_only_label(label):
+        return True
+    if _is_heading_with_note_only(label, vals):
         return True
     return bool(vals) and bool(_HDR_LABEL.search(label)) and all(_is_date_ish(v) for v in vals)
 
