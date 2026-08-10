@@ -213,8 +213,12 @@ def _looks_like_header(label_words: list[Word]) -> bool:
 # Words that cannot END a finished caption ("TOTAL ASSETS LESS CURRENT …") or that can only
 # CONTINUE one ("… AND CASH EQUIVALENTS", "… FOR THE YEAR"). Their presence is what separates a
 # wrapped ALL-CAPS label from a genuine ALL-CAPS section banner ("ASSETS", "EQUITY").
+# Bare adjectives and connectives cannot end a finished caption, so a line ending in one is a
+# wrapped head. "TOTAL COMPREHENSIVE" / "LOSS FOR THE YEAR" is the case that matters most: losing
+# the head leaves the tail to be mapped as the profit-or-loss bottom line it is not.
 _HEAD_INCOMPLETE = re.compile(
-    r"\b(less|in|and|or|of|for|to|from|with|net|total|other|that|which|current|non)\s*$",
+    r"\b(less|in|and|or|of|for|to|from|with|net|total|other|that|which|current|non"
+    r"|comprehensive|gross|accumulated|retained|attributable)\s*$",
     re.IGNORECASE)
 _CONT_STARTS = re.compile(r"^\s*(and|or|of|for|to|in|from|with|that|which|upon)\b",
                           re.IGNORECASE)
