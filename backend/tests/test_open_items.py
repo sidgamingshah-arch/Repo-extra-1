@@ -368,6 +368,35 @@ def test_note_column_not_read_as_value():
     assert nr3 is None and len(vw3) == 2
 
 
+# --- title/date/running-header rows are filtered out of line items --------------------------
+def test_header_and_date_rows_are_not_line_items():
+    from app.services.row_reconstruct import _is_noise_row
+
+    D = _dec  # local Decimal helper below
+
+    # Running header ("… / Annual Report 2023") and period captions whose only value is a date
+    # fragment (a year or a day-of-month) are dropped.
+    assert _is_noise_row("China SCE Group Holdings Limited / Annual Report 2023", [D(2023)])
+    assert _is_noise_row("Consolidated Statement of Cash Flows Year ended", [D(31)])
+    assert _is_noise_row("綜合財務狀況表", [D(2023)])
+    assert _is_noise_row("For the year ended", [D(31), D(2023)])
+    # A genuine line that merely mentions a statement name keeps a real amount → kept.
+    assert not _is_noise_row("Reclassified to profit or loss", [D(-499675)])
+    assert not _is_noise_row("Revenue", [D(20960968)])
+    # A header-like label with a decimal (EPS) is a real value, not a date → kept.
+    assert not _is_noise_row("For the year ended", [_dec_str("0.45")])
+
+
+def _dec(n):
+    from decimal import Decimal
+    return Decimal(n)
+
+
+def _dec_str(s):
+    from decimal import Decimal
+    return Decimal(s)
+
+
 # --- #9: Workspace statement rows carry a click-to-source location + doc shape ---------------
 def test_statement_rows_carry_source_and_format(client):
     doc_id = _upload(client, make_rich_pdf(), "srcstmt.pdf")

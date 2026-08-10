@@ -35,6 +35,39 @@ def _is_money_like(t: str, fmt=None) -> bool:
     return _num(t, fmt) is not None and not _is_note_number(t)
 
 
+# A running-header / statement-title / period-caption label. These carry the entity or the
+# statement name + a period date, not a financial line — and the only "number" on them is a
+# date fragment (a year or a day-of-month).
+_RUNNING_HDR = re.compile(r"annual report|interim report|年報|年度報告|中期報告", re.IGNORECASE)
+_HDR_LABEL = re.compile(
+    r"statement of|year ended|for the (year|period)|as at\b|as of\b|period ended|"
+    r"截至|止年度|財務狀況|现金流量|現金流量|權益變動|权益变动|全面收益|損益及其他|损益及其他|"
+    r"綜合.{0,8}表|综合.{0,8}表",
+    re.IGNORECASE)
+
+
+def _is_date_ish(d) -> bool:
+    """A value that is really a date fragment: a year (1990–2099) or a day-of-month (1–31),
+    with no fractional part (so a real figure like 0.45 or 12,345 never qualifies)."""
+    try:
+        iv = int(d)
+    except (TypeError, ValueError):
+        return False
+    if iv != d:
+        return False
+    a = abs(iv)
+    return 1 <= a <= 31 or 1990 <= a <= 2099
+
+
+def _is_noise_row(label: str, vals: list) -> bool:
+    """A title / running-header / period-caption line that leaked in as a row. Dropped only when
+    the label is header-like AND every extracted value is a date fragment — so a genuine line that
+    merely mentions a statement name (its value being a real amount) is never removed."""
+    if _RUNNING_HDR.search(label):
+        return True
+    return bool(vals) and bool(_HDR_LABEL.search(label)) and all(_is_date_ish(v) for v in vals)
+
+
 @dataclass
 class Word:
     text: str
@@ -326,6 +359,12 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
 
         label = " ".join(w.text for w in label_words).strip()
         if not label or not value_words:
+            continue
+
+        # Drop running-header / statement-title / period-caption lines that leaked in as rows
+        # (their only "value" is a date fragment) — never a genuine financial line.
+        row_vals = [d for d in (_num(w.text, number_format) for w in value_words) if d is not None]
+        if _is_noise_row(label, row_vals):
             continue
 
         li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
