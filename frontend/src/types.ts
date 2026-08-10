@@ -153,7 +153,7 @@ export interface StatementRow {
   level?: number;
   note?: string | null;
   note2?: string | null;
-  status?: "flag" | "recon" | "edited" | null;
+  status?: "flag" | "recon" | "edited" | "missing" | null;
   confidence?: Confidence;
   editable?: boolean;
   formula?: string | null;

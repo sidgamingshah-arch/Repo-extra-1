@@ -19,28 +19,7 @@ import { SCREENS } from "./config";
 const COL_DIVIDER = "rgba(37,45,60,0.07)";
 const colDiv: CSSProperties = { borderLeft: `1px solid ${COL_DIVIDER}` };
 
-/* ---- toolbar labelled field chip (display-only; e.g. currency is source-derived) ---- */
-function ToolChip({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        fontSize: 12,
-        color: color.sec,
-        border: `1px solid ${color.cardBorder}`,
-        borderRadius: radius.control,
-        padding: "6px 11px",
-      }}
-    >
-      <span style={{ color: color.muted }}>{label}</span>
-      <span style={{ fontWeight: 600 }}>{value}</span>
-    </div>
-  );
-}
-
-/* ---- toolbar labelled <select> chip (interactive; e.g. units presentation) ---- */
+/* ---- toolbar labelled <select> chip (interactive; e.g. statement / units / currency) ---- */
 function ToolSelect<T extends string>({
   label,
   value,
@@ -146,6 +125,11 @@ const TARGET_SCALE: Record<Exclude<UnitTarget, "as_reported">, number> = {
   billions: 1e9,
 };
 
+/* Currencies offered for presentation. Conversion is applied at a user-entered rate (there is
+ * no bundled FX feed), so a re-currencied figure is always shown with its rate — never a silent,
+ * unsourced conversion. The document's own currency stays the default (rate 1, no change). */
+const CURRENCIES = ["USD", "EUR", "GBP", "INR", "CNY", "HKD", "JPY", "SGD", "AUD", "CAD"];
+
 /* Accounting formatter with an explicit decimal count (fmtIN forces 0dp). */
 function fmtDec(n: number, dp: number): string {
   const s = Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: dp, maximumFractionDigits: dp });
@@ -162,46 +146,21 @@ function presentValue(raw: number | null, srcScale: number, target: UnitTarget):
   return fmtDec(scaled, dp);
 }
 
-/* Small click-to-source chip on a value → drives the live document viewer. */
-function ValueSourceChip({ source, onPick }: {
-  source: StatementRow["source"]; onPick: () => void;
-}) {
-  if (!source) return null;
-  const label = source.source_kind === "spreadsheet" && source.sheet
-    ? `${source.sheet}!${source.cell ?? ""}`
-    : `p.${(source.page_index ?? 0) + 1}${source.bbox ? " ⤢" : ""}`;
-  return (
-    <span
-      onClick={(e) => { e.stopPropagation(); onPick(); }}
-      role="button"
-      title={source.text_snippet ?? "Show source"}
-      style={{
-        fontFamily: font.mono, fontSize: 9.5, color: color.indigo, background: color.indigoTint2,
-        borderRadius: 5, padding: "1px 5px", cursor: "pointer", whiteSpace: "nowrap", flex: "0 0 auto",
-      }}
-    >
-      {label}
-    </span>
-  );
-}
-
 /* ---- right output-panel row ---- */
 function OutputRow({
   row,
   sel,
   present,
+  linkable,
   onSelect,
-  onEdit,
   onOpenNote,
-  onPickSource,
 }: {
   row: StatementRow;
   sel: string;
   present: (raw: number | null) => string;
+  linkable: boolean;   // real doc whose value resolves to a source location
   onSelect: (id: string) => void;
-  onEdit: (id: string) => void;
   onOpenNote: (ref: string) => void;
-  onPickSource?: (row: StatementRow) => void;
 }) {
   const k = row.kind;
   const isSection = k === "section";
@@ -231,10 +190,10 @@ function OutputRow({
   const noteRefs = [row.note, row.note2 && row.note2 !== row.note ? row.note2 : null].filter(
     (n): n is string => !!n,
   );
-  // Only offer click-to-source when the provenance actually resolves to a location (a PDF
-  // source without a bbox, or an Excel source without sheet+cell, can't be shown — no dead chip).
-  const pick = isItem && row.source ? toPicked(row.source, row.label) : null;
-  const canSource = !!pick && !!onPickSource;
+  // The value itself is the hyperlink: clicking the row selects it and drives the live viewer
+  // to the value's page+bbox (or cell). We only decorate the number as a link when the row
+  // actually resolves to a source location.
+  const valueLinks = linkable && isItem && !!row.source && toPicked(row.source, row.label) !== null;
 
   return (
     <div
@@ -274,25 +233,23 @@ function OutputRow({
       </div>
       {isItem ? (
         <span
+          title={valueLinks ? "Click to show this figure in the source document" : undefined}
           style={{
             ...colDiv,
             display: "flex",
             alignItems: "center",
             justifyContent: "flex-end",
-            gap: 6,
             fontFamily: font.mono,
             fontSize: 12,
             fontWeight: vwt,
-            color: vfg,
+            color: selected && valueLinks ? color.indigo : vfg,
+            cursor: valueLinks ? "pointer" : "default",
           }}
         >
-          {canSource && (
-            <ValueSourceChip source={row.source} onPick={() => onPickSource!(row)} />
-          )}
           <span
-            onClick={(e) => { e.stopPropagation(); onEdit(row.id); }}
-            title="Click to edit value"
-            style={{ cursor: "text", borderBottom: `1px dashed ${selected ? color.indigo : "transparent"}` }}
+            style={valueLinks
+              ? { borderBottom: `1px dashed ${selected ? color.indigo : color.dashed}` }
+              : undefined}
           >
             {v1}
           </span>
@@ -423,10 +380,14 @@ function InspectorEditor({
 export default function WorkspaceScreen() {
   const navigate = useNavigate();
   const t = useT();
-  const { locale, dataset, setDataset, statement, setStatement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing, setNote } =
+  const { locale, dataset, setDataset, statement, setStatement, sel, selRow, editing, startEdit, cancelEdit, stopEditing, setNote } =
     useUI();
   // Units presentation is display-only (raw values stay intact for editing/formulas).
   const [unitTarget, setUnitTarget] = useState<UnitTarget>("as_reported");
+  // Currency presentation: "" = the document's own currency (no conversion). A different target
+  // converts displayed figures at `fxRate` (user-entered — there is no bundled exchange-rate feed).
+  const [targetCcy, setTargetCcy] = useState<string>("");
+  const [fxRate, setFxRate] = useState<string>("1");
   // Open a note reference: select it and jump to the All Notes screen.
   const openNote = (ref: string) => {
     const n = parseInt(ref, 10);
@@ -465,17 +426,28 @@ export default function WorkspaceScreen() {
     selRow(id);
     if (usingReal) {
       const row = d.rows.find((r) => r.id === id);
-      const p = toPicked(row?.source ?? null, row?.label ?? "");
-      if (p) setPicked(p);
+      // Set (or clear, when the row has no resolvable source) the live-viewer highlight so a
+      // row without provenance never leaves a stale highlight from a previously clicked row.
+      setPicked(toPicked(row?.source ?? null, row?.label ?? ""));
     }
   };
   // Units presentation: convert relative to the source's own magnitude (default 1 = ones).
   const srcScale = d.units_scale_factor ?? 1;
-  const present = (raw: number | null) => presentValue(raw, srcScale, unitTarget);
-  // A single, unambiguous units caption for the whole output panel: the chosen magnitude when
-  // rescaled, otherwise the source's own reported units (so the figures are never unlabelled).
+  const srcCcy = d.currency || "";
+  // Currency conversion is applied before unit scaling; identity (rate 1) unless a different
+  // target currency is chosen with a positive rate. Raw values are never mutated.
+  const converting = !!targetCcy && targetCcy !== srcCcy;
+  const rate = Number(fxRate);
+  const fx = converting && Number.isFinite(rate) && rate > 0 ? rate : 1;
+  const present = (raw: number | null) =>
+    presentValue(raw == null ? null : raw * fx, srcScale, unitTarget);
+  // A single, unambiguous caption for the whole output panel: the active magnitude, plus the
+  // conversion (with its rate) when re-currencied — so figures are never silently transformed.
   const activeUnits = unitTarget === "as_reported" ? d.units : t(`ws.units.${unitTarget}`).toLowerCase();
-  const unitsCaption = activeUnits ? `${t("ws.figuresIn")} ${activeUnits}` : "";
+  const unitsCaption = [
+    activeUnits ? `${t("ws.figuresIn")} ${activeUnits}` : "",
+    converting ? `${srcCcy || "?"} → ${targetCcy} @ ${fx}` : "",
+  ].filter(Boolean).join("  ·  ");
   const lowConfCount = d.rows.filter((r) => r.confidence?.cat === "low").length;
   const selRowObj = d.rows.find((r) => r.id === sel) ?? d.rows.find((r) => r.inspector);
   const insp = selRowObj?.inspector;
@@ -513,7 +485,33 @@ export default function WorkspaceScreen() {
           value={statement}
           onChange={setStatement}
         />
-        <ToolChip label={t("ws.currency")} value={`${d.currency} ${d.currency_symbol}`} />
+        <ToolSelect<string>
+          label={t("ws.currency")}
+          value={targetCcy || srcCcy}
+          options={[
+            ...(srcCcy ? [{ value: srcCcy, label: `${srcCcy} (source)` }] : []),
+            ...CURRENCIES.filter((c) => c !== srcCcy).map((c) => ({ value: c, label: c })),
+          ]}
+          onChange={(v) => setTargetCcy(v === srcCcy ? "" : v)}
+        />
+        {converting && (
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12,
+                          color: color.sec, border: `1px solid ${color.cardBorder}`,
+                          borderRadius: radius.control, padding: "5px 9px" }}>
+            <span style={{ color: color.muted }}>{t("ws.rate")}</span>
+            <span style={{ fontFamily: font.mono, color: color.muted }}>1 {srcCcy || "?"} =</span>
+            <input
+              value={fxRate}
+              inputMode="decimal"
+              spellCheck={false}
+              onChange={(e) => setFxRate(e.target.value)}
+              style={{ width: 66, fontFamily: font.mono, fontSize: 12, fontWeight: 600,
+                       color: fx > 0 && Number.isFinite(Number(fxRate)) && Number(fxRate) > 0 ? color.ink : color.redFg,
+                       border: "none", outline: "none", background: "transparent" }}
+            />
+            <span style={{ fontFamily: font.mono, color: color.muted }}>{targetCcy}</span>
+          </label>
+        )}
         <ToolSelect<UnitTarget>
           label={t("ws.units")}
           value={unitTarget}
@@ -741,12 +739,8 @@ export default function WorkspaceScreen() {
           {/* scroll body */}
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {d.rows.map((r) => (
-              <OutputRow key={r.id} row={r} sel={sel} present={present} onSelect={handleSelect}
-                         onEdit={editable ? selForEdit : () => {}} onOpenNote={openNote}
-                         onPickSource={usingReal ? (row) => {
-                           const p = toPicked(row.source ?? null, row.label);
-                           if (p) setPicked(p);
-                         } : undefined} />
+              <OutputRow key={r.id} row={r} sel={sel} present={present} linkable={usingReal}
+                         onSelect={handleSelect} onOpenNote={openNote} />
             ))}
           </div>
 

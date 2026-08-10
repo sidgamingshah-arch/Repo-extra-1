@@ -242,6 +242,7 @@ export function StatusIcon({ status }: { status?: string | null }) {
     flag: ["!", color.redFg],
     recon: ["⇄", color.amberFg],
     edited: ["ƒ", color.indigo],
+    missing: ["—", color.faint],   // template line not found in this extraction
   };
   const s = map[status];
   if (!s) return null;
