@@ -607,13 +607,19 @@ def run_credit_narrative_endpoint(document_id: str, locale: str = Query("en"),
             model=settings.llm.model, input_tokens=None, output_tokens=None, status="failed"))
         raise HTTPException(status_code=502, detail=f"Credit narrative failed: {exc}") from exc
 
+    model = meta.get("model", settings.llm.model)
     audit_svc.record(document_id, audit_svc.AuditEntry(
         run_id=run_id, entity=entity, action="credit_narrative", provider=provider_id,
-        model=meta.get("model", settings.llm.model),
-        input_tokens=meta.get("input_tokens"), output_tokens=meta.get("output_tokens"),
-        status="succeeded"))
-    return {"narrative": result.narrative, "provider": provider_id,
-            "model": meta.get("model", settings.llm.model)}
+        model=model, input_tokens=meta.get("input_tokens"),
+        output_tokens=meta.get("output_tokens"), status="succeeded"))
+
+    # Persist the narrative on the run so the Excel/JSON export can fold it in. Reassigning
+    # the JSON column marks it dirty for the commit.
+    run.result = {**run.result, "credit_narrative": {
+        "text": result.narrative, "provider": provider_id, "model": model}}
+    session.commit()
+
+    return {"narrative": result.narrative, "provider": provider_id, "model": model}
 
 
 def _localize_commentary(c: dict, locale: str) -> dict:
@@ -838,11 +844,13 @@ def export_document(
     scale, unit_label = units_scale(src_units, units)
     ccy = (src_units or {}).get("currency")
     caption = (f"Amounts in {ccy + ' ' if ccy else ''}{unit_label}" if unit_label else None)
+    narrative = run.result.get("credit_narrative")  # stored LLM narrative, if generated
     if fmt == "json":
         data = build_rows_json(rows, filename=doc.filename or "document",
                                disclosures=run.result.get("disclosures", []),
                                note_details=run.result.get("note_details", []),
-                               reconciliation=run.result.get("reconciliation", []), locale=locale)
+                               reconciliation=run.result.get("reconciliation", []), locale=locale,
+                               credit_narrative=narrative)
         return Response(content=data, media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
 
@@ -853,7 +861,8 @@ def export_document(
                                         disclosures=run.result.get("disclosures", []),
                                         note_details=run.result.get("note_details", []),
                                         reconciliation=run.result.get("reconciliation", []),
-                                        include=include_set, scale=scale, units_caption=caption)
+                                        include=include_set, scale=scale, units_caption=caption,
+                                        credit_narrative=narrative)
     else:
         data = build_rows_xlsx(rows, filename=doc.filename or "document", scale=scale)
     return Response(
@@ -1086,7 +1095,9 @@ def _period_labels(rows: list[dict], basis: str, locale: str) -> list[str]:
     for r in rows:
         vals = _basis_values(r, basis)
         if len(vals) >= 1:
-            labels = [v.get("period_label") for v in vals]
+            # Prefer the real period-end date the extractor captured (Excel header text or a
+            # PDF-detected column date); fall back to the positional key for Current/Prior.
+            labels = [(v.get("period_display") or v.get("period_label")) for v in vals]
             return [_disp_period(labels[0] if labels else None, 0, locale),
                     _disp_period(labels[1] if len(labels) > 1 else None, 1, locale)]
     return [_t("Current", locale), _t("Prior", locale)]

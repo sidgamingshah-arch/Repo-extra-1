@@ -104,6 +104,9 @@ test("end-to-end: upload a new file â†’ Run integrity check shows real results â
   await expect(page.getByRole("heading", { name: "Statement page detection" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("All pages")).toBeVisible();
   await expect(page.getByRole("heading", { name: "No project yet" })).toHaveCount(0);
+  // Clicking a page opens the side-by-side rendered preview (real PDF page image).
+  await page.getByTestId("scope-page").first().click();
+  await expect(page.getByText(/Page preview/)).toBeVisible({ timeout: 15_000 });
 
   // Workspace renders the REAL extracted statement (its own line items, real filename).
   await page.goto("/workspace", DCL);

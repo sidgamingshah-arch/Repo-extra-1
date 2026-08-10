@@ -44,6 +44,7 @@ def _serialize_rows(doc_model) -> list[dict]:
             cv = ev.confidence
             values.append({
                 "period_label": ev.period_label,
+                "period_display": ev.period_display,  # real period-end date for headers, if any
                 "basis": ev.basis.value,
                 "value": (str(ev.value) if ev.value is not None else None),
                 "provenance": prov,

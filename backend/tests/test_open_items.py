@@ -311,6 +311,28 @@ def test_credit_narrative_endpoint_is_gated_and_coherent(client):
         assert r.json()["narrative"]
 
 
+# --- #5: native-PDF period-end date detection for column headers ----------------------------
+def test_period_bands_detects_dated_columns():
+    from app.core.models.geometry import BBox
+    from app.services.row_reconstruct import Word, _period_bands, _period_for
+
+    def W(text, x0):
+        return Word(text=text, bbox=BBox(x0=x0, y0=0.05, x1=x0 + 0.04, y1=0.07))
+
+    # A header row: "31 March 2025" over the first value column, "31 March 2024" over the second.
+    header = [W("31", 0.50), W("March", 0.55), W("2025", 0.60),
+              W("31", 0.75), W("March", 0.80), W("2024", 0.85)]
+    bands = _period_bands([header])
+    assert len(bands) == 2
+    assert bands[0][0] == "31 March 2025" and bands[1][0] == "31 March 2024"
+    # A value near the first column's x maps to the 2025 header; near the second → 2024.
+    assert _period_for(0.55, bands) == "31 March 2025"
+    assert _period_for(0.82, bands) == "31 March 2024"
+    # A row with no year/month yields no period bands (falls back to positional Current/Prior).
+    plain = [W("Trade", 0.1), W("receivables", 0.15), W("1,234", 0.55)]
+    assert _period_bands([plain]) == []
+
+
 # --- Item B: delete uploaded documents ------------------------------------------------------
 def test_delete_document_removes_it_and_its_runs(client):
     doc_id = _upload(client, make_rich_pdf(), "to-delete.pdf")

@@ -249,8 +249,15 @@ def test_analysis_and_export_sheets_present(client):
     doc_id = _extract_with_ontology(client, filename="rich.pdf", data=make_rich_pdf())
     x = client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "excel", "layout": "statement"})
     wb = openpyxl.load_workbook(_io.BytesIO(x.content))
-    assert {"Note details", "Ratios", "Disclosures"} <= set(wb.sheetnames)
+    assert {"Note details", "Ratios", "Disclosures", "Credit Analysis"} <= set(wb.sheetnames)
     assert "Highlights" not in wb.sheetnames
+    credit_text = " | ".join(str(v) for row in wb["Credit Analysis"].iter_rows(values_only=True)
+                             for v in row if v)
+    assert "Overall stance" in credit_text and "Rating factors" in credit_text
+    assert "Report signals" in credit_text
+    # The JSON export carries the same credit block.
+    j = client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "json"}).json()
+    assert "credit" in j["analysis"] and "stance" in j["analysis"]["credit"]
     ratios_text = " | ".join(str(v) for row in wb["Ratios"].iter_rows(values_only=True) for v in row if v)
     assert "Current ratio" in ratios_text and "2.0×" in ratios_text
     # Credit-focused ratios and their category headers are present (listed even when a given

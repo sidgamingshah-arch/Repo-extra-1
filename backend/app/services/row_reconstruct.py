@@ -193,6 +193,59 @@ def _basis_for(x: float, bands: list[tuple[Basis, float]]) -> Basis:
     return min(bands, key=lambda b: abs(b[1] - x))[0]
 
 
+_MONTHS = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+           r"aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?")
+# A single word that can belong to a date-column header phrase.
+_DATEISH_WORD = re.compile(
+    rf"^(?:{_MONTHS}|\d{{1,4}}(?:st|nd|rd|th)?|\d{{1,2}}[./-]\d{{1,2}}[./-]\d{{2,4}}|"
+    r"as|at|year|years?|period|ended|ending|for|the|fy|q[1-4]|h[12]|,)$", re.IGNORECASE)
+# A phrase only counts as a period header if it actually carries a year or month name.
+_DATE_PHRASE = re.compile(rf"(?:19|20)\d{{2}}|{_MONTHS}", re.IGNORECASE)
+
+
+def _period_bands(rows: list[list[Word]]) -> list[tuple[str, float]]:
+    """Detect date-like column headers (e.g. '31 March 2025' / '2024' / 'FY2025') near the top
+    of a statement block and return each period phrase's (label, x-centre). Used to give value
+    columns a real period-end DATE for display; empty when no dated header is found (native
+    PDFs without a parsable header fall back to positional Current/Prior)."""
+    best: list[tuple[str, float]] = []
+    for row in rows[:8]:                          # period headers sit at the top of the block
+        phrases: list[list[Word]] = []
+        run: list[Word] = []
+        for w in row:
+            dateish = bool(_DATEISH_WORD.match(w.text.strip(" .")))
+            # A wide horizontal gap means a new column — flush the current phrase even between
+            # two date-ish words (e.g. "…2025    31 March 2024" are two separate headers).
+            gap = run and (w.bbox.x0 - run[-1].bbox.x1) > 0.05
+            if dateish and not gap:
+                run.append(w)
+            else:
+                if run:
+                    phrases.append(run); run = []
+                if dateish:
+                    run.append(w)
+        if run:
+            phrases.append(run)
+        bands: list[tuple[str, float]] = []
+        for ph in phrases:
+            text = " ".join(w.text for w in ph).strip(" ,.")
+            if _DATE_PHRASE.search(text):         # keep only phrases with a real year/month
+                xc = sum((w.bbox.x0 + w.bbox.x1) / 2 for w in ph) / len(ph)
+                bands.append((text, xc))
+        if len(bands) > len(best):
+            best = bands
+        if len(bands) >= 2:                        # a two-column header is a confident match
+            break
+    return best
+
+
+def _period_for(x: float, bands: list[tuple[str, float]]) -> str | None:
+    """The detected period label whose column is nearest this value's x-centre, or None."""
+    if not bands:
+        return None
+    return min(bands, key=lambda b: abs(b[1] - x))[0]
+
+
 def build_line_items(words: list[Word], *, page_index: int, document_id: str | None,
                      source_kind: str, ordinal_start: int = 0,
                      number_format=None) -> tuple[list[LineItem], int]:
@@ -206,6 +259,7 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
     ordinal = ordinal_start
     rows = _merge_wrapped_labels(_group_rows(words), number_format)
     bands = _basis_bands(rows)
+    period_bands = _period_bands(rows)          # real period-end dates for column headers, if any
     for row in rows:
         label_words, note_ref, value_words = _scan_row(row, number_format)
 
@@ -230,9 +284,11 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
                 value_bbox=vw.bbox, label_bbox=label_bbox, text_snippet=label,
                 source_kind=source_kind, producer=f"extract:{source_kind}@0.1.0",
             )
+            xc = (vw.bbox.x0 + vw.bbox.x1) / 2
             li.set_value(ExtractedValue(
                 value_raw=dec, value=dec, basis=basis,
                 period_label="current" if k == 0 else "prior" if k == 1 else f"col{k}",
+                period_display=_period_for(xc, period_bands),  # display-only date, if detected
                 unit_ctx=UnitContext(), provenance=prov,
             ))
         if note_ref:

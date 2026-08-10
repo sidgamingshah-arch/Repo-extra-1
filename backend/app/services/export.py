@@ -53,12 +53,17 @@ def _prov_str(prov: dict | None) -> str:
 
 def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] | None = None,
                     note_details: list[dict] | None = None, reconciliation: list[dict] | None = None,
-                    locale: str = "en") -> bytes:
+                    locale: str = "en", credit_narrative: dict | None = None) -> bytes:
     """JSON export of a REAL extraction: every line item with its mapping, confidence, any
     edited formula, and the exact source location of each value (sheet/cell or page/bbox),
-    plus a derived-analysis block (ratios / disclosures) and the note detail + reconciliation
-    — so the JSON carries the same information the UI and the Excel show."""
-    from app.services.derived import compute_ratios, localize_disclosures
+    plus a derived-analysis block (ratios / disclosures / credit) and the note detail +
+    reconciliation — so the JSON carries the same information the UI and the Excel show."""
+    from app.services.derived import build_credit_analysis, compute_ratios, localize_disclosures
+
+    disc = localize_disclosures(disclosures or [], locale)
+    credit = build_credit_analysis(rows, disc, locale=locale)
+    if credit_narrative and credit_narrative.get("text"):
+        credit = {**credit, "narrative": credit_narrative}
 
     payload = {
         "source_document": filename,
@@ -85,7 +90,8 @@ def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] 
             "ratios": [{"key": x["key"], "label": x["label"], "category": x.get("category"),
                         "value": x["value"], "display": x["display"], "available": x["available"]}
                        for x in compute_ratios(rows, locale=locale)],
-            "disclosures": localize_disclosures(disclosures or [], locale),
+            "disclosures": disc,
+            "credit": credit,
         },
         "note_details": note_details or [],
         "reconciliation": reconciliation or [],
@@ -192,7 +198,8 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
                              note_details: list[dict] | None = None,
                              reconciliation: list[dict] | None = None,
                              include: set[str] | None = None,
-                             scale: float = 1.0, units_caption: str | None = None) -> bytes:
+                             scale: float = 1.0, units_caption: str | None = None,
+                             credit_narrative: dict | None = None) -> bytes:
     """A formatted, statement-shaped workbook: one sheet per statement in the template, with
     its sections / subtotals / totals, localized line labels, and consolidated + standalone
     columns side by side, plus Note details / Ratios / Disclosures sheets. Purely
@@ -274,7 +281,7 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
         ws.cell(1, 1, "No extracted line items for this document.")
 
     _add_analysis_sheets(wb, rows, disclosures or [], note_details or [], locale,
-                         reconciliation or [], include)
+                         reconciliation or [], include, credit_narrative)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -293,12 +300,14 @@ def _recon_by_note(reconciliation: list[dict]) -> dict[str, dict]:
 def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
                          note_details: list[dict], locale: str,
                          reconciliation: list[dict] | None = None,
-                         include: set[str] | None = None) -> None:
-    """Note details / Ratios / Disclosures sheets, each gated by the Include set (all on when
-    include is None)."""
+                         include: set[str] | None = None,
+                         credit_narrative: dict | None = None) -> None:
+    """Note details / Ratios / Disclosures / Credit Analysis sheets, each gated by the Include
+    set (all on when include is None). ``credit_narrative`` is the optional stored LLM narrative
+    (``run.result['credit_narrative']``) — folded into the Credit Analysis sheet when present."""
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-    from app.services.derived import compute_ratios, localize_disclosures
+    from app.services.derived import build_credit_analysis, compute_ratios, localize_disclosures
 
     def on(key: str) -> bool:
         return include is None or key in include
@@ -399,9 +408,63 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
         ws.cell(i, 3, d.get("page") or "")
         ws.cell(i, 4, d.get("snippet", "")).alignment = wrap
 
+    # Credit Analysis — the deterministic credit view (stance + rating factors from the
+    # extracted ratios + report signals), plus the LLM narrative if one was generated.
+    credit = build_credit_analysis(rows, disclosures, locale=locale)
+    ws = wb.create_sheet("Credit Analysis")
+    _header(ws, ["Credit analysis", "Value", "Rating"], [46, 18, 14])
+    ws.cell(1, 2).alignment = right
+    cat_fill2 = PatternFill("solid", fgColor="EEF1F6")
+    ink2 = "1f2937"
+    ri = 2
+    sc = ws.cell(ri, 1, "Overall stance"); sc.font = Font(bold=True, color=ink2)
+    ws.cell(ri, 3, credit.get("stance_label", "")).font = Font(bold=True, color=ink2)
+    ri += 1
+    ws.cell(ri, 1, credit.get("summary", "")).alignment = wrap
+    ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=3)
+    ri += 2
+    if credit_narrative and credit_narrative.get("text"):
+        model = credit_narrative.get("model") or ""
+        hc = ws.cell(ri, 1, f"Narrative{f' — {model}' if model else ''}")
+        hc.font = Font(bold=True, color=ink2)
+        for c in (1, 2, 3):
+            ws.cell(ri, c).fill = cat_fill2
+        ri += 1
+        nc = ws.cell(ri, 1, credit_narrative["text"]); nc.alignment = wrap
+        ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=3)
+        ws.row_dimensions[ri].height = 84
+        ri += 2
+    # Rating factors
+    fh = ws.cell(ri, 1, "Rating factors"); fh.font = Font(bold=True, color=ink2)
+    for c in (1, 2, 3):
+        ws.cell(ri, c).fill = cat_fill2
+    ri += 1
+    for f in credit.get("factors", []):
+        ws.cell(ri, 1, f"{f.get('category', '')} · {f.get('label', '')}").alignment = Alignment(indent=1)
+        ws.cell(ri, 2, f.get("display", "")).alignment = right
+        ws.cell(ri, 3, f.get("tone_label", ""))
+        ri += 1
+    # Report signals (narrative flags)
+    ri += 1
+    gh = ws.cell(ri, 1, "Report signals"); gh.font = Font(bold=True, color=ink2)
+    for c in (1, 2, 3):
+        ws.cell(ri, c).fill = cat_fill2
+    ri += 1
+    flags = credit.get("flags", [])
+    if not flags:
+        ws.cell(ri, 1, "No adverse narrative signals found in the report.").font = Font(
+            italic=True, size=9, color="6B7280")
+    else:
+        for fl in flags:
+            lab = fl.get("label", "") + (f" (p.{fl['page']})" if fl.get("page") else "")
+            ws.cell(ri, 1, lab).alignment = Alignment(indent=1)
+            ws.cell(ri, 2, fl.get("severity", ""))
+            ws.cell(ri, 3, fl.get("implication", "")).alignment = wrap
+            ri += 1
+
     # Honor the Include selection: drop any analysis sheet the caller didn't ask for.
     for key, name in (("note_details", "Note details"), ("ratios", "Ratios"),
-                      ("disclosures", "Disclosures")):
+                      ("disclosures", "Disclosures"), ("credit", "Credit Analysis")):
         if not on(key) and name in wb.sheetnames:
             wb.remove(wb[name])
 
