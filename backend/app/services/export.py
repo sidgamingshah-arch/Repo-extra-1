@@ -51,9 +51,23 @@ def _prov_str(prov: dict | None) -> str:
     return f"p.{(prov.get('page_index', 0) or 0) + 1}"
 
 
+def _netting_block(rows: list[dict], netting_rules: list | None) -> list[dict]:
+    if not netting_rules:
+        return []
+    from app.services.netting import compute_netting
+
+    cur = compute_netting(rows, netting_rules, basis="consolidated", period="current")
+    prior = compute_netting(rows, netting_rules, basis="consolidated", period="prior")
+    out = []
+    for key, c in cur.items():
+        out.append({**c, "prior_net": prior.get(key, {}).get("net")})
+    return out
+
+
 def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] | None = None,
                     note_details: list[dict] | None = None, reconciliation: list[dict] | None = None,
-                    locale: str = "en", credit_narrative: dict | None = None) -> bytes:
+                    locale: str = "en", credit_narrative: dict | None = None,
+                    netting_rules: list | None = None) -> bytes:
     """JSON export of a REAL extraction: every line item with its mapping, confidence, any
     edited formula, and the exact source location of each value (sheet/cell or page/bbox),
     plus a derived-analysis block (ratios / disclosures / credit) and the note detail +
@@ -92,6 +106,8 @@ def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] 
                        for x in compute_ratios(rows, locale=locale)],
             "disclosures": disc,
             "credit": credit,
+            # Face-line containment netting (target line net of contained lines) + the formula.
+            "netting": _netting_block(rows, netting_rules),
         },
         "note_details": note_details or [],
         "reconciliation": reconciliation or [],

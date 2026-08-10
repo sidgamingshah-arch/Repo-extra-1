@@ -102,6 +102,22 @@ class DecompositionRule(BaseModel):
     tolerance_rel: float = 0.001
 
 
+class NettingRule(BaseModel):
+    """A face line whose reported value already INCLUDES other lines, to be netted out when
+    showing the clean figure — e.g. a cost of sales that is stated inclusive of administrative
+    and selling/marketing expenses. The net value is computed with signed arithmetic
+    (``net = target − Σ subtract + Σ add``), so it works whether expenses are stored as
+    negatives or positives, and the formula is surfaced alongside the value. Deterministic,
+    non-destructive (the raw figure is kept and the adjustment is revertable), and admin-declared
+    per template — never auto-applied, since containment is an entity/presentation judgement."""
+
+    id: str
+    target_key: str
+    subtract_keys: list[str] = Field(default_factory=list)
+    add_keys: list[str] = Field(default_factory=list)
+    label: str = ""                         # human explanation of why the lines are contained
+
+
 class GlobalRules(BaseModel):
     credit_balance_lines: list[str] = Field(default_factory=list)  # key globs
     paren_means_negative: bool = True
@@ -148,6 +164,8 @@ class OntologyDefinition(BaseModel):
     metadata: OntologyMetadata | None = None
     mappings: list[OntologyMapping] = Field(default_factory=list)
     decomposition_rules: list[DecompositionRule] = Field(default_factory=list)
+    # Face-line containment netting (e.g. cost of sales stated inclusive of admin / S&M).
+    netting_rules: list[NettingRule] = Field(default_factory=list)
     global_rules: GlobalRules = Field(default_factory=GlobalRules)
     worked_examples: list[WorkedExample] = Field(default_factory=list)
 

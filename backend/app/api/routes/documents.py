@@ -856,7 +856,8 @@ def export_document(
                                disclosures=run.result.get("disclosures", []),
                                note_details=run.result.get("note_details", []),
                                reconciliation=run.result.get("reconciliation", []), locale=locale,
-                               credit_narrative=narrative)
+                               credit_narrative=narrative,
+                               netting_rules=_netting_rules_for_run(session, run))
         return Response(content=data, media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
 
@@ -1058,6 +1059,21 @@ def _inspector(r: dict, cur: dict | None) -> dict:
             "note": f"Mapped by {r.get('mapping_method') or 'ensemble'}"}
 
 
+def _netting_rules_for_run(session: Session, run) -> list:
+    """The face-line netting rules from the ontology the run used (empty when none/unavailable)."""
+    from app.db.models import OntologyVersion
+    from app.schemas.loader import load_ontology
+
+    oid = (run.options or {}).get("ontology_version_id")
+    row = session.get(OntologyVersion, oid) if oid else None
+    if row is None:
+        return []
+    try:
+        return load_ontology(row.definition).netting_rules
+    except Exception:  # noqa: BLE001 — a malformed ontology must not break the statement
+        return []
+
+
 def _template_for_run(session: Session, run) -> dict | None:
     """The template the run used, else the seeded HK reference template."""
     from app.db.models import TemplateVersion
@@ -1112,7 +1128,8 @@ def _period_labels(rows: list[dict], basis: str, locale: str) -> list[str]:
 def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
                      filename: str, basis: str = "consolidated", locale: str = "en",
                      units_ctx: dict | None = None, company: str | None = None,
-                     doc_format: str = "", page_count: int = 0) -> dict:
+                     doc_format: str = "", page_count: int = 0,
+                     netting_rules: list | None = None) -> dict:
     """Group the real extracted rows into one statement (by the template's sections), so the
     Workspace grid renders real data with its provenance-backed values. Only rows that
     carry a value for the requested `basis` (consolidated / standalone) are shown. Labels are
@@ -1169,6 +1186,33 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         for r in extra:
             out.append(item_row(r["canonical_key"], r.get("source_label", ""), r))
 
+    # Face-line containment netting: reduce a target line by the lines already included in it
+    # (e.g. cost of sales inclusive of admin / S&M), showing the net value + formula. Signed and
+    # non-destructive — the raw figure is preserved in the inspector for audit.
+    if netting_rules:
+        from app.services.netting import compute_netting
+
+        net_cur = compute_netting(rows, netting_rules, basis=basis, period="current")
+        net_prior = compute_netting(rows, netting_rules, basis=basis, period="prior")
+        for r in out:
+            if r.get("kind") != "item":
+                continue
+            nc, np = net_cur.get(r["id"]), net_prior.get(r["id"])
+            if not nc and not np:
+                continue
+            info = nc or np
+            if nc:
+                r["v1"] = _to_num(nc["net"])
+            if np:
+                r["v2"] = _to_num(np["net"])
+            r["formula"] = info["formula"]
+            r["status"] = "recon"
+            raw = info["raw"]
+            note = info.get("label") or _t("Contained lines netted out.", locale)
+            r["inspector"] = {"tag": "netted", "src": (r.get("inspector") or {}).get("src", ""),
+                              "formula": info["formula"], "result": info["net"],
+                              "note": f"{note} {_t('Raw', locale)}: {raw}."}
+
     basis_label = _BASIS_LABEL_I18N.get(basis, {}).get(locale, basis.title())
     return {
         "statement": statement_type,
@@ -1214,7 +1258,8 @@ def get_document_statement(
                             doc.filename or "document", basis, locale,
                             run.result.get("units"), company=run.result.get("entity"),
                             doc_format=run.result.get("format") or doc.fmt or "",
-                            page_count=run.result.get("page_count") or doc.page_count or 0)
+                            page_count=run.result.get("page_count") or doc.page_count or 0,
+                            netting_rules=_netting_rules_for_run(session, run))
 
 
 def _note_no(raw) -> int | None:
