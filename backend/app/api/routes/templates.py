@@ -171,6 +171,16 @@ def get_template_detail(template_id: str, locale: str = "en",
                         if m is not None and (m.sign_rule.convention.value or "") != "natural"
                         else _SIGN_UI.get(str(child.get("sign", "natural")), "auto")
                     ),
+                    # The criteria the LLM reasons over, so the editor can show and change what
+                    # actually drives meaning-based mapping rather than only string matching.
+                    "definition": (m.definition or m.description or "") if m else "",
+                    "include": list(m.include) if m else [],
+                    "exclude": list(m.exclude) if m else [],
+                    "confusable_with": list(m.confusable_with) if m else [],
+                    "value_scope": (m.value_scope if m else "exclusive_leaf"),
+                    "keyword_hints": list(m.keyword_hints) if m else [],
+                    "regex_hints": list(m.regex_hints) if m else [],
+                    "exclude_hints": list(m.exclude_hints) if m else [],
                     "value_type": "Monetary",
                     "aggregation": "Sum of children" if child.get("role") in ("subtotal", "total")
                                    else "Direct value",
