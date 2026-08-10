@@ -1144,13 +1144,18 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     def has_basis(r: dict) -> bool:
         return bool(_basis_values(r, basis))
 
-    def item_row(key: str, label: str, r: dict) -> dict:
+    # A template child's presentation kind (subtotal / total rows are styled differently in
+    # the grid); anything else is a plain line item.
+    def _kind_for(role: str | None) -> str:
+        return {"subtotal": "subtotal", "total": "total"}.get(role or "", "item")
+
+    def item_row(key: str, label: str, r: dict, kind: str = "item") -> dict:
         cur, prior = _cur_prior(r, basis)
         cat, pct = _conf_cat(r.get("mapping_confidence"))
         edited = bool(r.get("edited"))
         return {
             "id": key, "label": label or r.get("source_label"),
-            "source_label": r.get("source_label"), "kind": "item",
+            "source_label": r.get("source_label"), "kind": kind,
             "note": r.get("note"), "note2": None, "status": "edited" if edited else None,
             "confidence": {"cat": cat, "pct": pct}, "editable": True,
             "formula": r.get("formula"), "inspector": _inspector(r, cur),
@@ -1160,22 +1165,48 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
             "source": (cur or {}).get("provenance"),
         }
 
+    # A template line that wasn't extracted (or has no value for this basis) still appears, so
+    # the analyst sees the FULL template skeleton and can spot/fill gaps — just with blank values.
+    def blank_row(key: str, label: str, kind: str = "item") -> dict:
+        return {
+            "id": key, "label": label, "source_label": None, "kind": kind,
+            "note": None, "note2": None, "status": "missing",
+            "confidence": None, "editable": True, "formula": None,
+            "inspector": {"tag": _t("not extracted", locale), "src": "", "formula": "",
+                          "result": "", "note": _t("This template line was not found in the "
+                                                    "document's extraction for this basis.", locale)},
+            "v1": None, "v2": None, "source": None,
+        }
+
+    # Show the full template skeleton only when this statement+basis is actually present in the
+    # document. If the basis wasn't extracted at all (e.g. no standalone figures), the grid stays
+    # empty rather than implying an all-blank statement that the filing never contained.
+    basis_present = any(
+        has_basis(r) for r in rows if (r.get("canonical_key") or "").startswith(f"{prefix}_")
+    )
+
     out: list[dict] = []
     seen: set[str] = set()
     stmt = next((s for s in (template_def or {}).get("statements", [])
                  if s.get("type") == statement_type), None)
-    if stmt:
+    if stmt and basis_present:
         for sec in stmt.get("sections", []):
-            matched = [c for c in sec.get("children", [])
-                       if c.get("canonical_key") in by_key and has_basis(by_key[c["canonical_key"]])]
-            if not matched:
+            children = [c for c in sec.get("children", []) if c.get("canonical_key")]
+            if not children:
                 continue
+            # Show every section and every template line (extracted or not) so the whole
+            # template is represented, not only the lines that happened to be extracted.
             out.append({"id": f"sec_{sec.get('node_id', '')}", "label": _loc(sec, locale),
                         "kind": "section", "v1": None, "v2": None})
-            for c in matched:
+            for c in children:
                 k = c["canonical_key"]
                 seen.add(k)
-                out.append(item_row(k, _loc(c, locale), by_key[k]))
+                kind = _kind_for(c.get("role"))
+                r = by_key.get(k)
+                if r is not None and has_basis(r):
+                    out.append(item_row(k, _loc(c, locale), r, kind))
+                else:
+                    out.append(blank_row(k, _loc(c, locale), kind))
 
     extra = [r for r in rows
              if (r.get("canonical_key") or "").startswith(f"{prefix}_")
