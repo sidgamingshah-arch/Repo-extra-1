@@ -1,7 +1,7 @@
 /** React Query hooks — the data layer each screen consumes. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { Basis, Locale, SettingsPatch, StatementKey } from "../types";
+import type { Basis, FxRateInput, Locale, SettingsPatch, StatementKey } from "../types";
 import { useUI } from "../store";
 import { api } from "./api";
 
@@ -56,6 +56,62 @@ export function usePatchSettings() {
       qc.setQueryData(["settings"], res);
       // Role gating (/me) depends on review_required; refresh it.
       qc.invalidateQueries({ queryKey: ["me"] });
+    },
+  });
+}
+
+// --- FX rate master ---
+/** The whole FX master (admin editor). Readable by any authenticated user. */
+export const useFxRates = () => {
+  const token = useUI((s) => s.token);
+  return useQuery({ queryKey: ["fx-rates"], queryFn: api.fxRates, enabled: !!token });
+};
+
+/** Resolve one currency pair against the master. Disabled while `base`/`quote` are absent
+ *  or equal — an identical pair is not a conversion, so there is nothing to look up.
+ *  A "no rate configured" answer is data, not an error: it arrives as `resolved: false`
+ *  and the caller must then decline to convert. */
+export const useFxRateResolution = (base: string | undefined, quote: string | undefined) => {
+  const enabled = !!base && !!quote && base !== quote;
+  return useQuery({
+    queryKey: ["fx-resolve", base ?? null, quote ?? null],
+    queryFn: () => api.resolveFxRate(base as string, quote as string),
+    enabled,
+    retry: false,
+  });
+};
+
+/** Create/restate a rate (admin). Invalidates the master AND every resolution, since a new
+ *  rate can change — or newly enable — any pair currently on screen. */
+export function useUpsertFxRate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: FxRateInput) => api.upsertFxRate(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["fx-rates"] });
+      qc.invalidateQueries({ queryKey: ["fx-resolve"] });
+    },
+  });
+}
+
+export function useUpdateFxRate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; body: FxRateInput }) => api.updateFxRate(vars.id, vars.body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["fx-rates"] });
+      qc.invalidateQueries({ queryKey: ["fx-resolve"] });
+    },
+  });
+}
+
+export function useDeleteFxRate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteFxRate(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["fx-rates"] });
+      qc.invalidateQueries({ queryKey: ["fx-resolve"] });
     },
   });
 }

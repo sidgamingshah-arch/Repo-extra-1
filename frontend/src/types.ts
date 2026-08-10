@@ -128,6 +128,52 @@ export interface AppSettings {
   };
   auth: { allow_role_header: boolean; demo_mode: boolean; session_ttl_minutes: number };
 }
+
+/** One rate from the admin-maintained FX master: 1 `base` = `rate` `quote` on `as_of`.
+ *  `rate` stays a STRING end to end — the backend holds it as an exact decimal, and
+ *  parsing it into a JS number here would be the one place drift could creep in. */
+export interface FxRate {
+  id: string;
+  base: string;
+  quote: string;
+  rate: string;
+  as_of: string;
+  source: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+/** A rate submitted by the admin editor. `as_of` omitted means "as of today" (server-side). */
+export interface FxRateInput {
+  base: string;
+  quote: string;
+  rate: string;
+  as_of?: string;
+  source?: string;
+}
+/** The answer to "what is base→quote?". `resolved` false is a normal answer — the master
+ *  holds no rate for the pair — and the caller must then refuse to convert. */
+export type FxRateResolution =
+  | {
+      resolved: true;
+      base: string;
+      quote: string;
+      rate: string;
+      as_of: string;
+      /** True when the rate is OUR arithmetic (a reciprocal), not a quote as entered. */
+      derived: boolean;
+      method: "direct" | "inverse";
+      /** The currencies actually traversed, in the direction the master stores them. */
+      path: string[];
+      source: string;
+      rate_id: string;
+    }
+  | {
+      resolved: false;
+      base: string;
+      quote: string;
+      reason: "no_rate_configured";
+      detail: string;
+    };
 export type StatementKey = "balance_sheet" | "profit_and_loss" | "cash_flow";
 export type RowKind = "section" | "subhead" | "item" | "subtotal" | "total";
 export type ExportFmt = "excel" | "json";

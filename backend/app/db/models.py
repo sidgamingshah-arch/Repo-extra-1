@@ -8,10 +8,19 @@ extraction persistence phase.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -23,6 +32,10 @@ def _uuid() -> str:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _today() -> date:
+    return datetime.now(timezone.utc).date()
 
 
 class Document(Base):
@@ -76,6 +89,39 @@ class OntologyVersion(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     definition: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class FxRate(Base):
+    """One admin-maintained exchange rate: 1 ``base_ccy`` = ``rate`` ``quote_ccy`` on ``as_of``.
+
+    The FX master is deliberately *only* what an administrator entered — there is no rate
+    feed. Nothing is seeded: an empty table means "we hold no authoritative rate", which
+    the resolver reports honestly instead of falling back to 1.
+    """
+
+    __tablename__ = "fx_rates"
+    # One row per pair per as-of date. Without this a second entry for the same day would
+    # silently coexist with the first and the resolver would have to guess which is current.
+    __table_args__ = (
+        UniqueConstraint("base_ccy", "quote_ccy", "as_of", name="uq_fx_pair_as_of"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    base_ccy: Mapped[str] = mapped_column(String(3), index=True)
+    quote_ccy: Mapped[str] = mapped_column(String(3), index=True)
+    # Held as text and parsed back with ``Decimal(...)``: these multiply financial figures,
+    # and a binary FLOAT column cannot round-trip a rate like 0.0121 exactly — the drift
+    # would land in the presented numbers. Same reasoning as the extracted values, which
+    # are also persisted as strings.
+    rate: Mapped[str] = mapped_column(String(48))
+    # The date the rate is *for* (not when it was typed) — a converted figure is only
+    # honest next to the date of the rate that produced it.
+    as_of: Mapped[date] = mapped_column(Date, default=_today, index=True)
+    # Free-text provenance ("ECB reference, 2026-08-01 fixing", "treasury desk") so a
+    # reviewer can trace where an authoritative-looking number actually came from.
+    source: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
 class ExtractionRun(Base):

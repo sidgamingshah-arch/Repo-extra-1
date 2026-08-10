@@ -9,8 +9,8 @@ import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/u
 import { EmptyState } from "../components/EmptyState";
 import { ExcelGrid, PageStack, toPicked, type Picked } from "../components/SourceViewer";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
-import type { Basis, StatementKey, StatementResponse, StatementRow } from "../types";
-import { useDocumentStatement, useEditDocumentLineItem, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
+import type { Basis, FxRateResolution, StatementKey, StatementResponse, StatementRow } from "../types";
+import { useDocumentStatement, useEditDocumentLineItem, useFxRateResolution, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
 import { SCREENS } from "./config";
@@ -125,10 +125,31 @@ const TARGET_SCALE: Record<Exclude<UnitTarget, "as_reported">, number> = {
   billions: 1e9,
 };
 
-/* Currencies offered for presentation. Conversion is applied at a user-entered rate (there is
- * no bundled FX feed), so a re-currencied figure is always shown with its rate — never a silent,
- * unsourced conversion. The document's own currency stays the default (rate 1, no change). */
+/* Currencies offered for presentation. Rates come from the admin-maintained FX master
+ * (/fx-rates) — never typed here and never guessed — so a re-currencied figure is always
+ * shown with the rate, its as-of date, and a "derived" marker when the master only held the
+ * opposite direction. When the master has no rate for the pair we do NOT convert: presenting
+ * source figures under a target-currency label is the failure mode this replaces.
+ * The document's own currency stays the default (no conversion at all). */
 const CURRENCIES = ["USD", "EUR", "GBP", "INR", "CNY", "HKD", "JPY", "SGD", "AUD", "CAD"];
+
+/** The master's answer, but only when it actually carries a rate for the pair being shown.
+ * Returning the resolved variant (or null) rather than the whole union makes the "no rate
+ * configured" answer structurally unusable as a multiplier — the caller cannot accidentally
+ * convert with it. */
+type ResolvedFx = Extract<FxRateResolution, { resolved: true }>;
+function appliedRate(res: FxRateResolution | undefined, converting: boolean): ResolvedFx | null {
+  return converting && res !== undefined && res.resolved ? res : null;
+}
+
+/* A derived (inverted) rate is a repeating decimal carried at full precision — 20 digits of
+ * it would swamp the caption. Show 6 significant digits there; the multiplier itself still
+ * uses the full value the master returned, and the caption's tooltip carries it verbatim. */
+function fmtRate(rate: string): string {
+  const n = Number(rate);
+  if (!Number.isFinite(n) || n === 0) return rate;
+  return Number(n.toPrecision(6)).toString();
+}
 
 /* Accounting formatter with an explicit decimal count (fmtIN forces 0dp). */
 function fmtDec(n: number, dp: number): string {
@@ -385,9 +406,8 @@ export default function WorkspaceScreen() {
   // Units presentation is display-only (raw values stay intact for editing/formulas).
   const [unitTarget, setUnitTarget] = useState<UnitTarget>("as_reported");
   // Currency presentation: "" = the document's own currency (no conversion). A different target
-  // converts displayed figures at `fxRate` (user-entered — there is no bundled exchange-rate feed).
+  // is converted at the rate the FX master resolves for the pair — there is no manual entry.
   const [targetCcy, setTargetCcy] = useState<string>("");
-  const [fxRate, setFxRate] = useState<string>("1");
   // Open a note reference: select it and jump to the All Notes screen.
   const openNote = (ref: string) => {
     const n = parseInt(ref, 10);
@@ -412,6 +432,16 @@ export default function WorkspaceScreen() {
   // A highlight belongs to one statement/basis; clear it when either changes so the viewer
   // never keeps pointing at a page/cell from the statement the user just navigated away from.
   useEffect(() => { setPicked(null); }, [statement, dataset]);
+  // The FX lookup is resolved here, above the loading/empty early-returns, because hooks
+  // cannot be called conditionally. `converting` is false until a real target is picked, so
+  // the query stays disabled and no request goes out in the default (no conversion) case.
+  const srcCcy = data?.currency || "";
+  // `wantConvert` is the user's request; `converting` is whether it is even askable — a document
+  // whose own currency was never determined has no pair to look up, so we say "not converted"
+  // instead of firing a lookup for "? → USD".
+  const wantConvert = !!targetCcy && targetCcy !== srcCcy;
+  const converting = wantConvert && !!srcCcy;
+  const fxQ = useFxRateResolution(converting ? srcCcy : undefined, converting ? targetCcy : undefined);
 
   if (!usingReal && !loaded) return <EmptyState />;
   if (usingReal && realQ.isError) return <EmptyState />;   // uploaded but not extracted yet
@@ -433,20 +463,37 @@ export default function WorkspaceScreen() {
   };
   // Units presentation: convert relative to the source's own magnitude (default 1 = ones).
   const srcScale = d.units_scale_factor ?? 1;
-  const srcCcy = d.currency || "";
-  // Currency conversion is applied before unit scaling; identity (rate 1) unless a different
-  // target currency is chosen with a positive rate. Raw values are never mutated.
-  const converting = !!targetCcy && targetCcy !== srcCcy;
-  const rate = Number(fxRate);
-  const fx = converting && Number.isFinite(rate) && rate > 0 ? rate : 1;
+  // The master's answer, and only when it actually holds a rate for this pair. A pending or
+  // failed lookup leaves `appliedFx` null, which means the panel stays in the SOURCE currency
+  // rather than briefly showing unconverted figures under the target's label.
+  const fxRes = fxQ.data;
+  const appliedFx = appliedRate(fxRes, converting);
+  const fxPending = converting && fxQ.isPending;
+  const fxUnavailable = wantConvert && !appliedFx && !fxPending;
+  // A failed lookup and a missing rate both stop the conversion, but they are different facts:
+  // only the latter is something an administrator fixes by adding a rate.
+  const fxLookupFailed = converting && fxQ.isError;
+  // Currency conversion is applied before unit scaling; identity (rate 1) when not converting.
+  // Raw values are never mutated. The multiplier is a JS number only because this whole
+  // presentation path already is (toLocaleString) — the exact decimal arithmetic, including
+  // the reciprocal of an inverted rate, is done server-side in Decimal.
+  const fx = appliedFx ? Number(appliedFx.rate) : 1;
   const present = (raw: number | null) =>
     presentValue(raw == null ? null : raw * fx, srcScale, unitTarget);
   // A single, unambiguous caption for the whole output panel: the active magnitude, plus the
-  // conversion (with its rate) when re-currencied — so figures are never silently transformed.
+  // conversion when re-currencied — with the rate, the date it is AS OF, and a derived marker
+  // naming the stored pair we inverted. Figures are never silently transformed.
   const activeUnits = unitTarget === "as_reported" ? d.units : t(`ws.units.${unitTarget}`).toLowerCase();
+  const fxCaption = appliedFx
+    ? `${srcCcy || "?"} → ${targetCcy} @ ${fmtRate(appliedFx.rate)} · ${t("ws.asOf")} ${appliedFx.as_of}`
+      + (appliedFx.derived ? ` · ${t("ws.derived")} (${appliedFx.path.join(" → ")})` : "")
+    : fxPending
+      ? t("ws.rateLoading")
+      // Not converting: name the currency the figures ARE in, so the panel is never ambiguous.
+      : fxUnavailable ? `${srcCcy || "?"} (${t("ws.sourceCcy")})` : "";
   const unitsCaption = [
     activeUnits ? `${t("ws.figuresIn")} ${activeUnits}` : "",
-    converting ? `${srcCcy || "?"} → ${targetCcy} @ ${fx}` : "",
+    fxCaption,
   ].filter(Boolean).join("  ·  ");
   const lowConfCount = d.rows.filter((r) => r.confidence?.cat === "low").length;
   const selRowObj = d.rows.find((r) => r.id === sel) ?? d.rows.find((r) => r.inspector);
@@ -489,28 +536,20 @@ export default function WorkspaceScreen() {
           label={t("ws.currency")}
           value={targetCcy || srcCcy}
           options={[
-            ...(srcCcy ? [{ value: srcCcy, label: `${srcCcy} (source)` }] : []),
+            ...(srcCcy ? [{ value: srcCcy, label: `${srcCcy} (${t("ws.sourceCcy")})` }] : []),
             ...CURRENCIES.filter((c) => c !== srcCcy).map((c) => ({ value: c, label: c })),
           ]}
           onChange={(v) => setTargetCcy(v === srcCcy ? "" : v)}
         />
-        {converting && (
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12,
-                          color: color.sec, border: `1px solid ${color.cardBorder}`,
-                          borderRadius: radius.control, padding: "5px 9px" }}>
-            <span style={{ color: color.muted }}>{t("ws.rate")}</span>
-            <span style={{ fontFamily: font.mono, color: color.muted }}>1 {srcCcy || "?"} =</span>
-            <input
-              value={fxRate}
-              inputMode="decimal"
-              spellCheck={false}
-              onChange={(e) => setFxRate(e.target.value)}
-              style={{ width: 66, fontFamily: font.mono, fontSize: 12, fontWeight: 600,
-                       color: fx > 0 && Number.isFinite(Number(fxRate)) && Number(fxRate) > 0 ? color.ink : color.redFg,
-                       border: "none", outline: "none", background: "transparent" }}
-            />
-            <span style={{ fontFamily: font.mono, color: color.muted }}>{targetCcy}</span>
-          </label>
+        {fxUnavailable && (
+          <span
+            title={fxRes && !fxRes.resolved ? fxRes.detail : undefined}
+            style={{ fontSize: 11.5, fontWeight: 600, color: color.amberFg,
+                     background: color.amberBg, padding: "5px 10px",
+                     borderRadius: radius.pill, whiteSpace: "nowrap" }}
+          >
+            {fxLookupFailed ? t("ws.rateFailed") : t("ws.noRate")} {srcCcy || "?"} → {targetCcy}
+          </span>
         )}
         <ToolSelect<UnitTarget>
           label={t("ws.units")}
@@ -729,10 +768,32 @@ export default function WorkspaceScreen() {
 
           {/* units caption — labels the magnitude of every figure in the panel */}
           {unitsCaption && (
-            <div style={{ flex: "0 0 auto", padding: "3px 16px", background: color.rowAltBg,
-                          borderBottom: `1px solid ${color.hairline}`, textAlign: "right",
-                          fontSize: 10, fontStyle: "italic", color: color.muted }}>
+            <div
+              // The caption rounds the rate for legibility; the tooltip carries the exact
+              // multiplier (and the rate's own provenance note) so it can still be verified.
+              title={appliedFx
+                ? `1 ${srcCcy} = ${appliedFx.rate} ${targetCcy}`
+                  + (appliedFx.source ? ` · ${appliedFx.source}` : "")
+                : undefined}
+              style={{ flex: "0 0 auto", padding: "3px 16px", background: color.rowAltBg,
+                       borderBottom: `1px solid ${color.hairline}`, textAlign: "right",
+                       fontSize: 10, fontStyle: "italic", color: color.muted }}
+            >
               {unitsCaption}
+            </div>
+          )}
+
+          {/* The master holds no rate for the chosen pair, so nothing was converted. Say so
+            * where the figures are, and point at who can fix it — a silent fallback here
+            * would label source-currency numbers as the target currency. */}
+          {fxUnavailable && (
+            <div style={{ flex: "0 0 auto", padding: "6px 16px", background: color.amberBg,
+                          borderBottom: `1px solid ${color.hairline}`, fontSize: 11,
+                          color: color.amberFg, lineHeight: 1.5 }}>
+              <strong style={{ fontWeight: 600 }}>
+                {fxLookupFailed ? t("ws.rateFailed") : t("ws.noRate")} {srcCcy || "?"} → {targetCcy}.
+              </strong>{" "}
+              {fxLookupFailed ? t("ws.rateFailedHint") : t("ws.noRateHint")}
             </div>
           )}
 

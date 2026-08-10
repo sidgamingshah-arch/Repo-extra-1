@@ -13,6 +13,7 @@ from app.api.routes import (
     auth,
     documents,
     extractions,
+    fx_rates,
     languages,
     ontologies,
     projects,
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
     application.include_router(extractions.router, prefix=prefix)
     application.include_router(templates.router, prefix=prefix)
     application.include_router(ontologies.router, prefix=prefix)
+    application.include_router(fx_rates.router, prefix=prefix)
     application.include_router(languages.router, prefix=prefix)
     application.include_router(projects.router, prefix=prefix)
     application.include_router(auth.router, prefix=prefix)

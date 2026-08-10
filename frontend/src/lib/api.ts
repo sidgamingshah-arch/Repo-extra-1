@@ -27,12 +27,26 @@ export function setStoredActiveDoc(id: string | null): void {
   else localStorage.removeItem(ACTIVE_DOC_KEY);
 }
 
-/** Error carrying the HTTP status so callers (e.g. auth gating) can special-case 401. */
+/** Error carrying the HTTP status so callers (e.g. auth gating) can special-case 401.
+ *  `detail` is the server's own explanation when it sent one — editors show it verbatim
+ *  rather than a generic failure, so a rejected value says WHY it was rejected. */
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  detail?: string;
+  constructor(status: number, message: string, detail?: string) {
     super(message);
     this.status = status;
+    this.detail = detail;
+  }
+}
+
+/** Pull FastAPI's `detail` out of an error body; undefined when it isn't a plain message. */
+function errorDetail(text: string): string | undefined {
+  try {
+    const body = JSON.parse(text) as { detail?: unknown };
+    return typeof body.detail === "string" ? body.detail : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -48,7 +62,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`);
+    throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`, errorDetail(text));
   }
   if (res.status === 204) return undefined as T; // no content (e.g. DELETE)
   return res.json() as Promise<T>;
@@ -65,6 +79,9 @@ import type {
   DemoUser,
   ExtractionRunResponse,
   ExportFmt,
+  FxRate,
+  FxRateInput,
+  FxRateResolution,
   IntegrityResponse,
   Locale,
   LoginResponse,
@@ -98,6 +115,21 @@ export const api = {
   settings: () => req<AppSettings>(`/settings`),
   patchSettings: (body: SettingsPatch) =>
     req<AppSettings>(`/settings`, { method: "PATCH", body: JSON.stringify(body) }),
+  // --- FX rate master (admin-maintained; drives presentation currency conversion) ---
+  /** The whole master — readable by any authenticated user (the Workspace needs it). */
+  fxRates: () => req<{ rates: FxRate[] }>(`/fx-rates`),
+  /** Ask the master for one pair. Resolution happens server-side so the reciprocal of a
+   *  stored rate is computed in exact decimal, and comes back labelled as derived. */
+  resolveFxRate: (base: string, quote: string) =>
+    req<FxRateResolution>(
+      `/fx-rates/resolve?base=${encodeURIComponent(base)}&quote=${encodeURIComponent(quote)}`,
+    ),
+  /** Create or restate a rate for a pair + as-of date (admin). */
+  upsertFxRate: (body: FxRateInput) =>
+    req<FxRate>(`/fx-rates`, { method: "POST", body: JSON.stringify(body) }),
+  updateFxRate: (id: string, body: FxRateInput) =>
+    req<FxRate>(`/fx-rates/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteFxRate: (id: string) => req<void>(`/fx-rates/${id}`, { method: "DELETE" }),
   submitForReview: () =>
     req<{ ok: boolean; entry: AuditEntry }>(`/projects/${PROJECT}/submit-review`, { method: "POST" }),
   commentary: (locale: Locale = "en") =>
