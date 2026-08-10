@@ -1,11 +1,24 @@
 """Reconciliation stage (§20) — applies the note→face subtraction.
 
-For each ``FaceNoteLink``, per (basis, period), it subtracts the note detail lines that are
-*themselves* ingested as distinct template lines (avoiding double counting), writes the
-reconciled figure onto the face ``ExtractedValue.reconciled`` (always derived from the raw
-face value, so re-running is idempotent), and records a ``ReconciliationEntry``. It also
-checks that the FULL note total ties back to the face figure within tolerance; a residual
-outside tolerance (or a negative reconciled value) is flagged for the review queue.
+For each face line that cites a note, per (basis, period), it subtracts the note detail lines
+that are *themselves* ingested as distinct template lines (avoiding double counting), writes
+the reconciled figure onto the face ``ExtractedValue.reconciled`` (always derived from the raw
+face value, so re-running is idempotent), and records a ``ReconciliationEntry``.
+
+It also grades how well the note total ties back to the face figure. Three things make that
+grading non-obvious, and getting them wrong floods the review queue with non-findings:
+
+* **A cited note is usually not a breakdown of the face figure.** "Profit before tax" lists
+  selected items charged and credited; a segment note analyses by division; a commitments note
+  is a schedule. None of them sum to the face line. Only a genuine decomposition ties, so a
+  residual far from the face figure is graded ``unconfirmed`` rather than asserted as a
+  mismatch — see ``services.reconcile``.
+* **One note number can span several tables** (continuation pages, sub-analyses). Emitting one
+  entry per table multiplies the same question. Exactly one entry per
+  (face line, note, basis, period) is recorded, using whichever table corroborates best.
+* **Not every extracted column is a reported period.** A third or fourth numeric column
+  (maturity dates, coupon rates, an entity column) is not comparable to a face figure, so only
+  the reported periods take part in the tie.
 
 The arithmetic core lives in ``services.reconcile`` (pure, unit-tested); this stage wires it
 to the document model.
@@ -18,7 +31,18 @@ from app.core.models import DocumentModel
 from app.core.models.enums import LineRole
 from app.core.models.reports import ReconciliationEntry, ReconciliationReport
 from app.core.stage import PipelineContext
-from app.services.reconcile import NoteDetail, ReconcileInput, reconcile_face
+from app.services.reconcile import (
+    TIE_TIED,
+    TIE_UNTIED,
+    NoteDetail,
+    ReconcileInput,
+    reconcile_face,
+)
+
+# The reported periods a face figure can be tied against. Extraction also emits positional
+# columns ("col2", "col3", …) for tables with extra numeric columns; those are not periods
+# and comparing a note total to one of them is meaningless.
+_TIE_PERIODS = ("current", "prior")
 
 
 def _note_value(item, basis, period_label) -> Decimal | None:
@@ -45,46 +69,74 @@ class ReconcileStage:
         # these is double-counted and must be subtracted from the aggregate.
         distinct_face_keys = {li.canonical_key for li in doc.line_items if li.canonical_key}
 
-        applied = 0
+        # One question per (face line, note number): a note spanning several tables must not
+        # ask it once per table.
+        tables_by_link: dict[tuple, list] = {}
         for link in doc.links:
-            face = face_by_id.get(link.face_item_id)
             note = note_by_id.get(link.notes_table_id)
-            if face is None or note is None:
+            if note is None or link.face_item_id not in face_by_id:
                 continue
+            tables_by_link.setdefault((link.face_item_id, link.note_number), []).append(
+                (note, link))
+
+        def _outcome(face, note, ev):
+            """Reconcile one face value against one note table (None when the table has no
+            comparable detail for this basis/period)."""
+            details: list[NoteDetail] = []
+            for it in note.items:
+                if it.role in (LineRole.SUBTOTAL, LineRole.TOTAL):
+                    continue                      # a note's own subtotal isn't a detail
+                dv = _note_value(it, ev.basis, ev.period_label)
+                if dv is None:
+                    continue
+                maps = bool(it.canonical_key and it.canonical_key in distinct_face_keys
+                            and it.canonical_key != face.canonical_key)
+                details.append(NoteDetail(item_id=str(it.id), value=Decimal(dv),
+                                          maps_to_distinct_template_line=maps))
+            if not details:
+                return None
+            raw = ev.value if ev.value is not None else ev.value_raw
+            return reconcile_face(ReconcileInput(
+                face_item_id=str(face.id), note_number=note.note_number or "",
+                raw_face_value=Decimal(raw), details=details))
+
+        for (face_id, note_number), pairs in tables_by_link.items():
+            face = face_by_id[face_id]
             for ev in face.values.values():
                 raw = ev.value if ev.value is not None else ev.value_raw
-                if raw is None:
+                if raw is None or ev.period_label not in _TIE_PERIODS:
                     continue
-                details: list[NoteDetail] = []
-                for it in note.items:
-                    if it.role in (LineRole.SUBTOTAL, LineRole.TOTAL):
-                        continue                      # a note's own subtotal isn't a detail
-                    dv = _note_value(it, ev.basis, ev.period_label)
-                    if dv is None:
+                # The table that corroborates best is the one this face figure is broken
+                # down by; the rest are other tables that happen to share the note number.
+                best, best_link = None, None
+                for note, link in pairs:
+                    out = _outcome(face, note, ev)
+                    if out is None:
                         continue
-                    maps = bool(it.canonical_key and it.canonical_key in distinct_face_keys
-                                and it.canonical_key != face.canonical_key)
-                    details.append(NoteDetail(item_id=str(it.id), value=Decimal(dv),
-                                              maps_to_distinct_template_line=maps))
-                if not details:
+                    if best is None or abs(out.residual) < abs(best.residual):
+                        best, best_link = out, link
+                if best is None:
                     continue
-                out = reconcile_face(ReconcileInput(
-                    face_item_id=str(face.id), note_number=link.note_number,
-                    raw_face_value=Decimal(raw), details=details))
-                ev.reconciled = out.reconciled
+                # Only a corroborated breakdown may restate the face figure; otherwise the
+                # reported value stands untouched.
+                if best.tie_status in (TIE_TIED, TIE_UNTIED):
+                    ev.reconciled = best.reconciled
                 report.entries.append(ReconciliationEntry(
-                    face_item_id=str(face.id), note_number=link.note_number,
+                    face_item_id=str(face.id), note_number=note_number,
                     basis=ev.basis.value, period_label=ev.period_label,
-                    raw_face=out.raw_face, subtracted=out.subtracted, reconciled=out.reconciled,
-                    residual=out.residual, within_tolerance=out.within_tolerance,
-                    relationship=link.relationship.value))
-                if not out.within_tolerance:
+                    raw_face=best.raw_face, subtracted=best.subtracted,
+                    reconciled=best.reconciled, residual=best.residual,
+                    within_tolerance=best.within_tolerance, tie_status=best.tie_status,
+                    relationship=best_link.relationship.value))
+                if best.tie_status == TIE_UNTIED:
                     report.failed_assertions.append(
-                        f"Note {link.note_number} does not tie to "
+                        f"Note {note_number} does not tie to "
                         f"{face.canonical_key or face.source_label} "
-                        f"({ev.basis.value}/{ev.period_label}): residual {out.residual}")
-                applied += 1
+                        f"({ev.basis.value}/{ev.period_label}): residual {best.residual}")
 
         doc.reconciliation = report
-        ctx.log(f"reconcile:entries={len(report.entries)} failed={len(report.failed_assertions)}")
+        graded = {s: sum(1 for e in report.entries if e.tie_status == s)
+                  for s in ("tied", "untied", "unconfirmed")}
+        ctx.log(f"reconcile:entries={len(report.entries)} tied={graded['tied']} "
+                f"untied={graded['untied']} unconfirmed={graded['unconfirmed']}")
         return doc

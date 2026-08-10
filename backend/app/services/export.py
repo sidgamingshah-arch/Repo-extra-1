@@ -383,12 +383,23 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
             ri += 1
         e = recon.get(str(note.get("no")))               # note→face reconciliation (§20)
         if e is not None:
-            tie = ("ties to the face figure" if e.get("within_tolerance")
-                   else "does NOT tie to the face figure")
-            txt = f"Reconciliation: note total {tie} (residual {_num(e.get('residual')) or 0:,.0f})."
+            from app.services.reconcile import tie_status
+
+            status = tie_status(e)
+            resid = _num(e.get("residual")) or 0
+            if status == "unconfirmed":
+                # Saying "does NOT tie" about an analysis or segment note reads as an error in
+                # the filing; it only means the note is not a breakdown of that figure.
+                txt = ("Reconciliation: this note is not a breakdown of the face figure it is "
+                       "cited from, so no tie is asserted.")
+            else:
+                tie = ("ties to the face figure" if status == "tied"
+                       else "does NOT tie to the face figure")
+                txt = f"Reconciliation: note total {tie} (residual {resid:,.0f})."
             rc = ws.cell(ri, 1, txt)
             rc.font = Font(italic=True, size=9,
-                           color=("2E7D52" if e.get("within_tolerance") else "C0362C"))
+                           color=("2E7D52" if status == "tied"
+                                  else "8A8F98" if status == "unconfirmed" else "C0362C"))
             ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=3)
             ri += 1
         ri += 1                                          # blank spacer row between notes

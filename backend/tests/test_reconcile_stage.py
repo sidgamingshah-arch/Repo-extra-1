@@ -72,5 +72,11 @@ def test_check_reconciliation_flags_untied_notes():
     assert ok[0].status == "pass" and ok[0].type == "note_tie"
     bad = check_reconciliation([{"note_number": "9", "basis": "consolidated",
                                  "period_label": "current", "raw_face": 1000,
-                                 "residual": 250, "within_tolerance": False}])
-    assert bad[0].status == "fail" and bad[0].delta == 250
+                                 "residual": 20, "within_tolerance": False}])
+    assert bad[0].status == "fail" and bad[0].delta == 20
+
+    # A note whose total is nowhere near the face figure is not a breakdown of it, so there is
+    # nothing to pass or fail — it produces no check at all.
+    assert check_reconciliation([{"note_number": "8", "basis": "consolidated",
+                                  "period_label": "current", "raw_face": 1000,
+                                  "residual": 250, "within_tolerance": False}]) == []

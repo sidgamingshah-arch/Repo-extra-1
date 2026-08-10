@@ -18,6 +18,10 @@ class ReconciliationEntry(BaseModel):
     reconciled: Decimal
     residual: Decimal
     within_tolerance: bool
+    # "tied" | "untied" | "unconfirmed" — see app.services.reconcile. Only "untied" is a
+    # discrepancy worth an analyst's time; "unconfirmed" means the note is not a breakdown
+    # of this face figure, which is the normal case for an analysis or segment note.
+    tie_status: str = "unconfirmed"
     relationship: str
 
 

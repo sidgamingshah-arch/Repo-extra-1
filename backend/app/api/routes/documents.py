@@ -13,6 +13,7 @@ from app.api.deps import db, object_store
 from app.ports.object_store import LocalObjectStore
 from app.security import Permission, Principal, Role, current_principal, require
 from app.services.documents import analyze_document, content_hash
+from app.services.reconcile import tie_status
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -425,6 +426,38 @@ def _row_value(rows: list[dict], key: str, basis: str = "consolidated", period: 
     return None
 
 
+def _balance_sides(rows: list[dict], basis: str, period: str) -> tuple[float | None, float | None,
+                                                                     bool]:
+    """The two sides of the accounting identity, derived from subtotals when the filing does
+    not print the totals themselves.
+
+    Plenty of statements — HK/PRC ones especially — never print a "Total assets" line: they run
+    non-current assets, current assets, then "Total assets less current liabilities". Requiring
+    the printed total meant the identity check silently never ran on exactly those filings.
+    Both sides are reconstructed from the section subtotals instead, which the template already
+    defines, so the identity is genuinely checked. Returns (assets, equity+liabilities,
+    whether either side was derived).
+    """
+    def v(key: str):
+        return _row_value(rows, key, basis, period)
+
+    assets, derived = v("bs_total_assets"), False
+    if assets is None:
+        nca, ca = v("bs_non_current_assets__total_non_current_assets"), \
+            v("bs_current_assets__total_current_assets")
+        if nca is not None and ca is not None:
+            assets, derived = nca + ca, True
+
+    eqliab = v("bs_total_equity_and_liabilities")
+    if eqliab is None:
+        eq = v("bs_equity__total_equity")
+        ncl = v("bs_non_current_liabilities__total_non_current_liabilities")
+        cl = v("bs_current_liabilities__total_current_liabilities")
+        if eq is not None and ncl is not None and cl is not None:
+            eqliab, derived = eq + ncl + cl, True
+    return assets, eqliab, derived
+
+
 def _structural_checks(structural: list[dict], locale: str, covered: set[str]) -> list[dict]:
     """Failed template-structure relations as review items (from the structural stage).
 
@@ -474,8 +507,7 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
         return _t(s, locale)
 
     checks: list[dict] = []
-    a = _row_value(rows, "bs_total_assets")
-    e = _row_value(rows, "bs_total_equity_and_liabilities")
+    a, e, derived = _balance_sides(rows, "consolidated", "current")
     if a is not None and e is not None and abs(a - e) > 1:
         checks.append({
             "id": "chk-balance", "type": "balance", "icon": "≠",
@@ -486,14 +518,23 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
                 [L("Total assets"), f"{a:,.0f}", False],
                 [L("Total equity and liabilities"), f"{e:,.0f}", True],
                 [L("Difference"), f"{a - e:,.0f}", False],
-            ],
+            ] + ([[L("Totals derived from the section subtotals"), "", False]] if derived else []),
             "fix": L("Assets do not equal equity plus liabilities. Check the extracted totals "
                      "and their components against the document."),
         })
+    # Only a note that IS a breakdown of the face figure, yet does not tie, is a finding. An
+    # "unconfirmed" entry means the cited note is an analysis/segment/commitments table rather
+    # than a decomposition — raising those turned the queue into hundreds of non-findings.
+    # One item per (note, basis, period): a note spanning several tables asks one question.
+    seen_ties: set[tuple] = set()
     for ent in reconciliation:
-        if ent.get("within_tolerance"):
+        if tie_status(ent) != "untied":
             continue
         note = ent.get("note_number")
+        ident = (note, ent.get("basis"), ent.get("period_label"))
+        if ident in seen_ties:
+            continue
+        seen_ties.add(ident)
         checks.append({
             "id": f"chk-note-{note}-{ent.get('basis')}-{ent.get('period_label')}",
             "type": "note_tie", "icon": "≠",
@@ -1413,10 +1454,15 @@ def _reconciliation_text(entries: list[dict], note_no: int) -> str | None:
     mine = [e for e in entries if _note_no(e.get("note_number")) == note_no]
     if not mine:
         return None
-    mine.sort(key=lambda e: (e.get("basis") != "consolidated", e.get("period_label") != "current"))
+    # An entry we could actually grade says more than an unconfirmed one, so prefer it; then
+    # prefer the consolidated / current-period view.
+    mine.sort(key=lambda e: (tie_status(e) == "unconfirmed",
+                             e.get("basis") != "consolidated",
+                             e.get("period_label") != "current"))
     e = mine[0]
     raw, sub, rec = e.get("raw_face"), e.get("subtracted"), e.get("reconciled")
-    resid, tie = e.get("residual"), e.get("within_tolerance")
+    resid = e.get("residual")
+    status = tie_status(e)
     parts: list[str] = []
     try:
         if abs(float(sub)) > 0:
@@ -1425,11 +1471,14 @@ def _reconciliation_text(entries: list[dict], note_no: int) -> str | None:
                 f"carried as separate line items → reconciled {_fmt_amt(rec)}.")
     except (TypeError, ValueError):
         pass
-    if tie:
+    if status == "tied":
         parts.append(f"The note total ties to the face figure (residual {_fmt_amt(resid)}).")
-    else:
+    elif status == "untied":
         parts.append(f"The note total does not tie to the face figure — residual {_fmt_amt(resid)} "
                      f"(flagged for review).")
+    else:
+        parts.append("This note is not a breakdown of the face figure it is cited from, so no "
+                     "tie is asserted.")
     return " ".join(parts)
 
 

@@ -20,6 +20,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 
+from app.services.reconcile import tie_status
+
 
 @dataclass
 class Check:
@@ -108,15 +110,23 @@ def check_signs(rows: list[dict], period: str = "v1") -> list[Check]:
 
 
 def check_reconciliation(entries: list[dict], tol: Decimal = Decimal(1)) -> list[Check]:
-    """Turn the reconcile stage's report entries into note→face tie checks. An entry whose
-    note total does not tie to the face figure (``within_tolerance`` false) is a failure."""
+    """Turn the reconcile stage's report entries into note→face tie checks.
+
+    Only an entry graded ``untied`` is a failure — a corroborated breakdown that does not add
+    up. Entries graded ``unconfirmed`` are skipped entirely: the cited note is not a
+    decomposition of that face figure (an analysis note, a segment table), so there is nothing
+    to assert either way.
+    """
     out: list[Check] = []
     for e in entries:
         note = e.get("note_number")
         basis, period = e.get("basis"), e.get("period_label")
         resid = e.get("residual")
         resid_d = None if resid is None else Decimal(str(resid))
-        ok = bool(e.get("within_tolerance"))
+        status = tie_status(e)
+        if status == "unconfirmed":
+            continue
+        ok = status == "tied"
         out.append(Check(
             id=f"note_tie:{note}:{basis}:{period}", type="note_tie",
             title=f"Note {note} ties to face ({basis}/{period})",
