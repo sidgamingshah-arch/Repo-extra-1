@@ -1243,11 +1243,15 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     carry a value for the requested `basis` (consolidated / standalone) are shown. Labels are
     resolved in the output `locale` from the template's label_i18n (input=output parity)."""
     prefix = _stmt_prefix(template_def, statement_type)
-    by_key: dict[str, dict] = {}
+    # Several printed lines legitimately share one concept: three depreciation lines roll into
+    # "Depreciation and amortisation", two tax payments into "Income tax paid", and an "Others"
+    # bucket exists precisely to absorb a handful. Keeping only the first row would drop the
+    # rest from the statement silently, so rows are grouped and their values added.
+    by_key: dict[str, list[dict]] = {}
     for r in rows:
         k = r.get("canonical_key")
         if k:
-            by_key.setdefault(k, r)
+            by_key.setdefault(k, []).append(r)
 
     def has_basis(r: dict) -> bool:
         return bool(_basis_values(r, basis))
@@ -1257,17 +1261,42 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     def _kind_for(role: str | None) -> str:
         return {"subtotal": "subtotal", "total": "total"}.get(role or "", "item")
 
-    def item_row(key: str, label: str, r: dict, kind: str = "item") -> dict:
+    def item_row(key: str, label: str, group: list[dict], kind: str = "item") -> dict:
+        """One statement row from every extracted row that mapped to this concept.
+
+        With a single source row this is that row. With several, the values are summed and the
+        inspector says how many printed lines went into the figure, so a total that does not
+        match any one line on the page is explainable rather than mysterious. Provenance stays
+        on the first contributing line, which is where click-to-source lands.
+        """
+        r = group[0]
         cur, prior = _cur_prior(r, basis)
-        cat, pct = _conf_cat(r.get("mapping_confidence"))
-        edited = bool(r.get("edited"))
+        cat, pct = _conf_cat(min((x.get("mapping_confidence") or 0) for x in group)
+                             if len(group) > 1 else r.get("mapping_confidence"))
+        edited = any(bool(x.get("edited")) for x in group)
+        v1, v2 = _to_num((cur or {}).get("value")), _to_num((prior or {}).get("value"))
+        if len(group) > 1:
+            for extra in group[1:]:
+                c, p = _cur_prior(extra, basis)
+                cv, pv = _to_num((c or {}).get("value")), _to_num((p or {}).get("value"))
+                if cv is not None:
+                    v1 = cv if v1 is None else v1 + cv
+                if pv is not None:
+                    v2 = pv if v2 is None else v2 + pv
+        inspector = _inspector(r, cur)
+        if len(group) > 1:
+            printed = "; ".join(str(x.get("source_label") or "") for x in group)
+            inspector = {**inspector, "tag": "aggregated",
+                         "note": f"{inspector.get('note', '')} Sum of {len(group)} printed "
+                                 f"lines mapped to this concept: {printed}"}
         return {
             "id": key, "label": label or r.get("source_label"),
             "source_label": r.get("source_label"), "kind": kind,
-            "note": r.get("note"), "note2": None, "status": "edited" if edited else None,
+            "note": next((x.get("note") for x in group if x.get("note")), None),
+            "note2": None, "status": "edited" if edited else None,
             "confidence": {"cat": cat, "pct": pct}, "editable": True,
-            "formula": r.get("formula"), "inspector": _inspector(r, cur),
-            "v1": _to_num((cur or {}).get("value")), "v2": _to_num((prior or {}).get("value")),
+            "formula": r.get("formula"), "inspector": inspector,
+            "v1": v1, "v2": v2,
             # Structured source location of the current-period value, so the Workspace's live
             # viewer can hyperlink this row to its page+bbox (PDF) or sheet+cell (Excel).
             "source": (cur or {}).get("provenance"),
@@ -1310,20 +1339,24 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                 k = c["canonical_key"]
                 seen.add(k)
                 kind = _kind_for(c.get("role"))
-                r = by_key.get(k)
-                if r is not None and has_basis(r):
-                    out.append(item_row(k, _loc(c, locale), r, kind))
+                group = [r for r in by_key.get(k, []) if has_basis(r)]
+                if group:
+                    out.append(item_row(k, _loc(c, locale), group, kind))
                 else:
                     out.append(blank_row(k, _loc(c, locale), kind))
 
-    extra = [r for r in rows
-             if (r.get("canonical_key") or "").startswith(f"{prefix}_")
-             and r["canonical_key"] not in seen and has_basis(r)]
+    # Concepts this statement extracted that the template has no node for — shown so a mapped
+    # figure is never invisible just because the template skeleton omits its line.
+    extra: dict[str, list[dict]] = {}
+    for r in rows:
+        k = r.get("canonical_key") or ""
+        if k.startswith(f"{prefix}_") and k not in seen and has_basis(r):
+            extra.setdefault(k, []).append(r)
     if extra:
         out.append({"id": "sec_other", "label": _t("Other extracted items", locale),
                     "kind": "section", "v1": None, "v2": None})
-        for r in extra:
-            out.append(item_row(r["canonical_key"], r.get("source_label", ""), r))
+        for k, group in extra.items():
+            out.append(item_row(k, group[0].get("source_label", ""), group))
 
     # Face-line containment netting: reduce a target line by the lines already included in it
     # (e.g. cost of sales inclusive of admin / S&M), showing the net value + formula. Signed and

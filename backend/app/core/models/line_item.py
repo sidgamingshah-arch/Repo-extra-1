@@ -74,6 +74,11 @@ class LineItem(BaseModel):
 
     source_label: str = ""                # text exactly as printed
     display_label: str | None = None      # canonical label (locale-resolved)
+    # The section banner this row was printed under ("NON-CURRENT LIABILITIES", 流動負債).
+    # A statement prints the same caption under two sections — "Interest-bearing bank and other
+    # borrowings" appears once as non-current and once as current — so the caption alone cannot
+    # say which concept it is. Mapping uses this to tell them apart.
+    section_hint: str | None = None
     canonical_key: str | None = None
     template_node_id: str | None = None
     ordinal: int = 0

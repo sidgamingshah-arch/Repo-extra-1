@@ -825,12 +825,24 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
     bands = _basis_bands(rows)
     period_bands = _period_bands(rows)          # real period-end dates for column headers, if any
     note_x = _detect_note_column(rows)          # x of the note-ref column, so it isn't read as a value
+    section: str | None = None
     for row in rows:
         label_words, note_ref, value_words = _scan_row(row, number_format)
         note_ref, value_words = _resolve_note_column(note_ref, value_words, note_x, number_format)
 
         label = " ".join(w.text for w in label_words).strip()
         if not label or not value_words:
+            # A label-only banner ("NON-CURRENT LIABILITIES", 流動負債) carries no amount, but it
+            # scopes every row beneath it — the same caption under two banners is two different
+            # concepts. Remember it before dropping the row.
+            #
+            # A sub-heading ("Adjustments for:", "Represented by:") introduces a group WITHIN
+            # the section rather than a new one, so it must not displace it: the rows under
+            # "Adjustments for:" are still operating-activities rows, and losing that scope is
+            # what lets an operating add-back resolve to an investing concept.
+            if label and not value_words and _looks_like_header(label_words) \
+                    and not label.rstrip().endswith(":"):
+                section = label
             continue
 
         # Drop running-header / statement-title / period-caption lines that leaked in as rows
@@ -840,7 +852,7 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
             continue
 
         li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
-                      source=ValueSource.MACHINE)
+                      section_hint=section, source=ValueSource.MACHINE)
         label_bbox = _union([w.bbox for w in label_words])
         # Group value columns by basis (via the header band), then order within each basis.
         per_basis: dict[Basis, int] = {}

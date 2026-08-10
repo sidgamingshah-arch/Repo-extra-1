@@ -217,7 +217,12 @@ def test_shipped_template_relations_hold_on_a_consistent_spread():
         "cf_cash_flow_from_financing_activities__net_cash_from_financing_activities": -13_389_527,
         "cf_net_increase_decrease_in_cash_and_cash_equivalents": -4_251_131,
         "cf_opening_cash_and_cash_equivalents": 8_156_453,
-        "cf_closing_cash_and_cash_equivalents": 3_905_322,
+        # IAS 7: closing cash is opening plus the net change PLUS the effect of exchange rate
+        # movements. While the rollup omitted that third term the relation could not hold on
+        # any filing that reports one — it showed up as a phantom mismatch equal to the
+        # exchange effect.
+        "cf_s4_effect_of_foreign_exchange_rate_changes": 26_703,
+        "cf_closing_cash_and_cash_equivalents": 3_932_025,
     }))
     passed = {r.rule_id for r in report.results if r.status == "pass"}
     assert "rollup:cf_net_increase_decrease_in_cash_and_cash_equivalents" in passed

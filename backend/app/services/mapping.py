@@ -207,6 +207,20 @@ class OntologyMatcher:
             return Candidate(key, MappingMethod.EXACT, 1.0)
         return None
 
+    def _vetoed(self, canonical_key: str, caption: str) -> bool:
+        """Whether the concept's ``exclude_hints`` rule this caption out.
+
+        The field is named exclude and the ontology editor presents it as "never map a caption
+        like this here", so it has to hold across every tier. Applying it only inside the rule
+        tier meant an excluded caption could still arrive via fuzzy or an alias — an editor
+        would add the exclusion, see nothing change, and have no way to fix a mis-mapping.
+        """
+        m = self._by_key.get(canonical_key)
+        if m is None or not m.exclude_hints:
+            return False
+        text = caption.lower()
+        return any(re.search(ex, text) for ex in m.exclude_hints)
+
     def _rule(self, raw: str) -> Candidate | None:
         text = raw.lower()
         best: Candidate | None = None
@@ -449,6 +463,79 @@ class OntologyMatcher:
             return True
         return prefix == want
 
+    # Canonical keys are further namespaced by statement SECTION
+    # (bs_non_current_liabilities__…, bs_current_assets__…), and a statement prints the same
+    # caption under two of them: "Interest-bearing bank and other borrowings" appears once
+    # under non-current liabilities and once under current, as do senior notes and lease
+    # liabilities. The caption cannot distinguish them; the banner above the row can. Each
+    # entry maps a section token found in a key to the words a banner uses for it, in English
+    # and in Han (folded to Simplified by ``normalize_label``).
+    _SECTION_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+        # Longest first: "non current liabilities" must not be read as "current liabilities".
+        ("non_current_liabilities", ("non current liabilities", "noncurrent liabilities",
+                                    "非流动负债", "长期负债")),
+        ("non_current_assets", ("non current assets", "noncurrent assets",
+                               "非流动资产", "长期资产")),
+        ("current_liabilities", ("current liabilities", "流动负债")),
+        ("current_assets", ("current assets", "流动资产")),
+        ("equity", ("equity", "capital and reserves", "权益", "股本及储备", "资本及储备")),
+        # The cash flow statement is namespaced the same way, and its captions repeat across
+        # activities: "Interest received" and "Dividends received" appear under both operating
+        # and investing, "Acquisition of subsidiaries" under investing and financing.
+        ("cash_flow_from_operating_activities", ("operating activities", "经营活动", "营运活动")),
+        ("cash_flow_from_investing_activities", ("investing activities", "投资活动")),
+        ("cash_flow_from_financing_activities", ("financing activities", "融资活动", "筹资活动")),
+    )
+
+    def _section_of(self, text: str | None) -> str | None:
+        """The section a banner names, or None when it names none we recognise.
+
+        An umbrella banner that spans more than one section ("EQUITY AND LIABILITIES", which
+        IFRS statements print above the Equity / Non-current / Current sub-banners) scopes
+        nothing on its own: reading it as "equity" would refuse every liability concept
+        beneath it. Those return None so the constraint simply does not apply.
+        """
+        if not text:
+            return None
+        folded = normalize_label(text)
+        if ("equity" in folded or "权益" in folded) and (
+                "liabilit" in folded or "负债" in folded):
+            return None
+        for token, words in self._SECTION_WORDS:
+            if any(w in folded for w in words):
+                return token
+        return None
+
+    def _in_section(self, canonical_key: str, section: str | None) -> bool:
+        """False only when the key belongs to a DIFFERENT section than the banner names.
+
+        Keys that carry no section namespace (``bs_total_assets``, ``pl_profit_before_tax``)
+        and unrecognised banners are always allowed: like the statement constraint, this
+        suppresses a confident wrong answer without dropping concepts it cannot place.
+        """
+        want = self._section_of(section)
+        if not want:
+            return True
+        known = [tok for tok, _ in self._SECTION_WORDS]
+        # The key's own section token, matched longest-first for the same reason as above.
+        have = next((tok for tok in known if f"_{tok}__" in canonical_key), None)
+        if have is None:
+            return True
+        return have == want
+
+    def _allowed(self, canonical_key: str, statement: str | None,
+                 section: str | None, caption: str = "") -> bool:
+        """Whether a concept may be considered for a caption printed here.
+
+        Two of the three constraints are structural, not lexical: the statement the page is,
+        and the section banner the row sits under. The third is the concept's own declared
+        exclusions. They are combined in one place so no call site can apply only part of the
+        scoping.
+        """
+        return (self._in_statement(canonical_key, statement)
+                and self._in_section(canonical_key, section)
+                and not (caption and self._vetoed(canonical_key, caption)))
+
     @staticmethod
     def _best_per_key(cands: list[Candidate]) -> list[Candidate]:
         """Highest-scoring candidate per concept, best first (segments can both propose one)."""
@@ -460,7 +547,7 @@ class OntologyMatcher:
         return sorted(best.values(), key=lambda c: c.score, reverse=True)
 
     def match(self, raw_label: str, context: str | None = None,
-              statement: str | None = None) -> MappingResult:
+              statement: str | None = None, section: str | None = None) -> MappingResult:
         """A COMBINATION of methods — no single one is authoritative:
 
         exact identity short-circuits (free); otherwise rule / fuzzy / embedding each
@@ -474,6 +561,12 @@ class OntologyMatcher:
         balance-sheet caption must not resolve to a cash-flow concept just because the words
         overlap ("Finance costs" appears on both), which is otherwise a whole class of
         confidently-wrong mapping.
+
+        ``section`` is the section banner the row was printed under ("NON-CURRENT
+        LIABILITIES", 流動負債). Statements print one caption under two banners — a property
+        developer's "Interest-bearing bank and other borrowings" and "Senior notes and domestic
+        bonds" each appear once as non-current and once as current — so without the banner the
+        two rows are indistinguishable and collapse onto one concept.
         """
         segments = label_segments(raw_label)
         norm = normalize_label(raw_label)
@@ -484,7 +577,7 @@ class OntologyMatcher:
         #    for a bilingual line, on each script's half (either alone can be an exact alias).
         for seg in segments:
             exact = self._exact(normalize_label(seg))
-            if exact and self._in_statement(exact.canonical_key, statement):
+            if exact and self._allowed(exact.canonical_key, statement, section, raw_label):
                 return MappingResult(exact.canonical_key, exact.method, 1.0, [exact], False,
                                      {"exact": 1.0}, allocation_status="direct_exclusive")
 
@@ -495,10 +588,10 @@ class OntologyMatcher:
         fuzzy = self._best_per_key([c for seg in segments for c in self._fuzzy(normalize_label(seg))])
         emb = self._embedding(raw_label)
         # Drop candidates belonging to another statement BEFORE they can win or shortlist.
-        if rule and not self._in_statement(rule.canonical_key, statement):
+        if rule and not self._allowed(rule.canonical_key, statement, section, raw_label):
             rule = None
-        fuzzy = [c for c in fuzzy if self._in_statement(c.canonical_key, statement)]
-        emb = [c for c in (emb or []) if self._in_statement(c.canonical_key, statement)]
+        fuzzy = [c for c in fuzzy if self._allowed(c.canonical_key, statement, section, raw_label)]
+        emb = [c for c in (emb or []) if self._allowed(c.canonical_key, statement, section, raw_label)]
         by_method: dict[str, set[str]] = {}
         pool: list[Candidate] = []
         if rule:
@@ -525,7 +618,7 @@ class OntologyMatcher:
         #    (or every concept for a small ontology) plus each concept's criteria.
         if self.llm_enabled:
             all_keys = [k for k in self._extractable_keys()
-                        if self._in_statement(k, statement)]
+                        if self._allowed(k, statement, section, raw_label)]
             if len(all_keys) <= s.extraction.llm_candidate_cap:
                 shortlist = all_keys
             else:
@@ -596,7 +689,8 @@ class OntologyMatcher:
                              allocation_status="unmapped_review")
 
     def match_batch(self, items: list[tuple[str, str]],
-                    statement: str | None = None) -> dict[str, MappingResult]:
+                    statement: str | None = None,
+                    sections: dict[str, str | None] | None = None) -> dict[str, MappingResult]:
         """Per-statement mapping: decide ALL captions in one grounded LLM call so
         cross-line judgements (containment, residual, 'Others') have full context. The
         model references the provided item_ids and candidate keys — it never invents a
@@ -604,12 +698,17 @@ class OntologyMatcher:
         per-line matching for anything the batch call can't resolve, or entirely when no
         LLM is configured.
 
-        ``items`` is a list of (item_id, source_label)."""
+        ``items`` is a list of (item_id, source_label). ``sections`` maps an item_id to the
+        section banner that item was printed under; a batch spans a whole page and therefore
+        several sections, so the banner is per item, not per batch."""
+        sec = sections or {}
         if not self.llm_enabled or not items:
-            return {iid: self.match(label, statement=statement) for iid, label in items}
+            return {iid: self.match(label, statement=statement, section=sec.get(iid))
+                    for iid, label in items}
 
         # Only concepts from THIS statement are offered, so the batch cannot place a caption
-        # in another statement (see `match`).
+        # in another statement (see `match`). Section scoping is applied per decision below,
+        # since one batch covers rows from several sections.
         candidates = self._concept_payload(
             [k for k in self._extractable_keys() if self._in_statement(k, statement)])
         user = json.dumps({
@@ -627,7 +726,8 @@ class OntologyMatcher:
                 max_tokens=4096,
             )
         except Exception:
-            return {iid: self.match(label, statement=statement) for iid, label in items}
+            return {iid: self.match(label, statement=statement, section=sec.get(iid))
+                    for iid, label in items}
         self.usage["calls"] += 1
         self.usage["input_tokens"] += int(meta.get("input_tokens") or 0)
         self.usage["output_tokens"] += int(meta.get("output_tokens") or 0)
@@ -638,6 +738,11 @@ class OntologyMatcher:
         for d in decision.mappings:
             key = (d.canonical_key or "").strip()
             if not key or key not in self._by_key:
+                continue
+            # A concept from a different section than the row's banner is refused here for the
+            # same reason it is refused in `match`.
+            caption = next((lbl for iid, lbl in items if iid == d.item_id), "")
+            if not self._allowed(key, statement, sec.get(d.item_id), caption):
                 continue
             conf = max(0.0, min(1.0, d.confidence))
             alloc = (d.allocation_status or "").strip() or (
@@ -651,5 +756,5 @@ class OntologyMatcher:
         # Per-line fallback for any items the batch omitted.
         for iid, label in items:
             if iid not in out:
-                out[iid] = self.match(label, statement=statement)
+                out[iid] = self.match(label, statement=statement, section=sec.get(iid))
         return out

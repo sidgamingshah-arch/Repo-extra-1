@@ -142,3 +142,35 @@ def test_per_value_confidence_exposed(client):
     assert {"mapping", "validation", "overall", "weakest", "flags"} <= set(conf)
     assert isinstance(conf["overall"], (int, float)) and 0.0 <= conf["overall"] <= 1.0
     assert isinstance(conf["flags"], list)
+
+
+def test_several_printed_lines_mapping_to_one_concept_are_summed_not_dropped():
+    """Concepts legitimately absorb more than one printed line — three depreciation lines roll
+    into "Depreciation and amortisation", two tax payments into "Income tax paid", and an
+    "Others" bucket exists to catch a handful. Showing only the first would drop the rest from
+    the statement with nothing to indicate a figure went missing."""
+    from app.api.routes.documents import _build_statement
+
+    key = "cf_cash_flow_from_operating_activities__income_tax_paid"
+    rows = [
+        {"canonical_key": key, "source_label": "PRC corporate income tax paid",
+         "values": [{"basis": "consolidated", "period_label": "current", "value": "-559917"}]},
+        {"canonical_key": key, "source_label": "PRC land appreciation tax paid",
+         "values": [{"basis": "consolidated", "period_label": "current", "value": "-44488"}]},
+    ]
+    stmt = _build_statement(rows, None, "cash_flow", "f.pdf")
+    row = next(r for r in stmt["rows"] if r["id"] == key)
+    assert row["v1"] == -604405                      # both lines, not just the first
+    assert "Sum of 2 printed lines" in row["inspector"]["note"]
+    assert "land appreciation" in row["inspector"]["note"]
+
+
+def test_a_concept_with_one_source_line_is_unchanged():
+    from app.api.routes.documents import _build_statement
+
+    key = "cf_cash_flow_from_operating_activities__income_tax_paid"
+    rows = [{"canonical_key": key, "source_label": "Income tax paid",
+             "values": [{"basis": "consolidated", "period_label": "current", "value": "-100"}]}]
+    row = next(r for r in _build_statement(rows, None, "cash_flow", "f.pdf")["rows"]
+               if r["id"] == key)
+    assert row["v1"] == -100 and "Sum of" not in row["inspector"]["note"]
