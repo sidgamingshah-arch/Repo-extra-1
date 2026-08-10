@@ -6,11 +6,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Card } from "../components/ui";
 import { useAppLocale, useUI } from "../store";
 import { color, font, radius } from "../theme";
-import type { NodeConfig, TemplateResponse } from "../types";
+import type { Locale, NodeConfig, TemplateResponse } from "../types";
 import { useTemplateDetail, useTemplates } from "../lib/queries";
 import { api } from "../lib/api";
 import { useCan } from "../lib/rbac";
-import { useT } from "../i18n";
+import { NATIVE_NAME, useT } from "../i18n";
 
 /** Admin-only: create a template/ontology by importing a validated JSON definition. Persisted
  *  and versioned server-side, then selectable on Upload — the frontend authoring path (Req 4). */
@@ -188,6 +188,211 @@ function NettingRules({ rules, t }: {
   );
 }
 
+/** Editable ontology rules for the selected concept: the aliases the extractor matches on and
+ *  the sign convention. Saving publishes a NEW ontology version server-side (history preserved),
+ *  then re-reads the screen so what you see is the stored result, not local optimism. */
+function NodeRules({ cfg, canonicalKey, ontologyId, locale, canEdit, t }: {
+  cfg: NodeConfig; canonicalKey: string | undefined; ontologyId: string | undefined;
+  locale: Locale; canEdit: boolean; t: (k: string) => string;
+}) {
+  const qc = useQueryClient();
+  // Edit the RAW per-locale list (falls back to the merged set when the backend predates it).
+  const stored = cfg.aliases_locale ?? cfg.aliases;
+  const [aliases, setAliases] = useState<string[]>(stored);
+  const [sign, setSign] = useState<string>(cfg.sign);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Switching concept (or language) starts a fresh edit: drop the pending draft AND the last
+  // save message, which belonged to the previous concept.
+  const conceptKey = `${canonicalKey}|${locale}`;
+  const seenConcept = useRef(conceptKey);
+  useEffect(() => {
+    if (seenConcept.current !== conceptKey) {
+      seenConcept.current = conceptKey;
+      setAliases(stored);
+      setSign(cfg.sign);
+      setDraft("");
+      setMsg(null);
+    }
+  }, [conceptKey, stored, cfg.sign]);
+
+  // Adopt server truth when the stored rules change under us: our own save's refetch, or
+  // another admin's edit. Deliberately does NOT clear `msg` -- the save confirmation has to
+  // survive the very refetch that saving triggered.
+  const storedKey = `${stored.join(" ")}|${cfg.sign}`;
+  const seenStored = useRef(storedKey);
+  useEffect(() => {
+    if (seenStored.current !== storedKey) {
+      seenStored.current = storedKey;
+      setAliases(stored);
+      setSign(cfg.sign);
+    }
+  }, [storedKey, stored, cfg.sign]);
+
+  const editable = canEdit && !!ontologyId && !!canonicalKey;
+  // What a save would persist: the committed chips plus any alias still sitting in the input.
+  // Folding the draft in here (rather than relying on the input's blur firing before the
+  // button's click) means typing an alias and clicking Save directly can never drop it.
+  const pending = draft.trim();
+  const effective = pending && !aliases.includes(pending) ? [...aliases, pending] : aliases;
+  const dirty = effective.join(" ") !== stored.join(" ") || sign !== cfg.sign;
+  // The merged display set minus what we edit here = aliases inherited from the fallback
+  // locale. Shown read-only so it's clear why the extractor also matches them.
+  const inherited = cfg.aliases.filter((a) => !stored.includes(a));
+
+  function addDraft() {
+    const v = draft.trim();
+    if (!v) return;
+    if (!aliases.includes(v)) setAliases([...aliases, v]);
+    setDraft("");
+  }
+
+  async function save() {
+    if (!editable || !dirty) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await api.editOntologyMapping(ontologyId!, {
+        canonical_key: canonicalKey!, locale, aliases: effective, sign_convention: sign,
+      });
+      setAliases(effective);
+      setDraft("");
+      setMsg({ ok: true, text: t("tp.saved").replace("{v}", String(res.version)) });
+      // Re-read the detail (and the ontology list) so the screen shows the stored version.
+      await qc.invalidateQueries({ queryKey: ["template-detail"] });
+      qc.invalidateQueries({ queryKey: ["ontologies"] });
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      setMsg({ ok: false, text: `${t("tp.saveErr")} ${m}`.slice(0, 300) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const chip: CSSProperties = {
+    fontSize: 11.5, fontWeight: 500, padding: "5px 11px", borderRadius: radius.pill,
+    background: color.indigoTint2, color: color.indigo,
+  };
+
+  return (
+    <>
+      <Card style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between",
+                      gap: 10, marginBottom: 11 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>{t("tp.aliases")}</span>
+          {editable && (
+            <span style={{ fontSize: 10.5, color: color.muted }}>
+              {t("tp.editingLocale")} {NATIVE_NAME[locale]}
+            </span>
+          )}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 7, alignItems: "center" }}>
+          {aliases.map((a) => (
+            <span key={a} style={chip}>
+              {a}
+              {editable && (
+                <span
+                  role="button"
+                  title={t("tp.revert")}
+                  onClick={() => setAliases(aliases.filter((x) => x !== a))}
+                  style={{ opacity: 0.55, cursor: "pointer", marginInlineStart: 4, fontWeight: 700 }}
+                >
+                  ×
+                </span>
+              )}
+            </span>
+          ))}
+          {editable && (
+            <input
+              value={draft}
+              placeholder={t("tp.newAlias")}
+              title={t("tp.addAliasHint")}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); addDraft(); }
+              }}
+              onBlur={addDraft}
+              style={{ fontSize: 11.5, padding: "5px 11px", borderRadius: radius.pill,
+                       border: `1px dashed ${color.dashed}`, color: color.ink,
+                       background: "transparent", minWidth: 130, outline: "none" }}
+            />
+          )}
+          {/* Aliases coming from the fallback locale — matched by the extractor, edited under
+              their own language, so they're shown here read-only rather than silently merged. */}
+          {inherited.map((a) => (
+            <span key={`inh-${a}`} title={t("tp.viewOnly")}
+                  style={{ ...chip, background: color.rowAltBg, color: color.muted }}>
+              {a}
+            </span>
+          ))}
+        </div>
+      </Card>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+        <Card>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("tp.signConvention")}</div>
+          {SIGN_OPTIONS.map((opt) => {
+            const on = opt.key === sign;
+            return (
+              <div
+                key={opt.key}
+                role={editable ? "button" : undefined}
+                onClick={editable ? () => setSign(opt.key) : undefined}
+                style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 0",
+                         cursor: editable ? "pointer" : "default" }}
+              >
+                <Radio on={on} />
+                <span style={{ fontSize: 12, color: on ? color.ink : color.sec2, fontWeight: on ? 600 : 400 }}>
+                  {t(opt.labelKey)}
+                </span>
+              </div>
+            );
+          })}
+        </Card>
+        <Card>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("tp.dataTypeUnits")}</div>
+          <div style={{ marginBottom: 11 }}>
+            <FieldMock label={t("tp.valueType")} value={cfg.value_type} />
+          </div>
+          <FieldMock label={t("tp.aggregation")} value={cfg.aggregation} />
+        </Card>
+      </div>
+
+      {editable && (dirty || msg) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <button
+            onClick={save}
+            disabled={busy || !dirty}
+            style={{ fontSize: 12, fontWeight: 600, color: "#fff", background: color.indigo,
+                     border: "none", borderRadius: radius.control, padding: "8px 14px",
+                     cursor: busy || !dirty ? "default" : "pointer", opacity: dirty ? 1 : 0.5 }}
+          >
+            {busy ? t("tp.saving") : t("tp.save")}
+          </button>
+          {dirty && !busy && (
+            <button
+              onClick={() => { setAliases(stored); setSign(cfg.sign); setDraft(""); setMsg(null); }}
+              style={{ fontSize: 12, color: color.sec, background: "none",
+                       border: `1px solid ${color.controlBorder}`, borderRadius: radius.control,
+                       padding: "8px 12px", cursor: "pointer" }}
+            >
+              {t("tp.revert")}
+            </button>
+          )}
+          {dirty && <span style={{ fontSize: 11, color: color.muted }}>{t("tp.unsaved")}</span>}
+          {msg && (
+            <span style={{ fontSize: 11.5, color: msg.ok ? color.greenFg : color.redFg }}>
+              {msg.text}
+            </span>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function TemplateScreen() {
   const locale = useAppLocale();
   const t = useT();
@@ -268,6 +473,8 @@ export default function TemplateScreen() {
             return (
               <div
                 key={node.id}
+                // Only leaves map to a concept (headings carry no ontology rules to edit).
+                data-testid={head ? undefined : "tpl-node"}
                 onClick={() => setTpl(node.id)}
                 style={{
                   display: "flex",
@@ -330,66 +537,15 @@ export default function TemplateScreen() {
             {canEdit ? t("tp.editorSubhead") : t("tp.viewOnlyHint")}
           </p>
 
-          {/* Description aliases */}
-          <Card style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("tp.aliases")}</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
-              {cfg.aliases.map((a) => (
-                <span
-                  key={a}
-                  style={{
-                    fontSize: 11.5,
-                    fontWeight: 500,
-                    padding: "5px 11px",
-                    borderRadius: radius.pill,
-                    background: color.indigoTint2,
-                    color: color.indigo,
-                  }}
-                >
-                  {a}{canEdit && <span style={{ opacity: 0.5, cursor: "pointer" }}> ×</span>}
-                </span>
-              ))}
-              {canEdit && (
-                <span
-                  style={{
-                    fontSize: 11.5,
-                    padding: "5px 11px",
-                    borderRadius: radius.pill,
-                    border: `1px dashed ${color.dashed}`,
-                    color: color.muted,
-                    cursor: "pointer",
-                  }}
-                >
-                  {t("tp.addAlias")}
-                </span>
-              )}
-            </div>
-          </Card>
-
-          {/* Sign convention + Data type */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-            <Card>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("tp.signConvention")}</div>
-              {SIGN_OPTIONS.map((opt) => {
-                const on = opt.key === cfg.sign;
-                return (
-                  <div key={opt.key} style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 0" }}>
-                    <Radio on={on} />
-                    <span style={{ fontSize: 12, color: on ? color.ink : color.sec2, fontWeight: on ? 600 : 400 }}>
-                      {t(opt.labelKey)}
-                    </span>
-                  </div>
-                );
-              })}
-            </Card>
-            <Card>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("tp.dataTypeUnits")}</div>
-              <div style={{ marginBottom: 11 }}>
-                <FieldMock label={t("tp.valueType")} value={cfg.value_type} />
-              </div>
-              <FieldMock label={t("tp.aggregation")} value={cfg.aggregation} />
-            </Card>
-          </div>
+          {/* Editable ontology rules for this concept (aliases + sign), saved as a new version */}
+          <NodeRules
+            cfg={cfg}
+            canonicalKey={cfg.canonical_key ?? tplSel}
+            ontologyId={data.ontology?.id}
+            locale={locale}
+            canEdit={canEdit}
+            t={t}
+          />
 
           {/* Note-to-face netting rule (flagship) */}
           <div

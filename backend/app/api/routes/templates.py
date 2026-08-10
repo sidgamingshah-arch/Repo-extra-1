@@ -72,6 +72,15 @@ _SIGN_UI = {"natural": "as_reported", "as_reported": "as_reported",
             "contra": "expense_contra", "expense_contra": "expense_contra",
             "expense_negative": "expense_contra"}
 
+# A stored SignConvention → the three-way choice the Template screen shows. The ontology is
+# the extraction rulebook, so its sign_rule wins over the template's static hint — otherwise an
+# edit saved to the ontology would appear to do nothing on screen.
+_ONT_SIGN_UI = {
+    "natural": "as_reported", "natural_positive": "as_reported", "debit_positive": "as_reported",
+    "natural_negative": "expense_contra", "credit_positive": "expense_contra",
+    "context": "auto",
+}
+
 
 def _loc(node: dict, locale: str) -> str:
     return (node.get("label_i18n") or {}).get(locale) or node.get("label") or ""
@@ -139,11 +148,29 @@ def get_template_detail(template_id: str, locale: str = "en",
                 decomp = getattr(m, "decomposition_rule", None) if m else None
                 tree.append({"id": key, "label": _loc(child, locale), "lvl": 2,
                              "rule": bool(decomp)})
+                # `aliases` is the merged display set (locale + English fallback, capped).
+                # `aliases_locale` is the RAW list stored for this locale — what the editor
+                # loads and writes back, so saving zh aliases can't absorb the en fallbacks.
+                default_locale = "en"
+                if m is not None:
+                    raw_i18n = m.aliases_i18n.get(locale)
+                    aliases_locale = list(
+                        raw_i18n if raw_i18n is not None
+                        else (m.aliases if locale == default_locale else [])
+                    )
+                else:
+                    aliases_locale = []
                 node_config[key] = {
                     "breadcrumb": f"{stmt_label} / {sec_label}",
                     "label": _loc(child, locale),
+                    "canonical_key": key,
+                    "aliases_locale": aliases_locale,
                     "aliases": (m.aliases_for(locale) if m else [])[:12],
-                    "sign": _SIGN_UI.get(str(child.get("sign", "natural")), "auto"),
+                    "sign": (
+                        _ONT_SIGN_UI.get(str(m.sign_rule.convention.value), "as_reported")
+                        if m is not None and (m.sign_rule.convention.value or "") != "natural"
+                        else _SIGN_UI.get(str(child.get("sign", "natural")), "auto")
+                    ),
                     "value_type": "Monetary",
                     "aggregation": "Sum of children" if child.get("role") in ("subtotal", "total")
                                    else "Direct value",
@@ -151,4 +178,8 @@ def get_template_detail(template_id: str, locale: str = "en",
                 }
 
     return {"tree": tree, "node_config": node_config, "netting_rules": netting_rules,
+            # Which ontology version supplied the aliases/sign above — the editor PATCHes this
+            # id, and `locale` tells it which alias list it is editing.
+            "ontology": ({"id": ont_row.id, "ontology_key": ont_row.ontology_key,
+                          "version": ont_row.version, "locale": locale} if ont_row else None),
             "template": {"key": row.template_key, "name": row.name, "line_items": leaves}}
