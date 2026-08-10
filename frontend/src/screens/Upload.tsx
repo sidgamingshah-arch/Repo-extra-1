@@ -6,8 +6,15 @@ import { useNavigate } from "react-router-dom";
 import { Button, Card } from "../components/ui";
 import { color, font, radius } from "../theme";
 import type { ExtractMode, SourceDoc, TemplateRef } from "../types";
-import { useDocuments, useProject, useTemplates, useUploadDocument } from "../lib/queries";
-import { useUI } from "../store";
+import {
+  useDeleteDocument,
+  useDocumentIntegrity,
+  useDocuments,
+  useProject,
+  useTemplates,
+  useUploadDocument,
+} from "../lib/queries";
+import { useAppLocale, useUI } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
 import { SCREENS } from "./config";
@@ -25,7 +32,8 @@ function tagColors(tag: SourceDoc["tag"]): { bg: string; fg: string } {
   return { bg: color.indigoTint2, fg: color.indigo };
 }
 
-function DocRow({ doc, onView }: { doc: SourceDoc; onView?: () => void }) {
+function DocRow({ doc, onDelete, deleting }: { doc: SourceDoc; onDelete?: () => void; deleting?: boolean }) {
+  const t = useT();
   const ext = extColors(doc.ext);
   const tag = tagColors(doc.tag);
   return (
@@ -74,15 +82,19 @@ function DocRow({ doc, onView }: { doc: SourceDoc; onView?: () => void }) {
       >
         {doc.tag}
       </span>
-      {onView && (
+      {onDelete && (
         <button
-          onClick={onView}
+          onClick={onDelete}
+          disabled={deleting}
+          aria-label={t("u.deleteDoc")}
+          title={t("u.deleteDoc")}
+          data-testid="doc-delete"
           style={{
-            fontSize: 11, fontWeight: 600, color: color.indigo, background: "none",
-            border: "none", cursor: "pointer", whiteSpace: "nowrap", padding: 0,
+            fontSize: 14, color: color.muted, background: "none", border: "none",
+            cursor: deleting ? "wait" : "pointer", padding: "2px 4px", lineHeight: 1,
           }}
         >
-          View →
+          🗑
         </button>
       )}
     </div>
@@ -294,11 +306,17 @@ export default function UploadScreen() {
   const canSelectTemplate = useCan("template:select"); // choose an existing one (analyst)
   const canOntology = useCan("config:ontology");
   const canUpload = useCan("documents:manage");
+  const locale = useAppLocale();
   const extractMode = useUI((s) => s.extractMode);
   const setExtractMode = useUI((s) => s.setExtractMode);
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
   const { data, isPending } = useProject();
   const { data: docsData } = useDocuments();
   const upload = useUploadDocument();
+  const del = useDeleteDocument();
+  // Integrity is computed at upload; we read the active document's result to decide whether
+  // "Extract directly" is allowed — a BLOCKER (corrupt/encrypted) can never be skipped.
+  const docIntegrity = useDocumentIntegrity(activeDocumentId ?? undefined, locale);
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (isPending || !data) {
@@ -398,7 +416,14 @@ export default function UploadScreen() {
             <DocRow
               key={d.id ?? d.name}
               doc={d}
-              onView={d.id ? () => navigate(`/documents/${d.id}`) : undefined}
+              deleting={del.isPending && del.variables === d.id}
+              onDelete={
+                d.id && canUpload
+                  ? () => {
+                      if (window.confirm(t("u.deleteConfirm"))) del.mutate(d.id as string);
+                    }
+                  : undefined
+              }
             />
           ))}
         </Card>
@@ -513,6 +538,29 @@ export default function UploadScreen() {
         <Button variant="secondary" style={{ padding: "10px 18px" }}>
           {t("u.saveDraft")}
         </Button>
+        {/* Fast path: skip the integrity REVIEW screen and go straight to extraction. The
+            check itself still stands — a BLOCKER document (corrupt/encrypted) can't be
+            skipped, and there must be an active uploaded document to extract. */}
+        {(() => {
+          const noDoc = !activeDocumentId;
+          const blocked = (docIntegrity.data?.issues || []).some((i) => i.note === "BLOCKER");
+          const disabled = noDoc || blocked;
+          const title = noDoc ? t("u.noActiveDoc") : blocked ? t("u.extractBlocked") : undefined;
+          return (
+            <Button
+              variant="secondary"
+              style={{ padding: "10px 18px" }}
+              disabled={disabled}
+              title={title}
+              onClick={() =>
+                activeDocumentId &&
+                navigate(extractMode === "auto" ? `/documents/${activeDocumentId}` : SCREENS.scope.path)
+              }
+            >
+              {t("u.extractDirectly")} →
+            </Button>
+          );
+        })()}
         <Button style={{ padding: "10px 22px" }} onClick={() => navigate(SCREENS.integrity.path)}>
           {t("u.runIntegrity")} →
         </Button>

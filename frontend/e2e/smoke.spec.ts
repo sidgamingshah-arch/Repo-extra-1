@@ -45,10 +45,9 @@ test("analyst uploads a document and views its extracted data with provenance", 
   await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.pdf");
   await expect(page.getByTestId("doc-row").filter({ hasText: "sample.pdf" })).toBeVisible({ timeout: 15_000 });
 
-  // Open the extraction view for *this* document (select by filename — the docs list
-  // persists across runs, so "the first row" is not necessarily the one just uploaded).
-  await page.getByTestId("doc-row").filter({ hasText: "sample.pdf" })
-    .getByRole("button", { name: "View →" }).click();
+  // Skip the integrity review and go straight to extraction for the just-uploaded document
+  // (auto mode → the extraction view). The per-row "View" affordance was removed.
+  await page.getByRole("button", { name: /Extract directly/ }).click();
   await expect(page).toHaveURL(/\/documents\//);
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   // Real extracted line item + click-to-source provenance from the native PDF.
@@ -64,8 +63,7 @@ test("analyst uploads a spreadsheet and gets Excel cell-level click-to-source", 
   await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.xlsx");
   await expect(page.getByTestId("doc-row").filter({ hasText: "sample.xlsx" })).toBeVisible({ timeout: 15_000 });
 
-  await page.getByTestId("doc-row").filter({ hasText: "sample.xlsx" })
-    .getByRole("button", { name: "View →" }).click();
+  await page.getByRole("button", { name: /Extract directly/ }).click();
   await expect(page).toHaveURL(/\/documents\//);
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Trade receivables").first()).toBeVisible();
@@ -131,18 +129,17 @@ test("end-to-end: upload a new file → Run integrity check shows real results �
   await expect(page.getByText("Reliance Industries Ltd")).toHaveCount(0);           // demo chrome absent in real run
 });
 
-test("analyst can reach the template screen and select a template for a run", async ({ page }) => {
+test("analyst cannot reach the config template screen but can select a template", async ({ page }) => {
   await loginAs(page, "analyst");
 
-  // The template menu is present in the nav for the analyst (was admin-only before) and
-  // navigates to the template screen without being redirected away.
+  // Template & Ontology is an admin-only configuration screen: it must NOT appear in the
+  // analyst's nav, and a direct visit is redirected away (to the analyst's first screen).
   await page.goto("/workspace", DCL);
-  await page.getByText("Template & Ontology").click();
-  await expect(page).toHaveURL(/\/template/);
-  // Authoring is admin-only → the analyst gets no "add line item" control.
-  await expect(page.getByText("+ Add line item")).toHaveCount(0);
+  await expect(page.getByText("Template & Ontology")).toHaveCount(0);
+  await page.goto("/template", DCL);
+  await expect(page).not.toHaveURL(/\/template/);
 
-  // On the Documents & Template screen the analyst can open the picker and select a template.
+  // But the analyst still SELECTS a template on the Documents & Template (Upload) screen.
   await page.goto("/upload", DCL);
   await expect(page.getByText("Selected")).toBeVisible({ timeout: 15_000 }); // a template is active
   await page.getByRole("button", { name: "Choose another" }).click();

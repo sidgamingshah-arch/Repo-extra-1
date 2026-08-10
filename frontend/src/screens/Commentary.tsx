@@ -3,13 +3,16 @@
 import { Card, ScreenHeader } from "../components/ui";
 import { useT } from "../i18n";
 import {
-  useAudit, useCommentary, useDocumentCommentary, useProjectLoaded, useRunAnalysis,
+  useAudit, useCommentary, useDocumentAnalysis, useDocumentCommentary, useProjectLoaded,
+  useRunAnalysis,
 } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { useCan } from "../lib/rbac";
 import { useAppLocale, useUI } from "../store";
 import { color, fmtIN, font, radius } from "../theme";
-import type { AuditEntry, CommentaryMetric, CommentaryTrend } from "../types";
+import type {
+  AuditEntry, CommentaryMetric, CommentaryTrend, CreditAnalysis, CreditTone,
+} from "../types";
 
 function toneColors(tone: CommentaryMetric["tone"]): { fg: string; bg: string } {
   if (tone === "good") return { fg: color.greenFg, bg: color.greenBg };
@@ -164,6 +167,86 @@ function AuditLog({ t }: { t: (k: string) => string }) {
   );
 }
 
+/** tone → colors for credit factor chips and the stance banner. */
+function creditTone(tone: CreditTone | "insufficient"): { fg: string; bg: string; bar: string } {
+  if (tone === "strong") return { fg: color.greenFg, bg: color.greenBg2, bar: color.greenFg };
+  if (tone === "weak") return { fg: color.redFg, bg: color.redBg, bar: color.redFg };
+  if (tone === "insufficient") return { fg: color.muted, bg: color.rowAltBg, bar: color.faint };
+  return { fg: color.amberFg, bg: color.amberBg, bar: color.amberFg }; // adequate
+}
+
+/** Detailed credit view (#12): stance + rating factors from the extracted ratios, plus
+ *  narrative signals scanned from the annual report. Shown only for a real document. */
+function CreditPanel({ credit, t }: { credit: CreditAnalysis; t: (k: string) => string }) {
+  const banner = creditTone(credit.stance);
+  return (
+    <Card style={{ marginBottom: 16, borderLeft: `3px solid ${banner.bar}` }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{t("cm.credit")}</div>
+        <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: radius.pill,
+                       background: banner.bg, color: banner.fg }}>
+          {t("cm.creditStance")}: {credit.stance_label}
+        </span>
+      </div>
+      <div style={{ fontSize: 11.5, color: color.muted, marginBottom: 12 }}>{t("cm.creditHint")}</div>
+      <div style={{ fontSize: 12.5, color: color.sec, lineHeight: 1.6, marginBottom: 14 }}>{credit.summary}</div>
+
+      {credit.factors.length > 0 && (
+        <>
+          <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, color: color.muted, margin: "0 0 8px" }}>
+            {t("cm.creditFactors").toUpperCase()}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10, marginBottom: 14 }}>
+            {credit.factors.map((f) => {
+              const tc = creditTone(f.tone);
+              return (
+                <div key={f.key} data-testid="credit-factor"
+                     style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                              padding: "9px 12px", border: `1px solid ${color.hairline3}`, borderRadius: 9 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 10, color: color.muted2, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                      {f.category}
+                    </div>
+                    <div style={{ fontSize: 12.5, fontWeight: 500 }}>{f.label}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flex: "0 0 auto" }}>
+                    <span style={{ fontFamily: font.mono, fontSize: 12.5, fontWeight: 600 }}>{f.display}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: radius.pill,
+                                   background: tc.bg, color: tc.fg }}>{f.tone_label}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, color: color.muted, margin: "0 0 8px" }}>
+        {t("cm.creditFlags").toUpperCase()}
+      </div>
+      {credit.flags.length === 0 ? (
+        <div style={{ fontSize: 12, color: color.muted }}>{t("cm.creditNoFlags")}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {credit.flags.map((fl) => (
+            <div key={fl.key} data-testid="credit-flag"
+                 style={{ display: "flex", gap: 10, padding: "9px 12px", borderRadius: 9,
+                          background: color.amberBg, border: `1px solid ${color.amberBg}` }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: color.amberFg, flex: "0 0 auto" }}>⚑</span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: color.amberFg }}>
+                  {fl.label}{fl.page ? ` · ${t("cm.creditPage")}${fl.page}` : ""}
+                </div>
+                <div style={{ fontSize: 11.5, color: color.sec, lineHeight: 1.5 }}>{fl.implication}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function CommentaryScreen() {
   const t = useT();
   const locale = useAppLocale();
@@ -174,6 +257,9 @@ export default function CommentaryScreen() {
   // project uses the seeded statements. Same shape, so the rest of the screen is unchanged.
   const realC = useDocumentCommentary(activeDocumentId ?? undefined, locale);
   const demoC = useCommentary(locale);
+  // Credit view (#12) — real documents only; combines extracted ratios with report disclosures.
+  const analysis = useDocumentAnalysis(usingReal ? activeDocumentId ?? undefined : undefined, locale);
+  const credit = analysis.data?.credit;
   const data = usingReal ? realC.data : demoC.data;
   const isPending = usingReal ? realC.isPending : demoC.isPending;
   // The live-LLM run is a demo-only showcase; real-document commentary is deterministic and
@@ -273,6 +359,11 @@ export default function CommentaryScreen() {
         <PointList title={t("cm.strengths")} points={data.strengths} accent={color.greenFg} />
         <PointList title={t("cm.weaknesses")} points={data.weaknesses} accent={color.amberFg} />
       </div>
+
+      {/* Detailed credit analysis (real documents): ratios + annual-report signals */}
+      {usingReal && credit && (credit.factors.length > 0 || credit.flags.length > 0) && (
+        <CreditPanel credit={credit} t={t} />
+      )}
 
       {/* Data quality */}
       <div

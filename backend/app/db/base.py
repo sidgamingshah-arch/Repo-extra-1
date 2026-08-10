@@ -45,10 +45,19 @@ def _reconcile_schema(eng: Engine) -> None:
     uniques = insp.get_unique_constraints("documents")
     has_owner = "owner" in cols
     owner_in_unique = any("owner" in (uc.get("column_names") or []) for uc in uniques)
-    if has_owner and owner_in_unique:
+
+    # Generic column backfill: add any model column the existing table is missing (e.g.
+    # ``pages``/``page_scope`` added after the DB was first created). ``create_all`` never
+    # ALTERs an existing table, so without this a pre-existing DB 500s on every query that
+    # selects a newer column. New columns are added nullable (owner is special-cased NOT NULL).
+    missing = [c for c in Document.__table__.columns if c.name not in cols and c.name != "owner"]
+    if has_owner and owner_in_unique and not missing:
         return  # already current
 
     with eng.begin() as conn:
+        for col in missing:
+            ddl_type = col.type.compile(dialect=eng.dialect)
+            conn.execute(text(f'ALTER TABLE documents ADD COLUMN {col.name} {ddl_type}'))
         if not has_owner:
             conn.execute(text("ALTER TABLE documents ADD COLUMN owner VARCHAR(128) NOT NULL DEFAULT ''"))
         if not owner_in_unique:

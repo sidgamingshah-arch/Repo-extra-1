@@ -157,6 +157,22 @@ export function useUploadDocument() {
   });
 }
 
+/** Delete an uploaded document (owner/admin). Refreshes the list and clears the active
+ * document when it's the one removed, so the pipeline steps fall back cleanly. */
+export function useDeleteDocument() {
+  const qc = useQueryClient();
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const setActiveDocumentId = useUI((s) => s.setActiveDocumentId);
+  return useMutation({
+    mutationFn: (id: string) => api.deleteDocument(id),
+    onSuccess: (_res, id) => {
+      if (activeDocumentId === id) setActiveDocumentId(null);
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: ["project"] });
+    },
+  });
+}
+
 /** Real per-document pre-flight integrity — the uploaded file's own results. */
 export const useDocumentIntegrity = (documentId: string | undefined, locale: Locale = "en") =>
   useQuery({

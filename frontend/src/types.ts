@@ -287,10 +287,40 @@ export interface FreeNote {
   title: string;
   text: string;
 }
+export type CreditTone = "strong" | "adequate" | "weak";
+export type CreditStance = CreditTone | "insufficient";
+export interface CreditFactor {
+  category: string;
+  category_key: string;
+  key: string;
+  label: string;
+  value: number | null;
+  display: string;
+  unit: string;
+  tone: CreditTone;
+  tone_label: string;
+}
+export interface CreditFlag {
+  key: string;
+  label: string;
+  severity: "severe" | "high" | "watch";
+  implication: string;
+  page: number | null;
+  snippet: string;
+}
+export interface CreditAnalysis {
+  stance: CreditStance;
+  stance_label: string;
+  factors: CreditFactor[];
+  flags: CreditFlag[];
+  summary: string;
+  basis: string;
+}
 export interface AnalysisResponse {
   ratios: Ratio[];
   disclosures: Disclosure[];
   notes: FreeNote[];
+  credit?: CreditAnalysis;
 }
 
 /** A window of spreadsheet cells around a value's origin (Excel click-to-source). */

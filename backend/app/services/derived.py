@@ -411,6 +411,175 @@ def localize_disclosures(disclosures: list[dict], locale: str = "en") -> list[di
     return out
 
 
+# --- 3. Credit analysis (numeric factors + report-narrative signals) --------
+# A detailed credit view built from BOTH the extracted values (ratios) and the annual
+# report's narrative (the stored disclosure scan) — not the numbers alone. Deterministic and
+# transparent: every factor cites its ratio and threshold; every flag cites its report page.
+
+_STANCE_LABEL = {
+    "strong": {"en": "Strong", "zh": "强", "ar": "قوي", "fr": "Solide"},
+    "adequate": {"en": "Adequate", "zh": "适中", "ar": "ملائم", "fr": "Adéquat"},
+    "weak": {"en": "Weak / speculative", "zh": "偏弱 / 投机级", "ar": "ضعيف / مضاربي",
+             "fr": "Faible / spéculatif"},
+    "insufficient": {"en": "Insufficient data", "zh": "数据不足", "ar": "بيانات غير كافية",
+                     "fr": "Données insuffisantes"},
+}
+_TONE_LABEL = {
+    "strong": {"en": "Strong", "zh": "强", "ar": "قوي", "fr": "Solide"},
+    "adequate": {"en": "Adequate", "zh": "适中", "ar": "ملائم", "fr": "Adéquat"},
+    "weak": {"en": "Weak", "zh": "弱", "ar": "ضعيف", "fr": "Faible"},
+}
+_CREDIT_CAT_LABEL = {
+    "Leverage": {"en": "Leverage", "zh": "杠杆", "ar": "الرافعة المالية", "fr": "Levier"},
+    "Coverage": {"en": "Coverage", "zh": "偿债保障", "ar": "التغطية", "fr": "Couverture"},
+    "Liquidity": {"en": "Liquidity", "zh": "流动性", "ar": "السيولة", "fr": "Liquidité"},
+    "Profitability": {"en": "Profitability", "zh": "盈利能力", "ar": "الربحية", "fr": "Rentabilité"},
+}
+
+# Per category, an ordered preference of ratio keys with (higher_is_better, strong, weak)
+# thresholds. The first AVAILABLE ratio becomes that category's factor.
+_CREDIT_FACTORS: dict[str, list[tuple]] = {
+    "Leverage": [("debt_to_equity", False, 1.0, 2.0), ("net_debt_to_ebitda", False, 2.0, 4.0),
+                 ("debt_ratio", False, 45.0, 65.0)],
+    "Coverage": [("interest_coverage", True, 4.0, 1.5), ("ebitda_interest_coverage", True, 5.0, 2.0),
+                 ("ffo_to_total_debt", True, 30.0, 12.0), ("cfo_to_total_debt", True, 25.0, 10.0)],
+    "Liquidity": [("current_ratio", True, 1.5, 1.0), ("quick_ratio", True, 1.0, 0.7)],
+    "Profitability": [("net_margin", True, 8.0, 2.0), ("operating_margin", True, 10.0, 3.0),
+                      ("return_on_capital_employed", True, 12.0, 4.0)],
+}
+_CREDIT_CAT_SEQUENCE = ["Leverage", "Coverage", "Liquidity", "Profitability"]
+
+# Narrative signals (keyed to the disclosure scan) that bear on credit: (severity, implication).
+_CREDIT_NARRATIVE: dict[str, tuple[str, dict]] = {
+    "going_concern": ("severe", {
+        "en": "Going-concern language present — a material threat to creditworthiness.",
+        "zh": "存在持续经营相关表述——对信用状况构成重大威胁。",
+        "ar": "توجد إشارة إلى الاستمرارية — تهديد جوهري للجدارة الائتمانية.",
+        "fr": "Mention de continuité d'exploitation — menace importante pour la solvabilité."}),
+    "auditor_qualification": ("high", {
+        "en": "Modified / qualified audit opinion — reduces reliance on the reported figures.",
+        "zh": "审计意见被修正/保留——降低对所报告数字的可依赖程度。",
+        "ar": "رأي تدقيق معدَّل/متحفَّظ — يقلل الاعتماد على الأرقام المُبلَّغ عنها.",
+        "fr": "Opinion d'audit modifiée / avec réserve — réduit la fiabilité des chiffres publiés."}),
+    "contingent_liabilities": ("watch", {
+        "en": "Contingent liabilities disclosed — potential off-balance-sheet claims on cash.",
+        "zh": "披露或有负债——可能存在表外的现金索求。",
+        "ar": "الإفصاح عن التزامات محتملة — مطالبات محتملة خارج الميزانية على النقد.",
+        "fr": "Passifs éventuels divulgués — créances potentielles hors bilan sur la trésorerie."}),
+    "guarantees": ("watch", {
+        "en": "Guarantees given — contingent exposure beyond recorded debt.",
+        "zh": "提供担保——超出已入账债务的或有敞口。",
+        "ar": "ضمانات ممنوحة — تعرّض محتمل يتجاوز الدين المسجَّل.",
+        "fr": "Garanties accordées — exposition éventuelle au-delà de la dette comptabilisée."}),
+    "litigation": ("watch", {
+        "en": "Litigation / legal proceedings disclosed — potential financial impact.",
+        "zh": "披露诉讼/法律程序——可能带来财务影响。",
+        "ar": "الإفصاح عن تقاضٍ / إجراءات قانونية — أثر مالي محتمل.",
+        "fr": "Litiges / procédures judiciaires divulgués — impact financier potentiel."}),
+}
+_SEVERITY_WEIGHT = {"severe": 3, "high": 2, "watch": 1}
+
+_CREDIT_SUMMARY = {
+    "en": "{stance} credit profile from {n} computed factor(s): {pos} supportive, {neg} constraining.",
+    "zh": "基于 {n} 项计算因子的信用状况为「{stance}」：{pos} 项支撑，{neg} 项制约。",
+    "ar": "ملف ائتماني «{stance}» بناءً على {n} عامل محسوب: {pos} داعمة، {neg} مُقيِّدة.",
+    "fr": "Profil de crédit « {stance} » à partir de {n} facteur(s) calculé(s) : {pos} favorables, {neg} contraignants.",
+}
+_CREDIT_SUMMARY_FLAGS = {
+    "en": " Report signals to review: {list}.",
+    "zh": " 需关注的年报信号：{list}。",
+    "ar": " إشارات التقرير التي يجب مراجعتها: {list}.",
+    "fr": " Signaux du rapport à examiner : {list}.",
+}
+_CREDIT_SUMMARY_NODATA = {
+    "en": "Insufficient extracted values to compute a credit view.",
+    "zh": "提取的数值不足，无法计算信用视图。",
+    "ar": "القيم المستخرجة غير كافية لحساب رؤية ائتمانية.",
+    "fr": "Valeurs extraites insuffisantes pour calculer une vue de crédit.",
+}
+
+
+def _loc_map(table: dict, key: str, locale: str) -> str:
+    entry = table.get(key, {})
+    return entry.get(locale) or entry.get("en") or key
+
+
+def build_credit_analysis(rows: list[dict], disclosures: list[dict] | None = None, *,
+                          basis: str = "consolidated", locale: str = "en") -> dict:
+    """Detailed credit assessment from the extracted values PLUS the report narrative.
+
+    Numeric factors (leverage / coverage / liquidity / profitability) are bucketed against
+    credit thresholds; narrative flags come from the annual report's disclosure scan (going
+    concern, qualified opinion, contingents, guarantees, litigation). The overall stance
+    blends both — a going-concern or qualified-opinion signal caps an otherwise-strong read.
+    """
+    ratios = {r["key"]: r for r in compute_ratios(rows, basis=basis)}
+    factors: list[dict] = []
+    tone_score = 0
+    pos = neg = 0
+    for cat in _CREDIT_CAT_SEQUENCE:
+        for key, hib, strong, weak in _CREDIT_FACTORS[cat]:
+            r = ratios.get(key)
+            if not (r and r.get("available") and r.get("value") is not None):
+                continue
+            v = r["value"]
+            if hib:
+                tone = "strong" if v >= strong else "weak" if v < weak else "adequate"
+            else:
+                tone = "strong" if v <= strong else "weak" if v > weak else "adequate"
+            tone_score += 1 if tone == "strong" else -1 if tone == "weak" else 0
+            pos += tone == "strong"
+            neg += tone == "weak"
+            factors.append({
+                "category": _loc_map(_CREDIT_CAT_LABEL, cat, locale),
+                "category_key": cat, "key": key, "label": r["label"],
+                "value": r["value"], "display": r["display"], "unit": r["unit"],
+                "tone": tone, "tone_label": _loc_map(_TONE_LABEL, tone, locale),
+            })
+            break  # first available ratio per category
+
+    present = {d.get("key") for d in (disclosures or []) if d.get("present")}
+    dmap = {d.get("key"): d for d in (disclosures or [])}
+    flags: list[dict] = []
+    penalty = 0
+    for key, (sev, impl) in _CREDIT_NARRATIVE.items():
+        if key not in present:
+            continue
+        d = dmap.get(key, {})
+        penalty += _SEVERITY_WEIGHT.get(sev, 0)
+        flags.append({
+            "key": key, "label": d.get("label") or key, "severity": sev,
+            "implication": impl.get(locale) or impl["en"],
+            "page": d.get("page"), "snippet": d.get("snippet", ""),
+        })
+
+    n = len(factors)
+    if n == 0:
+        stance = "insufficient"
+    else:
+        avg = tone_score / n
+        stance = "strong" if avg >= 0.5 else "adequate" if avg >= -0.25 else "weak"
+        if "going_concern" in present:
+            stance = "weak"
+        elif "auditor_qualification" in present and stance == "strong":
+            stance = "adequate"
+        elif penalty >= 3 and stance == "strong":
+            stance = "adequate"
+
+    stance_label = _loc_map(_STANCE_LABEL, stance, locale)
+    if stance == "insufficient":
+        summary = _CREDIT_SUMMARY_NODATA.get(locale) or _CREDIT_SUMMARY_NODATA["en"]
+    else:
+        summary = (_CREDIT_SUMMARY.get(locale) or _CREDIT_SUMMARY["en"]).format(
+            stance=stance_label, n=n, pos=pos, neg=neg)
+        if flags:
+            names = ", ".join(f["label"] for f in flags)
+            summary += (_CREDIT_SUMMARY_FLAGS.get(locale) or _CREDIT_SUMMARY_FLAGS["en"]).format(list=names)
+
+    return {"stance": stance, "stance_label": stance_label, "factors": factors,
+            "flags": flags, "summary": summary, "basis": basis}
+
+
 # Company-name suffixes across the seed jurisdictions (HK/China, India, UK, US, EU, …).
 _ENTITY_SUFFIX = re.compile(
     r"\b("

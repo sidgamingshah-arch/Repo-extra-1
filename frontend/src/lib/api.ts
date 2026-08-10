@@ -50,6 +50,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     const text = await res.text().catch(() => "");
     throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`);
   }
+  if (res.status === 204) return undefined as T; // no content (e.g. DELETE)
   return res.json() as Promise<T>;
 }
 
@@ -191,6 +192,8 @@ export const api = {
     }
     return res.json();
   },
+  deleteDocument: (id: string) =>
+    req<void>(`/documents/${id}`, { method: "DELETE" }),
   integrity: (locale: Locale = "en") =>
     req<IntegrityResponse>(`/projects/${PROJECT}/integrity?locale=${locale}`),
   pages: (locale: Locale = "en") =>

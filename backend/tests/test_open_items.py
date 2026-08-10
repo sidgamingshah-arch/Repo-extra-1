@@ -228,3 +228,67 @@ def test_document_commentary_is_real_not_demo(client):
     assert c["metrics"], "commentary should compute metrics from the real extraction"
     # Not the demo commentary: the demo basis is the seeded ₹-crore string.
     assert c["basis"] != "consolidated · FY25 vs FY24 · ₹ crore"
+
+
+# --- #12: credit analysis blends extracted ratios with report narrative ---------------------
+def _cval(key, value):
+    return {"canonical_key": key,
+            "values": [{"basis": "consolidated", "period_label": "current", "value": value}]}
+
+
+def test_credit_analysis_blends_ratios_and_narrative():
+    from app.services.derived import build_credit_analysis
+
+    rows = [
+        _cval("bs_current_assets__total_current_assets", 300),
+        _cval("bs_current_liabilities__total_current_liabilities", 100),  # current ratio 3.0 → strong
+    ]
+    good = build_credit_analysis(rows, [])
+    assert good["stance"] in ("strong", "adequate")
+    assert any(f["category_key"] == "Liquidity" and f["tone"] == "strong" for f in good["factors"])
+    assert good["flags"] == []
+
+    # A going-concern narrative signal caps the stance to weak and is surfaced as a flag.
+    capped = build_credit_analysis(
+        rows, [{"key": "going_concern", "label": "Going concern", "present": True,
+                "page": 5, "snippet": "material uncertainty related to going concern"}])
+    assert capped["stance"] == "weak"
+    assert any(fl["key"] == "going_concern" for fl in capped["flags"])
+
+    # No extracted values → an honest "insufficient" rather than a fabricated view.
+    assert build_credit_analysis([], [])["stance"] == "insufficient"
+
+
+def test_analysis_endpoint_includes_credit(client):
+    doc_id = _upload(client, make_rich_pdf(), "credit.pdf")
+    _extract_and_wait(client, doc_id)
+    a = client.get(f"/api/v1/documents/{doc_id}/analysis").json()
+    assert "credit" in a
+    assert a["credit"]["stance"] in ("strong", "adequate", "weak", "insufficient")
+    assert isinstance(a["credit"]["factors"], list)
+
+
+# --- Item B: delete uploaded documents ------------------------------------------------------
+def test_delete_document_removes_it_and_its_runs(client):
+    doc_id = _upload(client, make_rich_pdf(), "to-delete.pdf")
+    _extract_and_wait(client, doc_id)  # give it a run to clean up
+    assert client.get(f"/api/v1/documents/{doc_id}/run").status_code == 200
+
+    assert client.delete(f"/api/v1/documents/{doc_id}").status_code == 204
+    # Gone: subsequent reads 404, and it no longer appears in the list.
+    assert client.get(f"/api/v1/documents/{doc_id}/run").status_code == 404
+    ids = [d.get("id") for d in client.get("/api/v1/documents").json()["documents"]]
+    assert doc_id not in ids
+
+
+def test_delete_document_requires_ownership(client, auth, anon_client):
+    # Admin uploads a document; an analyst (different owner) cannot delete it (404, not 403,
+    # so existence isn't leaked), and the reviewer lacks documents:manage entirely (403).
+    doc_id = _upload(client, make_multipage_pdf(), "owned.pdf")
+    assert anon_client.delete(f"/api/v1/documents/{doc_id}",
+                              headers=auth("analyst")).status_code == 404
+    assert anon_client.delete(f"/api/v1/documents/{doc_id}",
+                              headers=auth("reviewer")).status_code == 403
+    # Still there for its owner.
+    assert client.get(f"/api/v1/documents/{doc_id}/run").status_code in (200, 404)  # exists (run may be absent)
+    assert client.delete(f"/api/v1/documents/{doc_id}").status_code == 204

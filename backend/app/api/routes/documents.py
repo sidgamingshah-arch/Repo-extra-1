@@ -5,7 +5,7 @@ import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete as sql_delete, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -222,6 +222,31 @@ async def upload_document(
         "pages": [p.model_dump(mode="json") for p in doc_model.pages],
         "integrity_report": row.integrity_report,
     }
+
+
+@router.delete("/{document_id}", status_code=204,
+               dependencies=[Depends(require(Permission.DOCUMENTS_MANAGE))])
+def delete_document(
+    doc=Depends(authorized_document),
+    session: Session = Depends(db),
+    store: LocalObjectStore = Depends(object_store),
+) -> Response:
+    """Delete a document the caller owns (admins may delete any), along with its extraction
+    runs. The stored blob is content-addressed and de-duplicated, so it's only removed when
+    no other document still references it."""
+    from app.db.models import Document, ExtractionRun
+
+    object_key = doc.object_key
+    session.execute(sql_delete(ExtractionRun).where(ExtractionRun.document_id == doc.id))
+    session.delete(doc)
+    session.commit()
+
+    shared = session.execute(
+        select(Document.id).where(Document.object_key == object_key).limit(1)
+    ).first()
+    if not shared:
+        store.delete(object_key)
+    return Response(status_code=204)
 
 
 _CHECK_TITLES = {
@@ -513,16 +538,21 @@ def get_document_analysis(document_id: str, locale: str = Query("en"),
     """Derived analysis for a document, from its latest extraction: computed ratios and
     plain-language notes (recomputed from the current values so edits show) plus the stored
     disclosure scan. Empty (but valid) until the document has been extracted."""
-    from app.services.derived import build_free_notes, compute_ratios, localize_disclosures
+    from app.services.derived import (
+        build_credit_analysis, build_free_notes, compute_ratios, localize_disclosures)
 
     run = _latest_run(session, document_id)
     if run is None or not run.result:
-        return {"ratios": [], "disclosures": [], "notes": []}
+        return {"ratios": [], "disclosures": [], "notes": [],
+                "credit": build_credit_analysis([], [], locale=locale)}
     rows = run.result.get("rows", [])
+    disclosures = localize_disclosures(run.result.get("disclosures", []), locale)
     return {
         "ratios": compute_ratios(rows, locale=locale),
-        "disclosures": localize_disclosures(run.result.get("disclosures", []), locale),
+        "disclosures": disclosures,
         "notes": build_free_notes(rows, locale=locale),
+        # Credit view combines the extracted ratios with the report's narrative disclosures.
+        "credit": build_credit_analysis(rows, disclosures, locale=locale),
     }
 
 
