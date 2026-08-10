@@ -24,17 +24,32 @@ class MapOntologyStage:
         # Pull the configured LLM provider so mapping is description-based (see
         # services.mapping). Falls back to the deterministic ensemble if unavailable.
         llm_provider = None
-        if ctx.settings.llm.provider != "stub":
+        unavailable_reason = ""
+        if ctx.settings.llm.provider == "stub":
+            unavailable_reason = "llm provider is 'stub'"
+        elif not ctx.settings.extraction.llm_mapping:
+            unavailable_reason = "extraction.llm_mapping is disabled"
+        else:
             try:
                 llm_provider = ctx.registry.get("llm", ctx.settings.llm.provider)
-            except Exception as exc:  # unknown/misconfigured provider → deterministic
+            except Exception as exc:  # unknown/misconfigured provider (e.g. no API key)
+                unavailable_reason = f"{ctx.settings.llm.provider} unavailable: {exc}"
                 ctx.log(f"map_ontology:llm_unavailable({exc})")
 
         matcher = OntologyMatcher(ontology, locale=doc.locale, settings=ctx.settings,
                                   llm_provider=llm_provider)
         scope = ctx.settings.extraction.mapping_scope
-        ctx.log(f"map_ontology:strategy={'llm_description' if matcher.llm_enabled else 'deterministic'}"
-                f" scope={scope}")
+        # Record the strategy for the run record: mapping by MEANING (LLM) and mapping by
+        # string/rule evidence are very different quality levels, and the difference has to be
+        # visible to whoever reads the output.
+        # Provisional: confirmed after the run, because a provider can resolve (the adapter
+        # constructs fine) and still fail every call — e.g. no API key. Claiming
+        # "llm_description" on a run that made zero successful calls would overstate it.
+        ctx.mapping_strategy = "llm_description" if matcher.llm_enabled else "deterministic"
+        ctx.mapping_strategy_reason = "" if matcher.llm_enabled else (
+            unavailable_reason or "no llm provider resolved")
+        ctx.log(f"map_ontology:strategy={ctx.mapping_strategy}(intended) scope={scope}"
+                + (f" reason={ctx.mapping_strategy_reason}" if ctx.mapping_strategy_reason else ""))
 
         def _apply(li, result) -> bool:
             if result and result.canonical_key:
@@ -85,5 +100,12 @@ class MapOntologyStage:
         ctx.llm_calls += matcher.usage["calls"]
         if matcher.usage["model"]:
             ctx.llm_model = matcher.usage["model"]
+        # Report what ACTUALLY happened: zero successful calls means the deterministic
+        # ensemble decided every line, whatever was configured.
+        if matcher.llm_enabled and matcher.usage["calls"] == 0:
+            ctx.mapping_strategy = "deterministic"
+            ctx.mapping_strategy_reason = (
+                matcher.usage.get("last_error")
+                or "llm provider resolved but made no successful calls")
         ctx.log(f"map_ontology:mapped={mapped}/{len(doc.line_items)} llm_calls={matcher.usage['calls']}")
         return doc

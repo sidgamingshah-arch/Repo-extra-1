@@ -201,6 +201,47 @@ def _looks_like_header(label_words: list[Word]) -> bool:
     return False
 
 
+# Words that cannot END a finished caption ("TOTAL ASSETS LESS CURRENT …") or that can only
+# CONTINUE one ("… AND CASH EQUIVALENTS", "… FOR THE YEAR"). Their presence is what separates a
+# wrapped ALL-CAPS label from a genuine ALL-CAPS section banner ("ASSETS", "EQUITY").
+_HEAD_INCOMPLETE = re.compile(
+    r"\b(less|in|and|or|of|for|to|from|with|net|total|other|that|which|current|non)\s*$",
+    re.IGNORECASE)
+_CONT_STARTS = re.compile(r"^\s*(and|or|of|for|to|in|from|with|that|which|upon)\b",
+                          re.IGNORECASE)
+_HAN = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
+
+
+def _CJK_ONLY(text: str) -> bool:  # noqa: N802 - reads as a predicate at call sites
+    """Text that carries Han characters and no Latin words — a translation line."""
+    return bool(_HAN.search(text)) and not re.search(r"[A-Za-z]{2,}", text)
+
+
+def _is_wrapped_head(head: list[Word], cont: list[Word]) -> bool:
+    """Whether an ALL-CAPS label-only line is the first line of a WRAPPED caption.
+
+    Statement faces print both: banners that head a group ("ASSETS", "NON-CURRENT
+    LIABILITIES") and long captions that wrap ("TOTAL ASSETS LESS CURRENT" / "LIABILITIES",
+    "NET DECREASE IN CASH" / "AND CASH EQUIVALENTS"). Treating every ALL-CAPS line as a banner
+    discards the head and leaves the valued row labelled with a meaningless tail — which then
+    maps to whatever concept that tail resembles. Grammar tells them apart: a wrapped head ends
+    mid-phrase, or its continuation begins with a connective.
+    """
+    head_text = " ".join(w.text for w in head).strip()
+    cont_text = " ".join(w.text for w in cont).strip()
+    if not head_text or not cont_text:
+        return False
+    # A bilingual filing prints the translation of the SAME caption on the next line. A
+    # CJK-only continuation is therefore never a new banner — and without this the Chinese
+    # line breaks the chain between an English wrap and the row carrying the figures.
+    if _CJK_ONLY(cont_text):
+        return True
+    # In a bilingual filing the translation is appended to the SAME row, so the head's last
+    # English word is not the row's last word. Grammar is judged on the Latin portion only.
+    head_latin = re.sub(r"\s+", " ", _HAN.sub(" ", head_text)).strip()
+    return bool(_HEAD_INCOMPLETE.search(head_latin)) or bool(_CONT_STARTS.match(cont_text))
+
+
 def _merge_wrapped_labels(rows: list[list[Word]], fmt=None) -> list[list[Word]]:
     """Fold a label-only line into the following valued row when the two are clearly one
     wrapped label: tight vertical spacing *and* left-alignment inside the label column.
@@ -223,7 +264,10 @@ def _merge_wrapped_labels(rows: list[list[Word]], fmt=None) -> list[list[Word]]:
             nxt is not None
             and label_words
             and note_ref is None
-            and not _looks_like_header(label_words)
+            # An ALL-CAPS banner is not a continuation — unless grammar shows the caption
+            # actually wraps into the next line (see `_is_wrapped_head`).
+            and (not _looks_like_header(label_words)
+                 or _is_wrapped_head(label_words, _scan_row(nxt, fmt)[0]))
             and _scan_row(nxt, fmt)[2]                  # next row actually carries values
             and _wrap_adjacent(_row_box(row), _row_box(nxt), _scan_row(nxt, fmt)[0])
         )

@@ -228,6 +228,14 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             "reconciliation": ([e.model_dump(mode="json") for e in recon.entries] if recon else []),
             "units": (doc_model.unit_context.model_dump(mode="json")
                       if doc_model.unit_context else None),
+            # How mapping ran. Surfaced (not just logged) so a deterministic-only run — the
+            # fallback when no LLM is configured — is visibly weaker rather than silently so.
+            "mapping": {
+                "strategy": ctx.mapping_strategy or "deterministic",
+                "reason": ctx.mapping_strategy_reason,
+                "llm_calls": ctx.llm_calls,
+                "model": ctx.llm_model or "",
+            },
         }
         run.status = "succeeded"
         run.progress = {"phase": "done", "pct": 1.0}

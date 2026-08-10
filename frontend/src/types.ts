@@ -263,6 +263,9 @@ export interface ExtractionResult {
   notes: number;
   rows: ExtractionRow[];
   units?: SourceUnits | null;
+  /** How ontology mapping actually ran. "deterministic" means the LLM was unavailable and the
+   *  weaker rule/alias ensemble decided — surfaced so a degraded run is visible, not implied. */
+  mapping?: { strategy: string; reason: string; llm_calls: number; model: string } | null;
 }
 export interface ExtractionRunResponse {
   run_id: string;

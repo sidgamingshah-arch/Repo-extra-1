@@ -115,6 +115,8 @@ const core: LocaleDicts = {
     "ex.allStatements": "All statements",
     "ex.inUnits": "in",
     "ex.pagesLabel": "pages",
+    "ex.detMapping": "Rule-based mapping only",
+    "ex.detMappingHint": "No language model was configured for this run, so captions were matched by alias and rule rather than by meaning. Expect more unmapped lines.",
   },
   zh: {
     "group.SETUP": "设置",
@@ -205,6 +207,8 @@ const core: LocaleDicts = {
     "ex.allStatements": "全部报表",
     "ex.inUnits": "单位",
     "ex.pagesLabel": "页",
+    "ex.detMapping": "仅使用规则映射",
+    "ex.detMappingHint": "本次运行未配置语言模型，因此项目是按别名和规则匹配，而非按含义匹配。未映射的项目可能较多。",
   },
   ar: {
     "group.SETUP": "الإعداد",
@@ -295,6 +299,8 @@ const core: LocaleDicts = {
     "ex.allStatements": "كل القوائم",
     "ex.inUnits": "بوحدة",
     "ex.pagesLabel": "صفحة",
+    "ex.detMapping": "التعيين بالقواعد فقط",
+    "ex.detMappingHint": "لم يُهيَّأ أي نموذج لغوي لهذه العملية، لذا تمت مطابقة البنود بالأسماء البديلة والقواعد بدلًا من المعنى. توقّع مزيدًا من البنود غير المعيَّنة.",
   },
   fr: {
     "group.SETUP": "CONFIGURATION",
@@ -385,6 +391,8 @@ const core: LocaleDicts = {
     "ex.allStatements": "Tous les états",
     "ex.inUnits": "en",
     "ex.pagesLabel": "pages",
+    "ex.detMapping": "Mappage par règles uniquement",
+    "ex.detMappingHint": "Aucun modèle de langage n'était configuré pour cette exécution : les libellés ont été appariés par alias et par règle, non par sens. Attendez-vous à davantage de lignes non mappées.",
   },
 };
 

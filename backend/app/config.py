@@ -108,7 +108,12 @@ class ExtractionSettings(BaseModel):
     native_min_text_coverage: float = 0.02
     low_dpi_threshold: int = 150
     # Mapping ensemble thresholds (see services/mapping.py).
-    fuzzy_accept: float = 0.90        # rapidfuzz score to auto-accept
+    # Fuzzy scores are coverage-weighted (see services.mapping._fuzzy_score), so this
+    # threshold sits on that combined scale — not on a raw rapidfuzz ratio.
+    fuzzy_accept: float = 0.70        # combined fuzzy score to auto-accept, alone
+    # …and the caption must also explain this much of the matched alias, so a heading that
+    # is merely contained in a longer concept name can never auto-accept.
+    fuzzy_min_alias_coverage: float = 0.60
     fuzzy_candidate: float = 0.60     # minimum score to keep as a candidate
     embedding_accept: float = 0.82    # cosine similarity to accept
     mapping_margin: float = 0.08      # winner must beat runner-up by this margin

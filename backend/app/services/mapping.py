@@ -169,7 +169,10 @@ class OntologyMatcher:
         # and not disabled in config.
         self.llm_enabled = bool(llm_provider) and self.settings.extraction.llm_mapping
         # Token/usage accounting for the audit log (read by the mapping stage).
-        self.usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0, "model": ""}
+        # `failures`/`last_error` exist so a run whose LLM calls all failed can report itself
+        # as deterministic (what it actually was) instead of as LLM-mapped.
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0, "model": "",
+                      "failures": 0, "last_error": ""}
         # System prompt = the base instruction + the ontology's own extraction policies and
         # worked examples, so the LLM follows one consistent, auditable rulebook.
         self._system = self._build_system()
@@ -224,16 +227,72 @@ class OntologyMatcher:
                     best = Candidate(best.canonical_key, MappingMethod.RULE, 0.6)
         return best
 
+    @staticmethod
+    def _alias_coverage(caption: str, alias: str) -> float:
+        """Share of the ALIAS's words the caption accounts for, tolerating misspellings.
+
+        Direction matters: a section heading ("LIABILITIES") is trivially contained in a
+        longer alias ("non-current lease liabilities"), so measuring how much of the *caption*
+        is explained rewards fragments. Measuring how much of the *alias* is explained is what
+        separates a real match from a substring of one.
+
+        Token matching is itself fuzzy, because exact identity would punish the typos this
+        tier exists to absorb ("trade recievables" covers "receivables").
+        """
+        alias_tokens = alias.split()
+        if not alias_tokens:
+            return 0.0
+        caption_tokens = caption.split()
+        if not caption_tokens:
+            return 0.0
+        hit = 0
+        for at in alias_tokens:
+            if any(at == ct or fuzz.ratio(at, ct) >= 80 for ct in caption_tokens):
+                hit += 1
+        return hit / len(alias_tokens)
+
+    def _fuzzy_score(self, norm: str, alias: str) -> float:
+        """Length-aware similarity, weighted by how much of the alias is covered.
+
+        Deliberately NOT ``token_set_ratio``: that scores 100 whenever the caption's tokens
+        are a subset of the alias's, so every heading and wrapped-line fragment scored a
+        perfect 1.0 against some longer concept and was auto-accepted with false certainty
+        (observed on a real filing: "LIABILITIES" -> non-current lease liabilities at 1.00).
+        ``token_sort_ratio`` keeps length differences visible, and the coverage factor pulls
+        down matches that only explain a small part of the concept they claim to be.
+        """
+        base = fuzz.token_sort_ratio(norm, alias) / 100.0
+        coverage = self._alias_coverage(norm, alias)
+        return base * (0.4 + 0.6 * coverage)
+
     def _fuzzy(self, norm: str) -> list[Candidate]:
+        """Best fuzzy candidate per concept. Scores are EVIDENCE: the decision policy in
+        `match` only lets fuzzy decide alone when it is near-exact (see `_fuzzy_accepts`)."""
         out: list[Candidate] = []
         for key, aliases in self._alias_by_key.items():
             if not aliases:
                 continue
-            match = process.extractOne(norm, aliases, scorer=fuzz.token_set_ratio)
-            if match:
-                out.append(Candidate(key, MappingMethod.FUZZY, match[1] / 100.0))
+            best = max((self._fuzzy_score(norm, a) for a in aliases), default=0.0)
+            if best > 0:
+                out.append(Candidate(key, MappingMethod.FUZZY, best))
         out.sort(key=lambda c: c.score, reverse=True)
         return out
+
+    def _fuzzy_accepts(self, norm_segments: list[str], cand: Candidate) -> bool:
+        """Whether a fuzzy-only match is strong enough to stand on its own.
+
+        Requires BOTH a high combined score and that the caption explains most of the
+        alias — a string method may only decide when it is essentially an exact hit, since
+        it measures spelling, not meaning. Anything weaker is left for a human or the LLM
+        rather than asserted.
+        """
+        s = self.settings.extraction
+        if cand.score < s.fuzzy_accept:
+            return False
+        aliases = self._alias_by_key.get(cand.canonical_key) or []
+        best_cov = max((self._alias_coverage(n, a) for a in aliases for n in norm_segments),
+                       default=0.0)
+        return best_cov >= s.fuzzy_min_alias_coverage
 
     def _ensure_alias_embeddings(self) -> None:
         """Embed every alias once (lazily) and index it by canonical key. Cached for the life
@@ -350,8 +409,14 @@ class OntologyMatcher:
                 response_schema=LlmMappingDecision,
                 max_tokens=512,
             )
-        except Exception:
-            return None  # provider unreachable/misconfigured → deterministic decides
+        except Exception as exc:  # noqa: BLE001
+            # Provider unreachable/misconfigured (commonly a missing API key) → the
+            # deterministic ensemble decides. Record WHY: a run that silently degrades and
+            # still reports itself as LLM-mapped overstates the quality of its own output.
+            self.usage["failures"] += 1
+            if not self.usage["last_error"]:
+                self.usage["last_error"] = f"{type(exc).__name__}: {exc}"[:200]
+            return None
         self.usage["calls"] += 1
         self.usage["input_tokens"] += int(meta.get("input_tokens") or 0)
         self.usage["output_tokens"] += int(meta.get("output_tokens") or 0)
@@ -477,7 +542,7 @@ class OntologyMatcher:
                 conf = llm.score
                 if agreement:
                     conf = min(1.0, llm.score + 0.10 * (1.0 - llm.score))
-                elif det_top is not None and det_top.score >= s.extraction.fuzzy_accept:
+                elif det_top is not None and det_top.score >= s.extraction.fuzzy_accept:  # noqa: E501 - same combined scale
                     conf = llm.score * 0.85
                 needs_review = (
                     conf < s.extraction.auto_accept_confidence
@@ -516,9 +581,12 @@ class OntologyMatcher:
                 allocation_status="direct_exclusive" if accept else "unmapped_review",
             )
 
-        # Last resort: fuzzy only, and only when it is essentially certain.
+        # Last resort: fuzzy only, and only when it is essentially certain — a high combined
+        # score AND most of the alias explained (see `_fuzzy_accepts`).
+        norm_segments = [normalize_label(seg) for seg in segments]
+        norm_segments = [n for n in norm_segments if n]
         fuzzy_top = fuzzy[0] if fuzzy else None
-        if fuzzy_top and fuzzy_top.score >= s.extraction.fuzzy_accept:
+        if fuzzy_top and self._fuzzy_accepts(norm_segments, fuzzy_top):
             return MappingResult(
                 canonical_key=fuzzy_top.canonical_key, method=MappingMethod.FUZZY,
                 confidence=fuzzy_top.score, candidates=fuzzy[:5], needs_review=False,

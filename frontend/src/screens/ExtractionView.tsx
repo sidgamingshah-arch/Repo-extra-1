@@ -271,6 +271,22 @@ export default function ExtractionView() {
             </p>
           </div>
 
+          {/* How mapping ran. A deterministic-only run (no LLM configured) is materially
+              weaker at resolving captions by meaning, so it is stated rather than implied. */}
+          {res.mapping && res.mapping.strategy !== "llm_description" && (
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap",
+                          background: color.amberBg, border: `1px solid ${color.amberFg}33`,
+                          borderRadius: 8, padding: "8px 11px", marginBottom: 12 }}>
+              <b style={{ fontSize: 11.5, color: color.amberFg }}>{t("ex.detMapping")}</b>
+              <span style={{ fontSize: 11.5, color: color.sec2 }}>{t("ex.detMappingHint")}</span>
+              {res.mapping.reason && (
+                <span style={{ fontFamily: font.mono, fontSize: 10.5, color: color.muted }}>
+                  ({res.mapping.reason})
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Statement filter */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
             <span style={{ fontSize: 11, color: color.muted }}>{t("ex.statement")}</span>
