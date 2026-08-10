@@ -52,6 +52,10 @@ class ExtractedValue(BaseModel):
     basis: Basis
     period_end: date | None = None
     period_label: str | None = None
+    # Human-readable column header captured from the document (e.g. "31 March 2025"), for
+    # DISPLAY only. period_label stays the positional key ("current"/"prior"/…) used for all
+    # lookups; this never participates in ValueKey or value matching.
+    period_display: str | None = None
     unit_ctx: UnitContext = Field(default_factory=UnitContext)
     provenance: Provenance | None = None
     confidence: ConfidenceVector = Field(default_factory=ConfidenceVector)

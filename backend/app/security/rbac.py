@@ -83,10 +83,19 @@ PERMISSIONS: dict[Role, set[Permission]] = {
 # is available to everyone who works an extraction — the analyst included — independent
 # of the ``review_required`` flag. That flag governs only the second-person reviewer
 # SIGN-OFF (analyst submits vs. finalizes), never the QA screen itself.
+#
+# The analyst sees the ``template`` screen too, but as a **view-and-select** surface:
+# they need to see the template they're extracting into and switch between existing
+# templates (``TEMPLATE_SELECT``). Authoring/editing a template stays admin-only
+# (``CONFIG_TEMPLATE``), enforced both on the write endpoints and on the screen's
+# editing controls.
 SCREENS_BY_ROLE: dict[Role, list[str]] = {
     Role.ADMIN: ["upload", "integrity", "scope", "workspace", "notes", "review",
                  "commentary", "template", "settings", "export"],
     Role.REVIEWER: ["integrity", "workspace", "notes", "review", "commentary", "export"],
+    # Analysts run the operational pipeline; configuration surfaces (Template & Ontology
+    # authoring, Settings) are admin-only. Analysts still pick a template on the Upload
+    # screen (TEMPLATE_SELECT), they just don't get the authoring/config screen.
     Role.ANALYST: ["upload", "integrity", "scope", "workspace", "notes", "review",
                    "commentary", "export"],
 }

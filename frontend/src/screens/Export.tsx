@@ -1,8 +1,10 @@
 /** Screen 8: Export — deliver the extracted, reviewed and reconciled dataset. */
-import { useExportOptions, useProjectLoaded, useSubmitForReview } from "../lib/queries";
+import { useState } from "react";
+import { useDocumentRun, useExportOptions, useProjectLoaded, useSubmitForReview } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
-import { downloadExport } from "../lib/api";
+import { downloadDocumentExport, downloadExport } from "../lib/api";
 import { useUI } from "../store";
+import type { ExtractionRow } from "../types";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
 import { color, font, radius } from "../theme";
@@ -192,24 +194,100 @@ function JsonPreview() {
   );
 }
 
+function provStr(r: ExtractionRow): string {
+  const p = r.values?.[0]?.provenance;
+  if (!p) return "";
+  if (p.source_kind === "spreadsheet" && p.sheet) return `${p.sheet}!${p.cell ?? ""}`;
+  return `p.${p.page_index + 1}`;
+}
+
+/** Real export preview built from the document's actual extracted rows (no demo data). */
+function RealPreview({ rows, isExcel }: { rows: ExtractionRow[]; isExcel: boolean }) {
+  const t = useT();
+  if (!isExcel) {
+    const sample = {
+      source_document: "(this document)",
+      line_item_count: rows.length,
+      line_items: rows.slice(0, 6).map((r) => ({
+        source_label: r.source_label,
+        canonical_key: r.canonical_key,
+        note: r.note,
+        mapping_confidence: r.mapping_confidence,
+        values: r.values.map((v) => ({ period: v.period_label, value: v.value, source: provStr(r) })),
+      })),
+    };
+    return (
+      <pre style={{ margin: 0, padding: "14px 16px", fontFamily: font.mono, fontSize: 11,
+                    lineHeight: 1.6, color: color.ink, whiteSpace: "pre-wrap" }}>
+        {JSON.stringify(sample, null, 2)}
+      </pre>
+    );
+  }
+  const head = ["", t("e.col.lineitem"), "Value", t("e.col.note"), t("e.col.conf"), t("e.col.source")];
+  const cols = "30px 1fr 90px 46px 56px 80px";
+  return (
+    <div style={{ fontFamily: font.mono, fontSize: 11 }}>
+      <div style={{ display: "grid", gridTemplateColumns: cols, background: color.excelGreen, color: "#fff", fontWeight: 600 }}>
+        {head.map((h, i) => (
+          <div key={i} style={{ padding: "6px 8px", borderRight: "1px solid #1a5c37", textAlign: i > 1 && i < 5 ? "right" : "left" }}>{h}</div>
+        ))}
+      </div>
+      {rows.slice(0, 40).map((r, ri) => {
+        const conf = r.mapping_confidence;
+        return (
+          <div key={ri} style={{ display: "grid", gridTemplateColumns: cols,
+                                  background: ri % 2 ? "#f6f8f6" : "#fff", borderBottom: "1px solid #e6ebe6" }}>
+            <div style={{ padding: "6px 8px", borderRight: "1px solid #eef1ee" }}>{ri + 1}</div>
+            <div style={{ padding: "6px 8px", borderRight: "1px solid #eef1ee" }}>{r.source_label}</div>
+            <div style={{ padding: "6px 8px", borderRight: "1px solid #eef1ee", textAlign: "right" }}>{r.values?.[0]?.value ?? "—"}</div>
+            <div style={{ padding: "6px 8px", borderRight: "1px solid #eef1ee" }}>{r.note ?? ""}</div>
+            <div style={{ padding: "6px 8px", borderRight: "1px solid #eef1ee", textAlign: "right", color: color.amberFg }}>
+              {typeof conf === "number" ? `${Math.round(conf * 100)}%` : "—"}
+            </div>
+            <div style={{ padding: "6px 8px", color: color.muted }}>{provStr(r)}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ExportScreen() {
   const t = useT();
   const canConfig = useCan("config:export");
   const canExport = useCan("export:run");
   const canSubmit = useCan("review:submit");
   const submitReview = useSubmitForReview();
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const usingReal = !!activeDocumentId;
   const loaded = useProjectLoaded();
   const { data, isPending } = useExportOptions();
+  const runQ = useDocumentRun(activeDocumentId ?? undefined);
   const exportFmt = useUI((s) => s.exportFmt);
   const setFmt = useUI((s) => s.setFmt);
+  const outputLocale = useUI((s) => s.locale);
   const isExcel = exportFmt === "excel";
+  // Interactive Include selection for a real export — drives which analysis sheets are added.
+  const [inc, setInc] = useState<Record<string, boolean>>({
+    note_details: true, ratios: true, disclosures: true,
+  });
+  const includeKeys = Object.keys(inc).filter((k) => inc[k]);
+  // Target presentation unit for a real export (empty = as reported). Conversion applies only
+  // when the document declared its source units, which the run reports.
+  const [targetUnits, setTargetUnits] = useState<string>("");
+  const srcUnits = usingReal ? runQ.data?.result.units ?? null : null;
 
-  if (!loaded) return <EmptyState />;
-  if (isPending || !data) {
+  // No real document and no admin-seeded demo → greenfield guidance.
+  if (!usingReal && !loaded) return <EmptyState />;
+  if (usingReal && runQ.isError) return <EmptyState />;   // uploaded but not extracted yet
+  if (usingReal ? runQ.isPending || !runQ.data : isPending || !data) {
     return (
       <div style={{ padding: 40, textAlign: "center", color: color.muted }}>Loading…</div>
     );
   }
+
+  const realRows: ExtractionRow[] = usingReal ? (runQ.data?.result.rows ?? []) : [];
+  const realFlagged = realRows.filter((r) => !r.canonical_key || (r.flags?.length ?? 0) > 0).length;
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto", padding: "26px 30px 60px" }}>
@@ -241,30 +319,85 @@ export default function ExportScreen() {
             </div>
           </Card>
 
-          <Card>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
-            <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
-              {data.options.map((o) => (
-                <IncludeRow key={o.key} label={t(`e.opt.${o.key}`)} on={o.on} />
-              ))}
-            </div>
-          </Card>
+          {usingReal ? (
+            isExcel && (
+              <Card>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
+                <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
+                  {(["note_details", "ratios", "disclosures"] as const).map((k) => (
+                    <div key={k} onClick={() => setInc((s) => ({ ...s, [k]: !s[k] }))}
+                         style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 0", cursor: "pointer" }}>
+                      <span style={{ width: 15, height: 15, borderRadius: 4, flex: "0 0 auto",
+                                     border: `2px solid ${inc[k] ? color.indigo : color.dashed}`,
+                                     background: inc[k] ? color.indigo : "#fff", color: "#fff",
+                                     fontSize: 11, lineHeight: "11px", textAlign: "center" }}>
+                        {inc[k] ? "✓" : ""}
+                      </span>
+                      <span style={{ fontSize: 12 }}>{t(`e.sheet.${k}`)}</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )
+          ) : (
+            data?.options && (
+              <Card>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
+                <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
+                  {data.options.map((o) => (
+                    <IncludeRow key={o.key} label={t(`e.opt.${o.key}`)} on={o.on} />
+                  ))}
+                </div>
+              </Card>
+            )
+          )}
 
-          <Card>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.presentation")}</div>
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                opacity: canConfig ? 1 : 0.55,
-                pointerEvents: canConfig ? "auto" : "none",
-              }}
-            >
-              <PresField label={t("e.dataset")} value={`${t("e.both")} ▾`} />
-              <PresField label={t("e.currency")} value="INR ₹ ▾" />
-              <PresField label={t("e.units")} value="Crore ▾" />
-            </div>
-          </Card>
+          {/* Real presentation control: convert figures to a chosen unit — enabled only when
+              the document declared its source units (otherwise we never guess a scale). */}
+          {usingReal && isExcel && (
+            <Card>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t("e.presentation")}</div>
+              <div style={{ fontSize: 11, color: color.muted, marginBottom: 8 }}>
+                {srcUnits && (srcUnits.units_label || srcUnits.currency)
+                  ? `${t("e.sourceUnits")}: ${srcUnits.currency || ""} ${srcUnits.units_label || ""}`.trim()
+                  : t("e.unitsAsReported")}
+              </div>
+              <select
+                value={targetUnits}
+                disabled={!canConfig || !srcUnits?.units_label}
+                onChange={(e) => setTargetUnits(e.target.value)}
+                style={{ width: "100%", fontSize: 12, padding: "7px 10px",
+                         borderRadius: radius.controlSm, border: `1px solid ${color.cardBorder}` }}
+              >
+                <option value="">{t("e.unitsAsReported")}</option>
+                <option value="absolute">{t("e.units.absolute")}</option>
+                <option value="thousands">{t("e.units.thousands")}</option>
+                <option value="millions">{t("e.units.millions")}</option>
+                <option value="lakh">{t("e.units.lakh")}</option>
+                <option value="crore">{t("e.units.crore")}</option>
+              </select>
+            </Card>
+          )}
+
+          {/* Presentation (currency/units) is a demo affordance; hide it on a real run
+              rather than show fabricated INR/Crore defaults. */}
+          {!usingReal && (
+            <Card>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.presentation")}</div>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  opacity: canConfig ? 1 : 0.55,
+                  pointerEvents: canConfig ? "auto" : "none",
+                }}
+              >
+                <PresField label={t("e.dataset")} value={`${t("e.both")} ▾`} />
+                <PresField label={t("e.currency")} value="INR ₹ ▾" />
+                <PresField label={t("e.units")} value="Crore ▾" />
+              </div>
+            </Card>
+          )}
         </div>
 
         {/* RIGHT — preview */}
@@ -279,12 +412,18 @@ export default function ExportScreen() {
             }}
           >
             <span style={{ fontSize: 12.5, fontWeight: 600 }}>
-              {t("e.preview")} {isExcel ? "spread.xlsx" : "extract.json"}
+              {t("e.preview")} {isExcel ? "extract.xlsx" : "extract.json"}
             </span>
             <span style={{ fontSize: 11, color: color.muted }}>{t("e.previewMeta")}</span>
           </div>
           <div style={{ flex: 1, overflow: "auto", background: isExcel ? "#fff" : "#fbfcfd" }}>
-            {isExcel ? <ExcelPreview /> : <JsonPreview />}
+            {usingReal ? (
+              <RealPreview rows={realRows} isExcel={isExcel} />
+            ) : isExcel ? (
+              <ExcelPreview />
+            ) : (
+              <JsonPreview />
+            )}
           </div>
           <div
             style={{
@@ -296,19 +435,24 @@ export default function ExportScreen() {
             }}
           >
             <span style={{ fontSize: 11.5, color: color.muted }}>
-              148 {t("e.footer.lineitems")} · 48 {t("e.footer.notes")} · 12 {t("e.footer.flagged")}
+              {usingReal
+                ? `${realRows.length} ${t("e.footer.lineitems")} · ${realFlagged} ${t("e.footer.flagged")}`
+                : `148 ${t("e.footer.lineitems")} · 48 ${t("e.footer.notes")} · 12 ${t("e.footer.flagged")}`}
             </span>
             {canExport ? (
               // Reviewer/admin, or analyst when the review step is off: deliver the file.
               <button
                 onClick={() =>
-                  downloadExport({
-                    format: exportFmt,
-                    basis: "consolidated",
-                    currency: "INR",
-                    units: "crore",
-                    include: {},
-                  })
+                  usingReal && activeDocumentId
+                    ? downloadDocumentExport(activeDocumentId, exportFmt, outputLocale, includeKeys,
+                                             targetUnits || undefined)
+                    : downloadExport({
+                        format: exportFmt,
+                        basis: "consolidated",
+                        currency: "INR",
+                        units: "crore",
+                        include: {},
+                      })
                 }
                 style={{
                   fontSize: 13, fontWeight: 600, color: "#fff", background: color.indigo,

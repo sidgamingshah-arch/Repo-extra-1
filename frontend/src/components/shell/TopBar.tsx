@@ -2,7 +2,7 @@
  * The stepper marks steps before the current pipeline position as done (green check). */
 import { useLocation, useNavigate } from "react-router-dom";
 
-import { useMe, useProject } from "../../lib/queries";
+import { useDocuments, useMe, useProject } from "../../lib/queries";
 import { useUI } from "../../store";
 import { color } from "../../theme";
 import { useT } from "../../i18n";
@@ -17,6 +17,17 @@ export function TopBar() {
   const { data: me } = useMe();
   const t = useT();
   const extractMode = useUI((s) => s.extractMode);
+  // When a real uploaded document is being worked, the title bar reflects THAT file — not
+  // the demo project — so demo chrome never bleeds into a real run.
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const { data: docsData } = useDocuments();
+  const activeDoc = docsData?.documents?.find((d) => d.id === activeDocumentId);
+  const title = activeDoc ? activeDoc.name : data?.project.title ?? "Loading…";
+  const subtitle = activeDoc
+    ? activeDoc.meta
+    : data
+    ? `${data.project.filename} · ${data.project.pages} pages · ${data.project.standard}`
+    : "";
   // In auto mode the pipeline skips the manual Page Scope confirmation, so the
   // stepper collapses to Upload → Integrity → Extract → Review → Export. Also limit the
   // stepper to steps the caller's role can actually reach (e.g. a reviewer has no upload).
@@ -64,10 +75,10 @@ export function TopBar() {
 
       <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.25, minWidth: 0, overflow: "hidden" }}>
         <span style={{ fontWeight: 600, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {data?.project.title ?? "Loading…"}
+          {title}
         </span>
         <span style={{ fontSize: 11, color: color.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {data ? `${data.project.filename} · ${data.project.pages} pages · ${data.project.standard}` : ""}
+          {subtitle}
         </span>
       </div>
 

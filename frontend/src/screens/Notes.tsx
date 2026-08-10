@@ -1,11 +1,13 @@
 /** Screen 6 — All Notes. Left index of extracted notes; right detail with a
  * particulars grid and a note-to-face reconciliation callout. */
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Card } from "../components/ui";
+import { PageStack, type PdfPick } from "../components/SourceViewer";
 import { SCREENS } from "./config";
 import { useT } from "../i18n";
-import { useNote, useNotes, useProjectLoaded } from "../lib/queries";
+import { useDocumentNote, useDocumentNotes, useDocumentRun, useNote, useNotes, useProjectLoaded } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { useUI } from "../store";
 import { color, confStyle, fmtIN, font, radius } from "../theme";
@@ -136,12 +138,36 @@ function Detail({ detail }: { detail: NoteDetail }) {
 export default function NotesScreen() {
   const t = useT();
   const locale = useUI((s) => s.locale);
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const usingReal = !!activeDocumentId;
   const loaded = useProjectLoaded();
-  const { data: notes } = useNotes(locale);
   const { note, setNote } = useUI();
-  const { data: detail } = useNote(note, locale);
+  // Real document → notes from its extraction (line-item note references); else the demo.
+  const realNotes = useDocumentNotes(activeDocumentId ?? undefined);
+  const realDetail = useDocumentNote(activeDocumentId ?? undefined, note);
+  const demoNotes = useNotes(locale, !usingReal);
+  const demoDetail = useNote(note, locale, !usingReal);
+  const notes = usingReal ? realNotes.data : demoNotes.data;
+  const detail = usingReal ? realDetail.data : demoDetail.data;
+  // Real native-PDF docs get a side-by-side annual-report view, open by default, framed to
+  // the selected note's page (no note-level bbox → the whole page is highlighted, not a region).
+  const run = useDocumentRun(activeDocumentId ?? undefined);
+  const result = run.data?.result;
+  const showViewer = usingReal && result?.format === "pdf" && !!activeDocumentId;
+  const picked: PdfPick | null =
+    showViewer && detail && detail.page > 0
+      ? { kind: "pdf", page_index: detail.page - 1, bbox: { x0: 0, y0: 0, x1: 1, y1: 1 }, label: detail.title }
+      : null;
 
-  if (!loaded) return <EmptyState />;
+  // On a real doc, if the remembered note isn't one this document has, select the first.
+  useEffect(() => {
+    if (usingReal && notes?.notes.length && !notes.notes.some((n) => n.no === note)) {
+      setNote(notes.notes[0].no);
+    }
+  }, [usingReal, notes, note, setNote]);
+
+  if (!usingReal && !loaded) return <EmptyState />;
+  if (usingReal && realNotes.isError) return <EmptyState />;
   if (!notes) return <Loading />;
 
   return (
@@ -226,8 +252,52 @@ export default function NotesScreen() {
           })}
         </div>
       </div>
-      <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 34px" }}>
-        {detail ? <Detail detail={detail} /> : <Loading />}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", minHeight: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 34px" }}>
+          {detail ? <Detail detail={detail} /> : <Loading />}
+        </div>
+        {showViewer && activeDocumentId && (
+          <div
+            style={{
+              flex: "0 0 42%",
+              minWidth: 0,
+              borderLeft: `1px solid ${color.cardBorder}`,
+              background: color.viewerBg,
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "8px 12px",
+                background: color.viewerHeader,
+                color: "#dfe3e9",
+                flex: "0 0 auto",
+                fontSize: 11.5,
+                fontWeight: 600,
+              }}
+            >
+              <span>{t("n.sourceView")}</span>
+              {detail && detail.page > 0 && (
+                <span style={{ color: "#aab1bc", fontWeight: 400 }}>
+                  · {t("n.sourcePage")} {detail.page}
+                </span>
+              )}
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12, background: "#e9ebef" }}>
+              <PageStack
+                documentId={activeDocumentId}
+                pageCount={result?.page_count ?? 1}
+                picked={picked}
+                maxHeight="100%"
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,13 +1,20 @@
 /** Screen 1 — Documents & Template. Source docs dropzone + list, output template,
  * and ontology. Mirrors wireframe scrUpload verbatim. */
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button, Card } from "../components/ui";
 import { color, font, radius } from "../theme";
-import type { ExtractMode, SourceDoc } from "../types";
-import { useDocuments, useProject, useUploadDocument } from "../lib/queries";
-import { useUI } from "../store";
+import type { ExtractMode, SourceDoc, TemplateRef } from "../types";
+import {
+  useDeleteDocument,
+  useDocumentIntegrity,
+  useDocuments,
+  useProject,
+  useTemplates,
+  useUploadDocument,
+} from "../lib/queries";
+import { useAppLocale, useUI } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
 import { SCREENS } from "./config";
@@ -25,11 +32,13 @@ function tagColors(tag: SourceDoc["tag"]): { bg: string; fg: string } {
   return { bg: color.indigoTint2, fg: color.indigo };
 }
 
-function DocRow({ doc, onView }: { doc: SourceDoc; onView?: () => void }) {
+function DocRow({ doc, onDelete, deleting }: { doc: SourceDoc; onDelete?: () => void; deleting?: boolean }) {
+  const t = useT();
   const ext = extColors(doc.ext);
   const tag = tagColors(doc.tag);
   return (
     <div
+      data-testid="doc-row"
       style={{
         display: "flex",
         alignItems: "center",
@@ -73,15 +82,19 @@ function DocRow({ doc, onView }: { doc: SourceDoc; onView?: () => void }) {
       >
         {doc.tag}
       </span>
-      {onView && (
+      {onDelete && (
         <button
-          onClick={onView}
+          onClick={onDelete}
+          disabled={deleting}
+          aria-label={t("u.deleteDoc")}
+          title={t("u.deleteDoc")}
+          data-testid="doc-delete"
           style={{
-            fontSize: 11, fontWeight: 600, color: color.indigo, background: "none",
-            border: "none", cursor: "pointer", whiteSpace: "nowrap", padding: 0,
+            fontSize: 14, color: color.muted, background: "none", border: "none",
+            cursor: deleting ? "wait" : "pointer", padding: "2px 4px", lineHeight: 1,
           }}
         >
-          View →
+          🗑
         </button>
       )}
     </div>
@@ -173,6 +186,119 @@ function ModeOption({
   );
 }
 
+/** Output-template card: shows the active template and lets the analyst switch to another
+ * existing one (real templates from the API). Authoring a new template is admin-only and
+ * routes to the Template & Ontology screen. */
+function TemplateCard({
+  canTemplate,
+  canSelectTemplate,
+  onAuthor,
+}: {
+  canTemplate: boolean;
+  canSelectTemplate: boolean;
+  onAuthor: () => void;
+}) {
+  const t = useT();
+  const { data: templates, isPending } = useTemplates();
+  const selectedKey = useUI((s) => s.selectedTemplateKey);
+  const setSelectedKey = useUI((s) => s.setSelectedTemplateKey);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const list: TemplateRef[] = templates ?? [];
+  // Active template: the stored selection, else the first available template.
+  const active = list.find((x) => x.template_key === selectedKey) ?? list[0];
+
+  return (
+    <Card>
+      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 11 }}>{t("u.outputTemplate")}</div>
+      <div
+        style={{
+          display: "flex", alignItems: "center", gap: 10, padding: 11,
+          border: `1px solid ${color.indigoBorder}`, background: color.indigoTint,
+          borderRadius: 9, marginBottom: 9,
+        }}
+      >
+        <span
+          style={{
+            width: 30, height: 30, borderRadius: 7, background: color.indigo, color: "#fff",
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flex: "0 0 auto",
+          }}
+        >
+          ▦
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600 }}>
+            {active ? active.name : isPending ? t("u.loadingTemplates") : t("u.noTemplates")}
+          </div>
+          <div style={{ fontSize: 11, color: color.sec2 }}>
+            {active ? `${active.template_key} · v${active.version}` : t("u.templateMeta")}
+          </div>
+        </div>
+        {active && <span style={{ fontSize: 11, color: color.indigo, fontWeight: 600 }}>{t("u.selected")}</span>}
+      </div>
+
+      {/* Picker: the list of existing templates the analyst may select from. */}
+      {pickerOpen && (
+        <div style={{ border: `1px solid ${color.hairline3}`, borderRadius: 9, marginBottom: 9, overflow: "hidden" }}>
+          {list.length === 0 && (
+            <div style={{ padding: 12, fontSize: 11.5, color: color.muted }}>{t("u.noTemplates")}</div>
+          )}
+          {list.map((tpl) => {
+            const on = active?.template_key === tpl.template_key;
+            return (
+              <div
+                key={tpl.id}
+                role="button"
+                data-testid="tpl-option"
+                onClick={() => { setSelectedKey(tpl.template_key); setPickerOpen(false); }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", cursor: "pointer",
+                  background: on ? color.indigoTint : "#fff",
+                  borderBottom: `1px solid ${color.hairline3}`,
+                }}
+              >
+                <span style={{ width: 14, height: 14, borderRadius: "50%", flex: "0 0 auto",
+                               border: `2px solid ${on ? color.indigo : color.controlBorder}`,
+                               background: on ? color.indigo : "#fff" }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: on ? 600 : 500,
+                                color: on ? color.indigo : color.ink }}>{tpl.name}</div>
+                  <div style={{ fontSize: 10.5, fontFamily: font.mono, color: color.muted }}>
+                    {tpl.template_key} · v{tpl.version}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {(canSelectTemplate || canTemplate) && (
+        <div style={{ display: "flex", gap: 8 }}>
+          {/* Analysts may choose an existing template… */}
+          <Button
+            variant="secondary"
+            onClick={() => setPickerOpen((v) => !v)}
+            style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
+          >
+            {pickerOpen ? t("u.closePicker") : t("u.chooseAnother")}
+          </Button>
+          {/* …but authoring a new template is an admin configuration action. */}
+          {canTemplate && (
+            <Button
+              variant="ghost"
+              onClick={onAuthor}
+              style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
+            >
+              {t("u.newTemplate")}
+            </Button>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function UploadScreen() {
   const navigate = useNavigate();
   const t = useT();
@@ -180,11 +306,17 @@ export default function UploadScreen() {
   const canSelectTemplate = useCan("template:select"); // choose an existing one (analyst)
   const canOntology = useCan("config:ontology");
   const canUpload = useCan("documents:manage");
+  const locale = useAppLocale();
   const extractMode = useUI((s) => s.extractMode);
   const setExtractMode = useUI((s) => s.setExtractMode);
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
   const { data, isPending } = useProject();
   const { data: docsData } = useDocuments();
   const upload = useUploadDocument();
+  const del = useDeleteDocument();
+  // Integrity is computed at upload; we read the active document's result to decide whether
+  // "Extract directly" is allowed — a BLOCKER (corrupt/encrypted) can never be skipped.
+  const docIntegrity = useDocumentIntegrity(activeDocumentId ?? undefined, locale);
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (isPending || !data) {
@@ -194,7 +326,6 @@ export default function UploadScreen() {
   }
 
   const { project } = data;
-  const tpl = project.template;
   // Real uploaded documents take precedence; fall back to the sample's docs when loaded.
   const realDocs = docsData?.documents ?? [];
   const documents: SourceDoc[] = realDocs.length ? realDocs : data.documents;
@@ -285,70 +416,25 @@ export default function UploadScreen() {
             <DocRow
               key={d.id ?? d.name}
               doc={d}
-              onView={d.id ? () => navigate(`/documents/${d.id}`) : undefined}
+              deleting={del.isPending && del.variables === d.id}
+              onDelete={
+                d.id && canUpload
+                  ? () => {
+                      if (window.confirm(t("u.deleteConfirm"))) del.mutate(d.id as string);
+                    }
+                  : undefined
+              }
             />
           ))}
         </Card>
 
         {/* RIGHT — Template + Ontology */}
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          <Card>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 11 }}>{t("u.outputTemplate")}</div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: 11,
-                border: `1px solid ${color.indigoBorder}`,
-                background: color.indigoTint,
-                borderRadius: 9,
-                marginBottom: 9,
-              }}
-            >
-              <span
-                style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: 7,
-                  background: color.indigo,
-                  color: "#fff",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 14,
-                  flex: "0 0 auto",
-                }}
-              >
-                ▦
-              </span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600 }}>{tpl.name}</div>
-                <div style={{ fontSize: 11, color: color.sec2 }}>{t("u.templateMeta")}</div>
-              </div>
-              <span style={{ fontSize: 11, color: color.indigo, fontWeight: 600 }}>{t("u.selected")}</span>
-            </div>
-            {(canSelectTemplate || canTemplate) && (
-              <div style={{ display: "flex", gap: 8 }}>
-                {/* Analysts may choose an existing template… */}
-                <Button
-                  variant="secondary"
-                  style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
-                >
-                  {t("u.chooseAnother")}
-                </Button>
-                {/* …but authoring a new template is an admin configuration action. */}
-                {canTemplate && (
-                  <Button
-                    variant="ghost"
-                    style={{ flex: 1, fontSize: 11.5, padding: 8, borderRadius: radius.control }}
-                  >
-                    {t("u.newTemplate")}
-                  </Button>
-                )}
-              </div>
-            )}
-          </Card>
+          <TemplateCard
+            canTemplate={canTemplate}
+            canSelectTemplate={canSelectTemplate}
+            onAuthor={() => navigate(SCREENS.template.path)}
+          />
 
           <Card>
             <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 5 }}>{t("u.ontology")}</div>
@@ -452,6 +538,29 @@ export default function UploadScreen() {
         <Button variant="secondary" style={{ padding: "10px 18px" }}>
           {t("u.saveDraft")}
         </Button>
+        {/* Fast path: skip the integrity REVIEW screen and go straight to extraction. The
+            check itself still stands — a BLOCKER document (corrupt/encrypted) can't be
+            skipped, and there must be an active uploaded document to extract. */}
+        {(() => {
+          const noDoc = !activeDocumentId;
+          const blocked = (docIntegrity.data?.issues || []).some((i) => i.note === "BLOCKER");
+          const disabled = noDoc || blocked;
+          const title = noDoc ? t("u.noActiveDoc") : blocked ? t("u.extractBlocked") : undefined;
+          return (
+            <Button
+              variant="secondary"
+              style={{ padding: "10px 18px" }}
+              disabled={disabled}
+              title={title}
+              onClick={() =>
+                activeDocumentId &&
+                navigate(extractMode === "auto" ? `/documents/${activeDocumentId}` : SCREENS.scope.path)
+              }
+            >
+              {t("u.extractDirectly")} →
+            </Button>
+          );
+        })()}
         <Button style={{ padding: "10px 22px" }} onClick={() => navigate(SCREENS.integrity.path)}>
           {t("u.runIntegrity")} →
         </Button>

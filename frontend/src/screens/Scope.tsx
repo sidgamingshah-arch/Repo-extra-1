@@ -1,36 +1,82 @@
 /** Screen 3 — Statement page detection. Mirrors the wireframe's scrDetect(). */
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button, Toggle } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { SCREENS } from "./config";
-import { usePages, useProjectLoaded } from "../lib/queries";
-import { useAppLocale } from "../store";
+import {
+  useDocumentPages, usePages, useProjectLoaded, useSetDocumentScope,
+} from "../lib/queries";
+import { useAppLocale, useUI } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
+import { api } from "../lib/api";
 import { color, confStyle, font, layout, radius } from "../theme";
 import type { PageCard } from "../types";
 
-function PageCardTile({ p, t, canScope }: { p: PageCard; t: (key: string) => string; canScope: boolean }) {
+/** Rendered preview of a single PDF page (side-by-side with the page grid). Fetches the PNG
+ *  directly (like ExtractionView's PageSlot) — no bbox overlay needed here. */
+function PagePreview({ docId, pageIndex, t, onClose }:
+  { docId: string; pageIndex: number; t: (k: string) => string; onClose: () => void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let obj: string | null = null;
+    let cancelled = false;
+    setUrl(null);
+    api.fetchPageImage(docId, pageIndex)
+      .then((blob) => { if (!cancelled) { obj = URL.createObjectURL(blob); setUrl(obj); } })
+      .catch(() => {});
+    return () => { cancelled = true; if (obj) URL.revokeObjectURL(obj); };
+  }, [docId, pageIndex]);
+  return (
+    <div style={{ flex: "0 0 360px", position: "sticky", top: 0, alignSelf: "flex-start" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600 }}>{t("sc.preview")} · p.{pageIndex + 1}</span>
+        <button onClick={onClose}
+          style={{ fontSize: 11, fontWeight: 600, color: color.sec, background: "none",
+                   border: `1px solid ${color.controlBorder}`, borderRadius: 6, padding: "3px 9px", cursor: "pointer" }}>
+          {t("sc.previewClose")}
+        </button>
+      </div>
+      <div style={{ border: `1px solid ${color.cardBorder}`, borderRadius: radius.cardSm,
+                    overflow: "hidden", background: "#fff", minHeight: 200 }}>
+        {url
+          ? <img src={url} alt="" style={{ display: "block", width: "100%" }} />
+          : <div style={{ padding: 40, textAlign: "center", fontSize: 11, color: color.faint }}>…</div>}
+      </div>
+    </div>
+  );
+}
+
+function PageCardTile(
+  { p, t, canScope, included, onToggle, onSelect, selected }:
+  { p: PageCard; t: (key: string) => string; canScope: boolean;
+    included: boolean; onToggle?: () => void; onSelect?: () => void; selected?: boolean },
+) {
   const cc = confStyle(p.conf);
   const scanned = p.scan === "scanned";
   return (
     <div
       style={{
         background: color.surface,
-        border: `1.5px solid ${p.included ? color.indigo : color.cardBorder}`,
+        border: `1.5px solid ${selected ? color.indigo : included ? color.indigoBorder2 : color.cardBorder}`,
+        boxShadow: selected ? `0 0 0 2px ${color.indigoTint}` : undefined,
         borderRadius: radius.cardSm,
         overflow: "hidden",
       }}
     >
-      {/* Faux thumbnail */}
+      {/* Thumbnail — click to open the rendered preview (real documents only). */}
       <div
+        onClick={onSelect}
+        data-testid={onSelect ? "scope-page" : undefined}
         style={{
           height: 118,
           background: "#f6f7f9",
           position: "relative",
           padding: "11px 12px",
           borderBottom: `1px solid ${color.hairline3}`,
+          cursor: onSelect ? "pointer" : "default",
         }}
       >
         <div style={{ height: 6, width: "60%", background: "#dde1e7", borderRadius: 2, marginBottom: 7 }} />
@@ -76,15 +122,20 @@ function PageCardTile({ p, t, canScope }: { p: PageCard; t: (key: string) => str
             marginBottom: 5,
           }}
         >
-          <span style={{ fontSize: 11.5, fontWeight: 600, color: p.included ? color.ink : color.muted2 }}>
+          <span style={{ fontSize: 11.5, fontWeight: 600, color: included ? color.ink : color.muted2 }}>
             {p.cls}
           </span>
           <span style={{ fontSize: 10, fontFamily: font.mono, color: cc.fg }}>{cc.pct}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 10.5, color: color.muted2 }}>{p.sub}</span>
-          <span style={canScope ? undefined : { pointerEvents: "none", opacity: 0.5 }}>
-            <Toggle on={p.included} />
+          <span style={{ fontSize: 10.5, color: color.muted2 }}>
+            {included ? t("sc.inScope") : t("sc.skipped")}
+          </span>
+          <span
+            onClick={canScope && onToggle ? onToggle : undefined}
+            style={canScope && onToggle ? { cursor: "pointer" } : { pointerEvents: "none", opacity: 0.5 }}
+          >
+            <Toggle on={included} />
           </span>
         </div>
       </div>
@@ -97,15 +148,52 @@ export default function ScopeScreen() {
   const t = useT();
   const locale = useAppLocale();
   const canScope = useCan("config:scope");
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const usingReal = !!activeDocumentId;
   const loaded = useProjectLoaded();
-  const { data, isPending } = usePages(locale);
+  const realQ = useDocumentPages(activeDocumentId ?? undefined);
+  const demoQ = usePages(locale, !usingReal);
+  const data = usingReal ? realQ.data : demoQ.data;
+  const isPending = usingReal ? realQ.isPending : demoQ.isPending;
+  const setScope = useSetDocumentScope(activeDocumentId ?? undefined);
 
-  if (!loaded) return <EmptyState />;
+  // Local selection of INCLUDED page indices (0-based), synced from the fetched pages. On a
+  // real document, toggling persists the scope so extraction restricts itself to it.
+  const [selected, setSelected] = useState<Set<number> | null>(null);
+  const [filter, setFilter] = useState(0);   // active Face/Notes/Other filter chip (0 = All)
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);  // 0-based page in preview
+  useEffect(() => {
+    if (data) {
+      setSelected(new Set(data.pages.filter((p) => p.included).map((p) => p.no - 1)));
+    }
+  }, [data]);
+
+  const toggle = (idx: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev ?? []);
+      next.has(idx) ? next.delete(idx) : next.add(idx);
+      if (usingReal) setScope.mutate([...next]);
+      return next;
+    });
+  };
+
+  if (!usingReal && !loaded) return <EmptyState />;
+  if (usingReal && realQ.isError) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>
     );
   }
+
+  // Focused = the live local selection (so counts move with the toggles); fall back to the
+  // server's figure until the first sync.
+  const focused = selected ? selected.size : data.focused;
+
+  // Face / Notes / Other chips act as filters over the page grid. Filter index → page kind
+  // (0 = all). Cards without a kind (demo pages) are always shown.
+  const FILTER_KIND: (string | null)[] = [null, "face", "notes", "other"];
+  const activeKind = FILTER_KIND[Math.min(filter, FILTER_KIND.length - 1)];
+  const visiblePages = data.pages.filter((p) => !activeKind || !p.kind || p.kind === activeKind);
 
   return (
     <div style={{ maxWidth: layout.screenMaxWide, margin: "0 auto", padding: "26px 30px 60px" }}>
@@ -124,19 +212,20 @@ export default function ScopeScreen() {
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 12.5, fontWeight: 600 }}>
-            {t("sc.focused")} <span style={{ color: color.indigo }}>{data.focused} of {data.total}</span> {t("sc.pages")}
+            {t("sc.focused")} <span style={{ color: color.indigo }}>{focused} of {data.total}</span> {t("sc.pages")}
           </div>
-          <div style={{ fontSize: 11, color: color.muted }}>{data.skipped} {t("sc.pagesSkipped")}</div>
+          <div style={{ fontSize: 11, color: color.muted }}>{data.total - focused} {t("sc.pagesSkipped")}</div>
         </div>
       </div>
 
       {/* Filter chips */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         {data.filters.map((f, i) => {
-          const active = i === 0;
+          const active = i === filter;
           return (
             <span
               key={f.label}
+              onClick={() => setFilter(i)}
               style={{
                 fontSize: 11.5,
                 fontWeight: 600,
@@ -154,17 +243,34 @@ export default function ScopeScreen() {
         })}
       </div>
 
-      {/* Page grid */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill,minmax(158px,1fr))",
-          gap: 14,
-        }}
-      >
-        {data.pages.map((p) => (
-          <PageCardTile key={p.no} p={p} t={t} canScope={canScope} />
-        ))}
+      {/* Page grid (+ side-by-side rendered preview when a page is selected on a real doc) */}
+      <div style={{ display: "flex", gap: 18, alignItems: "flex-start" }}>
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill,minmax(158px,1fr))",
+            gap: 14,
+          }}
+        >
+          {visiblePages.map((p) => (
+            <PageCardTile
+              key={p.no}
+              p={p}
+              t={t}
+              canScope={canScope && usingReal}
+              included={selected ? selected.has(p.no - 1) : p.included}
+              onToggle={() => toggle(p.no - 1)}
+              onSelect={usingReal ? () => setPreviewIndex(p.no - 1) : undefined}
+              selected={previewIndex === p.no - 1}
+            />
+          ))}
+        </div>
+        {usingReal && activeDocumentId && previewIndex !== null && (
+          <PagePreview docId={activeDocumentId} pageIndex={previewIndex} t={t}
+                       onClose={() => setPreviewIndex(null)} />
+        )}
       </div>
 
       {/* Footer */}
@@ -172,8 +278,8 @@ export default function ScopeScreen() {
         <Button variant="secondary" onClick={() => nav(SCREENS.integrity.path)}>
           ← {t("sc.back")}
         </Button>
-        <Button onClick={() => nav(SCREENS.workspace.path)}>
-          {t("sc.extract")} {data.focused} {t("sc.pages")} →
+        <Button onClick={() => nav(usingReal ? `/documents/${activeDocumentId}` : SCREENS.workspace.path)}>
+          {t("sc.extract")} {focused} {t("sc.pages")} →
         </Button>
       </div>
     </div>

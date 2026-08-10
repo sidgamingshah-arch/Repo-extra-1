@@ -78,6 +78,19 @@ _LLM_SYSTEM = (
 )
 
 
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity of two equal-length vectors; 0 for a zero or mismatched vector."""
+    n = min(len(a), len(b))
+    if n == 0:
+        return 0.0
+    dot = sum(a[i] * b[i] for i in range(n))
+    na = sum(x * x for x in a[:n]) ** 0.5
+    nb = sum(x * x for x in b[:n]) ** 0.5
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
 def normalize_label(text: str) -> str:
     """Lowercase, strip accents/punctuation, collapse whitespace (locale-agnostic)."""
     text = unicodedata.normalize("NFKD", text)
@@ -138,6 +151,8 @@ class OntologyMatcher:
         self._alias_index: dict[str, str] = {}
         self._alias_by_key: dict[str, list[str]] = {}
         self._by_key: dict[str, OntologyMapping] = {}
+        # Alias embeddings, indexed by canonical key — computed lazily on first embedding use.
+        self._alias_vecs: list[tuple[str, list[float]]] | None = None
         for m in ontology.mappings:
             self._by_key[m.canonical_key] = m
             aliases = m.aliases_for(self.locale)
@@ -184,16 +199,49 @@ class OntologyMatcher:
         out.sort(key=lambda c: c.score, reverse=True)
         return out
 
+    def _ensure_alias_embeddings(self) -> None:
+        """Embed every alias once (lazily) and index it by canonical key. Cached for the life
+        of the matcher so a batch of captions reuses the same alias vectors."""
+        if self._alias_vecs is not None:
+            return
+        pairs = [(key, alias) for key, aliases in self._alias_by_key.items()
+                 for alias in aliases if alias]
+        if not pairs:
+            self._alias_vecs = []
+            return
+        vectors = self.embedding_provider.embed([a for _k, a in pairs])
+        indexed: list[tuple[str, list[float]]] = []
+        for (key, _alias), vec in zip(pairs, vectors):
+            if vec:
+                indexed.append((key, list(vec)))
+        self._alias_vecs = indexed
+
     def _embedding(self, raw: str) -> list[Candidate]:
+        """Cosine similarity of the raw caption against alias embeddings — catches paraphrases
+        with no shared tokens ("Cash & bank balances" ↔ "Cash and cash equivalents"). Returns
+        the best-scoring candidate per canonical key. A provider that is absent, unimplemented,
+        or errors just yields no evidence so the rest of the ensemble carries on."""
         if self.embedding_provider is None:
             return []
-        # Real impl: cosine similarity of raw vs alias embeddings. Deferred to the
-        # embedding adapter; returns [] when unavailable so the cascade continues.
         try:
-            self.embedding_provider.embed([raw])
-        except NotImplementedError:
+            self._ensure_alias_embeddings()
+            if not self._alias_vecs:
+                return []
+            query = self.embedding_provider.embed([raw])
+        except Exception:  # noqa: BLE001 — NotImplementedError / provider unreachable
             return []
-        return []
+        if not query or not query[0]:
+            return []
+        qv = list(query[0])
+        best: dict[str, float] = {}
+        for key, vec in self._alias_vecs:
+            score = _cosine(qv, vec)
+            if score > best.get(key, -1.0):
+                best[key] = score
+        out = [Candidate(k, MappingMethod.EMBEDDING, max(0.0, min(1.0, s)))
+               for k, s in best.items()]
+        out.sort(key=lambda c: c.score, reverse=True)
+        return out
 
     def _build_system(self) -> str:
         """Base instruction + the ontology's global extraction policies + worked examples."""
@@ -361,23 +409,38 @@ class OntologyMatcher:
                 )
 
         # 4. Deterministic decision (no LLM configured, or the LLM abstained).
+        #    Fuzzy is a LAST RESORT. A fuzzy score measures string overlap, not meaning, so
+        #    letting it auto-map floods the review queue with shaky guesses. Decide from the
+        #    "meaningful" methods first (exact already returned above; then rule, then
+        #    embedding). Only if they produce nothing do we consult fuzzy — and even then
+        #    only when the match is essentially an exact string hit (>= fuzzy_accept);
+        #    anything weaker is left unmapped for a human rather than guessed.
         if rule and rule.score >= 0.9:
             return MappingResult(rule.canonical_key, rule.method, rule.score, [rule], False,
                                  {**scores, "rule": rule.score}, allocation_status="direct_exclusive")
-        if not ranked:
-            return MappingResult(None, MappingMethod.UNMATCHED, 0.0, [], True, scores,
-                                 allocation_status="unmapped_review")
-        top = ranked[0]
-        runner = ranked[1].score if len(ranked) > 1 else 0.0
-        margin = top.score - runner
-        accept = (top.score >= s.extraction.fuzzy_accept
-                  and margin >= s.extraction.mapping_margin
-                  and top.score >= s.extraction.auto_accept_confidence)
-        return MappingResult(
-            canonical_key=top.canonical_key, method=top.method, confidence=top.score,
-            candidates=ranked[:5], needs_review=not accept, scores=scores,
-            allocation_status="direct_exclusive" if accept else "unmapped_review",
-        )
+
+        primary = [c for c in ranked if c.method in (MappingMethod.RULE, MappingMethod.EMBEDDING)]
+        if primary:
+            top = primary[0]
+            runner = primary[1].score if len(primary) > 1 else 0.0
+            accept = (top.score >= s.extraction.auto_accept_confidence
+                      and (top.score - runner) >= s.extraction.mapping_margin)
+            return MappingResult(
+                canonical_key=top.canonical_key, method=top.method, confidence=top.score,
+                candidates=primary[:5], needs_review=not accept, scores=scores,
+                allocation_status="direct_exclusive" if accept else "unmapped_review",
+            )
+
+        # Last resort: fuzzy only, and only when it is essentially certain.
+        fuzzy_top = fuzzy[0] if fuzzy else None
+        if fuzzy_top and fuzzy_top.score >= s.extraction.fuzzy_accept:
+            return MappingResult(
+                canonical_key=fuzzy_top.canonical_key, method=MappingMethod.FUZZY,
+                confidence=fuzzy_top.score, candidates=fuzzy[:5], needs_review=False,
+                scores=scores, allocation_status="direct_exclusive")
+        # Nothing confident — do NOT emit a low-confidence fuzzy guess; route to review unmapped.
+        return MappingResult(None, MappingMethod.UNMATCHED, 0.0, ranked[:5], True, scores,
+                             allocation_status="unmapped_review")
 
     def match_batch(self, items: list[tuple[str, str]]) -> dict[str, MappingResult]:
         """Per-statement mapping: decide ALL captions in one grounded LLM call so

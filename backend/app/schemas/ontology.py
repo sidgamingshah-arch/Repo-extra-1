@@ -102,6 +102,28 @@ class DecompositionRule(BaseModel):
     tolerance_rel: float = 0.001
 
 
+class NettingRule(BaseModel):
+    """A GENERIC containment-netting policy: a face line MAY be reported inclusive of other lines
+    (e.g. a cost of sales stated inclusive of administrative / selling & marketing expenses), and
+    when it is, the clean figure nets them out — ``net = target − Σ subtract + Σ add`` (signed, so
+    it works whether expenses are stored negative or positive), with the formula surfaced.
+
+    It is NOT applied unconditionally. ``condition`` is a natural-language test an LLM evaluates
+    against the actual document first; only when the model confirms the containment (and which of
+    the candidate lines are truly included) is the deterministic arithmetic applied. So the policy
+    can ship for every template yet stay silent on filings where it doesn't hold (e.g. a property
+    developer whose cost of sales excludes admin/S&M). ``subtract_keys``/``add_keys`` are the
+    CANDIDATE lines the model chooses from; the math itself stays deterministic and non-destructive
+    (the raw figure is retained for audit)."""
+
+    id: str
+    target_key: str
+    subtract_keys: list[str] = Field(default_factory=list)   # candidate lines possibly contained
+    add_keys: list[str] = Field(default_factory=list)
+    condition: str = ""                     # NL test the LLM evaluates before applying
+    label: str = ""                         # human explanation of the policy
+
+
 class GlobalRules(BaseModel):
     credit_balance_lines: list[str] = Field(default_factory=list)  # key globs
     paren_means_negative: bool = True
@@ -148,6 +170,8 @@ class OntologyDefinition(BaseModel):
     metadata: OntologyMetadata | None = None
     mappings: list[OntologyMapping] = Field(default_factory=list)
     decomposition_rules: list[DecompositionRule] = Field(default_factory=list)
+    # Face-line containment netting (e.g. cost of sales stated inclusive of admin / S&M).
+    netting_rules: list[NettingRule] = Field(default_factory=list)
     global_rules: GlobalRules = Field(default_factory=GlobalRules)
     worked_examples: list[WorkedExample] = Field(default_factory=list)
 

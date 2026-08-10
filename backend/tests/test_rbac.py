@@ -16,7 +16,11 @@ def test_login_issues_token_and_scopes_analyst(anon_client):
     me = anon_client.get("/api/v1/me", headers={"Authorization": f"Bearer {tok}"}).json()
     assert me["authenticated"] is True and me["role"] == "analyst" and me["via"] == "session"
     assert "workspace" in me["screens"] and "commentary" in me["screens"]
+    # Configuration screens (Template & Ontology authoring, Settings) are admin-only. The
+    # analyst still selects a template on the Upload screen (template:select), but the
+    # authoring/config screen is hidden from their nav.
     assert "template" not in me["screens"] and "settings" not in me["screens"]
+    assert "template:select" in me["permissions"]
     assert "config:template" not in me["permissions"]
 
 
@@ -43,6 +47,7 @@ def test_me_admin_sees_config(auth, anon_client):
 
 def test_reviewer_finalizes_but_does_not_configure(auth, anon_client):
     me = anon_client.get("/api/v1/me", headers=auth("reviewer")).json()
+    # Reviewer works from an already-configured extraction — no template screen at all.
     assert "review" in me["screens"] and "template" not in me["screens"]
     # Reviewer reviews & finalizes and can deliver, but does no configuration.
     assert "review:finalize" in me["permissions"]
@@ -71,14 +76,19 @@ def test_demo_users_listed_without_secrets(anon_client):
     assert all("password" not in u for u in body["users"])
 
 
-def test_template_config_requires_admin(auth, anon_client):
-    # Unauthenticated → 401; reviewer → 403; admin → 200.
+def test_template_read_is_open_but_authoring_requires_admin(auth, anon_client):
+    # Viewing the template tree is reference info for any authenticated worker:
+    # unauthenticated → 401; analyst/reviewer/admin → 200.
     assert anon_client.get("/api/v1/projects/demo/template").status_code == 401
-    assert anon_client.get("/api/v1/projects/demo/template", headers=auth("reviewer")).status_code == 403
+    assert anon_client.get("/api/v1/projects/demo/template", headers=auth("analyst")).status_code == 200
+    assert anon_client.get("/api/v1/projects/demo/template", headers=auth("reviewer")).status_code == 200
     assert anon_client.get("/api/v1/projects/demo/template", headers=auth("admin")).status_code == 200
 
+    # Authoring a template stays admin-only: anon → 401, analyst → 403, admin → 201.
     tpl = {"template_key": "rbac_t", "name": "T", "statements": []}
     assert anon_client.post("/api/v1/templates", json={"definition": tpl}).status_code == 401
+    assert anon_client.post("/api/v1/templates", json={"definition": tpl},
+                            headers=auth("analyst")).status_code == 403
     assert anon_client.post("/api/v1/templates", json={"definition": tpl},
                             headers=auth("admin")).status_code == 201
 

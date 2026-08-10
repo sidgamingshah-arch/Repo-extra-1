@@ -3,7 +3,7 @@
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "../components/ui";
-import { useReview, useProjectLoaded } from "../lib/queries";
+import { useDocumentReview, useReview, useProjectLoaded } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { SCREENS } from "./config";
 import { useAppLocale, useUI } from "../store";
@@ -23,13 +23,20 @@ export default function ReviewScreen() {
   const t = useT();
   const locale = useAppLocale();
   const canResolve = useCan("review:resolve");
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const usingReal = !!activeDocumentId;
   const loaded = useProjectLoaded();
-  const { data, isPending } = useReview(locale);
+  const realQ = useDocumentReview(activeDocumentId ?? undefined, locale);
+  const demoQ = useReview(locale, !usingReal);
+  const data = usingReal ? realQ.data : demoQ.data;
+  const isPending = usingReal ? realQ.isPending : demoQ.isPending;
   const openCheck = useUI((s) => s.openCheck);
   const toggleCheck = useUI((s) => s.toggleCheck);
   const navigate = useNavigate();
 
-  if (!loaded) return <EmptyState />;
+  // No real document and no admin-seeded demo → greenfield guidance.
+  if (!usingReal && !loaded) return <EmptyState />;
+  if (usingReal && realQ.isError) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 60, textAlign: "center", color: color.muted, fontSize: 13 }}>

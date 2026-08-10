@@ -66,3 +66,89 @@ def get_template(template_id: str, session: Session = Depends(db)) -> dict:
         raise HTTPException(status_code=404, detail="Template not found")
     return {"id": row.id, "template_key": row.template_key, "version": row.version,
             "definition": row.definition}
+
+
+_SIGN_UI = {"natural": "as_reported", "as_reported": "as_reported",
+            "contra": "expense_contra", "expense_contra": "expense_contra",
+            "expense_negative": "expense_contra"}
+
+
+def _loc(node: dict, locale: str) -> str:
+    return (node.get("label_i18n") or {}).get(locale) or node.get("label") or ""
+
+
+@router.get("/{template_id}/detail")
+def get_template_detail(template_id: str, locale: str = "en",
+                        session: Session = Depends(db)) -> dict:
+    """Render a REAL configured template into the tree + per-node config the Template &
+    Ontology screen shows — so an admin sees the seeded/authored template instead of an
+    empty screen (the demo-bound view only ever showed demo data). Aliases, sign convention
+    and any note-decomposition rule are pulled from the ontology that targets this template."""
+    from app.db.models import OntologyVersion, TemplateVersion
+
+    row = session.get(TemplateVersion, template_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    tdef = row.definition or {}
+
+    # The ontology that targets this template (latest version) supplies aliases/sign/netting.
+    from app.schemas.loader import load_ontology
+
+    ont_row = session.execute(
+        select(OntologyVersion)
+        .where(OntologyVersion.target_template_key == row.template_key)
+        .order_by(OntologyVersion.version.desc())
+    ).scalars().first()
+    by_key = {}
+    netting_rules: list[dict] = []
+    if ont_row:
+        try:
+            ont = load_ontology(ont_row.definition)
+            for m in ont.mappings:
+                by_key[m.canonical_key] = m
+            # Generic containment-netting policies (LLM-gated) — surfaced for the admin to review.
+            def _lbl(k: str) -> str:
+                mm = by_key.get(k)
+                return (mm.label if mm and mm.label else k.replace("_", " "))
+            for nr in ont.netting_rules:
+                netting_rules.append({
+                    "id": nr.id, "target_key": nr.target_key, "target_label": _lbl(nr.target_key),
+                    "subtract": [{"key": k, "label": _lbl(k)} for k in nr.subtract_keys],
+                    "add": [{"key": k, "label": _lbl(k)} for k in nr.add_keys],
+                    "condition": nr.condition, "label": nr.label,
+                })
+        except Exception:  # noqa: BLE001 — a malformed ontology shouldn't blank the screen
+            by_key = {}
+
+    tree: list[dict] = []
+    node_config: dict[str, dict] = {}
+    leaves = 0
+    for stmt in tdef.get("statements", []):
+        stmt_label = _loc(stmt, locale) or str(stmt.get("type", "")).replace("_", " ").title()
+        tree.append({"id": f"stmt:{stmt.get('type')}", "label": stmt_label, "lvl": 0, "head": True})
+        for sec in stmt.get("sections", []):
+            sec_label = _loc(sec, locale)
+            tree.append({"id": f"sec:{sec.get('node_id', sec_label)}", "label": sec_label,
+                         "lvl": 1, "head": True})
+            for child in sec.get("children", []):
+                key = child.get("canonical_key")
+                if not key:
+                    continue
+                leaves += 1
+                m = by_key.get(key)
+                decomp = getattr(m, "decomposition_rule", None) if m else None
+                tree.append({"id": key, "label": _loc(child, locale), "lvl": 2,
+                             "rule": bool(decomp)})
+                node_config[key] = {
+                    "breadcrumb": f"{stmt_label} / {sec_label}",
+                    "label": _loc(child, locale),
+                    "aliases": (m.aliases_for(locale) if m else [])[:12],
+                    "sign": _SIGN_UI.get(str(child.get("sign", "natural")), "auto"),
+                    "value_type": "Monetary",
+                    "aggregation": "Sum of children" if child.get("role") in ("subtotal", "total")
+                                   else "Direct value",
+                    "netting": {"expr": "", "explain": decomp or "No note-decomposition rule for this concept."},
+                }
+
+    return {"tree": tree, "node_config": node_config, "netting_rules": netting_rules,
+            "template": {"key": row.template_key, "name": row.name, "line_items": leaves}}

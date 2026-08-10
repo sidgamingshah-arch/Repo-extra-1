@@ -36,3 +36,6 @@ playwright-report/
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code local state + agent worktrees (never tracked)
+.claude/

@@ -23,6 +23,8 @@ def list_languages(
 ) -> dict:
     from app.db.models import OntologyVersion, TemplateVersion
 
+    from sqlalchemy import select
+
     template = None
     ontology = None
     if template_version_id:
@@ -31,6 +33,24 @@ def list_languages(
             template = load_template(row.definition)
     if ontology_version_id:
         row = session.get(OntologyVersion, ontology_version_id)
+        if row:
+            ontology = load_ontology(row.definition)
+
+    # No explicit config → evaluate parity against the latest seeded template + a matching
+    # ontology, so the default call reports the real supported set (not an all-False collapse
+    # that the UI would otherwise have to paper over).
+    if template is None:
+        row = session.execute(
+            select(TemplateVersion).order_by(TemplateVersion.version.desc())
+        ).scalars().first()
+        if row:
+            template = load_template(row.definition)
+    if ontology is None and template is not None:
+        row = session.execute(
+            select(OntologyVersion)
+            .where(OntologyVersion.target_template_key == template.template_key)
+            .order_by(OntologyVersion.version.desc())
+        ).scalars().first()
         if row:
             ontology = load_ontology(row.definition)
 

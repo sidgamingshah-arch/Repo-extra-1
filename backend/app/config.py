@@ -78,9 +78,21 @@ class LlmSettings(BaseModel):
 
 
 class OcrSettings(BaseModel):
-    engine: str = "stub"              # paddleocr | tesseract | stub
+    # docling = recommended free, pip-only engine (layout + OCR + tables, no system binary);
+    # azure = Azure AI Document Intelligence (cloud layout+OCR+tables); paddleocr / tesseract
+    # are alternatives. Default stays "stub" so the app runs offline with zero external
+    # services; set the engine (and provide its config/extra) for scanned docs.
+    engine: str = "stub"              # docling | azure | paddleocr | tesseract | stub
     languages: list[str] = Field(default_factory=lambda: ["en"])
     dpi: int = 300
+
+    # Azure AI Document Intelligence (used when engine = "azure"). The resource endpoint
+    # and model are config; the key is read at call time from the env var named below, so
+    # the secret never lives in config or the UI (same policy as the LLM key).
+    azure_endpoint: str = ""                          # e.g. https://<resource>.cognitiveservices.azure.com
+    azure_model: str = "prebuilt-layout"              # prebuilt-layout | prebuilt-read
+    azure_api_version: str = "2024-11-30"
+    azure_api_key_env: str = "AZURE_DI_KEY"
 
 
 class EmbeddingSettings(BaseModel):

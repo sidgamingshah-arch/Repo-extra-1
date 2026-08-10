@@ -2,18 +2,24 @@
  * output panel with a cell inspector (right). Full-height flex layout, not a padded page.
  * Mirrors wireframe scrExtract + OUTPUT + SELINFO verbatim, data-driven from useStatement. */
 import { useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
+import { ExcelGrid, PageStack, toPicked, type Picked } from "../components/SourceViewer";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
-import type { Basis, StatementResponse, StatementRow } from "../types";
-import { useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
+import type { Basis, StatementKey, StatementResponse, StatementRow } from "../types";
+import { useDocumentStatement, useEditDocumentLineItem, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
 import { SCREENS } from "./config";
 
-/* ---- toolbar labelled field chip (matches wireframe inline chip) ---- */
+/* Very light vertical column divider for the output grid (subtle table gridlines). */
+const COL_DIVIDER = "rgba(37,45,60,0.07)";
+const colDiv: CSSProperties = { borderLeft: `1px solid ${COL_DIVIDER}` };
+
+/* ---- toolbar labelled field chip (display-only; e.g. currency is source-derived) ---- */
 function ToolChip({ label, value }: { label: string; value: string }) {
   return (
     <div
@@ -26,13 +32,61 @@ function ToolChip({ label, value }: { label: string; value: string }) {
         border: `1px solid ${color.cardBorder}`,
         borderRadius: radius.control,
         padding: "6px 11px",
-        cursor: "pointer",
       }}
     >
       <span style={{ color: color.muted }}>{label}</span>
       <span style={{ fontWeight: 600 }}>{value}</span>
-      <span style={{ color: color.faint }}>▾</span>
     </div>
+  );
+}
+
+/* ---- toolbar labelled <select> chip (interactive; e.g. units presentation) ---- */
+function ToolSelect<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 12,
+        color: color.sec,
+        border: `1px solid ${color.cardBorder}`,
+        borderRadius: radius.control,
+        padding: "5px 9px 5px 11px",
+      }}
+    >
+      <span style={{ color: color.muted }}>{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as T)}
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          fontFamily: font.sans,
+          color: color.ink,
+          border: "none",
+          outline: "none",
+          background: "transparent",
+          cursor: "pointer",
+        }}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -81,19 +135,54 @@ function PaperRow({ row, selected }: { row: StatementRow; selected: boolean }) {
   );
 }
 
+/* Scale a value for the chosen units presentation (display only; raw stays for editing). */
+function scaleFmt(n: number | null, scale: number): string {
+  if (n == null) return "";
+  if (scale <= 1) return fmtIN(n);
+  const dp = scale >= 1e6 ? 2 : 0;
+  return fmtIN(Number((n / scale).toFixed(dp)));
+}
+
+/* Small click-to-source chip on a value → drives the live document viewer. */
+function ValueSourceChip({ source, onPick }: {
+  source: StatementRow["source"]; onPick: () => void;
+}) {
+  if (!source) return null;
+  const label = source.source_kind === "spreadsheet" && source.sheet
+    ? `${source.sheet}!${source.cell ?? ""}`
+    : `p.${(source.page_index ?? 0) + 1}${source.bbox ? " ⤢" : ""}`;
+  return (
+    <span
+      onClick={(e) => { e.stopPropagation(); onPick(); }}
+      role="button"
+      title={source.text_snippet ?? "Show source"}
+      style={{
+        fontFamily: font.mono, fontSize: 9.5, color: color.indigo, background: color.indigoTint2,
+        borderRadius: 5, padding: "1px 5px", cursor: "pointer", whiteSpace: "nowrap", flex: "0 0 auto",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
 /* ---- right output-panel row ---- */
 function OutputRow({
   row,
   sel,
+  unitScale,
   onSelect,
   onEdit,
   onOpenNote,
+  onPickSource,
 }: {
   row: StatementRow;
   sel: string;
+  unitScale: number;
   onSelect: (id: string) => void;
   onEdit: (id: string) => void;
   onOpenNote: (ref: string) => void;
+  onPickSource?: (row: StatementRow) => void;
 }) {
   const k = row.kind;
   const isSection = k === "section";
@@ -116,9 +205,10 @@ function OutputRow({
   const vwt = isSt || isTot ? 600 : selected ? 600 : 400;
   const vfg = isTot ? color.indigo : color.ink;
   const showV = isItem || isSt || isTot;
-  const v1 = showV ? fmtIN(row.v1) : "";
-  const v2 = showV ? fmtIN(row.v2) : "";
-  const note2 = row.note2 != null ? row.note2 : row.note;
+  const v1 = showV ? scaleFmt(row.v1, unitScale) : "";
+  const v2 = showV ? scaleFmt(row.v2, unitScale) : "";
+  const note = row.note ?? row.note2;   // single NOTE column (was duplicated per period)
+  const canSource = isItem && !!row.source && !!onPickSource;
 
   return (
     <div
@@ -126,7 +216,7 @@ function OutputRow({
       style={{
         display: "grid",
         gridTemplateColumns: layout.gridCols,
-        alignItems: "center",
+        alignItems: "stretch",
         padding: "0 16px",
         height: h,
         borderBottom: `1px solid ${color.hairline}`,
@@ -150,42 +240,45 @@ function OutputRow({
         </span>
         <StatusIcon status={row.status} />
       </div>
-      <div style={{ textAlign: "center" }}>
-        {row.note ? (
-          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(row.note!); }}>{row.note}</NoteChip>
+      <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {note ? (
+          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(note!); }}>{note}</NoteChip>
         ) : null}
       </div>
       {isItem ? (
         <span
-          onClick={(e) => {
-            e.stopPropagation();
-            onEdit(row.id);
-          }}
-          title="Click to edit value"
           style={{
-            textAlign: "right",
+            ...colDiv,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 6,
             fontFamily: font.mono,
             fontSize: 12,
             fontWeight: vwt,
             color: vfg,
-            cursor: "text",
-            borderBottom: `1px dashed ${selected ? color.indigo : "transparent"}`,
           }}
         >
-          {v1}
+          {canSource && (
+            <ValueSourceChip source={row.source} onPick={() => onPickSource!(row)} />
+          )}
+          <span
+            onClick={(e) => { e.stopPropagation(); onEdit(row.id); }}
+            title="Click to edit value"
+            style={{ cursor: "text", borderBottom: `1px dashed ${selected ? color.indigo : "transparent"}` }}
+          >
+            {v1}
+          </span>
         </span>
       ) : (
-        <span style={{ textAlign: "right", fontFamily: font.mono, fontSize: 12, fontWeight: vwt, color: vfg }}>
+        <span style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end",
+                       fontFamily: font.mono, fontSize: 12, fontWeight: vwt, color: vfg }}>
           {v1}
         </span>
       )}
-      <div style={{ textAlign: "center" }}>
-        {note2 ? (
-          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(note2!); }}>{note2}</NoteChip>
-        ) : null}
-      </div>
-      <span style={{ textAlign: "right", fontFamily: font.mono, fontSize: 12, color: color.muted }}>{v2}</span>
-      <div style={{ textAlign: "right" }}>
+      <span style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end",
+                     fontFamily: font.mono, fontSize: 12, color: color.muted }}>{v2}</span>
+      <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
         {row.confidence ? <ConfidencePill cat={row.confidence.cat} /> : null}
       </div>
     </div>
@@ -303,8 +396,10 @@ function InspectorEditor({
 export default function WorkspaceScreen() {
   const navigate = useNavigate();
   const t = useT();
-  const { locale, dataset, setDataset, statement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing, setNote } =
+  const { locale, dataset, setDataset, statement, setStatement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing, setNote } =
     useUI();
+  // Units presentation is a display-only scale (raw values stay intact for editing/formulas).
+  const [unitScale, setUnitScale] = useState(1);
   // Open a note reference: select it and jump to the All Notes screen.
   const openNote = (ref: string) => {
     const n = parseInt(ref, 10);
@@ -313,16 +408,38 @@ export default function WorkspaceScreen() {
       navigate(SCREENS.notes.path);
     }
   };
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const usingReal = !!activeDocumentId;
+  const editable = true;   // both the demo and the real workspace support value editing
   const loaded = useProjectLoaded();
-  const { data, isPending } = useStatement(statement, dataset, locale);
+  const realQ = useDocumentStatement(activeDocumentId ?? undefined, statement, dataset, locale);
+  const demoQ = useStatement(statement, dataset, locale, !usingReal);
+  const data = usingReal ? realQ.data : demoQ.data;
+  const isPending = usingReal ? realQ.isPending : demoQ.isPending;
   const editMut = useEditLineItem();
+  const realEditMut = useEditDocumentLineItem(activeDocumentId ?? undefined);
+  const realRevertMut = useRevertDocumentLineItem(activeDocumentId ?? undefined);
+  // The value's source location for the live viewer — set when a row is selected (real docs).
+  const [picked, setPicked] = useState<Picked | null>(null);
 
-  if (!loaded) return <EmptyState />;
+  if (!usingReal && !loaded) return <EmptyState />;
+  if (usingReal && realQ.isError) return <EmptyState />;   // uploaded but not extracted yet
   if (isPending || !data) {
     return <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>;
   }
 
   const d: StatementResponse = data;
+  // Selecting a row also drives the live source viewer: resolve the row's provenance to a pick
+  // so the document scrolls to and highlights the value's page+bbox (PDF) or cell (Excel).
+  const handleSelect = (id: string) => {
+    selRow(id);
+    if (usingReal) {
+      const row = d.rows.find((r) => r.id === id);
+      const p = toPicked(row?.source ?? null, row?.label ?? "");
+      if (p) setPicked(p);
+    }
+  };
+  const lowConfCount = d.rows.filter((r) => r.confidence?.cat === "low").length;
   const selRowObj = d.rows.find((r) => r.id === sel) ?? d.rows.find((r) => r.inspector);
   const insp = selRowObj?.inspector;
   const isEdited = selRowObj?.status === "edited";
@@ -350,9 +467,27 @@ export default function WorkspaceScreen() {
           value={dataset}
           onChange={setDataset}
         />
-        <ToolChip label={t("ws.statement")} value={d.label} />
+        <Segmented<StatementKey>
+          options={[
+            { value: "balance_sheet", label: t("ws.stmt.balance_sheet") },
+            { value: "profit_and_loss", label: t("ws.stmt.profit_and_loss") },
+            { value: "cash_flow", label: t("ws.stmt.cash_flow") },
+          ]}
+          value={statement}
+          onChange={setStatement}
+        />
         <ToolChip label={t("ws.currency")} value={`${d.currency} ${d.currency_symbol}`} />
-        <ToolChip label={t("ws.units")} value={d.units} />
+        <ToolSelect<string>
+          label={t("ws.units")}
+          value={String(unitScale)}
+          options={[
+            { value: "1", label: t("ws.units.as_reported") },
+            { value: "1000", label: t("ws.units.thousands") },
+            { value: "1000000", label: t("ws.units.millions") },
+            { value: "1000000000", label: t("ws.units.billions") },
+          ]}
+          onChange={(v) => setUnitScale(Number(v))}
+        />
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9 }}>
           <span
             style={{
@@ -365,21 +500,23 @@ export default function WorkspaceScreen() {
               cursor: "pointer",
             }}
           >
-            3 {t("ws.lowconf")}
+            {usingReal ? lowConfCount : 3} {t("ws.lowconf")}
           </span>
-          <span
-            style={{
-              fontSize: 11.5,
-              color: color.amberFg,
-              fontWeight: 600,
-              background: color.amberBg,
-              padding: "5px 10px",
-              borderRadius: radius.pill,
-              cursor: "pointer",
-            }}
-          >
-            2 {t("ws.unreconciled")}
-          </span>
+          {!usingReal && (
+            <span
+              style={{
+                fontSize: 11.5,
+                color: color.amberFg,
+                fontWeight: 600,
+                background: color.amberBg,
+                padding: "5px 10px",
+                borderRadius: radius.pill,
+                cursor: "pointer",
+              }}
+            >
+              2 {t("ws.unreconciled")}
+            </span>
+          )}
           <button
             onClick={() => navigate(SCREENS.export.path)}
             style={{
@@ -422,7 +559,7 @@ export default function WorkspaceScreen() {
               flex: "0 0 auto",
             }}
           >
-            <span style={{ fontSize: 11.5, fontWeight: 600 }}>AnnualReport_RIL_FY25.pdf</span>
+            <span style={{ fontSize: 11.5, fontWeight: 600 }}>{d.viewer.company}</span>
             <div style={{ display: "flex", gap: 4, marginLeft: 6 }}>
               {d.viewer.chips.map((c) => (
                 <span
@@ -456,6 +593,17 @@ export default function WorkspaceScreen() {
               <span style={{ cursor: "pointer" }}>+</span>
             </div>
           </div>
+          {usingReal && d.format === "pdf" && activeDocumentId ? (
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12, background: "#e9ebef" }}>
+              <PageStack documentId={activeDocumentId} pageCount={d.page_count ?? 1}
+                         picked={picked?.kind === "pdf" ? picked : null} maxHeight="100%" />
+            </div>
+          ) : usingReal && (d.format === "xlsx" || d.format === "xls") && activeDocumentId ? (
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12, background: "#fff" }}>
+              <ExcelGrid documentId={activeDocumentId}
+                         picked={picked?.kind === "xlsx" ? picked : null} t={t} />
+            </div>
+          ) : (
           <div style={{ flex: 1, overflow: "auto", padding: 22, display: "flex", justifyContent: "center" }}>
             <div
               style={{
@@ -508,6 +656,7 @@ export default function WorkspaceScreen() {
               </div>
             </div>
           </div>
+          )}
         </div>
 
         {/* -------- RIGHT: output panel -------- */}
@@ -537,17 +686,21 @@ export default function WorkspaceScreen() {
             }}
           >
             <span>{t("col.lineitem")}</span>
-            <span style={{ textAlign: "center" }}>{t("col.note")}</span>
-            <span style={{ textAlign: "right" }}>{d.periods[0]}</span>
-            <span style={{ textAlign: "center" }}>{t("col.note")}</span>
-            <span style={{ textAlign: "right" }}>{d.periods[1]}</span>
-            <span style={{ textAlign: "right" }}>{t("col.conf")}</span>
+            <span style={{ textAlign: "center", ...colDiv }}>{t("col.note")}</span>
+            <span style={{ textAlign: "right", ...colDiv }}>{d.periods[0]}</span>
+            <span style={{ textAlign: "right", ...colDiv }}>{d.periods[1]}</span>
+            <span style={{ textAlign: "right", ...colDiv }}>{t("col.conf")}</span>
           </div>
 
           {/* scroll body */}
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {d.rows.map((r) => (
-              <OutputRow key={r.id} row={r} sel={sel} onSelect={selRow} onEdit={selForEdit} onOpenNote={openNote} />
+              <OutputRow key={r.id} row={r} sel={sel} unitScale={unitScale} onSelect={handleSelect}
+                         onEdit={editable ? selForEdit : () => {}} onOpenNote={openNote}
+                         onPickSource={usingReal ? (row) => {
+                           const p = toPicked(row.source ?? null, row.label);
+                           if (p) setPicked(p);
+                         } : undefined} />
             ))}
           </div>
 
@@ -603,7 +756,19 @@ export default function WorkspaceScreen() {
                 <span style={{ fontSize: 11, color: color.muted, fontFamily: font.mono }}>
                   source: {insp?.src ?? ""}
                 </span>
-                {!editing && (
+                {!editing && usingReal && selRowObj?.status === "edited" && (
+                  <button
+                    onClick={() => selRowObj && realRevertMut.mutate(selRowObj.id)}
+                    style={{
+                      fontSize: 11, fontWeight: 600, color: color.sec2, background: "#fff",
+                      border: `1px solid ${color.controlBorder}`, borderRadius: radius.controlSm,
+                      padding: "5px 11px", cursor: "pointer",
+                    }}
+                  >
+                    ↺ Revert
+                  </button>
+                )}
+                {!editing && editable && (
                   <button
                     onClick={startEdit}
                     style={{
@@ -623,12 +788,13 @@ export default function WorkspaceScreen() {
               </div>
             </div>
 
-            {editing && selRowObj ? (
+            {editing && editable && selRowObj ? (
               <InspectorEditor
                 key={selRowObj.id}
                 row={selRowObj}
                 onSave={(value, formula) => {
-                  editMut.mutate({ id: selRowObj.id, value, formula });
+                  if (usingReal) realEditMut.mutate({ key: selRowObj.id, value, formula });
+                  else editMut.mutate({ id: selRowObj.id, value, formula });
                   stopEditing();
                 }}
                 onCancel={cancelEdit}

@@ -14,6 +14,8 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.linked": "· linked to",
     "n.onFace": "on the face of the Balance Sheet",
     "n.reconciliation": "Note-to-face reconciliation.",
+    "n.sourceView": "Annual report",
+    "n.sourcePage": "Page",
   },
   zh: {
     "n.heading": "已提取附注",
@@ -28,6 +30,8 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.linked": "· 关联至",
     "n.onFace": "资产负债表表内项目",
     "n.reconciliation": "附注与表内核对。",
+    "n.sourceView": "年度报告",
+    "n.sourcePage": "第",
   },
   ar: {
     "n.heading": "الإيضاحات المستخرجة",
@@ -42,6 +46,8 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.linked": "· مرتبط بـ",
     "n.onFace": "ضمن بنود قائمة المركز المالي",
     "n.reconciliation": "تسوية الإيضاح مع القائمة.",
+    "n.sourceView": "التقرير السنوي",
+    "n.sourcePage": "صفحة",
   },
   fr: {
     "n.heading": "Notes extraites",
@@ -56,5 +62,7 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.linked": "· liée à",
     "n.onFace": "au bilan",
     "n.reconciliation": "Rapprochement note-bilan.",
+    "n.sourceView": "Rapport annuel",
+    "n.sourcePage": "Page",
   },
 };

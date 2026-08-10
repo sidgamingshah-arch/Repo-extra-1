@@ -160,6 +160,7 @@ export interface StatementRow {
   inspector?: Inspector;
   v1: number | null;
   v2: number | null;
+  source?: ExtractionProvenance | null;  // real docs: current-period value's source location
 }
 
 export interface ViewerMeta {
@@ -179,6 +180,8 @@ export interface StatementResponse {
   units: string;
   rows: StatementRow[];
   viewer: ViewerMeta;
+  format?: string;       // real docs: "pdf" | "xlsx" | … → chooses the live source viewer
+  page_count?: number;   // real docs: page count for the PDF viewer
 }
 
 export interface Project {
@@ -221,10 +224,18 @@ export interface ExtractionProvenance {
   bbox: { x0: number; y0: number; x1: number; y1: number } | null;
   text_snippet: string | null;
 }
+export interface ValueConfidence {
+  mapping: number;
+  validation: number | null;
+  overall: number;
+  weakest: number;
+  flags: string[];
+}
 export interface ExtractionValue {
   period_label: string;
   value: string | null;
   provenance: ExtractionProvenance | null;
+  confidence?: ValueConfidence;
 }
 export interface ExtractionRow {
   source_label: string;
@@ -236,19 +247,91 @@ export interface ExtractionRow {
   flags: string[];
   values: ExtractionValue[];
 }
+export interface SourceUnits {
+  currency: string;
+  scale_factor: number;
+  units_label: string | null;
+}
 export interface ExtractionResult {
   locale: string;
   format: string;
   filename: string;
+  entity?: string | null;
+  page_count?: number;
   line_item_count: number;
   notes: number;
   rows: ExtractionRow[];
+  units?: SourceUnits | null;
 }
 export interface ExtractionRunResponse {
   run_id: string;
   status: string;
   result: ExtractionResult;
 }
+/** Derived analysis from a real extraction: ratios, disclosure scan, free-form notes. */
+export interface Ratio {
+  key: string;
+  label: string;
+  category: string;
+  unit: string;
+  formula: string;
+  value: number | null;
+  display: string;
+  available: boolean;
+}
+export interface Disclosure {
+  key: string;
+  label: string;
+  present: boolean;
+  page: number | null;
+  snippet: string;
+}
+export interface FreeNote {
+  title: string;
+  text: string;
+}
+export type CreditTone = "strong" | "adequate" | "weak";
+export type CreditStance = CreditTone | "insufficient";
+export interface CreditFactor {
+  category: string;
+  category_key: string;
+  key: string;
+  label: string;
+  value: number | null;
+  display: string;
+  unit: string;
+  tone: CreditTone;
+  tone_label: string;
+}
+export interface CreditFlag {
+  key: string;
+  label: string;
+  severity: "severe" | "high" | "watch";
+  implication: string;
+  page: number | null;
+  snippet: string;
+}
+export interface CreditNarrative {
+  text: string;
+  provider: string;
+  model: string;
+}
+export interface CreditAnalysis {
+  stance: CreditStance;
+  stance_label: string;
+  factors: CreditFactor[];
+  flags: CreditFlag[];
+  summary: string;
+  basis: string;
+  narrative?: CreditNarrative;  // cached LLM narrative, when present
+}
+export interface AnalysisResponse {
+  ratios: Ratio[];
+  disclosures: Disclosure[];
+  notes: FreeNote[];
+  credit?: CreditAnalysis;
+}
+
 /** A window of spreadsheet cells around a value's origin (Excel click-to-source). */
 export interface CellContextCell {
   ref: string;
@@ -301,6 +384,7 @@ export interface IntegrityResponse {
 
 export interface PageCard {
   no: number;
+  kind?: "face" | "notes" | "other";
   cls: string;
   sub: string;
   conf: ConfCat;
@@ -382,10 +466,20 @@ export interface NodeConfig {
   aggregation: string;
   netting: { expr: string; explain: string };
 }
+export interface NettingRuleView {
+  id: string;
+  target_key: string;
+  target_label: string;
+  subtract: { key: string; label: string }[];
+  add: { key: string; label: string }[];
+  condition: string;
+  label: string;
+}
 export interface TemplateResponse {
   tree: TemplateNode[];
   node_config: Record<string, NodeConfig>;
   template: { key: string; name: string; line_items: number };
+  netting_rules?: NettingRuleView[];
 }
 
 export interface ExportOption {

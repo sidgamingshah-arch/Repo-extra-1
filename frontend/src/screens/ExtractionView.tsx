@@ -2,31 +2,17 @@
  * provenance. Clicking a PDF value opens a Source panel that renders that page and
  * highlights the value's bounding box. Mapping is against the seeded reference ontology.
  * Distinct from the demo-driven workspace: this reads a live extraction run. */
-import React, { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Card } from "../components/ui";
+import { ExcelSourcePanel, PagedSource, toPicked, type Picked } from "../components/SourceViewer";
 import { useT } from "../i18n";
-import { api } from "../lib/api";
-import { useCellContext, useExtraction, useOntologies, useTemplates } from "../lib/queries";
+import { useDocumentAnalysis, useExtraction, useOntologies, useTemplates } from "../lib/queries";
+import { useUI } from "../store";
 import { SCREENS } from "./config";
 import { color, font } from "../theme";
-import type { ExtractionProvenance, ExtractionRow } from "../types";
-
-/** A value's source location, resolved to what the Source panel needs to render it.
- *  PDF sources carry a page + bbox; spreadsheet sources carry a sheet + cell. */
-type Picked =
-  | { kind: "pdf"; page_index: number; bbox: { x0: number; y0: number; x1: number; y1: number }; label: string }
-  | { kind: "xlsx"; sheet: string; cell: string; label: string };
-
-/** Resolve a provenance record to a Picked, or null if it isn't click-to-source-able. */
-function toPicked(p: ExtractionProvenance | null, label: string): Picked | null {
-  if (!p) return null;
-  if (p.source_kind === "spreadsheet" && p.sheet && p.cell)
-    return { kind: "xlsx", sheet: p.sheet, cell: p.cell, label };
-  if (p.bbox) return { kind: "pdf", page_index: p.page_index, bbox: p.bbox, label };
-  return null;
-}
+import type { ExtractionProvenance, ExtractionRow, Locale } from "../types";
 
 function SourceChip({ p, onPick }: { p: ExtractionProvenance | null; onPick?: () => void }) {
   if (!p) return <span style={{ color: color.faint }}>—</span>;
@@ -65,9 +51,19 @@ function RowLine({ row, t, onPick }: {
       <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {row.values.map((v, i) => {
           const picked = toPicked(v.provenance, row.source_label);
+          const conf = v.confidence;
+          // A value that participates in a failed check (balance / note tie) is flagged so a
+          // doubtful number reads at a glance — per value, not just per row.
+          const low = conf && (conf.flags.length > 0 || conf.overall < 0.75);
+          const tip = conf
+            ? `confidence ${Math.round(conf.overall * 100)}%${conf.flags.length ? " · " + conf.flags.join(", ") : ""}`
+            : undefined;
           return (
             <span key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-              <span style={{ fontSize: 11.5, fontFamily: font.mono, color: color.ink }}>{v.value ?? "—"}</span>
+              <span title={tip} style={{ fontSize: 11.5, fontFamily: font.mono,
+                            color: low ? color.amberFg : color.ink }}>
+                {v.value ?? "—"}{low ? " ⚠" : ""}
+              </span>
               <SourceChip p={v.provenance} onPick={picked ? () => onPick(picked) : undefined} />
             </span>
           );
@@ -86,154 +82,114 @@ function RowLine({ row, t, onPick }: {
   );
 }
 
-type PdfPick = Extract<Picked, { kind: "pdf" }>;
-type XlsxPick = Extract<Picked, { kind: "xlsx" }>;
+/** Localized heading for a ratio category (backend sends the English category name). */
+const CAT_KEY: Record<string, string> = {
+  Liquidity: "ex.cat.liquidity", Leverage: "ex.cat.leverage", Coverage: "ex.cat.coverage",
+  Efficiency: "ex.cat.efficiency", Profitability: "ex.cat.profitability",
+};
 
-/** Shared chrome for a source panel: sticky column with a heading and a card. */
-function PanelShell({ t, children }: { t: (k: string) => string; children: React.ReactNode }) {
+/** Derived analysis (computed from the extracted values): ratios, qualitative disclosures,
+ * and free-form notes — the on-screen twin of the export's Ratios/Disclosures/Notes sheets. */
+function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k: string) => string }) {
+  const q = useDocumentAnalysis(id, locale);
+  if (!q.data) return null;
+  const { ratios, disclosures, notes } = q.data;
+
+  // Group ratios by category, preserving the backend's category ordering.
+  const groups: { cat: string; items: typeof ratios }[] = [];
+  for (const r of ratios) {
+    const cat = r.category || "Profitability";
+    let g = groups.find((x) => x.cat === cat);
+    if (!g) { g = { cat, items: [] }; groups.push(g); }
+    g.items.push(r);
+  }
+
   return (
-    <div style={{ width: 420, flex: "0 0 420px", position: "sticky", top: 0, alignSelf: "flex-start" }}>
-      <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: 0.3, color: color.muted, margin: "0 0 8px" }}>
-        {t("ex.col.source").toUpperCase()}
-      </div>
-      <Card pad={10}>{children}</Card>
+    <div style={{ marginTop: 22, display: "grid", gap: 18 }}>
+      <Card>
+        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: color.muted, marginBottom: 10 }}>
+          {t("ex.ratios")}
+        </div>
+        {groups.map((g) => (
+          <div key={g.cat} style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase",
+                          color: color.sec2, marginBottom: 6 }}>
+              {t(CAT_KEY[g.cat] || "") || g.cat}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8 }}>
+              {g.items.map((r) => (
+                <div key={r.key} title={r.formula}
+                     style={{ border: `1px solid ${color.hairline3}`, borderRadius: 8, padding: "8px 10px",
+                              opacity: r.available ? 1 : 0.5 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, fontFamily: font.mono,
+                                color: r.available ? color.ink : color.faint }}>{r.display}</div>
+                  <div style={{ fontSize: 10.5, color: color.sec2 }}>{r.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </Card>
+
+      <Card>
+        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: color.muted, marginBottom: 10 }}>
+          {t("ex.highlights")}
+        </div>
+        {notes.map((n, i) => (
+          <div key={i} style={{ marginBottom: 9 }}>
+            <div style={{ fontSize: 11.5, fontWeight: 600, color: color.ink }}>{n.title}</div>
+            <div style={{ fontSize: 11.5, color: color.sec2, lineHeight: 1.5 }}>{n.text}</div>
+          </div>
+        ))}
+      </Card>
+
+      <Card>
+        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.3, color: color.muted, marginBottom: 10 }}>
+          {t("ex.disclosures")}
+        </div>
+        {disclosures.map((d) => (
+          <div key={d.key} style={{ display: "grid", gridTemplateColumns: "1.4fr 70px 2.5fr",
+                                    gap: 10, alignItems: "center", padding: "6px 0",
+                                    borderBottom: `1px solid ${color.hairline2}` }}>
+            <span style={{ fontSize: 12, color: color.ink }}>{d.label}</span>
+            <span style={{ fontSize: 10.5, fontWeight: 700,
+                           color: d.present ? color.greenFg : color.faint }}>
+              {d.present ? `p.${d.page}` : "—"}
+            </span>
+            <span style={{ fontSize: 11, color: color.muted, fontStyle: d.snippet ? "italic" : "normal",
+                           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {d.snippet || t("ex.notFound")}
+            </span>
+          </div>
+        ))}
+      </Card>
     </div>
   );
 }
 
-/** Renders a PDF page image (auth'd fetch → blob URL) with the picked value's bbox drawn. */
-function SourcePanel({ documentId, picked, t }: { documentId: string; picked: PdfPick | null; t: (k: string) => string }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [err, setErr] = useState(false);
-  useEffect(() => {
-    if (!picked) return;
-    let objUrl: string | null = null;
-    let cancelled = false;
-    setErr(false);
-    api.fetchPageImage(documentId, picked.page_index)
-      .then((blob) => {
-        if (cancelled) return;
-        objUrl = URL.createObjectURL(blob);
-        setUrl(objUrl);
-      })
-      .catch(() => !cancelled && setErr(true));
-    return () => { cancelled = true; if (objUrl) URL.revokeObjectURL(objUrl); };
-  }, [documentId, picked?.page_index]);  // eslint-disable-line react-hooks/exhaustive-deps
-
-  const b = picked?.bbox;
-  return (
-    <PanelShell t={t}>
-      {!picked && (
-        <div style={{ fontSize: 12, color: color.muted, padding: "24px 8px", textAlign: "center" }}>
-          {t("ex.pickHint")}
-        </div>
-      )}
-      {picked && err && <div style={{ fontSize: 12, color: color.redFg }}>{t("ex.failed")}</div>}
-      {picked && !err && (
-        <>
-          <div style={{ fontSize: 11, color: color.sec2, marginBottom: 8 }}>
-            {picked.label} · p.{picked.page_index + 1}
-          </div>
-          <div style={{ position: "relative", display: "inline-block", width: "100%",
-                        border: `1px solid ${color.hairline3}`, borderRadius: 6, overflow: "hidden" }}>
-            {url && <img src={url} alt="" style={{ display: "block", width: "100%" }} />}
-            {url && b && (
-              <div data-testid="prov-highlight" style={{
-                position: "absolute",
-                left: `${b.x0 * 100}%`, top: `${b.y0 * 100}%`,
-                width: `${(b.x1 - b.x0) * 100}%`, height: `${(b.y1 - b.y0) * 100}%`,
-                border: `2px solid ${color.amberFg}`, background: "rgba(217,164,65,0.22)",
-                borderRadius: 2, boxShadow: "0 0 0 1px rgba(0,0,0,0.05)",
-              }} />
-            )}
-          </div>
-        </>
-      )}
-    </PanelShell>
-  );
-}
-
-/** Spreadsheet click-to-source: renders a small window of cells around the value's origin
- * with the target cell highlighted — the Excel analogue of the PDF page overlay. */
-function ExcelSourcePanel({ documentId, picked, t }: { documentId: string; picked: XlsxPick | null; t: (k: string) => string }) {
-  const q = useCellContext(documentId, picked?.sheet, picked?.cell);
-  return (
-    <PanelShell t={t}>
-      {!picked && (
-        <div style={{ fontSize: 12, color: color.muted, padding: "24px 8px", textAlign: "center" }}>
-          {t("ex.pickHint")}
-        </div>
-      )}
-      {picked && q.isError && <div style={{ fontSize: 12, color: color.redFg }}>{t("ex.failed")}</div>}
-      {picked && q.isPending && !q.isError && (
-        <div style={{ fontSize: 12, color: color.muted, padding: "18px 8px" }}>{t("ex.running")}</div>
-      )}
-      {picked && q.data && (
-        <>
-          <div style={{ fontSize: 11, color: color.sec2, marginBottom: 8 }}>
-            {picked.label} · <span style={{ fontFamily: font.mono }}>{q.data.sheet}!{q.data.target}</span>
-          </div>
-          <div style={{ overflowX: "auto", border: `1px solid ${color.hairline3}`, borderRadius: 6 }}>
-            <table style={{ borderCollapse: "collapse", fontSize: 10.5, fontFamily: font.mono, width: "100%" }}>
-              <thead>
-                <tr>
-                  <th style={cellSt(false, true)}></th>
-                  {q.data.col_letters.map((c) => (
-                    <th key={c} style={cellSt(false, true)}>{c}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {q.data.grid.map((line, r) => (
-                  <tr key={r}>
-                    <td style={cellSt(false, true)}>{q.data!.row_numbers[r]}</td>
-                    {line.map((cell) => (
-                      <td key={cell.ref}
-                          data-testid={cell.is_target ? "cell-target" : undefined}
-                          title={cell.ref}
-                          style={{
-                            ...cellSt(cell.is_target, false),
-                            textAlign: cell.numeric ? "right" : "left",
-                          }}>
-                        {cell.value.length > 22 ? cell.value.slice(0, 21) + "…" : cell.value}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </PanelShell>
-  );
-}
-
-function cellSt(target: boolean, header: boolean): React.CSSProperties {
-  return {
-    border: `1px solid ${color.hairline2}`,
-    padding: "3px 6px",
-    whiteSpace: "nowrap",
-    maxWidth: 130,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    background: target ? "rgba(217,164,65,0.22)" : header ? color.rowAltBg : undefined,
-    color: header ? color.muted : color.ink,
-    fontWeight: target ? 700 : header ? 600 : 400,
-    outline: target ? `2px solid ${color.amberFg}` : undefined,
-  };
-}
+/** Known canonical-key prefixes → statement labels for the filter dropdown. */
+const STMT_LABELS: Record<string, string> = {
+  bs: "Balance sheet", pl: "Profit & loss", cf: "Cash flow", eq: "Changes in equity",
+};
 
 export default function ExtractionView() {
   const { id } = useParams();
   const nav = useNavigate();
   const t = useT();
+  const outputLocale = useUI((s) => s.locale);
   const [picked, setPicked] = useState<Picked | null>(null);
+  const [stmt, setStmt] = useState<string>("all");   // statement filter (by canonical prefix)
 
   const ontQ = useOntologies();
   const tplQ = useTemplates();
+  const selectedTemplateKey = useUI((s) => s.selectedTemplateKey);
   const ready = ontQ.isFetched && tplQ.isFetched;   // don't POST until the lists settle
-  const ont = ontQ.data?.find((o) => o.ontology_key === "hkfrs_hk_china_v1") ?? ontQ.data?.[0];
+  // Prefer the ontology targeting the template the analyst selected on the Upload screen;
+  // fall back to the shipped HK reference ontology, then whatever is first.
+  const ont =
+    (selectedTemplateKey && ontQ.data?.find((o) => o.target_template_key === selectedTemplateKey)) ||
+    ontQ.data?.find((o) => o.ontology_key === "hkfrs_hk_china_v1") ||
+    ontQ.data?.[0];
   const tpl = ont ? tplQ.data?.find((tt) => tt.template_key === ont.target_template_key) : undefined;
   const { data, isPending, isError, error } = useExtraction(id, ont?.id, tpl?.id, ready);
 
@@ -254,16 +210,48 @@ export default function ExtractionView() {
         </div>
       )}
 
-      {data && (
+      {data && (() => {
+        const res = data.result;
+        const u = res.units;
+        // Statement filter options: the canonical-key prefixes actually present, plus
+        // All / Unmapped. Prefix-based so it tracks whatever template the run used.
+        const prefixes = Array.from(
+          new Set(res.rows.map((r) => r.canonical_key?.split("_")[0]).filter(Boolean) as string[]),
+        );
+        const shown = res.rows.filter((r) =>
+          stmt === "all" ? true
+            : stmt === "unmapped" ? !r.canonical_key
+              : r.canonical_key?.startsWith(`${stmt}_`));
+        return (
         <>
-          <div style={{ marginBottom: 16 }}>
-            <h1 style={{ fontSize: 19, fontWeight: 600, margin: "0 0 4px" }}>{t("ex.title")}</h1>
+          <div style={{ marginBottom: 14 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 4px" }}>
+              {res.entity || t("ex.title")}
+            </h1>
             <p style={{ margin: 0, color: color.sec2, fontSize: 12.5 }}>
-              <span style={{ fontFamily: font.mono }}>{data.result.filename}</span>
-              {"  ·  "}{data.result.format.toUpperCase()}
-              {"  ·  "}{data.result.line_item_count} {t("ex.count")}
+              <span style={{ fontFamily: font.mono }}>{res.filename}</span>
+              {"  ·  "}{res.format.toUpperCase()}
+              {"  ·  "}{res.line_item_count} {t("ex.count")}
+              {u?.currency && <>{"  ·  "}<b>{u.currency}</b></>}
+              {u?.units_label && <>{"  ·  "}{t("ex.inUnits")} {u.units_label}</>}
             </p>
           </div>
+
+          {/* Statement filter */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: 11, color: color.muted }}>{t("ex.statement")}</span>
+            <select value={stmt} onChange={(e) => setStmt(e.target.value)}
+                    style={{ fontSize: 12, padding: "5px 9px", borderRadius: 7,
+                             border: `1px solid ${color.controlBorder}`, background: "#fff", color: color.ink }}>
+              <option value="all">{t("ex.allStatements")}</option>
+              {prefixes.map((p) => (
+                <option key={p} value={p}>{STMT_LABELS[p] || p.toUpperCase()}</option>
+              ))}
+              <option value="unmapped">{t("ex.unmapped")}</option>
+            </select>
+            <span style={{ fontSize: 11, color: color.muted2 }}>{shown.length} / {res.rows.length}</span>
+          </div>
+
           <div style={{ display: "flex", gap: 18, alignItems: "flex-start" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <Card pad={0} style={{ overflow: "hidden" }}>
@@ -275,23 +263,26 @@ export default function ExtractionView() {
                   <span>{t("ex.col.value")} · {t("ex.col.source")}</span>
                   <span>{t("ex.col.mapping")}</span>
                 </div>
-                {data.result.rows.length === 0 && (
+                {shown.length === 0 && (
                   <div style={{ padding: "18px 14px", fontSize: 12.5, color: color.muted }}>{t("ex.empty")}</div>
                 )}
-                {data.result.rows.map((row, i) => (
+                {shown.map((row, i) => (
                   <RowLine key={i} row={row} t={t} onPick={setPicked} />
                 ))}
               </Card>
             </div>
-            {data.result.format === "pdf" && id && (
-              <SourcePanel documentId={id} picked={picked?.kind === "pdf" ? picked : null} t={t} />
+            {res.format === "pdf" && id && (
+              <PagedSource documentId={id} pageCount={res.page_count ?? 1}
+                           picked={picked?.kind === "pdf" ? picked : null} t={t} />
             )}
-            {(data.result.format === "xlsx" || data.result.format === "xls") && id && (
+            {(res.format === "xlsx" || res.format === "xls") && id && (
               <ExcelSourcePanel documentId={id} picked={picked?.kind === "xlsx" ? picked : null} t={t} />
             )}
           </div>
+          {id && <AnalysisSection id={id} locale={outputLocale} t={t} />}
         </>
-      )}
+        );
+      })()}
     </div>
   );
 }

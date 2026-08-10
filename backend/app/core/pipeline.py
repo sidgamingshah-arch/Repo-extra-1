@@ -42,7 +42,6 @@ def default_pipeline() -> Pipeline:
     from app.stages.integrity import IntegrityStage
     from app.stages.language import LanguageDetectStage
     from app.stages.classify import ClassifyStage
-    from app.stages.reconstruct import ReconstructStage
     from app.stages.extract import ExtractStage
     from app.stages.map_ontology import MapOntologyStage
     from app.stages.normalize import NormalizeStage
@@ -50,12 +49,14 @@ def default_pipeline() -> Pipeline:
     from app.stages.reconcile import ReconcileStage
     from app.stages.confidence import ConfidenceStage
 
+    # Table reconstruction is performed inside the extract stage (native pages via the
+    # PyMuPDF text layer + shared row_reconstruct; scanned pages via the OCR port), so there
+    # is no separate reconstruct stage — extraction consumes the reconstruction directly.
     return Pipeline(stages=[
         IngestStage(),
         IntegrityStage(),
         LanguageDetectStage(),
         ClassifyStage(),
-        ReconstructStage(),
         ExtractStage(),
         MapOntologyStage(),
         NormalizeStage(),

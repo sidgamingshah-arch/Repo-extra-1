@@ -20,6 +20,10 @@ class PipelineContext:
     registry: Registry = field(default_factory=lambda: default_registry)
     object_store: Any = None
     raw_bytes: bytes | None = None            # original uploaded file
+    # Explicit extraction scope: INCLUDED page indices (0-based). None = default (all
+    # face/notes pages). Set from the document's persisted page_scope so a user's page
+    # selection on the Scope screen actually restricts what gets extracted.
+    included_pages: set[int] | None = None
     logs: list[str] = field(default_factory=list)
     progress_cb: Callable[[str, float], None] | None = None
     # LLM usage accumulated across stages (description-based mapping, …) for the audit log.

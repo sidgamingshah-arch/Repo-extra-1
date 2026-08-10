@@ -1,12 +1,71 @@
 /** Screen 7 — Template & Ontology. Left template tree + right node editor. */
 import type { CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { Card } from "../components/ui";
 import { useAppLocale, useUI } from "../store";
 import { color, font, radius } from "../theme";
-import type { NodeConfig } from "../types";
-import { useTemplate } from "../lib/queries";
+import type { NodeConfig, TemplateResponse } from "../types";
+import { useTemplateDetail, useTemplates } from "../lib/queries";
+import { api } from "../lib/api";
+import { useCan } from "../lib/rbac";
 import { useT } from "../i18n";
+
+/** Admin-only: create a template/ontology by importing a validated JSON definition. Persisted
+ *  and versioned server-side, then selectable on Upload — the frontend authoring path (Req 4). */
+function ImportTemplate() {
+  const t = useT();
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const def = JSON.parse(await f.text());
+      const isOntology = "target_template_key" in def || "mappings" in def;
+      const res = isOntology ? await api.createOntology(def) : await api.createTemplate(def);
+      const key = "template_key" in res ? res.template_key : res.ontology_key;
+      setMsg({ ok: true, text: t("tp.importOk").replace("{key}", key).replace("{v}", String(res.version)) });
+      qc.invalidateQueries({ queryKey: ["templates"] });
+      qc.invalidateQueries({ queryKey: ["ontologies"] });
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      setMsg({ ok: false, text: `${t("tp.importErr")} ${m}`.slice(0, 300) });
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  return (
+    <div style={{ flex: "0 0 auto", padding: "11px 14px", borderTop: `1px solid ${color.hairline3}` }}>
+      <input ref={fileRef} type="file" accept="application/json,.json" onChange={onFile} style={{ display: "none" }} />
+      <button
+        onClick={() => fileRef.current?.click()}
+        disabled={busy}
+        style={{
+          width: "100%", fontSize: 12, fontWeight: 600, color: color.indigo, background: "#fff",
+          border: `1px dashed ${color.indigoBorder2}`, borderRadius: radius.control, padding: 9,
+          cursor: busy ? "wait" : "pointer",
+        }}
+      >
+        {busy ? t("tp.importing") : t("tp.importTemplate")}
+      </button>
+      {msg && (
+        <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5,
+                      color: msg.ok ? color.greenFg : color.redFg }}>
+          {msg.text}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const SIGN_OPTIONS: { key: string; labelKey: string }[] = [
   { key: "as_reported", labelKey: "tp.sign.asReported" },
@@ -79,12 +138,83 @@ function NettingExpr({ expr }: { expr: string }) {
   );
 }
 
+/** Template-wide netting policies (LLM-gated): a target line net of the components it may
+ *  include, applied per-document only when the model confirms the containment. */
+function NettingRules({ rules, t }: {
+  rules: NonNullable<TemplateResponse["netting_rules"]>; t: (k: string) => string;
+}) {
+  return (
+    <Card style={{ marginTop: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{t("tp.nettingRules")}</span>
+        <span style={{ fontSize: 9.5, fontWeight: 600, padding: "2px 7px", borderRadius: radius.pill,
+                       background: color.amberBg, color: color.amberFg }}>{t("tp.nettingLLM")}</span>
+      </div>
+      <p style={{ margin: "0 0 12px", fontSize: 11.5, color: color.sec2, lineHeight: 1.55 }}>
+        {t("tp.nettingRulesHint")}
+      </p>
+      {rules.length === 0 ? (
+        <div style={{ fontSize: 12, color: color.muted }}>{t("tp.nettingNone")}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {rules.map((r) => (
+            <div key={r.id} data-testid="netting-rule"
+                 style={{ border: `1px solid ${color.hairline3}`, borderRadius: radius.control, padding: 12 }}>
+              <div style={{ fontFamily: font.mono, fontSize: 11.5, color: color.ink, marginBottom: 6,
+                            display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                <span style={{ fontWeight: 600, color: color.indigo }}>{r.target_label}</span>
+                <span style={{ color: color.muted }}>=</span>
+                <span style={{ color: color.muted }}>{r.target_label}</span>
+                {r.subtract.map((c) => (
+                  <span key={c.key}><span style={{ color: color.redFg, fontWeight: 600 }}>− {c.label}</span></span>
+                ))}
+                {r.add.map((c) => (
+                  <span key={c.key}><span style={{ color: color.greenFg, fontWeight: 600 }}>+ {c.label}</span></span>
+                ))}
+              </div>
+              {r.label && (
+                <div style={{ fontSize: 11.5, color: color.sec, lineHeight: 1.5 }}>{r.label}</div>
+              )}
+              {r.condition && (
+                <div style={{ fontSize: 11, color: color.muted, lineHeight: 1.5, marginTop: 6 }}>
+                  <b style={{ color: color.sec2 }}>{t("tp.nettingWhen")}:</b> {r.condition}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function TemplateScreen() {
   const locale = useAppLocale();
   const t = useT();
-  const { data } = useTemplate(locale);
+  // Render the REAL configured template(s), not the demo project. Admin picks among the
+  // templates that exist; the detail (tree + per-node config) comes from that template and
+  // its paired ontology.
+  const tplList = useTemplates();
+  const [selId, setSelId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!selId && tplList.data && tplList.data.length) setSelId(tplList.data[0].id);
+  }, [selId, tplList.data]);
+  const { data } = useTemplateDetail(selId, locale);
   const tplSel = useUI((s) => s.tplSel);
   const setTpl = useUI((s) => s.setTpl);
+  const canEdit = useCan("config:template"); // authoring is admin-only
+
+  // No templates configured yet → guidance (also covers the initial load).
+  if (tplList.data && tplList.data.length === 0) {
+    return (
+      <div style={{ maxWidth: 560, margin: "60px auto", textAlign: "center", color: color.muted, padding: "0 24px" }}>
+        <div style={{ fontSize: 28, marginBottom: 10 }}>◆</div>
+        <h1 style={{ fontSize: 18, fontWeight: 600, color: color.ink, marginBottom: 8 }}>{t("tp.emptyTitle")}</h1>
+        <p style={{ fontSize: 12.5, lineHeight: 1.6 }}>{t("tp.emptyHint")}</p>
+        <div style={{ maxWidth: 320, margin: "18px auto 0" }}><ImportTemplate /></div>
+      </div>
+    );
+  }
 
   if (!data) {
     return (
@@ -95,7 +225,20 @@ export default function TemplateScreen() {
   }
 
   const { tree, node_config, template } = data;
-  const cfg: NodeConfig = node_config[tplSel] ?? node_config["trade_recv"];
+  const cfg: NodeConfig | undefined =
+    node_config[tplSel] ?? node_config["trade_recv"] ?? Object.values(node_config)[0];
+
+  // Greenfield (no project loaded yet): the template tree is empty. Show guidance rather
+  // than crashing on a missing node config.
+  if (!tree.length || !cfg) {
+    return (
+      <div style={{ maxWidth: 560, margin: "60px auto", textAlign: "center", color: color.muted, padding: "0 24px" }}>
+        <div style={{ fontSize: 28, marginBottom: 10 }}>◆</div>
+        <h1 style={{ fontSize: 18, fontWeight: 600, color: color.ink, marginBottom: 8 }}>{t("tp.emptyTitle")}</h1>
+        <p style={{ fontSize: 12.5, lineHeight: 1.6 }}>{t("tp.emptyHint")}</p>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
@@ -167,32 +310,24 @@ export default function TemplateScreen() {
           })}
         </div>
 
-        <div style={{ flex: "0 0 auto", padding: "11px 14px", borderTop: `1px solid ${color.hairline3}` }}>
-          <button
-            style={{
-              width: "100%",
-              fontSize: 12,
-              fontWeight: 600,
-              color: color.indigo,
-              background: "#fff",
-              border: `1px dashed ${color.indigoBorder2}`,
-              borderRadius: radius.control,
-              padding: 9,
-              cursor: "pointer",
-            }}
-          >
-            {t("tp.addLineItem")}
-          </button>
-        </div>
+        {canEdit && <ImportTemplate />}
       </div>
 
       {/* RIGHT: node editor */}
       <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 30px" }}>
         <div style={{ maxWidth: 680 }}>
           <div style={{ fontSize: 11, color: color.muted, marginBottom: 3 }}>{cfg.breadcrumb}</div>
-          <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 3 }}>{cfg.label}</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 3 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>{cfg.label}</h1>
+            {!canEdit && (
+              <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: radius.pill,
+                             background: color.rowAltBg, color: color.muted, border: `1px solid ${color.hairline3}` }}>
+                {t("tp.viewOnly")}
+              </span>
+            )}
+          </div>
           <p style={{ margin: "0 0 20px", color: color.sec2, fontSize: 12.5 }}>
-            {t("tp.editorSubhead")}
+            {canEdit ? t("tp.editorSubhead") : t("tp.viewOnlyHint")}
           </p>
 
           {/* Description aliases */}
@@ -211,21 +346,23 @@ export default function TemplateScreen() {
                     color: color.indigo,
                   }}
                 >
-                  {a} <span style={{ opacity: 0.5, cursor: "pointer" }}>×</span>
+                  {a}{canEdit && <span style={{ opacity: 0.5, cursor: "pointer" }}> ×</span>}
                 </span>
               ))}
-              <span
-                style={{
-                  fontSize: 11.5,
-                  padding: "5px 11px",
-                  borderRadius: radius.pill,
-                  border: `1px dashed ${color.dashed}`,
-                  color: color.muted,
-                  cursor: "pointer",
-                }}
-              >
-                {t("tp.addAlias")}
-              </span>
+              {canEdit && (
+                <span
+                  style={{
+                    fontSize: 11.5,
+                    padding: "5px 11px",
+                    borderRadius: radius.pill,
+                    border: `1px dashed ${color.dashed}`,
+                    color: color.muted,
+                    cursor: "pointer",
+                  }}
+                >
+                  {t("tp.addAlias")}
+                </span>
+              )}
             </div>
           </Card>
 
@@ -284,6 +421,9 @@ export default function TemplateScreen() {
             </p>
             <NettingExpr expr={cfg.netting.expr} />
           </div>
+
+          {/* Template-wide containment-netting policies (LLM-gated). */}
+          {data.netting_rules && <NettingRules rules={data.netting_rules} t={t} />}
         </div>
       </div>
     </div>

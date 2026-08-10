@@ -80,9 +80,16 @@ api_key_env = "ANTHROPIC_API_KEY"   # env var the key is read from (the key itse
 # OCR (scanned-page recognition)
 # ---------------------------------------------------------------------------
 [ocr]
-engine = "paddleocr"            # paddleocr | tesseract | stub
+engine = "docling"              # docling (free, recommended) | azure | paddleocr | tesseract | stub
 languages = ["en", "ch", "ar", "fr"]   # OCR language packs to load
 dpi = 300                       # rasterization DPI for scanned pages
+
+# Azure AI Document Intelligence (used when engine = "azure"). The key is NOT here —
+# it's read from the env var named by azure_api_key_env (default AZURE_DI_KEY).
+azure_endpoint = ""             # https://<resource>.cognitiveservices.azure.com
+azure_model = "prebuilt-layout" # prebuilt-layout | prebuilt-read
+azure_api_version = "2024-11-30"
+azure_api_key_env = "AZURE_DI_KEY"
 
 # ---------------------------------------------------------------------------
 # Embeddings (semantic alias matching in the mapping ensemble)

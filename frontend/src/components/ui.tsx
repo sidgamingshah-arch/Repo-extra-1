@@ -114,18 +114,23 @@ export function Button({
   onClick,
   variant = "primary",
   style,
+  disabled = false,
+  title,
 }: {
   children: ReactNode;
   onClick?: () => void;
   variant?: "primary" | "secondary" | "ghost";
   style?: CSSProperties;
+  disabled?: boolean;
+  title?: string;
 }) {
   const base: CSSProperties = {
     fontSize: 13,
     fontWeight: 600,
     borderRadius: 9,
     padding: "10px 20px",
-    cursor: "pointer",
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.5 : 1,
   };
   const variants: Record<string, CSSProperties> = {
     primary: { color: "#fff", background: color.indigo, border: "none" },
@@ -133,7 +138,8 @@ export function Button({
     ghost: { color: color.indigo, background: "#fff", border: `1px solid ${color.indigoBorder2}` },
   };
   return (
-    <button onClick={onClick} style={{ ...base, ...variants[variant], ...style }}>
+    <button onClick={disabled ? undefined : onClick} disabled={disabled} title={title}
+            style={{ ...base, ...variants[variant], ...style }}>
       {children}
     </button>
   );

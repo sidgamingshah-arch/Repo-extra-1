@@ -11,7 +11,7 @@
  * `appLocale` (see useAppLocale) is the effective locale for interface chrome. */
 import { create } from "zustand";
 
-import { getToken, setStoredToken } from "./lib/api";
+import { getStoredActiveDoc, getToken, setStoredActiveDoc, setStoredToken } from "./lib/api";
 import type { Basis, ExportFmt, ExtractMode, Locale, StatementKey } from "./types";
 
 interface UIState {
@@ -20,6 +20,7 @@ interface UIState {
   token: string | null; // session token
 
   extractMode: ExtractMode; // chosen at upload: auto-extract vs confirm page scope
+  activeDocumentId: string | null; // the real uploaded document being worked (drives integrity/extract)
   dataset: Basis;
   statement: StatementKey;
   sel: string; // selected line-item id in the workspace
@@ -27,12 +28,14 @@ interface UIState {
   note: number; // selected note (All Notes)
   openCheck: string; // expanded review check
   tplSel: string; // selected template node
+  selectedTemplateKey: string | null; // active output template for the next run (null = default)
   exportFmt: ExportFmt;
 
   setLocale: (l: Locale) => void;
   setUiLocalization: (v: boolean) => void;
   setToken: (t: string | null) => void;
   setExtractMode: (m: ExtractMode) => void;
+  setActiveDocumentId: (id: string | null) => void;
   setDataset: (b: Basis) => void;
   setStatement: (s: StatementKey) => void;
   selRow: (id: string) => void;
@@ -43,6 +46,7 @@ interface UIState {
   setNote: (n: number) => void;
   toggleCheck: (id: string) => void;
   setTpl: (id: string) => void;
+  setSelectedTemplateKey: (k: string | null) => void;
   setFmt: (f: ExportFmt) => void;
 }
 
@@ -51,6 +55,7 @@ export const useUI = create<UIState>((set) => ({
   uiLocalization: false,
   token: getToken(),
   extractMode: "auto",
+  activeDocumentId: getStoredActiveDoc(),
   dataset: "consolidated",
   statement: "balance_sheet",
   sel: "trade_recv",
@@ -58,6 +63,7 @@ export const useUI = create<UIState>((set) => ({
   note: 12,
   openCheck: "bs",
   tplSel: "trade_recv",
+  selectedTemplateKey: null,
   exportFmt: "excel",
 
   setLocale: (locale) => set({ locale }),
@@ -67,6 +73,10 @@ export const useUI = create<UIState>((set) => ({
     set({ token });
   },
   setExtractMode: (extractMode) => set({ extractMode }),
+  setActiveDocumentId: (activeDocumentId) => {
+    setStoredActiveDoc(activeDocumentId);
+    set({ activeDocumentId });
+  },
   setDataset: (dataset) => set({ dataset }),
   setStatement: (statement) => set({ statement, sel: "" }),
   selRow: (sel) => set({ sel, editing: false }),
@@ -77,6 +87,7 @@ export const useUI = create<UIState>((set) => ({
   setNote: (note) => set({ note }),
   toggleCheck: (id) => set((s) => ({ openCheck: s.openCheck === id ? "" : id })),
   setTpl: (tplSel) => set({ tplSel }),
+  setSelectedTemplateKey: (selectedTemplateKey) => set({ selectedTemplateKey }),
   setFmt: (exportFmt) => set({ exportFmt }),
 }));
 

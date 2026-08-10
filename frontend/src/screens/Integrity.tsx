@@ -1,11 +1,12 @@
 /** Screen 2 — Document integrity. Pre-flight scan results (score, stats, issues). */
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button, Card } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { color, font, radius } from "../theme";
 import type { IntegrityIssue, IntegrityStat } from "../types";
-import { useIntegrity, useProjectLoaded } from "../lib/queries";
+import { useDocumentIntegrity, useIntegrity, useProjectLoaded } from "../lib/queries";
 import { useAppLocale, useUI } from "../store";
 import { SCREENS } from "./config";
 import { useT } from "../i18n";
@@ -31,10 +32,42 @@ export default function IntegrityScreen() {
   const t = useT();
   const locale = useAppLocale();
   const extractMode = useUI((s) => s.extractMode);
-  const loaded = useProjectLoaded();
-  const { data, isPending } = useIntegrity(locale);
+  const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const setActiveDocumentId = useUI((s) => s.setActiveDocumentId);
 
-  if (!loaded) return <EmptyState />;
+  // The document explicitly being worked this session (set on upload, persisted across
+  // refresh) drives the screen. We deliberately do NOT fall back to "the most recent
+  // document in the list" — that could be another session's file. When there's no active
+  // document, the demo project shows only if an admin has enabled seed_demo; otherwise the
+  // greenfield empty state. So real runs are deterministic and demo never leaks in.
+  const docId = activeDocumentId ?? undefined;
+  const usingReal = !!docId;
+  const realQ = useDocumentIntegrity(docId, locale);
+  const loaded = useProjectLoaded();
+  const demoQ = useIntegrity(locale, !usingReal);
+
+  // A persisted/stale active id that no longer resolves (deleted doc, DB reset, duplicate)
+  // will 404 — clear it so the app falls back cleanly instead of showing a raw error.
+  useEffect(() => {
+    if (usingReal && realQ.isError) setActiveDocumentId(null);
+  }, [usingReal, realQ.isError, setActiveDocumentId]);
+
+  const data = usingReal ? realQ.data : demoQ.data;
+  const isPending = usingReal ? realQ.isPending : demoQ.isPending;
+
+  const goNext = () => {
+    // Confirm-scope mode pauses on Page Scope first (real pages); auto goes straight to the
+    // real extraction. Demo path keeps the workspace/scope destinations.
+    if (usingReal) {
+      return navigate(extractMode === "auto" ? `/documents/${docId}` : SCREENS.scope.path);
+    }
+    navigate(extractMode === "auto" ? SCREENS.workspace.path : SCREENS.scope.path);
+  };
+
+  // No real document to work: demo only if an admin enabled it, else greenfield guidance.
+  if (!usingReal && !loaded) return <EmptyState />;
+  // Real doc's integrity couldn't load — degrade to guidance (effect clears the stale id).
+  if (usingReal && realQ.isError) return <EmptyState />;
   if (isPending || !data) {
     return (
       <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>
@@ -193,11 +226,16 @@ export default function IntegrityScreen() {
         <Button variant="secondary" onClick={() => navigate("/upload")}>
           ← {t("i.back")}
         </Button>
-        {extractMode === "auto" ? (
-          <Button onClick={() => navigate(SCREENS.workspace.path)}>{t("i.extractNow")} →</Button>
-        ) : (
-          <Button onClick={() => navigate(SCREENS.scope.path)}>{t("i.detect")} →</Button>
-        )}
+        {(() => {
+          const blocked = (data.issues || []).some((i) => i.note === "BLOCKER");
+          return (
+            <Button onClick={goNext} disabled={blocked}
+                    title={blocked ? t("i.blocked") : undefined}>
+              {blocked ? t("i.blocked")
+                       : (usingReal || extractMode === "auto" ? t("i.extractNow") : t("i.detect"))} →
+            </Button>
+          );
+        })()}
       </div>
     </div>
   );

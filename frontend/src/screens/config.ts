@@ -11,11 +11,11 @@ export interface ScreenDef {
 
 export const SCREENS: Record<string, ScreenDef> = {
   upload: { id: "upload", path: "/upload", label: "Documents & Template", icon: "▤", step: 1 },
-  integrity: { id: "integrity", path: "/integrity", label: "Document Integrity", icon: "◎", step: 2, badge: { count: 3, tone: "warn" } },
+  integrity: { id: "integrity", path: "/integrity", label: "Document Integrity", icon: "◎", step: 2 },
   scope: { id: "scope", path: "/scope", label: "Page Scope", icon: "▦", step: 3 },
   workspace: { id: "workspace", path: "/workspace", label: "Workspace", icon: "▤", step: 4 },
   notes: { id: "notes", path: "/notes", label: "All Notes", icon: "☰" },
-  review: { id: "review", path: "/review", label: "Review Queue", icon: "✓", step: 5, badge: { count: 12, tone: "review" } },
+  review: { id: "review", path: "/review", label: "Review Queue", icon: "✓", step: 5 },
   commentary: { id: "commentary", path: "/commentary", label: "Analysis", icon: "✦" },
   template: { id: "template", path: "/template", label: "Template & Ontology", icon: "◆" },
   settings: { id: "settings", path: "/settings", label: "Settings", icon: "⚙" },

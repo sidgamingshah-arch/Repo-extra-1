@@ -7,10 +7,13 @@ extract stage) and computes the validations whose failure populates the review q
 * subtotal rollups    — a subtotal equals the sum of the item rows since the previous
                         subtotal/section boundary
 * sign anomalies      — an expense line carrying a positive value
-* note reconciliation — a face value tied to a note total (delegated to services.reconcile)
+* note reconciliation — a face value ties to its note total; computed by the reconcile
+                        stage (services.reconcile) and turned into checks by
+                        ``check_reconciliation`` over the stage's report entries
 
-Pure and unit-tested; used for real uploaded extractions. The seeded demo serves its
-curated narrative checks, but this engine runs against the same row shape.
+``run_all`` covers the row-based checks (balance/subtotal/sign); ``check_reconciliation``
+takes the reconcile stage's entries because reconciliation needs the note detail, not just
+the flat face rows. Pure and unit-tested; used for real uploaded extractions.
 """
 from __future__ import annotations
 
@@ -101,6 +104,29 @@ def check_signs(rows: list[dict], period: str = "v1") -> list[Check]:
                 status="fail", actual=n, expected=-n, target=r["id"],
                 detail={"expected_sign": "negative"},
             ))
+    return out
+
+
+def check_reconciliation(entries: list[dict], tol: Decimal = Decimal(1)) -> list[Check]:
+    """Turn the reconcile stage's report entries into note→face tie checks. An entry whose
+    note total does not tie to the face figure (``within_tolerance`` false) is a failure."""
+    out: list[Check] = []
+    for e in entries:
+        note = e.get("note_number")
+        basis, period = e.get("basis"), e.get("period_label")
+        resid = e.get("residual")
+        resid_d = None if resid is None else Decimal(str(resid))
+        ok = bool(e.get("within_tolerance"))
+        out.append(Check(
+            id=f"note_tie:{note}:{basis}:{period}", type="note_tie",
+            title=f"Note {note} ties to face ({basis}/{period})",
+            status="pass" if ok else "fail",
+            expected=(None if e.get("raw_face") is None else Decimal(str(e["raw_face"]))),
+            actual=(None if e.get("raw_face") is None or resid_d is None
+                    else Decimal(str(e["raw_face"])) - resid_d),
+            delta=resid_d, target=f"note:{note}",
+            detail={"note_number": note, "basis": basis, "period": period},
+        ))
     return out
 
 

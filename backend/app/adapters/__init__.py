@@ -41,10 +41,21 @@ def register_builtins() -> None:
     registry.register("llm", "openai", OpenAiLlmProvider)
     registry.register("llm", "openai_compatible", OpenAiLlmProvider)
 
-    # Real OCR adapter (scanned pages) — registered under its id so it's available when
-    # ocr.engine = "paddleocr". Lazy: needs the 'ocr' extra + models only on first use.
+    # Real OCR adapters (scanned pages) — registered under their ids so they're available
+    # when ocr.engine selects them. Both are lazy: the engine + models load only on first
+    # use, so registering needs neither the extra nor the models.
+    #   - docling: the recommended FREE, pip-only OCR (layout + OCR + table structure),
+    #     no system binary, no cloud. Install with the 'docling' extra.
+    #   - azure: Azure AI Document Intelligence (cloud layout+OCR+tables); needs an endpoint
+    #     + key. Uses httpx (a dependency) — no SDK required.
+    #   - paddleocr: alternative, via the 'ocr' extra.
+    from .azure_doc_intelligence import AzureDocIntelligenceProvider
+    from .docling_ocr import DoclingOcrProvider
     from .paddle_ocr import PaddleOcrProvider
 
+    registry.register("ocr", "docling", DoclingOcrProvider)
+    registry.register("ocr", "azure", AzureDocIntelligenceProvider)
+    registry.register("ocr", "azure_document_intelligence", AzureDocIntelligenceProvider)
     registry.register("ocr", "paddleocr", PaddleOcrProvider)
 
     registry.register(
