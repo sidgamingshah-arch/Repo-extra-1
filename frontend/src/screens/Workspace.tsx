@@ -135,12 +135,31 @@ function PaperRow({ row, selected }: { row: StatementRow; selected: boolean }) {
   );
 }
 
-/* Scale a value for the chosen units presentation (display only; raw stays for editing). */
-function scaleFmt(n: number | null, scale: number): string {
-  if (n == null) return "";
-  if (scale <= 1) return fmtIN(n);
-  const dp = scale >= 1e6 ? 2 : 0;
-  return fmtIN(Number((n / scale).toFixed(dp)));
+/* Units presentation (display only; the raw value is untouched for editing/formulas). Values
+ * are stored AS REPORTED, i.e. already in the source's magnitude (`srcScale`, e.g. 1000 for a
+ * statement stated "in thousands"). Converting to a target magnitude therefore scales by
+ * srcScale/target — never a naive divide, which would double-scale an already-scaled figure. */
+type UnitTarget = "as_reported" | "thousands" | "millions" | "billions";
+const TARGET_SCALE: Record<Exclude<UnitTarget, "as_reported">, number> = {
+  thousands: 1e3,
+  millions: 1e6,
+  billions: 1e9,
+};
+
+/* Accounting formatter with an explicit decimal count (fmtIN forces 0dp). */
+function fmtDec(n: number, dp: number): string {
+  const s = Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  return n < 0 ? `(${s})` : s;
+}
+
+function presentValue(raw: number | null, srcScale: number, target: UnitTarget): string {
+  if (raw == null) return "";
+  if (target === "as_reported") return fmtIN(raw);
+  const scaled = raw * (srcScale / TARGET_SCALE[target]);
+  // 0dp for large magnitudes, else 2dp — and never collapse a genuinely nonzero figure to 0.
+  let dp = Math.abs(scaled) >= 1000 ? 0 : 2;
+  while (scaled !== 0 && Number(scaled.toFixed(dp)) === 0 && dp < 6) dp += 2;
+  return fmtDec(scaled, dp);
 }
 
 /* Small click-to-source chip on a value → drives the live document viewer. */
@@ -170,7 +189,7 @@ function ValueSourceChip({ source, onPick }: {
 function OutputRow({
   row,
   sel,
-  unitScale,
+  present,
   onSelect,
   onEdit,
   onOpenNote,
@@ -178,7 +197,7 @@ function OutputRow({
 }: {
   row: StatementRow;
   sel: string;
-  unitScale: number;
+  present: (raw: number | null) => string;
   onSelect: (id: string) => void;
   onEdit: (id: string) => void;
   onOpenNote: (ref: string) => void;
@@ -205,10 +224,17 @@ function OutputRow({
   const vwt = isSt || isTot ? 600 : selected ? 600 : 400;
   const vfg = isTot ? color.indigo : color.ink;
   const showV = isItem || isSt || isTot;
-  const v1 = showV ? scaleFmt(row.v1, unitScale) : "";
-  const v2 = showV ? scaleFmt(row.v2, unitScale) : "";
-  const note = row.note ?? row.note2;   // single NOTE column (was duplicated per period)
-  const canSource = isItem && !!row.source && !!onPickSource;
+  const v1 = showV ? present(row.v1) : "";
+  const v2 = showV ? present(row.v2) : "";
+  // One NOTE column, but keep BOTH references when a row cites different notes per period
+  // (e.g. note "10" current, "10a" prior) — collapsing to one would drop the second linkage.
+  const noteRefs = [row.note, row.note2 && row.note2 !== row.note ? row.note2 : null].filter(
+    (n): n is string => !!n,
+  );
+  // Only offer click-to-source when the provenance actually resolves to a location (a PDF
+  // source without a bbox, or an Excel source without sheet+cell, can't be shown — no dead chip).
+  const pick = isItem && row.source ? toPicked(row.source, row.label) : null;
+  const canSource = !!pick && !!onPickSource;
 
   return (
     <div
@@ -240,10 +266,11 @@ function OutputRow({
         </span>
         <StatusIcon status={row.status} />
       </div>
-      <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        {note ? (
-          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(note!); }}>{note}</NoteChip>
-        ) : null}
+      <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "center",
+                    gap: 4, flexWrap: "wrap" }}>
+        {noteRefs.map((n) => (
+          <NoteChip key={n} onClick={(e) => { e?.stopPropagation(); onOpenNote(n); }}>{n}</NoteChip>
+        ))}
       </div>
       {isItem ? (
         <span
@@ -398,8 +425,8 @@ export default function WorkspaceScreen() {
   const t = useT();
   const { locale, dataset, setDataset, statement, setStatement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing, setNote } =
     useUI();
-  // Units presentation is a display-only scale (raw values stay intact for editing/formulas).
-  const [unitScale, setUnitScale] = useState(1);
+  // Units presentation is display-only (raw values stay intact for editing/formulas).
+  const [unitTarget, setUnitTarget] = useState<UnitTarget>("as_reported");
   // Open a note reference: select it and jump to the All Notes screen.
   const openNote = (ref: string) => {
     const n = parseInt(ref, 10);
@@ -421,6 +448,9 @@ export default function WorkspaceScreen() {
   const realRevertMut = useRevertDocumentLineItem(activeDocumentId ?? undefined);
   // The value's source location for the live viewer — set when a row is selected (real docs).
   const [picked, setPicked] = useState<Picked | null>(null);
+  // A highlight belongs to one statement/basis; clear it when either changes so the viewer
+  // never keeps pointing at a page/cell from the statement the user just navigated away from.
+  useEffect(() => { setPicked(null); }, [statement, dataset]);
 
   if (!usingReal && !loaded) return <EmptyState />;
   if (usingReal && realQ.isError) return <EmptyState />;   // uploaded but not extracted yet
@@ -439,6 +469,13 @@ export default function WorkspaceScreen() {
       if (p) setPicked(p);
     }
   };
+  // Units presentation: convert relative to the source's own magnitude (default 1 = ones).
+  const srcScale = d.units_scale_factor ?? 1;
+  const present = (raw: number | null) => presentValue(raw, srcScale, unitTarget);
+  // A single, unambiguous units caption for the whole output panel: the chosen magnitude when
+  // rescaled, otherwise the source's own reported units (so the figures are never unlabelled).
+  const activeUnits = unitTarget === "as_reported" ? d.units : t(`ws.units.${unitTarget}`).toLowerCase();
+  const unitsCaption = activeUnits ? `${t("ws.figuresIn")} ${activeUnits}` : "";
   const lowConfCount = d.rows.filter((r) => r.confidence?.cat === "low").length;
   const selRowObj = d.rows.find((r) => r.id === sel) ?? d.rows.find((r) => r.inspector);
   const insp = selRowObj?.inspector;
@@ -477,16 +514,16 @@ export default function WorkspaceScreen() {
           onChange={setStatement}
         />
         <ToolChip label={t("ws.currency")} value={`${d.currency} ${d.currency_symbol}`} />
-        <ToolSelect<string>
+        <ToolSelect<UnitTarget>
           label={t("ws.units")}
-          value={String(unitScale)}
+          value={unitTarget}
           options={[
-            { value: "1", label: t("ws.units.as_reported") },
-            { value: "1000", label: t("ws.units.thousands") },
-            { value: "1000000", label: t("ws.units.millions") },
-            { value: "1000000000", label: t("ws.units.billions") },
+            { value: "as_reported", label: t("ws.units.as_reported") },
+            { value: "thousands", label: t("ws.units.thousands") },
+            { value: "millions", label: t("ws.units.millions") },
+            { value: "billions", label: t("ws.units.billions") },
           ]}
-          onChange={(v) => setUnitScale(Number(v))}
+          onChange={setUnitTarget}
         />
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9 }}>
           <span
@@ -692,10 +729,19 @@ export default function WorkspaceScreen() {
             <span style={{ textAlign: "right", ...colDiv }}>{t("col.conf")}</span>
           </div>
 
+          {/* units caption — labels the magnitude of every figure in the panel */}
+          {unitsCaption && (
+            <div style={{ flex: "0 0 auto", padding: "3px 16px", background: color.rowAltBg,
+                          borderBottom: `1px solid ${color.hairline}`, textAlign: "right",
+                          fontSize: 10, fontStyle: "italic", color: color.muted }}>
+              {unitsCaption}
+            </div>
+          )}
+
           {/* scroll body */}
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {d.rows.map((r) => (
-              <OutputRow key={r.id} row={r} sel={sel} unitScale={unitScale} onSelect={handleSelect}
+              <OutputRow key={r.id} row={r} sel={sel} present={present} onSelect={handleSelect}
                          onEdit={editable ? selForEdit : () => {}} onOpenNote={openNote}
                          onPickSource={usingReal ? (row) => {
                            const p = toPicked(row.source ?? null, row.label);

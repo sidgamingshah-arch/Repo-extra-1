@@ -291,7 +291,9 @@ export default function NotesScreen() {
             <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12, background: "#e9ebef" }}>
               <PageStack
                 documentId={activeDocumentId}
-                pageCount={result?.page_count ?? 1}
+                // Fall back to the note's own page when the run omits a page count, so a note
+                // beyond page 1 still renders (PageStack draws pages 0…n-1).
+                pageCount={Math.max(result?.page_count ?? 1, detail?.page ?? 1)}
                 picked={picked}
                 maxHeight="100%"
               />

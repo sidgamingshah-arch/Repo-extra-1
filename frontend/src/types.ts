@@ -178,6 +178,7 @@ export interface StatementResponse {
   currency: string;
   currency_symbol: string;
   units: string;
+  units_scale_factor?: number;  // detected source magnitude (e.g. 1000 for "in thousands"); default 1
   rows: StatementRow[];
   viewer: ViewerMeta;
   format?: string;       // real docs: "pdf" | "xlsx" | … → chooses the live source viewer
