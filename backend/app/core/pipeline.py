@@ -48,6 +48,7 @@ def default_pipeline() -> Pipeline:
     from app.stages.link_notes import LinkNotesStage
     from app.stages.reconcile import ReconcileStage
     from app.stages.confidence import ConfidenceStage
+    from app.stages.structural import StructuralStage
 
     # Table reconstruction is performed inside the extract stage (native pages via the
     # PyMuPDF text layer + shared row_reconstruct; scanned pages via the OCR port), so there
@@ -63,4 +64,5 @@ def default_pipeline() -> Pipeline:
         LinkNotesStage(),
         ReconcileStage(),
         ConfidenceStage(),
+        StructuralStage(),
     ])

@@ -37,6 +37,28 @@ class RuleResult(BaseModel):
     details: dict = Field(default_factory=dict)
 
 
+class StructuralReport(BaseModel):
+    """Template-structure validation (rollups + declared identities) as ``RuleResult`` rows.
+
+    Both outcomes are kept: a relation actually checked (``pass``/``fail``) and one that could
+    not be checked because a participant was never extracted (``skipped``, with the reason).
+    Keeping the skips is the honest half — it says how much of the structure a run could
+    verify, so a nearly-unverified extraction can't read as a clean one.
+    """
+
+    results: list[RuleResult] = Field(default_factory=list)
+    failed_assertions: list[str] = Field(default_factory=list)
+
+    def evaluated(self) -> list[RuleResult]:
+        return [r for r in self.results if r.status in ("pass", "fail")]
+
+    def failures(self) -> list[RuleResult]:
+        return [r for r in self.results if r.status == "fail"]
+
+    def skipped(self) -> list[RuleResult]:
+        return [r for r in self.results if r.status == "skipped"]
+
+
 class ReviewItemModel(BaseModel):
     rule_id: str
     category: str

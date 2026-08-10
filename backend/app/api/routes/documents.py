@@ -123,6 +123,25 @@ _TR.update({
 })
 
 
+# structural validation (template rollups / identities)
+_TR.update({
+    "Figure does not equal its template components":
+        {"zh": "数字与模板组成部分不符", "ar": "الرقم لا يساوي مكوناته في القالب",
+         "fr": "Le montant ne correspond pas à ses composantes du modèle"},
+    "Reported": {"zh": "已报告", "ar": "المُبلَّغ", "fr": "Déclaré"},
+    "Sum of template components": {"zh": "模板组成部分合计", "ar": "مجموع مكونات القالب",
+                                   "fr": "Somme des composantes du modèle"},
+    "The reported figure does not equal the components the template says it is made of, so a "
+    "value is on the wrong line. Check the components and the total against the document.":
+        {"zh": "报告的数字与模板所述的组成部分不相等，说明某个数值被放在了错误的行。请将各组成部分及合计与文档核对。",
+         "ar": "الرقم المُبلَّغ لا يساوي المكونات التي يحددها القالب، أي أن قيمة وُضعت في السطر الخطأ. راجع المكونات والمجموع مقابل المستند.",
+         "fr": "Le montant déclaré ne correspond pas aux composantes définies par le modèle : une valeur est sur la mauvaise ligne. Vérifiez les composantes et le total dans le document."},
+    "Flipping the sign of": {"zh": "改变符号的项目：", "ar": "قلب إشارة", "fr": "Inverser le signe de"},
+    "would make it balance.": {"zh": "即可使其平衡。", "ar": "سيجعلها متوازنة.",
+                               "fr": "permettrait d'équilibrer."},
+})
+
+
 def _t(s: str, locale: str) -> str:
     if not s or locale == "en":
         return s
@@ -406,9 +425,51 @@ def _row_value(rows: list[dict], key: str, basis: str = "consolidated", period: 
     return None
 
 
-def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str) -> list[dict]:
+def _structural_checks(structural: list[dict], locale: str, covered: set[str]) -> list[dict]:
+    """Failed template-structure relations as review items (from the structural stage).
+
+    Only ``fail`` rows become checks: a ``skipped`` row means the relation could not be
+    evaluated because a participant was never extracted, which is a coverage fact, not a
+    defect. Relations whose total already has its own check (the balance identity) are left to
+    it so the analyst doesn't see the same difference twice.
+    """
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    out: list[dict] = []
+    for res in structural:
+        d = res.get("details") or {}
+        if res.get("status") != "fail" or d.get("target") in covered:
+            continue
+        expected, actual = float(res.get("expected") or 0), float(res.get("actual") or 0)
+        suspect = d.get("sign_suspect")
+        calc = [[L("Reported"), f"{actual:,.0f}", False],
+                [L("Sum of template components"), f"{expected:,.0f}", True],
+                [L("Difference"), f"{actual - expected:,.0f}", False]]
+        calc += [[k, f"{float(v):,.0f}", False]
+                 for k, v in (d.get("component_values") or {}).items()]
+        fix = L("The reported figure does not equal the components the template says it is made "
+                "of, so a value is on the wrong line. Check the components and the total "
+                "against the document.")
+        if suspect:
+            fix = f"{fix} {L('Flipping the sign of')} {suspect} {L('would make it balance.')}"
+        out.append({
+            "id": f"chk-structural-{res.get('rule_id')}-{res.get('scope_key')}",
+            "type": "structural", "icon": "≠",
+            "title": L("Figure does not equal its template components"),
+            "where": f"{d.get('target')} · {res.get('scope_key')}",
+            "severity": L("Check failed"), "tone": "high",
+            "delta": f"{actual - expected:,.0f}", "target": d.get("target") or "",
+            "calc": calc, "fix": fix,
+        })
+    return out
+
+
+def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str,
+                       structural: list[dict] | None = None) -> list[dict]:
     """Failed accounting validations for the review queue (Req 11): the balance-sheet
-    identity and note→face ties. Computed from the real extracted values."""
+    identity, note→face ties, and the template's structural relations. Computed from the real
+    extracted values."""
     def L(s: str) -> str:
         return _t(s, locale)
 
@@ -447,14 +508,18 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
             "fix": L("The note's detail rows do not sum to the face figure it supports. "
                      "Verify the note breakdown and the face value."),
         })
+    checks += _structural_checks(structural or [], locale,
+                                 covered={c["target"] for c in checks})
     return checks
 
 
 def _build_review(rows: list[dict], filename: str, locale: str = "en",
-                  reconciliation: list[dict] | None = None) -> dict:
+                  reconciliation: list[dict] | None = None,
+                  structural: list[dict] | None = None) -> dict:
     """Derive the human-in-the-loop review queue from a real extraction: failed accounting
-    checks (balance identity, note ties) plus unmapped and low-confidence line items become
-    review items (the QA the analyst works before export). No demo data involved."""
+    checks (balance identity, note ties, template structure) plus unmapped and low-confidence
+    line items become review items (the QA the analyst works before export). No demo data
+    involved."""
     def L(s: str) -> str:
         return _t(s, locale)
 
@@ -462,7 +527,7 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                      "line item, or add an alias so future runs map it automatically.")
     _LOWCONF_FIX = ("The mapping is uncertain. Confirm the concept is correct or reassign it; "
                     "the value and its source location are shown so you can verify against the document.")
-    accounting = _accounting_checks(rows, reconciliation or [], locale)
+    accounting = _accounting_checks(rows, reconciliation or [], locale, structural or [])
     checks: list[dict] = list(accounting)
     unmapped = low_conf = 0
     for i, r in enumerate(rows):
@@ -663,7 +728,8 @@ def get_document_commentary(document_id: str, locale: str = Query("en"),
         return {"headline": "", "assessment": "", "metrics": [], "trends": [],
                 "strengths": [], "weaknesses": [], "data_quality": "", "basis": ""}
     rows = run.result.get("rows", [])
-    review = _build_review(rows, "", locale, run.result.get("reconciliation", []))
+    review = _build_review(rows, "", locale, run.result.get("reconciliation", []),
+                           run.result.get("structural", []))
     units = run.result.get("units") or {}
     c = build_commentary_from_rows(
         rows, open_review_items=review["summary"]["open"], basis=basis,
@@ -685,7 +751,8 @@ def get_document_review(document_id: str, locale: str = Query("en"),
         return {"checks": [], "tabs": [{"label": _t("All", locale), "count": 0}],
                 "summary": {"open": 0, "passed": 0}}
     return _build_review(run.result.get("rows", []), doc.filename or "document", locale,
-                         run.result.get("reconciliation", []))
+                         run.result.get("reconciliation", []),
+                         run.result.get("structural", []))
 
 
 class LineItemEdit(BaseModel):

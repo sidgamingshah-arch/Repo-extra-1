@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from .enums import DocFormat, PageKind, PageSourceKind
 from .integrity import IntegrityReport
 from .line_item import FaceNoteLink, LineItem, NotesTable, UnitContext
-from .reports import ReconciliationReport
+from .reports import ReconciliationReport, StructuralReport
 from .table import Table
 
 
@@ -53,6 +53,7 @@ class DocumentModel(BaseModel):
     notes: list[NotesTable] = Field(default_factory=list)
     links: list[FaceNoteLink] = Field(default_factory=list)
     reconciliation: ReconciliationReport | None = None
+    structural: StructuralReport | None = None   # template rollup/identity validation
     unit_context: UnitContext | None = None    # detected source currency + scale ("in ₹ crore")
 
     def face_pages(self) -> list[PageSource]:

@@ -1172,6 +1172,13 @@
           "label_i18n": {
             "en": "Gross profit",
             "zh": "毛利"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_income__revenue_from_operations",
+              "pl_expenses__cost_of_goods_sold"
+            ]
           }
         },
         {
@@ -1202,6 +1209,14 @@
           "label_i18n": {
             "en": "Profit before exceptional items and tax",
             "zh": "非经常性项目及税前利润"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_income__total_income",
+              "pl_expenses__total_operating_cost",
+              "pl_non_operating_expenses__total_non_operating_expense"
+            ]
           }
         },
         {
@@ -1212,6 +1227,13 @@
           "label_i18n": {
             "en": "Profit before tax",
             "zh": "税前利润"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_profit_before_exceptional_items_and_tax",
+              "pl_exceptional_items__total_exceptional_items"
+            ]
           }
         },
         {
@@ -1222,6 +1244,13 @@
           "label_i18n": {
             "en": "Profit for the year",
             "zh": "年度利润"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_profit_before_tax",
+              "pl_tax_expense__total_tax_expense"
+            ]
           }
         }
       ]
@@ -1742,6 +1771,13 @@
           "label_i18n": {
             "en": "Closing cash and cash equivalents",
             "zh": "期末现金及现金等价物"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "cf_opening_cash_and_cash_equivalents",
+              "cf_net_increase_decrease_in_cash_and_cash_equivalents"
+            ]
           }
         }
       ]

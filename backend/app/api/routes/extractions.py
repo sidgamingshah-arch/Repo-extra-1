@@ -16,7 +16,7 @@ from app.api.deps import db, settings as get_settings_dep
 from app.api.routes.documents import authorized_document
 from app.config import Settings
 from app.ports.object_store import LocalObjectStore
-from app.schemas.loader import load_ontology
+from app.schemas.loader import load_ontology, load_template
 from app.security import Permission, require
 from app.services import audit as audit_svc
 from app.services.documents import run_extraction
@@ -180,7 +180,7 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
     its own DB session + object store (the request's are gone by the time this executes)."""
     from app.config import get_settings
     from app.db.base import SessionLocal
-    from app.db.models import ExtractionRun, OntologyVersion
+    from app.db.models import ExtractionRun, OntologyVersion, TemplateVersion
 
     session = SessionLocal()
     try:
@@ -192,10 +192,21 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             ont_row = session.get(OntologyVersion, oid)
             if ont_row is not None:
                 ontology = load_ontology(ont_row.definition)
+        # The template is the run's target definition; the structural stage validates the
+        # extraction against the rollups and identities it declares.
+        template = None
+        tid = options.get("template_version_id")
+        if tid:
+            tpl_row = session.get(TemplateVersion, tid)
+            if tpl_row is not None:
+                try:
+                    template = load_template(tpl_row.definition)
+                except Exception:  # noqa: BLE001 — a bad stored template must not fail the run
+                    template = None
 
         data = store.get(object_key)
         doc_model, ctx = run_extraction(data, filename=filename, ontology=ontology,
-                                        included_pages=included_pages)
+                                        included_pages=included_pages, template=template)
         run = session.get(ExtractionRun, run_id)
         if run is None:
             return
@@ -213,6 +224,7 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             disclosures = []
 
         recon = doc_model.reconciliation
+        structural = doc_model.structural
         run.result = {
             "locale": doc_model.locale,
             "format": doc_model.fmt.value,
@@ -226,6 +238,10 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             "note_details": _serialize_notes(doc_model),
             "disclosures": disclosures,
             "reconciliation": ([e.model_dump(mode="json") for e in recon.entries] if recon else []),
+            # Template-structure validation: relations checked (pass/fail) AND the ones that
+            # could not be checked, so partial coverage is visible rather than implied.
+            "structural": ([r.model_dump(mode="json") for r in structural.results]
+                           if structural else []),
             "units": (doc_model.unit_context.model_dump(mode="json")
                       if doc_model.unit_context else None),
             # How mapping ran. Surfaced (not just logged) so a deterministic-only run — the

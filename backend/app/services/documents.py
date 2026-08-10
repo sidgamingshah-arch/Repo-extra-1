@@ -24,11 +24,13 @@ def content_hash(data: bytes) -> str:
 
 
 def _context(data: bytes, object_store=None, ontology=None,
-             progress_cb=None, included_pages=None) -> PipelineContext:
+             progress_cb=None, included_pages=None, template=None) -> PipelineContext:
     ctx = PipelineContext(raw_bytes=data, object_store=object_store,
                           progress_cb=progress_cb)
     if ontology is not None:
         ctx.ontology = ontology  # attribute read by MapOntologyStage
+    if template is not None:
+        ctx.template = template  # attribute read by StructuralStage
     if included_pages is not None:
         ctx.included_pages = set(included_pages)
     return ctx
@@ -45,9 +47,10 @@ def analyze_document(data: bytes, filename: str = "") -> tuple[DocumentModel, Pi
 
 
 def run_extraction(data: bytes, filename: str = "", ontology=None,
-                   progress_cb=None, included_pages=None) -> tuple[DocumentModel, PipelineContext]:
+                   progress_cb=None, included_pages=None,
+                   template=None) -> tuple[DocumentModel, PipelineContext]:
     doc = DocumentModel(filename=filename, content_hash=content_hash(data))
     ctx = _context(data, ontology=ontology, progress_cb=progress_cb,
-                   included_pages=included_pages)
+                   included_pages=included_pages, template=template)
     doc = default_pipeline().run(doc, ctx)
     return doc, ctx
