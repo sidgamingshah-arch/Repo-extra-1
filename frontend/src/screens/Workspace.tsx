@@ -9,7 +9,7 @@ import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/u
 import { EmptyState } from "../components/EmptyState";
 import { ExcelGrid, PageStack, toPicked, type Picked } from "../components/SourceViewer";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
-import type { Basis, StatementResponse, StatementRow } from "../types";
+import type { Basis, StatementKey, StatementResponse, StatementRow } from "../types";
 import { useDocumentStatement, useEditDocumentLineItem, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
@@ -19,7 +19,7 @@ import { SCREENS } from "./config";
 const COL_DIVIDER = "rgba(37,45,60,0.07)";
 const colDiv: CSSProperties = { borderLeft: `1px solid ${COL_DIVIDER}` };
 
-/* ---- toolbar labelled field chip (matches wireframe inline chip) ---- */
+/* ---- toolbar labelled field chip (display-only; e.g. currency is source-derived) ---- */
 function ToolChip({ label, value }: { label: string; value: string }) {
   return (
     <div
@@ -32,13 +32,61 @@ function ToolChip({ label, value }: { label: string; value: string }) {
         border: `1px solid ${color.cardBorder}`,
         borderRadius: radius.control,
         padding: "6px 11px",
-        cursor: "pointer",
       }}
     >
       <span style={{ color: color.muted }}>{label}</span>
       <span style={{ fontWeight: 600 }}>{value}</span>
-      <span style={{ color: color.faint }}>▾</span>
     </div>
+  );
+}
+
+/* ---- toolbar labelled <select> chip (interactive; e.g. units presentation) ---- */
+function ToolSelect<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 12,
+        color: color.sec,
+        border: `1px solid ${color.cardBorder}`,
+        borderRadius: radius.control,
+        padding: "5px 9px 5px 11px",
+      }}
+    >
+      <span style={{ color: color.muted }}>{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as T)}
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          fontFamily: font.sans,
+          color: color.ink,
+          border: "none",
+          outline: "none",
+          background: "transparent",
+          cursor: "pointer",
+        }}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -87,19 +135,54 @@ function PaperRow({ row, selected }: { row: StatementRow; selected: boolean }) {
   );
 }
 
+/* Scale a value for the chosen units presentation (display only; raw stays for editing). */
+function scaleFmt(n: number | null, scale: number): string {
+  if (n == null) return "";
+  if (scale <= 1) return fmtIN(n);
+  const dp = scale >= 1e6 ? 2 : 0;
+  return fmtIN(Number((n / scale).toFixed(dp)));
+}
+
+/* Small click-to-source chip on a value → drives the live document viewer. */
+function ValueSourceChip({ source, onPick }: {
+  source: StatementRow["source"]; onPick: () => void;
+}) {
+  if (!source) return null;
+  const label = source.source_kind === "spreadsheet" && source.sheet
+    ? `${source.sheet}!${source.cell ?? ""}`
+    : `p.${(source.page_index ?? 0) + 1}${source.bbox ? " ⤢" : ""}`;
+  return (
+    <span
+      onClick={(e) => { e.stopPropagation(); onPick(); }}
+      role="button"
+      title={source.text_snippet ?? "Show source"}
+      style={{
+        fontFamily: font.mono, fontSize: 9.5, color: color.indigo, background: color.indigoTint2,
+        borderRadius: 5, padding: "1px 5px", cursor: "pointer", whiteSpace: "nowrap", flex: "0 0 auto",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
 /* ---- right output-panel row ---- */
 function OutputRow({
   row,
   sel,
+  unitScale,
   onSelect,
   onEdit,
   onOpenNote,
+  onPickSource,
 }: {
   row: StatementRow;
   sel: string;
+  unitScale: number;
   onSelect: (id: string) => void;
   onEdit: (id: string) => void;
   onOpenNote: (ref: string) => void;
+  onPickSource?: (row: StatementRow) => void;
 }) {
   const k = row.kind;
   const isSection = k === "section";
@@ -122,9 +205,10 @@ function OutputRow({
   const vwt = isSt || isTot ? 600 : selected ? 600 : 400;
   const vfg = isTot ? color.indigo : color.ink;
   const showV = isItem || isSt || isTot;
-  const v1 = showV ? fmtIN(row.v1) : "";
-  const v2 = showV ? fmtIN(row.v2) : "";
-  const note2 = row.note2 != null ? row.note2 : row.note;
+  const v1 = showV ? scaleFmt(row.v1, unitScale) : "";
+  const v2 = showV ? scaleFmt(row.v2, unitScale) : "";
+  const note = row.note ?? row.note2;   // single NOTE column (was duplicated per period)
+  const canSource = isItem && !!row.source && !!onPickSource;
 
   return (
     <div
@@ -157,30 +241,34 @@ function OutputRow({
         <StatusIcon status={row.status} />
       </div>
       <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        {row.note ? (
-          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(row.note!); }}>{row.note}</NoteChip>
+        {note ? (
+          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(note!); }}>{note}</NoteChip>
         ) : null}
       </div>
       {isItem ? (
         <span
-          onClick={(e) => {
-            e.stopPropagation();
-            onEdit(row.id);
-          }}
-          title="Click to edit value"
           style={{
             ...colDiv,
             display: "flex",
             alignItems: "center",
             justifyContent: "flex-end",
+            gap: 6,
             fontFamily: font.mono,
             fontSize: 12,
             fontWeight: vwt,
             color: vfg,
-            cursor: "text",
           }}
         >
-          <span style={{ borderBottom: `1px dashed ${selected ? color.indigo : "transparent"}` }}>{v1}</span>
+          {canSource && (
+            <ValueSourceChip source={row.source} onPick={() => onPickSource!(row)} />
+          )}
+          <span
+            onClick={(e) => { e.stopPropagation(); onEdit(row.id); }}
+            title="Click to edit value"
+            style={{ cursor: "text", borderBottom: `1px dashed ${selected ? color.indigo : "transparent"}` }}
+          >
+            {v1}
+          </span>
         </span>
       ) : (
         <span style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end",
@@ -188,11 +276,6 @@ function OutputRow({
           {v1}
         </span>
       )}
-      <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        {note2 ? (
-          <NoteChip onClick={(e) => { e?.stopPropagation(); onOpenNote(note2!); }}>{note2}</NoteChip>
-        ) : null}
-      </div>
       <span style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end",
                      fontFamily: font.mono, fontSize: 12, color: color.muted }}>{v2}</span>
       <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
@@ -313,8 +396,10 @@ function InspectorEditor({
 export default function WorkspaceScreen() {
   const navigate = useNavigate();
   const t = useT();
-  const { locale, dataset, setDataset, statement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing, setNote } =
+  const { locale, dataset, setDataset, statement, setStatement, sel, selRow, selForEdit, editing, startEdit, cancelEdit, stopEditing, setNote } =
     useUI();
+  // Units presentation is a display-only scale (raw values stay intact for editing/formulas).
+  const [unitScale, setUnitScale] = useState(1);
   // Open a note reference: select it and jump to the All Notes screen.
   const openNote = (ref: string) => {
     const n = parseInt(ref, 10);
@@ -382,9 +467,27 @@ export default function WorkspaceScreen() {
           value={dataset}
           onChange={setDataset}
         />
-        <ToolChip label={t("ws.statement")} value={d.label} />
+        <Segmented<StatementKey>
+          options={[
+            { value: "balance_sheet", label: t("ws.stmt.balance_sheet") },
+            { value: "profit_and_loss", label: t("ws.stmt.profit_and_loss") },
+            { value: "cash_flow", label: t("ws.stmt.cash_flow") },
+          ]}
+          value={statement}
+          onChange={setStatement}
+        />
         <ToolChip label={t("ws.currency")} value={`${d.currency} ${d.currency_symbol}`} />
-        <ToolChip label={t("ws.units")} value={d.units} />
+        <ToolSelect<string>
+          label={t("ws.units")}
+          value={String(unitScale)}
+          options={[
+            { value: "1", label: t("ws.units.as_reported") },
+            { value: "1000", label: t("ws.units.thousands") },
+            { value: "1000000", label: t("ws.units.millions") },
+            { value: "1000000000", label: t("ws.units.billions") },
+          ]}
+          onChange={(v) => setUnitScale(Number(v))}
+        />
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9 }}>
           <span
             style={{
@@ -585,7 +688,6 @@ export default function WorkspaceScreen() {
             <span>{t("col.lineitem")}</span>
             <span style={{ textAlign: "center", ...colDiv }}>{t("col.note")}</span>
             <span style={{ textAlign: "right", ...colDiv }}>{d.periods[0]}</span>
-            <span style={{ textAlign: "center", ...colDiv }}>{t("col.note")}</span>
             <span style={{ textAlign: "right", ...colDiv }}>{d.periods[1]}</span>
             <span style={{ textAlign: "right", ...colDiv }}>{t("col.conf")}</span>
           </div>
@@ -593,8 +695,12 @@ export default function WorkspaceScreen() {
           {/* scroll body */}
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {d.rows.map((r) => (
-              <OutputRow key={r.id} row={r} sel={sel} onSelect={handleSelect}
-                         onEdit={editable ? selForEdit : () => {}} onOpenNote={openNote} />
+              <OutputRow key={r.id} row={r} sel={sel} unitScale={unitScale} onSelect={handleSelect}
+                         onEdit={editable ? selForEdit : () => {}} onOpenNote={openNote}
+                         onPickSource={usingReal ? (row) => {
+                           const p = toPicked(row.source ?? null, row.label);
+                           if (p) setPicked(p);
+                         } : undefined} />
             ))}
           </div>
 

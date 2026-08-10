@@ -4,9 +4,10 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Card } from "../components/ui";
+import { PageStack, type PdfPick } from "../components/SourceViewer";
 import { SCREENS } from "./config";
 import { useT } from "../i18n";
-import { useDocumentNote, useDocumentNotes, useNote, useNotes, useProjectLoaded } from "../lib/queries";
+import { useDocumentNote, useDocumentNotes, useDocumentRun, useNote, useNotes, useProjectLoaded } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { useUI } from "../store";
 import { color, confStyle, fmtIN, font, radius } from "../theme";
@@ -148,6 +149,15 @@ export default function NotesScreen() {
   const demoDetail = useNote(note, locale, !usingReal);
   const notes = usingReal ? realNotes.data : demoNotes.data;
   const detail = usingReal ? realDetail.data : demoDetail.data;
+  // Real native-PDF docs get a side-by-side annual-report view, open by default, framed to
+  // the selected note's page (no note-level bbox → the whole page is highlighted, not a region).
+  const run = useDocumentRun(activeDocumentId ?? undefined);
+  const result = run.data?.result;
+  const showViewer = usingReal && result?.format === "pdf" && !!activeDocumentId;
+  const picked: PdfPick | null =
+    showViewer && detail && detail.page > 0
+      ? { kind: "pdf", page_index: detail.page - 1, bbox: { x0: 0, y0: 0, x1: 1, y1: 1 }, label: detail.title }
+      : null;
 
   // On a real doc, if the remembered note isn't one this document has, select the first.
   useEffect(() => {
@@ -242,8 +252,52 @@ export default function NotesScreen() {
           })}
         </div>
       </div>
-      <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 34px" }}>
-        {detail ? <Detail detail={detail} /> : <Loading />}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", minHeight: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 34px" }}>
+          {detail ? <Detail detail={detail} /> : <Loading />}
+        </div>
+        {showViewer && activeDocumentId && (
+          <div
+            style={{
+              flex: "0 0 42%",
+              minWidth: 0,
+              borderLeft: `1px solid ${color.cardBorder}`,
+              background: color.viewerBg,
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "8px 12px",
+                background: color.viewerHeader,
+                color: "#dfe3e9",
+                flex: "0 0 auto",
+                fontSize: 11.5,
+                fontWeight: 600,
+              }}
+            >
+              <span>{t("n.sourceView")}</span>
+              {detail && detail.page > 0 && (
+                <span style={{ color: "#aab1bc", fontWeight: 400 }}>
+                  · {t("n.sourcePage")} {detail.page}
+                </span>
+              )}
+            </div>
+            <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12, background: "#e9ebef" }}>
+              <PageStack
+                documentId={activeDocumentId}
+                pageCount={result?.page_count ?? 1}
+                picked={picked}
+                maxHeight="100%"
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
