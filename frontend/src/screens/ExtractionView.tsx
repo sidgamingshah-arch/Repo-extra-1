@@ -16,8 +16,26 @@ import type { ExtractionRow, Locale, OntologyRef } from "../types";
 
 const GRID = "1.8fr 56px 1.3fr 1.1fr";
 
-function RowLine({ row, t, onPick }: {
-  row: ExtractionRow; t: (k: string) => string; onPick: (p: Picked) => void;
+/** Digit grouping follows the FILING, not the app: Indian filings group as 12,68,100 while
+ *  IFRS/HKFRS filings group as 1,268,100. Rendering an HK filing with Indian grouping would
+ *  misrepresent the printed figure, so the source currency selects the convention. */
+function groupingLocale(currency: string | undefined): string {
+  return currency === "INR" ? "en-IN" : "en-US";
+}
+
+/** Format an extracted figure for reading: grouped digits, negatives in parentheses (the
+ *  accounting convention used elsewhere in the app). Anything non-numeric is passed through
+ *  unchanged rather than coerced — a caption that failed to parse must not become "0". */
+function fmtFigure(raw: string | null, loc: string): string {
+  if (raw == null || raw === "") return "—";
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return raw;
+  const abs = Math.abs(n).toLocaleString(loc, { maximumFractionDigits: 2 });
+  return n < 0 ? `(${abs})` : abs;
+}
+
+function RowLine({ row, t, onPick, loc }: {
+  row: ExtractionRow; t: (k: string) => string; onPick: (p: Picked) => void; loc: string;
 }) {
   const flagged = row.flags?.includes("low_mapping_confidence");
   return (
@@ -49,13 +67,15 @@ function RowLine({ row, t, onPick }: {
               key={i}
               onClick={clickable ? () => onPick(picked!) : undefined}
               role={clickable ? "button" : undefined}
-              title={[confTip, clickable ? "click to show in source" : ""].filter(Boolean).join(" · ") || undefined}
+              title={[v.value != null ? `as printed: ${v.value}` : "", confTip,
+                       clickable ? "click to show in source" : ""]
+                       .filter(Boolean).join(" · ") || undefined}
               style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
                        gap: 8, cursor: clickable ? "pointer" : "default" }}
             >
               <span style={{ fontSize: 11.5, fontFamily: font.mono, color: low ? color.amberFg : color.ink,
                              borderBottom: clickable ? `1px dashed ${color.indigoBorder2}` : undefined }}>
-                {v.value ?? "—"}{low ? " ⚠" : ""}
+                {fmtFigure(v.value, loc)}{low ? " ⚠" : ""}
               </span>
               {ref && (
                 <span style={{ fontFamily: font.mono, fontSize: 10, color: clickable ? color.indigo : color.muted2,
@@ -317,7 +337,8 @@ export default function ExtractionView() {
                   <div style={{ padding: "18px 14px", fontSize: 12.5, color: color.muted }}>{t("ex.empty")}</div>
                 )}
                 {shown.map((row, i) => (
-                  <RowLine key={i} row={row} t={t} onPick={setPicked} />
+                  <RowLine key={i} row={row} t={t} onPick={setPicked}
+                           loc={groupingLocale(u?.currency)} />
                 ))}
               </Card>
             </div>
