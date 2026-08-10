@@ -185,3 +185,85 @@ test("admin edits the ontology inline and the new version persists", async ({ pa
   await nodes.first().click();
   await expect(page.getByText(alias)).toBeVisible({ timeout: 15_000 });
 });
+
+test("admin edits the mapping CRITERIA and the new version persists", async ({ page }) => {
+  await loginAs(page, "admin");
+  await page.goto("/template", DCL);
+
+  const nodes = page.getByTestId("tpl-node");
+  await expect(nodes.first()).toBeVisible({ timeout: 15_000 });
+  await nodes.first().click();
+
+  // Criteria — not aliases — are what let an unfamiliar caption be mapped by MEANING, so they
+  // have to be editable: add an inclusion criterion the same way an alias is added.
+  const criterion = `E2E includes ${Date.now()}`;
+  const include = page.getByTestId("criteria-include").getByRole("textbox");
+  await expect(include).toBeVisible();
+  await include.fill(criterion);
+  await include.press("Enter");
+  await expect(page.getByText(criterion)).toBeVisible();
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
+
+  // The value-scope choice is a real select over the four scopes the backend accepts.
+  await expect(page.getByTestId("criteria-scope")).toBeVisible();
+
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText(/Saved as v\d+/)).toBeVisible({ timeout: 15_000 });
+
+  // Stored, not just local: it comes back after a full reload.
+  await page.reload(DCL);
+  await expect(nodes.first()).toBeVisible({ timeout: 15_000 });
+  await nodes.first().click();
+  await expect(page.getByText(criterion)).toBeVisible({ timeout: 15_000 });
+});
+
+test("admin adds a netting rule and it persists; unknown keys are impossible", async ({ page }) => {
+  await loginAs(page, "admin");
+  await page.goto("/template", DCL);
+  await expect(page.getByTestId("tpl-node").first()).toBeVisible({ timeout: 15_000 });
+
+  await page.getByTestId("netting-add").click();
+  const target = page.getByTestId("netting-target");
+  await expect(target).toBeVisible();
+  // Keys are PICKED from the concepts that exist — there is no free-text key field to typo.
+  const options = target.locator("option");
+  expect(await options.count()).toBeGreaterThan(1);
+  await target.selectOption({ index: 1 });
+
+  // The draft rule is rendered last; fill and save it there (existing rules have the same
+  // fields, so the locator has to be scoped to the row).
+  const draft = page.getByTestId("netting-rule").last();
+  const label = `E2E netting ${Date.now()}`;
+  await draft.getByTestId("netting-label").fill(label);
+  await draft.getByTestId("netting-save").click();
+  await expect(page.getByText(/Saved as v\d+/)).toBeVisible({ timeout: 15_000 });
+
+  // Stored: after a reload the rule comes back (the server appends it, so it is the last row)
+  // with the explanation we typed.
+  await page.reload(DCL);
+  await expect(page.getByTestId("tpl-node").first()).toBeVisible({ timeout: 15_000 });
+  const rows = page.getByTestId("netting-rule");
+  const saved = rows.last();
+  await expect(saved.getByTestId("netting-label")).toHaveValue(label, { timeout: 15_000 });
+  const before = await rows.count();
+
+  // Clean up after ourselves so the rule doesn't leak into later runs (delete is two-step).
+  await saved.getByTestId("netting-delete").click();
+  await saved.getByTestId("netting-delete").click();
+  await expect(page.getByText(/Saved as v\d+/)).toBeVisible({ timeout: 15_000 });
+  await expect(rows).toHaveCount(before - 1, { timeout: 15_000 });
+});
+
+test("an analyst gets no ontology editing affordances at all", async ({ page }) => {
+  await loginAs(page, "analyst");
+
+  // The authoring screen is admin-only, so the analyst is redirected away from it — and none
+  // of the criteria / netting edit controls exist anywhere in their app.
+  await page.goto("/template", DCL);
+  await expect(page).not.toHaveURL(/\/template/);
+  await expect(page.getByTestId("criteria-include")).toHaveCount(0);
+  await expect(page.getByTestId("criteria-scope")).toHaveCount(0);
+  await expect(page.getByTestId("netting-add")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save rule" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save changes" })).toHaveCount(0);
+});

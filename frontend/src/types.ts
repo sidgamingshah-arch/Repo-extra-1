@@ -521,7 +521,26 @@ export interface NodeConfig {
   value_type: string;
   aggregation: string;
   netting: { expr: string; explain: string };
+  /** The criteria the mapper reasons over. Aliases only fire when the printed wording is
+   *  close to one; these decide the concept by MEANING, so they are editable too. Optional
+   *  because the demo project's template view predates them. */
+  definition?: string;
+  include?: string[];
+  exclude?: string[];
+  /** Other canonical_keys this concept is easily confused with (server rejects unknown keys). */
+  confusable_with?: string[];
+  value_scope?: ValueScope;
+  /** Lexical hints for the deterministic tier (keyword / regex / phrases that rule a match out). */
+  keyword_hints?: string[];
+  regex_hints?: string[];
+  exclude_hints?: string[];
 }
+/** How a concept's value relates to its neighbours — mirrors the backend `ValueScope`. */
+export type ValueScope =
+  | "exclusive_leaf"
+  | "exclusive_child"
+  | "exclusive_residual"
+  | "not_applicable";
 export interface NettingRuleView {
   id: string;
   target_key: string;
@@ -539,6 +558,41 @@ export interface TemplateResponse {
   /** The ontology version whose rules this view shows — the target of inline edits.
    *  Null when no ontology targets this template (nothing to edit). */
   ontology?: { id: string; ontology_key: string; version: number; locale: string } | null;
+}
+
+/** An inline edit to ONE concept's mapping rules; only the fields present are changed.
+ *  `aliases` is locale-scoped, so editing one language never clobbers another's list. */
+export interface MappingEdit {
+  canonical_key: string;
+  locale?: string;
+  aliases?: string[];
+  sign_convention?: string;
+  label?: string;
+  description?: string;
+  definition?: string;
+  include?: string[];
+  exclude?: string[];
+  confusable_with?: string[];
+  value_scope?: ValueScope;
+  keyword_hints?: string[];
+  regex_hints?: string[];
+  exclude_hints?: string[];
+}
+/** Upsert or remove ONE netting rule, identified by its id. */
+export interface NettingRuleEdit {
+  id: string;
+  delete?: boolean;
+  target_key?: string;
+  subtract_keys?: string[];
+  add_keys?: string[];
+  condition?: string;
+  label?: string;
+}
+/** Every ontology edit publishes a new version — this is the version it published. */
+export interface OntologyEditResult {
+  id: string;
+  ontology_key: string;
+  version: number;
 }
 
 export interface ExportOption {

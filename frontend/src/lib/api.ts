@@ -85,9 +85,12 @@ import type {
   IntegrityResponse,
   Locale,
   LoginResponse,
+  MappingEdit,
   Me,
+  NettingRuleEdit,
   NoteDetail,
   NotesResponse,
+  OntologyEditResult,
   OntologyRef,
   PagesResponse,
   ProjectResponse,
@@ -266,22 +269,19 @@ export const api = {
   createOntology: (definition: unknown) =>
     req<{ id: string; ontology_key: string; version: number }>(
       `/ontologies`, { method: "POST", body: JSON.stringify({ definition }) }),
-  /** Edit ONE concept's rules inline. The server validates the result and publishes a NEW
-   *  ontology version (so a past extraction still explains itself against the version it
-   *  actually used); the response carries that new version's id/number. */
-  editOntologyMapping: (
-    ontologyId: string,
-    edit: {
-      canonical_key: string;
-      locale?: string;
-      aliases?: string[];
-      sign_convention?: string;
-      label?: string;
-      description?: string;
-    },
-  ) =>
-    req<{ id: string; ontology_key: string; version: number; canonical_key: string }>(
+  /** Edit ONE concept's rules inline — aliases, sign, and the mapping criteria the model
+   *  reasons over. The server validates the result and publishes a NEW ontology version (so a
+   *  past extraction still explains itself against the version it actually used); the
+   *  response carries that new version's id/number. */
+  editOntologyMapping: (ontologyId: string, edit: MappingEdit) =>
+    req<OntologyEditResult & { canonical_key: string }>(
       `/ontologies/${ontologyId}/mappings`,
+      { method: "PATCH", body: JSON.stringify(edit) }),
+  /** Upsert or delete ONE netting rule. Netting restates a reported figure, so it goes
+   *  through the same versioned publish + validation as a concept edit. */
+  editNettingRule: (ontologyId: string, edit: NettingRuleEdit) =>
+    req<OntologyEditResult>(
+      `/ontologies/${ontologyId}/netting-rules`,
       { method: "PATCH", body: JSON.stringify(edit) }),
   listTemplates: () =>
     req<{ id: string; template_key: string; name: string; version: number }[]>(`/templates`),

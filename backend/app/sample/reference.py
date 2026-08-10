@@ -25,9 +25,12 @@ def ensure_reference_data(session: Session) -> None:
     tpl = json.loads(_TEMPLATE.read_text())
     ont = json.loads(_ONTOLOGY.read_text())
 
+    # "Already seeded" means ANY version of the key exists, not exactly one: authoring and
+    # inline ontology edits publish further versions, and demanding a single row made the next
+    # startup after any edit crash on MultipleResultsFound.
     existing_tpl = session.execute(
         select(TemplateVersion).where(TemplateVersion.template_key == tpl["template_key"])
-    ).scalar_one_or_none()
+    ).scalars().first()
     if existing_tpl is None:
         session.add(TemplateVersion(
             template_key=tpl["template_key"], name=tpl.get("name", ""), version=1,
@@ -36,7 +39,7 @@ def ensure_reference_data(session: Session) -> None:
 
     existing_ont = session.execute(
         select(OntologyVersion).where(OntologyVersion.ontology_key == ont["ontology_key"])
-    ).scalar_one_or_none()
+    ).scalars().first()
     if existing_ont is None:
         session.add(OntologyVersion(
             ontology_key=ont["ontology_key"],
