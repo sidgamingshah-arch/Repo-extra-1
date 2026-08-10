@@ -110,6 +110,15 @@ def test_detect_entity_name_none_when_absent():
     assert detect_entity_name([(0, "Balance Sheet\nTotal assets 100")]) is None
 
 
+def test_detect_entity_name_from_running_header():
+    """Real HK/PRC filings print a running header 'Company Limited / Annual Report YYYY' on every
+    page — the entity is the segment before the slash, not the whole line (which reads as chrome)."""
+    from app.services.derived import detect_entity_name
+
+    pages = [(0, "01\nChina SCE Group Holdings Limited / Annual Report 2023\n中駿集團控股有限公司 / 二零二三年年報")]
+    assert detect_entity_name(pages) == "China SCE Group Holdings Limited"
+
+
 # --- admin template detail renders a REAL configured template (#13) -------------------------
 def test_template_detail_renders_real_template(client):
     templates = client.get("/api/v1/templates").json()

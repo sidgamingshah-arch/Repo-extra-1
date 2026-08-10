@@ -593,22 +593,34 @@ _STATEMENTish = re.compile(
     re.I)
 
 
+def _entity_from_segment(seg: str) -> str | None:
+    """A single candidate segment → the entity name if it looks like one, else None."""
+    line = re.sub(r"\s+", " ", seg).strip(" .-—·|")
+    if not (3 <= len(line) <= 90):
+        return None
+    if _STATEMENTish.search(line):
+        return None                               # a statement/section/running-header phrase
+    if _ENTITY_SUFFIX.search(line) and re.search(r"[A-Za-z]", line) \
+            and sum(c.isdigit() for c in line) <= 4:
+        return line
+    return None
+
+
 def detect_entity_name(pages: list[tuple[int, str]]) -> str | None:
-    """Best-effort entity name from the document's opening pages: the first prominent line
-    that carries a company-name suffix (Ltd / PLC / Inc / …) and isn't itself a statement
-    title. Deterministic and honest — returns None when nothing convincing is found rather
-    than guessing a heading. (An LLM extractor is the future upgrade.)"""
-    for _idx, text in pages[:3]:
+    """Best-effort entity name from the document's opening pages: the first prominent line (or
+    slash/pipe-separated segment of one) that carries a company-name suffix (Ltd / PLC / Inc / …)
+    and isn't itself a statement title or running-header phrase. Real HK/PRC filings print a
+    running header like 'ACME Holdings Limited / Annual Report 2024' — the entity is the segment
+    before the slash. Deterministic and honest: returns None when nothing convincing is found."""
+    for _idx, text in pages[:5]:
         for raw in text.splitlines():
-            line = re.sub(r"\s+", " ", raw).strip(" .-—·|")
-            if not (3 <= len(line) <= 90):
-                continue
-            if _STATEMENTish.search(line):
-                continue                          # a statement/section title, not the entity
-            if _ENTITY_SUFFIX.search(line) and re.search(r"[A-Za-z]", line):
-                # Avoid all-caps banners longer than a name and lines that are mostly digits.
-                if sum(c.isdigit() for c in line) <= 4:
-                    return line
+            # Try the whole line first, then each '/'- or '|'-separated segment (running headers
+            # glue the company name to 'Annual Report YYYY', which we must split off).
+            candidates = [raw, *re.split(r"[/|]", raw)]
+            for cand in candidates:
+                got = _entity_from_segment(cand)
+                if got:
+                    return got
     return None
 
 

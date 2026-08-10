@@ -75,6 +75,25 @@ def test_chinese_hk_prc_titles_and_note_patterns():
     assert _NOTE_REF.search("附註 14") and _NOTE_REF.search("note 14")
 
 
+def test_running_header_report_regions(client):
+    """A report with a bilingual running header on every page (as real HK/PRC filings have):
+    the Financial Highlights page that quotes 'Summary of Statement of Profit or Loss' and the
+    auditor's report must be OTHER; the three statements (with titles split across two lines)
+    are FACE; the two note pages are NOTES; the five-year summary back-matter is OTHER."""
+    from app.core.models import PageKind
+    from app.services.documents import run_extraction
+    from tests.fixtures.generate import make_hk_running_header_report_pdf
+
+    doc, _ = run_extraction(make_hk_running_header_report_pdf(), filename="hk.pdf")
+    k = {p.index: p.kind for p in doc.pages}
+    assert k[1] != PageKind.FACE, "Financial Highlights quotes a statement name but isn't one"
+    assert k[2] != PageKind.FACE, "the auditor's report is not a statement face"
+    for i in (3, 4, 5):
+        assert k[i] == PageKind.FACE, f"page {i} is a consolidated statement (split title)"
+    assert k[6] == PageKind.NOTES and k[7] == PageKind.NOTES
+    assert k[8] != PageKind.NOTES, "the five-year summary is back-matter, not a note"
+
+
 def test_integrity_gate_blocks_extraction(client):
     # A non-document upload is detected as an unknown/corrupt format → BLOCKER integrity finding.
     up = client.post("/api/v1/documents",

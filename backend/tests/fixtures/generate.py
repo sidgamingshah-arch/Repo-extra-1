@@ -216,6 +216,64 @@ def make_annual_report_pdf() -> bytes:
     return buf.getvalue()
 
 
+def make_hk_running_header_report_pdf() -> bytes:
+    """Reproduces the structure of a real HK/PRC-listed annual report that trips naive
+    classifiers: a bilingual RUNNING HEADER on every page, a Financial Highlights page that
+    quotes 'Summary of Statement of Profit or Loss' (must NOT be a face), an auditor's report
+    that mentions statements in prose, statement titles SPLIT across two lines, a 'Notes to
+    Consolidated Financial Statements' banner, and a Five Year Financial Summary in back-matter.
+    Ground truth: highlights + auditor = OTHER, the three statements = FACE, the two note pages =
+    NOTES, the five-year summary = OTHER."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _, height = A4
+    n = [0]
+
+    def page(title_lines, body_lines):
+        y = height - 56
+        c.setFont("Helvetica", 8)
+        c.drawString(60, y, f"{n[0]:02d}")                       # page number
+        c.drawString(90, y, "Acme Holdings Limited / Annual Report 2024")   # running header EN
+        c.setFont("Helvetica", 8)
+        c.drawString(90, y - 12, "艾克美控股有限公司 / 二零二四年年報")          # running header ZH
+        y -= 40
+        c.setFont("Helvetica-Bold", 13)
+        for tl in title_lines:                                    # the real page title (may split)
+            c.drawString(72, y, tl); y -= 18
+        c.setFont("Helvetica", 10)
+        y -= 6
+        for bl in body_lines:
+            c.drawString(72, y, bl); y -= 18
+        c.showPage(); n[0] += 1
+
+    page(["Annual Report 2024"], ["Corporate information", "Contents"])                    # 0 cover
+    page(["Financial Highlights", "Summary of Statement of Profit or Loss"],               # 1 highlights (OTHER)
+         ["Revenue      45,230", "Profit for the year      6,120"])
+    page(["Independent Auditor's Report"],                                                 # 2 auditor (OTHER)
+         ["In our opinion the consolidated financial statements give a true and fair view.",
+          "We audited the consolidated statement of profit or loss and the statement of cash flows."])
+    page(["Consolidated Statement of", "Profit or Loss"],                                  # 3 FACE (split title)
+         ["Revenue      Note 5      45,230", "Profit for the year      6,120"])
+    page(["Consolidated Statement of", "Financial Position"],                              # 4 FACE (split title)
+         ["Property, plant and equipment      Note 12      88,400",
+          "Cash and cash equivalents      Note 18      9,870", "Total assets      143,900"])
+    page(["Consolidated Statement of", "Cash Flows"],                                      # 5 FACE (split title)
+         ["Net cash from operating activities      14,200"])
+    page(["Notes to Consolidated", "Financial Statements"],                                # 6 NOTES (banner)
+         ["1. Corporate and group information",
+          "The Company is incorporated in the Cayman Islands with limited liability."])
+    page(["18 Cash and cash equivalents"],                                                 # 7 NOTES (continuation)
+         ["Cash at banks and on hand      9,870",
+          "See the statement of profit or loss for related interest income."])
+    page(["Five Year Financial Summary"],                                                  # 8 back-matter (OTHER)
+         ["Revenue      45,230      40,110      38,900      35,000      31,200"])
+    c.save()
+    return buf.getvalue()
+
+
 def make_xlsx() -> bytes:
     """A workbook with a negative-number format and a hidden sheet."""
     import openpyxl

@@ -52,6 +52,19 @@ _NOTE_REF = re.compile(r"\bnotes?\s*\d{1,2}\b|附註?\s*\d{1,2}", re.I)
 _DIGIT = re.compile(r"\d")
 
 
+# A page's running header repeats on every page of a real annual report (company name /
+# "Annual Report YYYY" / the Chinese equivalent). We skip those lines so a statement title is
+# read from the actual page heading beneath them, not from the running chrome.
+_RUNNING_HEADER = re.compile(r"annual report|interim report|年報|年度報告|中期報告", re.I)
+# Contexts where a face phrase is NOT a statement face: the highlights/summary pages and the
+# five-year summary that bracket the real statements.
+_SUMMARY_CTX = re.compile(r"summary|highlights?|five[\s-]?year|摘要", re.I)
+_BACKMATTER = re.compile(r"five[\s-]?year (financial )?summary|五年財務摘要|五年财务摘要", re.I)
+# The notes section opens at note 1 ("1. Corporate information" / "1 General information"),
+# even when a filing omits the explicit "Notes to…" banner.
+_NOTE_ONE = re.compile(r"(?m)^\s*(note\s*)?1[.)、]?\s+[A-Za-z一-鿿]{2,}")
+
+
 def _looks_like_heading(line: str) -> bool:
     """A statement title is a short heading line — not a sentence. Auditor's-report prose such
     as 'We audited the statement of profit or loss …' mentions face phrases but is long and ends
@@ -64,21 +77,56 @@ def _looks_like_heading(line: str) -> bool:
     return sum(ch.isdigit() for ch in s) <= 8   # a heading, not a row of figures
 
 
-def _face_title_at_top(text: str) -> bool:
-    """True when a face-statement title appears as a heading-like line among the first few
-    non-empty lines — anchored to the top AND shaped like a title, so a mid-page or in-sentence
-    mention (common in note prose and the auditor's report) never counts."""
-    seen = 0
+def _title_zone(text: str, limit: int = 6) -> list[str]:
+    """The page's heading lines: the first few non-empty lines, minus the leading page number
+    and the repeating running header. Real report titles sit just beneath the running chrome."""
+    out: list[str] = []
     for raw in text.splitlines():
-        line = raw.strip()
-        if not line:
+        s = raw.strip()
+        if not s:
             continue
-        seen += 1
-        if seen > 6:
+        if re.fullmatch(r"\d{1,4}", s):                 # a bare page number
+            continue
+        if _RUNNING_HEADER.search(s):                   # company / "Annual Report YYYY" band
+            continue
+        out.append(s)
+        if len(out) >= limit:
             break
-        if _looks_like_heading(line) and any(re.search(rx, line.lower()) for rx in _FACE_TITLES):
+    return out
+
+
+def _title_candidates(lines: list[str]) -> list[str]:
+    """Heading-like lines plus joins of consecutive heading-like lines — so a statement title
+    split across two lines ('CONSOLIDATED STATEMENT OF' / 'CASH FLOWS') is matched as one."""
+    cands = [l for l in lines if _looks_like_heading(l)]
+    run: list[str] = []
+    for l in lines:
+        if _looks_like_heading(l):
+            run.append(l)
+        elif len(run) >= 2:
+            cands.append(" ".join(run)); run = []
+        else:
+            run = []
+    if len(run) >= 2:
+        cands.append(" ".join(run))
+    return cands
+
+
+def _title_matches(text: str, patterns: list[str]) -> bool:
+    for c in _title_candidates(_title_zone(text)):
+        low = c.lower()
+        if any(re.search(rx, low) for rx in patterns):
             return True
     return False
+
+
+def _face_title_at_top(text: str) -> bool:
+    """A face-statement title as a heading beneath the running header — excluding the
+    highlights / summary pages that quote a statement name without being one."""
+    zone = " ".join(_title_zone(text)).lower()
+    if _SUMMARY_CTX.search(zone):
+        return False
+    return _title_matches(text, _FACE_TITLES)
 
 
 class ClassifyStage:
@@ -97,41 +145,34 @@ class ClassifyStage:
         except Exception:  # noqa: BLE001
             return doc
 
-        notes_started = False
-        seen_face = False       # a face statement has appeared → the notes come after it
+        # Annual reports run in order: narrative (cover / MD&A / directors / auditor) → the face
+        # statements → the notes → back-matter (five-year summary). We track that region so a
+        # note page that quotes a face phrase in prose isn't re-read as a face, and a highlights
+        # page that quotes one isn't a false statement. Regions: pre → face → notes → post.
+        region = "pre"
         for page_src in doc.pages:
             if page_src.index >= len(pdf):
                 continue
             text = pdf[page_src.index].get_text("text") or ""
-            low = text.lower()
 
-            face_title_at_top = _face_title_at_top(text)
-            notes_header = any(re.search(rx, low) for rx in _NOTES_HEADERS)
-            numbered_heading = bool(_NUMBERED_HEADING.search(text))
-            note_refs = len(_NOTE_REF.findall(low))
-            has_numbers = bool(_DIGIT.search(text))
+            face_title = _face_title_at_top(text)
+            notes_header = _title_matches(text, _NOTES_HEADERS)
+            note_one = bool(_NOTE_ONE.search(text)) and not face_title
+            backmatter = bool(_BACKMATTER.search(" ".join(_title_zone(text))))
 
-            # The notes section begins at an explicit header, or at a numbered note heading that
-            # either back-references a note OR follows the face statements — real reports open the
-            # notes with "1 General information" / "1 Basis of preparation", which carries no note
-            # reference and (in some filings) no "Notes to…" banner. A face page never starts it.
-            if not face_title_at_top and (
-                notes_header or (numbered_heading and (note_refs > 0 or seen_face))
-            ):
-                notes_started = True
+            if region in ("pre", "face") and notes_header:
+                region = "notes"
+            elif region == "pre" and face_title:
+                region = "face"
+            elif region == "face" and note_one:        # banner-less notes start at note 1
+                region = "notes"
+            if region == "notes" and backmatter:        # five-year summary etc. after the notes
+                region = "post"
 
-            if notes_started:
-                # Sticky: stay in NOTES unless a new face statement clearly leads the page
-                # (a face title at the very top, with no note heading/reference).
-                if face_title_at_top and not numbered_heading and note_refs == 0:
-                    kind, conf = PageKind.FACE, 0.7
-                elif has_numbers or numbered_heading or note_refs or notes_header:
-                    kind, conf = PageKind.NOTES, 0.75 if notes_header else 0.6
-                else:
-                    kind, conf = PageKind.OTHER, 0.4
-            elif face_title_at_top:
-                kind, conf = PageKind.FACE, 0.7
-                seen_face = True
+            if region == "face":
+                kind, conf = PageKind.FACE, 0.72
+            elif region == "notes":
+                kind, conf = PageKind.NOTES, 0.75 if notes_header else 0.6
             else:
                 kind, conf = PageKind.OTHER, 0.4
 
