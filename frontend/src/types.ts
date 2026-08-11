@@ -264,6 +264,24 @@ export interface StatementRow {
    *  ratio into "thousands" would be nonsense. */
   display1?: string | null;
   display2?: string | null;
+  /** Where the displayed figure came from:
+   *  - `extracted`            — read off the document (the ordinary line);
+   *  - `calculated`           — computed from the components the template declares;
+   *  - `manual`              — a value an analyst typed, which outranks both;
+   *  - `reported_uncomputed`  — a calculated line none of whose components were extracted, so
+   *                             the printed figure is shown UNVERIFIED and is in the review queue.
+   */
+  origin?: "extracted" | "calculated" | "manual" | "reported_uncomputed";
+  /** What the DOCUMENT printed for a calculated line. Never the line's displayed value — a
+   *  subtotal that contradicts its components is a finding, not a figure — but kept so the
+   *  divergence can be stated. */
+  reported1?: number | null;
+  reported2?: number | null;
+  /** What the components come to, present even when a manual value is displayed instead. */
+  calculated1?: number | null;
+  calculated2?: number | null;
+  /** Why a figure was overridden, per period ("current" / "prior"), with who and when. */
+  comments?: Record<string, { text: string; by?: string; at?: string }> | null;
 }
 
 /** A named column of a matrix statement — an equity component, not a period. */

@@ -298,10 +298,10 @@ export function useEditDocumentLineItem(documentId: string | undefined) {
   return useMutation({
     mutationFn: (vars: {
       key: string; value: number | null; formula: string;
-      basis: Basis; period: "current" | "prior";
+      basis: Basis; period: "current" | "prior"; comment?: string;
     }) =>
       api.editDocumentLineItem(documentId as string, vars.key, vars.value, vars.formula,
-                               vars.basis, vars.period),
+                               vars.basis, vars.period, vars.comment ?? ""),
     onSuccess: () => invalidateAfterEdit(qc, documentId),
   });
 }

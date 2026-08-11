@@ -175,14 +175,14 @@ export const api = {
    *  visible. The response echoes the figures the grid will now show. */
   editDocumentLineItem: (
     documentId: string, key: string, value: number | null, formula: string,
-    basis: Basis, period: "current" | "prior",
+    basis: Basis, period: "current" | "prior", comment = "",
   ) =>
     req<{
-      status: string; value: string | null; label: string;
+      status: string; value: string | null; label: string; comment: string;
       current: number | null; prior: number | null; combined_from: number;
     }>(
       `/documents/${documentId}/line-items/${encodeURIComponent(key)}`,
-      { method: "PATCH", body: JSON.stringify({ value, formula, basis, period }) },
+      { method: "PATCH", body: JSON.stringify({ value, formula, basis, period, comment }) },
     ),
   /** Revert an edited line item to its original machine-extracted values. */
   revertDocumentLineItem: (documentId: string, key: string) =>
