@@ -1,6 +1,11 @@
-/** Screen 4 — Workspace. The core extraction screen: source viewer (left) + editable
- * output panel with a cell inspector (right). Full-height flex layout, not a padded page.
- * Mirrors wireframe scrExtract + OUTPUT + SELINFO verbatim, data-driven from useStatement. */
+/** Screen 4 — Workspace. The core extraction screen: source viewer (left) + editable output panel
+ * (right) with the cell inspector along its bottom edge. Full-height flex layout, not a padded
+ * page. Mirrors wireframe scrExtract + OUTPUT + SELINFO verbatim, data-driven from useStatement.
+ *
+ * Selecting a figure describes it in the inspector; "Edit value" turns the inspector into the
+ * editor for both periods, with the comment recording why. Everything the inspector says — the
+ * origin, the arithmetic, each contribution's page, the comment — is resolved for the period on
+ * show, not for the row, because last year's figure is its own number with its own provenance. */
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
@@ -364,22 +369,15 @@ function OutputRow({
   sel,
   present,
   linkable,
-  editing,
   onSelect,
-  onEditCell,
-  onCommitCell,
   onOpenNote,
 }: {
   row: StatementRow;
   sel: string;
   present: (raw: number | null) => string;
   linkable: boolean;   // real doc whose value resolves to a source location
-  /** Which cell of THIS row is currently open for typing, if any. */
-  editing: "current" | "prior" | null;
   /** Selecting a row also drives the source viewer — to the period whose figure was clicked. */
   onSelect: (id: string, period?: "current" | "prior") => void;
-  onEditCell: (id: string, period: "current" | "prior" | null) => void;
-  onCommitCell: (row: StatementRow, period: "current" | "prior", raw: string) => void;
   onOpenNote: (ref: string) => void;
 }) {
   const k = row.kind;
@@ -418,52 +416,24 @@ function OutputRow({
   // just as much as this year's, so linking only the current column left half the grid dead.
   const links1 = linkable && isItem && !!row.source && toPicked(row.source, row.label) !== null;
   const links2 = linkable && isItem && !!row.source2 && toPicked(row.source2, row.label) !== null;
-  const canEdit = row.editable !== false && (isItem || isSt || isTot);
 
-  /** One figure cell. A single click follows it to the page it was printed on; a double click
-   *  opens it for typing IN PLACE. Editing a figure two hundred pixels below the figure — which
-   *  is what a bottom bar is — makes the analyst hold the number in their head to check the one
-   *  they typed. */
+  /** One figure cell. Clicking it selects the row — which follows the figure to the page it was
+   *  printed on and describes it in the inspector below, where it is also edited. */
   function valueCell(period: "current" | "prior", text: string, links: boolean,
                      weight: number, fg: string) {
-    const raw = period === "current" ? row.v1 : row.v2;
-    const isOpen = editing === period;
     const note = row.comments?.[period]?.text;
-    if (isOpen) {
-      return (
-        <span style={{ ...colDiv, display: "flex", alignItems: "center", padding: "0 2px" }}
-              onClick={(e) => e.stopPropagation()}>
-          <input
-            autoFocus
-            defaultValue={fmtPlain(raw)}
-            data-testid={`cell-input-${period}`}
-            onBlur={(e) => onCommitCell(row, period, e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") onCommitCell(row, period, e.currentTarget.value);
-              if (e.key === "Escape") { e.preventDefault(); onEditCell(row.id, null); }
-            }}
-            style={{ width: "100%", fontFamily: font.mono, fontSize: 12, textAlign: "right",
-                     border: `1px solid ${color.indigo}`, borderRadius: 4, padding: "3px 5px",
-                     outline: "none", boxShadow: shadow.focusRing }}
-          />
-        </span>
-      );
-    }
     return (
       <span
         data-testid={showV ? `${period === "current" ? "v1" : "v2"}-${row.id}` : undefined}
         onClick={showV ? (e) => { e.stopPropagation(); onSelect(row.id, period); } : undefined}
-        onDoubleClick={canEdit ? (e) => { e.stopPropagation(); onEditCell(row.id, period); }
-                               : undefined}
         title={[links ? (period === "current"
                           ? "Click to show this figure in the source document"
                           : "Click to show last year's figure in the source document") : "",
-                canEdit ? "Double-click to edit" : "",
                 note ? `Note: ${note}` : ""].filter(Boolean).join(" · ") || undefined}
         style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end",
                  gap: 4, fontFamily: font.mono, fontSize: 12, fontWeight: weight,
                  color: selected && links ? color.indigo : fg,
-                 cursor: links || canEdit ? "pointer" : "default" }}
+                 cursor: links ? "pointer" : "default" }}
       >
         {/* A figure carrying a reason why it was overridden says so where the figure is. */}
         {note && <span style={{ color: color.amberFg, fontSize: 10 }}>✎</span>}
@@ -524,340 +494,197 @@ function OutputRow({
   );
 }
 
-/* ---- the selected row's detail, beside the grid ----
+/* ---- inspector edit-mode body (local input state, remounts per selection) ----
  *
- * Everything that explains one figure, next to that figure: where it came from, the arithmetic if
- * it was computed, every component with its own page, the reason it was overridden if it was, and
- * the actions. Editing happens in the cell itself (double-click); this panel is for the parts of
- * an explanation that do not fit in a cell. */
-function RowDetail({
+ * Both periods are editable, and the save only closes the editor when the server accepted it: a
+ * rejected edit — a wrong basis, an unknown concept, a bad formula — must not look like a saved
+ * one, with the figure on screen simply never changing and nothing saying why.
+ *
+ * The comment belongs to ONE period (the one the inspector is describing), because the reason last
+ * year's figure was restated is not the reason this year's was. */
+type PeriodEdit = { period: "current" | "prior"; value: number | null };
+
+function InspectorEditor({
   row,
   periods,
-  present,
-  linkable,
-  canEdit,
+  period,
   saving,
   error,
-  onClose,
-  onEditCell,
-  onSaveComment,
-  onSaveFormula,
-  onRevert,
-  onPickContribution,
+  onSave,
+  onCancel,
 }: {
   row: StatementRow;
   periods: string[];
-  present: (raw: number | null) => string;
-  linkable: boolean;
-  canEdit: boolean;
+  /** The period the comment is filed against, and the one a formula-only save recomputes. */
+  period: "current" | "prior";
   saving: boolean;
   error: string | null;
-  onClose: () => void;
-  onEditCell: (cell: { id: string; period: "current" | "prior" } | null) => void;
-  onSaveComment: (row: StatementRow, period: "current" | "prior", text: string) => void;
-  onSaveFormula: (row: StatementRow, period: "current" | "prior", formula: string) => void;
-  onRevert: () => void;
-  onPickContribution: (picked: Picked | null) => void;
+  onSave: (edits: PeriodEdit[], formula: string, comment: string) => void;
+  onCancel: () => void;
 }) {
-  const [period, setPeriod] = useState<"current" | "prior">("current");
-  const existing = row.comments?.[period]?.text ?? "";
-  const [note, setNote] = useState(existing);
+  // A CALCULATED line has no stored expression — `row.formula` is empty and the rollup is shown as
+  // `arithmetic`, which is a rendering of figures ("100 + 50"), not an expression. Seeding the box
+  // from it would send it back on save for the server to evaluate, and a computed result outranks
+  // a typed value: the analyst's 200 would come back as 150.
   const [formula, setFormula] = useState(row.formula ?? "");
-  useEffect(() => { setNote(row.comments?.[period]?.text ?? ""); }, [row.id, period, row.comments]);
-  useEffect(() => { setFormula(row.formula ?? ""); }, [row.id, row.formula]);
+  const [v1, setV1] = useState(fmtPlain(row.v1));
+  const [v2, setV2] = useState(fmtPlain(row.v2));
+  const existingNote = row.comments?.[period]?.text ?? "";
+  const [note, setNote] = useState(existingNote);
 
-  // The panel talks about ONE period, so it uses that period's origin, not the row summary.
-  const origin = (period === "current" ? row.origin1 : row.origin2) ?? row.origin ?? "extracted";
-  const chip = ORIGIN_CHIP[origin];
-  const cs = row.confidence ? confStyle(row.confidence.cat) : null;
-  const reported = period === "current" ? row.reported1 : row.reported2;
-  const shown = period === "current" ? row.v1 : row.v2;
-  const computed = period === "current" ? row.calculated1 : row.calculated2;
-  // A calculated line's divergence from the printed figure is the finding this panel exists to
-  // state. The printed figure is never the line's value, but silence about it would hide the
-  // disagreement entirely.
-  const diverges = origin === "calculated" && reported != null && shown != null
-    && Math.abs(shown - reported) > 0.5;
+  useEffect(() => {
+    setFormula(row.formula ?? "");
+    setV1(fmtPlain(row.v1));
+    setV2(fmtPlain(row.v2));
+  }, [row.id, row.formula, row.v1, row.v2]);
+  useEffect(() => { setNote(row.comments?.[period]?.text ?? ""); },
+            [row.id, period, row.comments]);
 
-  const sectionTitle: CSSProperties = {
-    fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase",
-    color: color.muted, marginBottom: 6,
+  const commit = () => {
+    // Only the columns actually retyped are sent. Sending both would restate last year's figure
+    // as a manual value every time this year's is corrected, quietly detaching it from the page.
+    const edits: PeriodEdit[] = [];
+    if (v1 !== fmtPlain(row.v1)) edits.push({ period: "current", value: parseAccounting(v1) });
+    if (v2 !== fmtPlain(row.v2)) edits.push({ period: "prior", value: parseAccounting(v2) });
+    onSave(edits, formula, note);
   };
 
-  return (
-    <div
-      data-testid="row-detail"
+  const numInput = (val: string, set: (s: string) => void, testId: string) => (
+    <input
+      value={val}
+      spellCheck={false}
+      data-testid={testId}
+      onChange={(e) => set(e.target.value)}
       style={{
-        width: 340, flex: "0 0 340px", borderLeft: `1px solid ${color.cardBorder}`,
-        background: "#fbfcfd", display: "flex", flexDirection: "column", minHeight: 0,
+        width: 120,
+        fontFamily: font.mono,
+        fontSize: 12,
+        textAlign: "right",
+        border: `1px solid ${color.controlBorder}`,
+        borderRadius: 6,
+        padding: "6px 9px",
+        outline: "none",
       }}
-    >
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "12px 14px 10px",
-                    borderBottom: `1px solid ${color.hairline}` }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: color.ink, lineHeight: 1.35 }}>
-            {row.label}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 5,
-                        flexWrap: "wrap" }}>
-            {origin !== "extracted" && (
-              <span title={chip.help}
-                    style={{ fontSize: 10, fontWeight: 600, padding: "2px 7px",
-                             borderRadius: radius.pill, background: chip.bg, color: chip.fg }}>
-                {origin === "calculated" ? "calculated"
-                  : origin === "manual" ? "manual override" : "printed, unverified"}
-              </span>
-            )}
-            {cs && row.confidence && (
-              <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 7px",
-                             borderRadius: radius.pill, background: cs.bg, color: cs.fg }}>
-                {row.confidence.pct}%
-              </span>
-            )}
-            {row.inspector?.src && (
-              <span style={{ fontSize: 10.5, fontFamily: font.mono, color: color.muted }}>
-                {row.inspector.src}
-              </span>
-            )}
-          </div>
-        </div>
+    />
+  );
+
+  return (
+    <>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          background: color.surface,
+          border: `1px solid ${color.indigo}`,
+          borderRadius: radius.control,
+          padding: "8px 11px",
+          boxShadow: shadow.focusRing,
+        }}
+      >
+        <span style={{ fontFamily: font.mono, fontSize: 12, color: color.amberFg, fontWeight: 600 }}>ƒx</span>
+        <input
+          value={formula}
+          spellCheck={false}
+          data-testid="edit-formula"
+          placeholder="=bs_current_assets__cash + …"
+          onChange={(e) => setFormula(e.target.value)}
+          style={{
+            fontFamily: font.mono,
+            fontSize: 12,
+            color: color.ink,
+            flex: 1,
+            border: "none",
+            outline: "none",
+            background: "transparent",
+          }}
+        />
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 9, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: color.muted }}>{periods[0] || "Current"}</span>
+        {numInput(v1, setV1, "edit-v1")}
+        <span style={{ fontSize: 11, color: color.muted }}>{periods[1] || "Prior"}</span>
+        {numInput(v2, setV2, "edit-v2")}
         <button
-          onClick={onClose}
-          data-testid="row-detail-close"
-          style={{ border: "none", background: "transparent", cursor: "pointer",
-                   color: color.muted, fontSize: 15, lineHeight: 1, padding: 2 }}
+          onClick={commit}
+          disabled={saving}
+          data-testid="edit-save"
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: "#fff",
+            background: saving ? color.muted : color.indigo,
+            border: "none",
+            borderRadius: radius.controlSm,
+            padding: "7px 15px",
+            cursor: saving ? "default" : "pointer",
+          }}
         >
-          ×
+          {saving ? "Saving…" : "Save edit"}
         </button>
+        <button
+          onClick={onCancel}
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: color.ink2,
+            background: "#fff",
+            border: `1px solid ${color.controlBorder}`,
+            borderRadius: radius.controlSm,
+            padding: "7px 13px",
+            cursor: "pointer",
+          }}
+        >
+          Cancel
+        </button>
+        <span style={{ fontSize: 11, color: color.muted, flex: 1, minWidth: 200 }}>
+          Enter a number in either period, or a formula referencing other line items — the formula
+          is stored with the cell. Only the columns you change are saved.
+        </span>
       </div>
-
-      <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px", minHeight: 0 }}>
-        {/* which period the panel is talking about */}
-        <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
-          {(["current", "prior"] as const).map((p, i) => (
-            <button
-              key={p}
-              onClick={() => setPeriod(p)}
-              data-testid={`detail-period-${p}`}
-              style={{ flex: 1, fontSize: 11, fontWeight: 600, padding: "6px 8px",
-                       borderRadius: radius.controlSm, cursor: "pointer",
-                       border: `1px solid ${period === p ? color.indigo : color.controlBorder}`,
-                       background: period === p ? color.indigoTint2 : "#fff",
-                       color: period === p ? color.indigo : color.sec2 }}
-            >
-              {periods[i] || (p === "current" ? "Current" : "Prior")}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-          <span style={{ fontFamily: font.mono, fontSize: 20, fontWeight: 600, color: color.ink }}>
-            {(period === "current" ? row.display1 : row.display2) ?? present(shown)}
-          </span>
-          {canEdit && (
-            <button
-              onClick={() => onEditCell({ id: row.id, period })}
-              data-testid="edit-value"
-              style={{ fontSize: 11, fontWeight: 600, color: color.indigo, background: "#fff",
-                       border: `1px solid ${color.indigoBorder2}`, borderRadius: radius.controlSm,
-                       padding: "4px 9px", cursor: "pointer" }}
-            >
-              ✎ Edit
-            </button>
-          )}
-          {row.status === "edited" && (
-            <button
-              onClick={onRevert}
-              style={{ fontSize: 11, fontWeight: 600, color: color.sec2, background: "#fff",
-                       border: `1px solid ${color.controlBorder}`, borderRadius: radius.controlSm,
-                       padding: "4px 9px", cursor: "pointer" }}
-            >
-              ↺ Revert
-            </button>
-          )}
-        </div>
-
-        {/* the arithmetic — read-only for a computed line (its formula IS the template's rollup),
-            typeable for an ordinary one, where a formula referencing other lines drives the value */}
-        {origin === "calculated" && (row.arithmetic || row.formula) ? (
-          <div style={{ marginTop: 10 }}>
-            <div style={sectionTitle}>Computed as</div>
-            <div style={{ fontFamily: font.mono, fontSize: 11, color: color.sec,
-                          background: "#fff", border: `1px solid ${color.controlBorder}`,
-                          borderRadius: radius.control, padding: "7px 9px", lineHeight: 1.6,
-                          wordBreak: "break-word" }}>
-              {row.arithmetic ?? row.formula}
-            </div>
-          </div>
-        ) : canEdit ? (
-          <div style={{ marginTop: 10 }}>
-            <div style={sectionTitle}>Formula</div>
-            <div style={{ display: "flex", gap: 6 }}>
-              <input
-                value={formula}
-                spellCheck={false}
-                data-testid="detail-formula"
-                placeholder="=bs_current_assets__cash + …"
-                onChange={(e) => setFormula(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") onSaveFormula(row, period, formula); }}
-                style={{ flex: 1, minWidth: 0, fontFamily: font.mono, fontSize: 11,
-                         color: color.ink, border: `1px solid ${color.controlBorder}`,
-                         borderRadius: radius.control, padding: "7px 9px", outline: "none" }}
-              />
-              <button
-                onClick={() => onSaveFormula(row, period, formula)}
-                disabled={saving || formula === (row.formula ?? "")}
-                data-testid="detail-formula-save"
-                style={{ fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
-                         color: formula === (row.formula ?? "") ? color.muted : color.indigo,
-                         background: "#fff",
-                         border: `1px solid ${formula === (row.formula ?? "")
-                                              ? color.controlBorder : color.indigoBorder2}`,
-                         borderRadius: radius.controlSm, padding: "5px 9px",
-                         cursor: formula === (row.formula ?? "") ? "default" : "pointer" }}
-              >
-                ƒx Apply
-              </button>
-            </div>
-            <div style={{ fontSize: 10.5, color: color.muted, marginTop: 4, lineHeight: 1.5 }}>
-              References other line items by canonical key; the result becomes this figure.
-            </div>
-          </div>
-        ) : (row.arithmetic || row.formula) ? (
-          <div style={{ marginTop: 10 }}>
-            <div style={sectionTitle}>{row.arithmetic ? "Made up of" : "Formula"}</div>
-            <div style={{ fontFamily: font.mono, fontSize: 11, color: color.sec,
-                          wordBreak: "break-word" }}>{row.arithmetic ?? row.formula}</div>
-          </div>
-        ) : null}
-
-        {/* what the document printed, when that is a DIFFERENT number from the one shown */}
-        {diverges && (
-          <div
-            data-testid="reported-divergence"
-            style={{ marginTop: 10, padding: "8px 10px", background: color.amberBg,
-                     borderRadius: radius.control, fontSize: 11.5, color: color.amberFg,
-                     lineHeight: 1.55 }}
-          >
-            <strong style={{ fontWeight: 600 }}>The document printed {present(reported)}.</strong>{" "}
-            This line shows what its components come to. The difference
-            ({present((shown ?? 0) - (reported ?? 0))}) is in the review queue.
-          </div>
-        )}
-        {origin === "manual" && computed != null && (
-          <div style={{ marginTop: 10, fontSize: 11.5, color: color.sec, lineHeight: 1.55 }}>
-            The components come to {present(computed)}; the value above was entered by hand.
-          </div>
-        )}
-        {row.inspector?.note && !diverges && (
-          <div style={{ marginTop: 10, fontSize: 11.5, color: color.sec2, lineHeight: 1.55 }}>
-            {row.inspector.note}
-          </div>
-        )}
-
-        {/* every line that went into the figure, each clickable through to its page */}
-        {row.contributions?.length ? (
-          <div style={{ marginTop: 14 }}>
-            <div style={sectionTitle}>Made up of</div>
-            <div style={{ border: `1px solid ${color.controlBorder}`, borderRadius: radius.control,
-                          background: "#fff", overflow: "hidden" }}>
-              {row.contributions.map((c, i) => {
-                const prov = period === "current" ? c.source : c.source2;
-                const jump = linkable ? toPicked(prov ?? null, c.label) : null;
-                const v = period === "current" ? c.v1 : c.v2;
-                return (
-                  <div
-                    key={`${c.label}-${i}`}
-                    onClick={() => jump && onPickContribution(jump)}
-                    title={jump ? `Show ${period === "current" ? c.src : c.src2} in the document`
-                                : undefined}
-                    style={{ display: "flex", alignItems: "baseline", gap: 6, padding: "6px 9px",
-                             borderTop: i === 0 ? "none" : `1px solid ${color.hairline}`,
-                             cursor: jump ? "pointer" : "default" }}
-                  >
-                    <span style={{ fontSize: 11, color: color.ink, flex: 1, minWidth: 0,
-                                   textDecoration: jump ? "underline dotted" : "none" }}>
-                      {c.label}
-                    </span>
-                    {c.residual && (
-                      <span style={{ fontSize: 9, fontWeight: 600, padding: "1px 5px",
-                                     borderRadius: radius.pill, background: color.amberBg,
-                                     color: color.amberFg }}>
-                        {v == null ? "absent" : "routed"}
-                      </span>
-                    )}
-                    <span style={{ fontFamily: font.mono, fontSize: 10, color: color.muted }}>
-                      {(period === "current" ? c.src : c.src2) || ""}
-                    </span>
-                    <span style={{ fontFamily: font.mono, fontSize: 11, fontWeight: 600,
-                                   color: color.ink, minWidth: 66, textAlign: "right" }}>
-                      {v == null ? "—" : present(v)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        {/* the reason, for a figure that was overridden */}
-        {canEdit && (
-          <div style={{ marginTop: 14 }}>
-            <div style={sectionTitle}>Note on this figure</div>
-            <textarea
-              value={note}
-              data-testid="detail-comment"
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Why was this figure changed? Saved with the edit and carried into the export."
-              rows={3}
-              style={{ width: "100%", boxSizing: "border-box", fontSize: 11.5,
-                       fontFamily: font.sans, color: color.ink, resize: "vertical",
-                       border: `1px solid ${color.controlBorder}`, borderRadius: radius.control,
-                       padding: "7px 9px", outline: "none", lineHeight: 1.5 }}
-            />
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-              <button
-                onClick={() => onSaveComment(row, period, note)}
-                disabled={saving || note === existing}
-                data-testid="detail-comment-save"
-                style={{ fontSize: 11, fontWeight: 600,
-                         color: note === existing ? color.muted : "#fff",
-                         background: note === existing ? "#fff" : color.indigo,
-                         border: note === existing ? `1px solid ${color.controlBorder}` : "none",
-                         borderRadius: radius.controlSm, padding: "5px 11px",
-                         cursor: note === existing ? "default" : "pointer" }}
-              >
-                {saving ? "Saving…" : "Save note"}
-              </button>
-              {row.comments?.[period]?.by && (
-                <span style={{ fontSize: 10.5, color: color.muted }}>
-                  {row.comments[period].by}
-                  {row.comments[period].at ? ` · ${row.comments[period].at.slice(0, 10)}` : ""}
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div
-            data-testid="edit-error"
-            style={{ marginTop: 12, padding: "8px 10px", background: color.redBg,
-                     borderRadius: radius.control, fontSize: 11.5, color: color.redFg,
-                     lineHeight: 1.5 }}
-          >
-            <strong style={{ fontWeight: 600 }}>Not saved.</strong> {error}
-          </div>
-        )}
+      {/* why the figure was changed — saved with the edit, against the period named above */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginTop: 9 }}>
+        <span style={{ fontSize: 11, color: color.muted, paddingTop: 7, whiteSpace: "nowrap" }}>
+          Comment
+        </span>
+        <textarea
+          value={note}
+          data-testid="edit-comment"
+          onChange={(e) => setNote(e.target.value)}
+          placeholder={`Why is this figure being changed? Saved against `
+                       + `${period === "current" ? periods[0] || "the current period"
+                                                 : periods[1] || "the prior period"}`
+                       + ` and carried into the export.`}
+          rows={2}
+          style={{ flex: 1, minWidth: 0, boxSizing: "border-box", fontSize: 11.5,
+                   fontFamily: font.sans, color: color.ink, resize: "vertical",
+                   border: `1px solid ${color.controlBorder}`, borderRadius: radius.control,
+                   padding: "6px 9px", outline: "none", lineHeight: 1.5 }}
+        />
       </div>
-    </div>
+      {error && (
+        <div
+          data-testid="edit-error"
+          style={{ marginTop: 9, padding: "7px 11px", background: color.redBg,
+                   border: `1px solid ${color.redFg}22`, borderRadius: radius.control,
+                   fontSize: 11.5, color: color.redFg, lineHeight: 1.5 }}
+        >
+          <strong style={{ fontWeight: 600 }}>Not saved.</strong> {error}
+        </div>
+      )}
+    </>
   );
 }
 
 export default function WorkspaceScreen() {
   const navigate = useNavigate();
   const t = useT();
-  const { locale, dataset, setDataset, statement, setStatement, sel, selRow, setNote } = useUI();
+  const { locale, dataset, setDataset, statement, setStatement, sel, selRow, editing, startEdit,
+          cancelEdit, stopEditing, setNote } = useUI();
+  // Which period the inspector is describing — its origin, its arithmetic, the page each
+  // contribution was printed on, and the comment an edit is filed against. Per-period, because
+  // last year's figure has its own provenance and its own reason for having been restated.
+  const [inspPeriod, setInspPeriod] = useState<"current" | "prior">("current");
   // Units presentation is display-only (raw values stay intact for editing/formulas).
   const [unitTarget, setUnitTarget] = useState<UnitTarget>("as_reported");
   // Currency presentation: "" = the document's own currency (no conversion). A different target
@@ -889,11 +716,8 @@ export default function WorkspaceScreen() {
   const realRevertMut = useRevertDocumentLineItem(activeDocumentId ?? undefined);
   // The value's source location for the live viewer — set when a row is selected (real docs).
   const [picked, setPicked] = useState<Picked | null>(null);
-  // Why the last save was refused, shown in the detail panel. Null while nothing was rejected.
+  // Why the last save was refused, shown in the editor. Null while nothing has been rejected.
   const [editError, setEditError] = useState<string | null>(null);
-  // Which cell is open for typing. Editing happens IN the cell — a bottom bar put the input a
-  // long way from the figure it was changing.
-  const [editCell, setEditCell] = useState<{ id: string; period: "current" | "prior" } | null>(null);
   // A highlight belongs to one statement/basis; clear it when either changes so the viewer
   // never keeps pointing at a page/cell from the statement the user just navigated away from.
   useEffect(() => { setPicked(null); }, [statement, dataset]);
@@ -924,6 +748,9 @@ export default function WorkspaceScreen() {
   // (Excel). Clicking last year's number goes to last year's figure, not this year's.
   const handleSelect = (id: string, period: "current" | "prior" = "current") => {
     selRow(id);
+    // The inspector describes the figure that was clicked, so clicking last year's number
+    // switches it to last year rather than silently explaining this year's instead.
+    setInspPeriod(period);
     if (usingReal) {
       const row = d.rows.find((r) => r.id === id);
       const prov = period === "prior" ? (row?.source2 ?? null) : (row?.source ?? null);
@@ -987,63 +814,59 @@ export default function WorkspaceScreen() {
   const canEditSel = !!selRowObj && selRowObj.editable !== false
     && (selRowObj.kind === "item" || selRowObj.kind === "subtotal" || selRowObj.kind === "total");
   const saving = realEditMut.isPending || editMut.isPending;
-  // The detail panel is open whenever a row is selected. `editing` (the old bottom-bar mode) is
-  // still honoured so the "Edit value" affordance can open a cell from elsewhere.
-  const detailOpen = !!sel;
+  // The inspector describes ONE period, so it reads that period's origin rather than the row
+  // summary — a row whose current figure was overridden still has an extracted prior one.
+  const inspOrigin = (inspPeriod === "current" ? selRowObj?.origin1 : selRowObj?.origin2)
+    ?? selRowObj?.origin ?? "extracted";
+  const inspChip = ORIGIN_CHIP[inspOrigin];
+  const inspReported = inspPeriod === "current" ? selRowObj?.reported1 : selRowObj?.reported2;
+  const inspShown = inspPeriod === "current" ? selRowObj?.v1 : selRowObj?.v2;
+  const inspComputed = inspPeriod === "current" ? selRowObj?.calculated1 : selRowObj?.calculated2;
+  // A calculated line's divergence from the printed figure is a finding, so the inspector states
+  // it. The printed figure is never the line's value, but silence would hide the disagreement.
+  const inspDiverges = inspOrigin === "calculated" && inspReported != null && inspShown != null
+    && Math.abs(inspShown - inspReported) > 0.5;
+  const inspNote = selRowObj?.comments?.[inspPeriod];
 
-  /** Write ONE figure. Returns true when the server took it; on refusal the reason is shown and
-   *  the cell stays open, because a rejected edit that closes silently is indistinguishable from
-   *  a saved one. */
-  const writeFigure = async (row: StatementRow, period: "current" | "prior",
-                             value: number | null, comment: string) => {
-    try {
-      if (usingReal) {
-        await realEditMut.mutateAsync({ key: row.id, value, formula: row.formula ?? "",
-                                        basis: dataset, period, comment });
-      } else if (period === "current") {
-        await editMut.mutateAsync({ id: row.id, value, formula: row.formula ?? "" });
-      } else {
-        throw new Error("The sample project only supports editing the current period. "
-                        + "Upload a document to edit both.");
-      }
-      setEditError(null);
-      return true;
-    } catch (err) {
-      setEditError(editErrorText(err));
-      return false;
+  /** Save an edit: the retyped columns, the stored formula, and the reason.
+   *
+   *  The comment is filed against the period the inspector is describing; every other period keeps
+   *  the note already recorded against it, so correcting this year does not restate why last year
+   *  was changed. */
+  const saveEdit = async (edits: PeriodEdit[], formula: string, comment: string) => {
+    if (!selRowObj) return;
+    const figureFor = (p: "current" | "prior") => (p === "current" ? selRowObj.v1 : selRowObj.v2);
+    // A formula (or a comment) on its own is still an edit: it applies to the period on show.
+    const work: PeriodEdit[] = edits.length
+      ? [...edits]
+      : [{ period: inspPeriod, value: figureFor(inspPeriod) }];
+    // The comment is filed against the period on show, so that period has to be among the writes
+    // or the reason would be typed, accepted, and never sent — which is what happens when the
+    // inspector is showing last year while this year's column is the one being retyped.
+    if (comment !== (selRowObj.comments?.[inspPeriod]?.text ?? "")
+        && !work.some((e) => e.period === inspPeriod)) {
+      work.push({ period: inspPeriod, value: figureFor(inspPeriod) });
     }
-  };
-
-  /** Commit an in-cell edit. The row's existing note for that period is resent, so correcting a
-   *  figure does not silently drop the reason already recorded against it. */
-  const commitCell = async (row: StatementRow, period: "current" | "prior", raw: string) => {
-    const before = period === "current" ? row.v1 : row.v2;
-    const next = parseAccounting(raw);
-    if (next === before) { setEditCell(null); return; }        // nothing typed
-    const ok = await writeFigure(row, period, next, row.comments?.[period]?.text ?? "");
-    if (ok) setEditCell(null);
-  };
-
-  /** Save a note against a figure, leaving the figure itself alone. */
-  const saveComment = async (row: StatementRow, period: "current" | "prior", text: string) => {
-    await writeFigure(row, period, period === "current" ? row.v1 : row.v2, text);
-  };
-
-  /** Apply a formula to a figure. The SERVER evaluates it against the other line items and the
-   *  result becomes the value, so a formula that cannot be resolved comes back as an error rather
-   *  than silently leaving the old number in place. */
-  const saveFormula = async (row: StatementRow, period: "current" | "prior", formula: string) => {
-    const comment = row.comments?.[period]?.text ?? "";
     try {
-      if (usingReal) {
-        // No explicit value: the formula alone decides the figure.
-        await realEditMut.mutateAsync({ key: row.id, value: null, formula,
-                                        basis: dataset, period, comment });
-      } else {
-        await editMut.mutateAsync({ id: row.id, value: null, formula });
+      for (const e of work) {
+        const note = e.period === inspPeriod
+          ? comment
+          : (selRowObj.comments?.[e.period]?.text ?? "");
+        if (usingReal) {
+          await realEditMut.mutateAsync({ key: selRowObj.id, value: e.value, formula,
+                                          basis: dataset, period: e.period, comment: note });
+        } else if (e.period === "current") {
+          await editMut.mutateAsync({ id: selRowObj.id, value: e.value, formula });
+        } else {
+          throw new Error("The sample project only supports editing the current period. "
+                          + "Upload a document to edit both.");
+        }
       }
       setEditError(null);
+      stopEditing();
     } catch (err) {
+      // Deliberately stays in edit mode: the figures on screen did not change, and closing the
+      // editor as if they had is the failure this replaces.
       setEditError(editErrorText(err));
     }
   };
@@ -1293,9 +1116,7 @@ export default function WorkspaceScreen() {
           )}
         </div>
 
-        {/* -------- RIGHT: output panel + the selected row's detail beside it -------- */}
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "row",
-                      background: color.surface, minHeight: 0 }}>
+        {/* -------- RIGHT: output panel, with the cell inspector along the bottom -------- */}
         <div
           style={{
             flex: 1,
@@ -1371,38 +1192,295 @@ export default function WorkspaceScreen() {
               {d.rows.map((r) => (
                 <OutputRow
                   key={r.id} row={r} sel={sel} present={present} linkable={usingReal}
-                  editing={editCell?.id === r.id ? editCell.period : null}
                   onSelect={handleSelect}
-                  onEditCell={(id, period) => setEditCell(period ? { id, period } : null)}
-                  onCommitCell={commitCell}
                   onOpenNote={openNote}
                 />
               ))}
             </div>
           )}
 
-        </div>
+          {/* ---------------- CELL INSPECTOR ---------------- */}
+          <div
+            data-testid="cell-inspector"
+            style={{
+              flex: "0 0 auto",
+              borderTop: `1px solid ${color.cardBorder}`,
+              background: "#fbfcfd",
+              padding: "12px 16px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                marginBottom: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600 }}>{selRowObj?.label ?? ""}</span>
+                {selRowObj?.confidence && (
+                  <span
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      padding: "2px 8px",
+                      borderRadius: radius.pill,
+                      background: cs.bg,
+                      color: cs.fg,
+                    }}
+                  >
+                    {selRowObj.confidence.pct}% confidence
+                  </span>
+                )}
+                {/* Where the figure on show came from — extracted, computed from its components,
+                    overridden by hand, or printed and unverifiable. */}
+                {inspOrigin !== "extracted" && (
+                  <span
+                    title={inspChip.help}
+                    data-testid={`inspector-origin-${inspOrigin}`}
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      padding: "2px 8px",
+                      borderRadius: radius.pill,
+                      background: inspChip.bg,
+                      color: inspChip.fg,
+                    }}
+                  >
+                    {inspOrigin === "calculated" ? "calculated"
+                      : inspOrigin === "manual" ? "manual override" : "printed, unverified"}
+                  </span>
+                )}
+                {insp && inspOrigin === "extracted" && (
+                  <span
+                    style={{
+                      fontSize: 10.5,
+                      fontWeight: 600,
+                      padding: "2px 8px",
+                      borderRadius: radius.pill,
+                      background: isEdited ? color.indigoTint2 : color.amberBg,
+                      color: isEdited ? color.indigo : color.amberFg,
+                    }}
+                  >
+                    {isEdited ? `Edited · ${insp.tag}` : insp.tag}
+                  </span>
+                )}
+                {/* Which period everything below is about. */}
+                {selRowObj && (
+                  <span style={{ display: "flex", gap: 4 }}>
+                    {(["current", "prior"] as const).map((p, i) => (
+                      <button
+                        key={p}
+                        onClick={() => setInspPeriod(p)}
+                        data-testid={`inspector-period-${p}`}
+                        style={{ fontSize: 10.5, fontWeight: 600, padding: "3px 9px",
+                                 borderRadius: radius.pill, cursor: "pointer",
+                                 border: `1px solid ${inspPeriod === p ? color.indigo
+                                                                       : color.controlBorder}`,
+                                 background: inspPeriod === p ? color.indigoTint2 : "#fff",
+                                 color: inspPeriod === p ? color.indigo : color.sec2 }}
+                      >
+                        {d.periods[i] || (p === "current" ? "Current" : "Prior")}
+                      </button>
+                    ))}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 11, color: color.muted, fontFamily: font.mono }}>
+                  source: {insp?.src ?? ""}
+                </span>
+                {!editing && usingReal && selRowObj?.status === "edited" && (
+                  <button
+                    onClick={() => selRowObj && realRevertMut.mutate(selRowObj.id)}
+                    style={{
+                      fontSize: 11, fontWeight: 600, color: color.sec2, background: "#fff",
+                      border: `1px solid ${color.controlBorder}`, borderRadius: radius.controlSm,
+                      padding: "5px 11px", cursor: "pointer",
+                    }}
+                  >
+                    ↺ Revert
+                  </button>
+                )}
+                {!editing && canEditSel && (
+                  <button
+                    data-testid="edit-value"
+                    onClick={() => { setEditError(null); startEdit(); }}
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: color.indigo,
+                      background: "#fff",
+                      border: `1px solid ${color.indigoBorder2}`,
+                      borderRadius: radius.controlSm,
+                      padding: "5px 11px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    ✎ Edit value
+                  </button>
+                )}
+              </div>
+            </div>
 
-          {/* The detail lives BESIDE the figures, not under them — the statement column shrinks to
-              make room. A fixed bar at the bottom of the screen put the explanation of a number a
-              long way from the number it explained. */}
-          {selRowObj && detailOpen && (
-            <RowDetail
-              row={selRowObj}
-              periods={d.periods}
-              present={present}
-              linkable={usingReal}
-              canEdit={canEditSel}
-              saving={saving}
-              error={editError}
-              onClose={() => { selRow(""); setEditError(null); }}
-              onEditCell={setEditCell}
-              onSaveComment={saveComment}
-              onSaveFormula={saveFormula}
-              onRevert={() => realRevertMut.mutate(selRowObj.id)}
-              onPickContribution={(p) => p && setPicked(p)}
-            />
-          )}
+            {editing && canEditSel && selRowObj ? (
+              <InspectorEditor
+                key={selRowObj.id}
+                row={selRowObj}
+                periods={d.periods}
+                period={inspPeriod}
+                saving={saving}
+                error={editError}
+                onSave={saveEdit}
+                onCancel={() => { setEditError(null); cancelEdit(); }}
+              />
+            ) : (
+              <>
+                {/* The arithmetic behind the figure. For a calculated line this is the template's
+                    rollup rendered from the figures — display only, never an expression to send
+                    back: the server would evaluate it, and a computed result outranks a typed
+                    value, so a hand-entered figure would be silently replaced by the old sum. */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    background: "#fff",
+                    border: `1px solid ${color.controlBorder}`,
+                    borderRadius: radius.control,
+                    padding: "8px 11px",
+                  }}
+                >
+                  <span style={{ fontFamily: font.mono, fontSize: 12, color: color.amberFg, fontWeight: 600 }}>ƒx</span>
+                  <span
+                    data-testid="inspector-arithmetic"
+                    style={{ fontFamily: font.mono, fontSize: 12, color: color.ink, flex: 1,
+                             wordBreak: "break-word" }}
+                  >
+                    {selRowObj?.arithmetic ?? selRowObj?.formula ?? ""}
+                  </span>
+                  <span style={{ fontFamily: font.mono, fontSize: 12, fontWeight: 600, color: color.indigo }}>
+                    = {(inspPeriod === "current" ? selRowObj?.display1 : selRowObj?.display2)
+                       ?? (inspShown == null ? (insp?.result ?? "") : present(inspShown))}
+                  </span>
+                </div>
+
+                {/* What the document printed, when the figure shown is a DIFFERENT number. */}
+                {inspDiverges && (
+                  <div
+                    data-testid="reported-divergence"
+                    style={{ marginTop: 9, padding: "7px 11px", background: color.amberBg,
+                             borderRadius: radius.control, fontSize: 11.5, color: color.amberFg,
+                             lineHeight: 1.5 }}
+                  >
+                    <strong style={{ fontWeight: 600 }}>
+                      The document printed {present(inspReported)}.
+                    </strong>{" "}
+                    This line shows what its components come to. The difference
+                    ({present((inspShown ?? 0) - (inspReported ?? 0))}) is in the review queue.
+                  </div>
+                )}
+                {inspOrigin === "manual" && inspComputed != null && (
+                  <div style={{ fontSize: 11, color: color.sec2, marginTop: 7, lineHeight: 1.5 }}>
+                    The components come to {present(inspComputed)}; the figure shown was entered
+                    by hand.
+                  </div>
+                )}
+                {!inspDiverges && inspOrigin !== "manual" && (
+                  <div style={{ fontSize: 11, color: color.sec2, marginTop: 7, lineHeight: 1.5 }}>
+                    {isEdited
+                      ? "Manually edited from the front-end — the cell now carries the formula above. Original extraction confidence is retained."
+                      : insp?.note ?? ""}
+                  </div>
+                )}
+
+                {/* The reason an analyst recorded against this figure, beside the figure. */}
+                {inspNote?.text && (
+                  <div
+                    data-testid="inspector-comment"
+                    style={{ marginTop: 9, padding: "7px 11px", background: "#fff",
+                             border: `1px solid ${color.controlBorder}`,
+                             borderRadius: radius.control, fontSize: 11.5, color: color.ink,
+                             lineHeight: 1.5 }}
+                  >
+                    <span style={{ color: color.amberFg, fontWeight: 600 }}>✎ </span>
+                    {inspNote.text}
+                    {inspNote.by && (
+                      <span style={{ fontSize: 10.5, color: color.muted }}>
+                        {" "}— {inspNote.by}
+                        {inspNote.at ? ` · ${inspNote.at.slice(0, 10)}` : ""}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* A combined figure matches no single line on the page, so every line that went
+                    into it is listed with its own amount and its own page — click one to jump
+                    the viewer straight to where it was printed. */}
+                {selRowObj?.contributions?.length ? (
+                  <div
+                    style={{
+                      marginTop: 9,
+                      border: `1px solid ${color.controlBorder}`,
+                      borderRadius: radius.control,
+                      background: "#fff",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {selRowObj.contributions.map((c, i) => {
+                      // Each period was printed in its own column, often on its own page.
+                      const prov = inspPeriod === "current" ? c.source : c.source2;
+                      const src = inspPeriod === "current" ? c.src : c.src2;
+                      const v = inspPeriod === "current" ? c.v1 : c.v2;
+                      const jump = usingReal ? toPicked(prov ?? null, c.label) : null;
+                      return (
+                        <div
+                          key={`${c.label}-${i}`}
+                          onClick={() => jump && setPicked(jump)}
+                          title={jump ? `Show ${src} in the document` : undefined}
+                          style={{
+                            display: "flex",
+                            alignItems: "baseline",
+                            gap: 8,
+                            padding: "6px 10px",
+                            borderTop: i === 0 ? "none" : `1px solid ${color.cardBorder}`,
+                            cursor: jump ? "pointer" : "default",
+                          }}
+                        >
+                          <span style={{ fontFamily: font.mono, fontSize: 10.5, color: color.muted,
+                                         minWidth: 14 }}>
+                            {i === 0 ? "" : "+"}
+                          </span>
+                          <span style={{ fontSize: 11.5, color: color.ink, flex: 1,
+                                         textDecoration: jump ? "underline dotted" : "none" }}>
+                            {c.label}
+                          </span>
+                          {c.residual ? (
+                            <span style={{ fontSize: 9.5, fontWeight: 600, padding: "1px 6px",
+                                           borderRadius: radius.pill, background: color.amberBg,
+                                           color: color.amberFg }}>
+                              {v == null ? "absent" : "routed"}
+                            </span>
+                          ) : null}
+                          <span style={{ fontFamily: font.mono, fontSize: 11, color: color.sec2,
+                                         minWidth: 46, textAlign: "right" }}>
+                            {src || ""}
+                          </span>
+                          <span style={{ fontFamily: font.mono, fontSize: 11.5, fontWeight: 600,
+                                         color: color.ink, minWidth: 92, textAlign: "right" }}>
+                            {v == null ? "—" : present(v)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>

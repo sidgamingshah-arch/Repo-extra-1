@@ -435,48 +435,54 @@ test("real extraction: prior-year links, an edit that sticks, KPIs and Additiona
   await priorLink.click();
   await expect(page.getByTestId("prov-highlight")).toBeVisible({ timeout: 15_000 });
 
-  // --- the detail is BESIDE the grid, not under it -----------------------------------------
+  // --- the inspector describes the selected figure, along the bottom of the panel ------------
   await page.getByText("Trade receivables").first().click();
-  const detail = page.getByTestId("row-detail");
-  await expect(detail).toBeVisible({ timeout: 15_000 });
-  // It sits to the right of the statement column rather than below it.
+  const inspector = page.getByTestId("cell-inspector");
+  await expect(inspector).toBeVisible({ timeout: 15_000 });
+  // It sits BELOW the statement rows rather than beside them.
   const gridBox = await page.getByText("Trade receivables").first().boundingBox();
-  const detailBox = await detail.boundingBox();
-  expect(detailBox!.x).toBeGreaterThan(gridBox!.x);
+  const inspBox = await inspector.boundingBox();
+  expect(inspBox!.y).toBeGreaterThan(gridBox!.y);
 
-  // --- editing happens IN the cell, and the typed figure is the figure shown ----------------
-  const cell = page.locator('[data-testid^="v1-"]').filter({ hasText: /3,410|3410/ }).first();
-  await cell.dblclick();
-  const input = page.getByTestId("cell-input-current");
+  // --- editing happens in the inspector, and the typed figure is the figure shown ------------
+  await page.getByTestId("edit-value").click();
+  const input = page.getByTestId("edit-v1");
   await expect(input).toBeVisible({ timeout: 15_000 });
   await input.fill("55555");
-  await input.press("Enter");
-  // Accepted → the input closes. A refused save keeps it open and shows why, so this doubles as
+  // --- and an edit can say WHY ---------------------------------------------------------------
+  await page.getByTestId("edit-comment").fill("Agreed with management");
+  await page.getByTestId("edit-save").click();
+  // Accepted → the editor closes. A refused save keeps it open and shows why, so this doubles as
   // the assertion that nothing was silently rejected.
-  await expect(page.getByTestId("cell-input-current")).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByTestId("edit-v1")).toHaveCount(0, { timeout: 15_000 });
   await expect(page.getByTestId("edit-error")).toHaveCount(0);
   await expect(page.getByText("55,555").first()).toBeVisible({ timeout: 15_000 });
-
-  // --- an edit can say WHY --------------------------------------------------------------------
-  await page.getByTestId("detail-comment").fill("Agreed with management");
-  await page.getByTestId("detail-comment-save").click();
-  await expect(page.getByTestId("detail-comment-save")).toBeDisabled({ timeout: 15_000 });
+  // The reason survives a reload and is shown against the figure it explains.
+  await expect(page.getByTestId("inspector-comment")).toContainText("Agreed with management",
+                                                                   { timeout: 15_000 });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByText("Trade receivables").first().click();
-  await expect(page.getByTestId("detail-comment")).toHaveValue(/Agreed with management/,
-                                                              { timeout: 15_000 });
+  await expect(page.getByTestId("inspector-comment")).toContainText("Agreed with management",
+                                                                   { timeout: 15_000 });
 
   await page.getByRole("button", { name: /Revert/ }).click();
   await expect(page.getByText("55,555")).toHaveCount(0, { timeout: 15_000 });
 
   // --- a subtotal shows what its components come to ------------------------------------------
-  // Total assets is a calculated line: the grid marks it, and the panel names the arithmetic.
+  // Total assets is a calculated line: the grid marks it, and the inspector names the arithmetic
+  // and lists the lines behind it.
   const calc = page.locator('[data-testid="origin-calculated"]').first();
   await expect(calc).toBeVisible({ timeout: 15_000 });
   await calc.click();
-  await expect(page.getByTestId("row-detail").getByText("calculated")).toBeVisible();
-  await expect(page.getByText("Computed as")).toBeVisible();
-  await expect(page.getByText("Made up of")).toBeVisible();
+  await expect(page.getByTestId("inspector-origin-calculated")).toBeVisible();
+  await expect(page.getByTestId("inspector-arithmetic")).toContainText(/\+|−|-/);
+
+  // The rollup is a RENDERING of the figures, not an expression, so opening the editor must not
+  // prefill the formula box with it: the server would evaluate what came back, and a computed
+  // result outranks a typed value — the analyst's number would be silently replaced by the sum.
+  await page.getByTestId("edit-value").click();
+  await expect(page.getByTestId("edit-formula")).toHaveValue("");
+  await page.getByRole("button", { name: "Cancel" }).click();
 
   // --- KPIs -------------------------------------------------------------------------------
   await page.getByTestId("seg-kpi").click();
