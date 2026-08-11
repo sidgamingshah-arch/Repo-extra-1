@@ -1,5 +1,5 @@
 /** React Query hooks — the data layer each screen consumes. */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { Basis, FxRateInput, Locale, SettingsPatch, StatementKey } from "../types";
 import { useUI } from "../store";
@@ -368,12 +368,18 @@ export const useNote = (no: number, locale: Locale = "en", enabled = true) =>
   useQuery({ queryKey: ["note", no, locale], queryFn: () => api.note(no, locale), enabled });
 export const useTemplate = (locale: Locale = "en") =>
   useQuery({ queryKey: ["template", locale], queryFn: () => api.template(locale) });
-/** A real configured template's structure (Template & Ontology screen, admin). */
+/** A real configured template's structure (Template & Ontology screen, admin).
+ *
+ * Keeps the previous template's detail on screen while a newly selected one loads. Without it the
+ * screen blanks to "Loading…" on every selection change — which also unmounted the authoring
+ * panel the moment it published a template and selected the new version, taking its confirmation
+ * (or its error) with it. */
 export const useTemplateDetail = (id: string | undefined, locale: Locale = "en") =>
   useQuery({
     queryKey: ["template-detail", id, locale],
     queryFn: () => api.templateDetail(id as string, locale),
     enabled: !!id,
+    placeholderData: keepPreviousData,
   });
 export const useExportOptions = () =>
   useQuery({ queryKey: ["export-options"], queryFn: api.exportOptions });

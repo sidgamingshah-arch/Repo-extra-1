@@ -81,10 +81,10 @@ function TemplateAuthoring({
         templateKey: asNew ? "" : (selected?.template_key ?? ""),
         name: asNew ? f.name.replace(/\.(xlsx|xlsm)$/i, "") : (selected?.name ?? ""),
       });
-      onSelect(res.id);
       setMsg({ ok: true, text: t("tp.auth.publishedTemplate")
         .replace("{key}", res.template_key).replace("{v}", String(res.version))
         .replace("{n}", String(res.line_items)) });
+      onSelect(res.id);
     } catch (err) {
       fail(err);
     } finally {
