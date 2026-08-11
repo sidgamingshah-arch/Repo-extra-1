@@ -238,12 +238,16 @@
          "bs_non_current_assets__intangible_assets_under_development",
          "bs_non_current_assets__investments_in_subsidiaries",
          "bs_non_current_assets__interests_in_associates",
+         "bs_non_current_assets__interests_in_joint_ventures",
          "bs_non_current_assets__equity_investments_designated_at_fair_value_through_other_comprehensive_income",
          "bs_non_current_assets__financial_assets_at_fair_value_through_profit_or_loss",
          "bs_non_current_assets__other_non_current_financial_assets",
          "bs_non_current_assets__deferred_income_tax_assets",
          "bs_non_current_assets__term_deposits",
-         "bs_non_current_assets__others"
+         "bs_non_current_assets__others",
+         "bs_non_current_assets__properties_under_development",
+         "bs_non_current_assets__prepayments_and_other_assets",
+         "bs_non_current_assets__contract_in_progress"
         ]
        }
       }
@@ -418,7 +422,13 @@
          "bs_current_assets__prepayments_other_receivables_and_other_assets",
          "bs_current_assets__financial_assets_at_fair_value_through_other_comprehensive_income",
          "bs_current_assets__other_financial_assets",
-         "bs_current_assets__others"
+         "bs_current_assets__others",
+         "bs_current_assets__properties_under_development",
+         "bs_current_assets__completed_properties_held_for_sale",
+         "bs_current_assets__restricted_cash",
+         "bs_current_assets__due_from_related_parties",
+         "bs_current_assets__prepaid_income_tax",
+         "bs_current_assets__pledged_deposits"
         ]
        }
       }
@@ -576,7 +586,8 @@
          "bs_equity__general_reserve",
          "bs_equity__other_comprehensive_income_reserve",
          "bs_equity__non_controlling_interests",
-         "bs_equity__others"
+         "bs_equity__others",
+         "bs_equity__reserves"
         ]
        }
       }
@@ -858,7 +869,10 @@
          "bs_current_liabilities__current_income_tax_liabilities",
          "bs_current_liabilities__current_lease_liabilities",
          "bs_current_liabilities__current_deferred_revenue",
-         "bs_current_liabilities__others"
+         "bs_current_liabilities__others",
+         "bs_current_liabilities__due_to_related_parties",
+         "bs_current_liabilities__other_payables_and_accruals",
+         "bs_current_liabilities__contract_liabilities"
         ]
        }
       }
@@ -895,6 +909,22 @@
       "children": [
        "bs_non_current_assets__total_non_current_assets",
        "bs_net_current_assets_liabilities"
+      ]
+     }
+    },
+    {
+     "node_id": "bs_net_assets",
+     "canonical_key": "bs_net_assets",
+     "label": "Net assets",
+     "role": "total",
+     "label_i18n": {
+      "en": "Net assets",
+      "zh": "资产净值"
+     },
+     "rollup": {
+      "op": "sum",
+      "children": [
+       "bs_equity__total_equity"
       ]
      }
     },
@@ -981,6 +1011,16 @@
        }
       },
       {
+       "node_id": "pl_income__others",
+       "canonical_key": "pl_income__others",
+       "label": "Other income items",
+       "role": "line",
+       "label_i18n": {
+        "en": "Other income items",
+        "zh": "其他收入项目"
+       }
+      },
+      {
        "node_id": "pl_income__total_income",
        "canonical_key": "pl_income__total_income",
        "label": "Total income",
@@ -993,7 +1033,8 @@
         "op": "sum",
         "children": [
          "pl_income__revenue_from_operations",
-         "pl_income__other_income"
+         "pl_income__other_income",
+         "pl_income__others"
         ]
        }
       }
@@ -1100,6 +1141,16 @@
        }
       },
       {
+       "node_id": "pl_expenses__others",
+       "canonical_key": "pl_expenses__others",
+       "label": "Other expense items",
+       "role": "line",
+       "label_i18n": {
+        "en": "Other expense items",
+        "zh": "其他费用项目"
+       }
+      },
+      {
        "node_id": "pl_expenses__total_operating_cost",
        "canonical_key": "pl_expenses__total_operating_cost",
        "label": "Total operating cost",
@@ -1119,7 +1170,8 @@
          "pl_expenses__purchases_of_stock_in_trade",
          "pl_expenses__other_operating_costs",
          "pl_expenses__other_expenses",
-         "pl_expenses__depreciation_and_amortisation_expense"
+         "pl_expenses__depreciation_and_amortisation_expense",
+         "pl_expenses__others"
         ]
        }
       }
@@ -1287,6 +1339,16 @@
        }
       },
       {
+       "node_id": "pl_exceptional_items__others",
+       "canonical_key": "pl_exceptional_items__others",
+       "label": "Other exceptional items",
+       "role": "line",
+       "label_i18n": {
+        "en": "Other exceptional items",
+        "zh": "其他特殊项目"
+       }
+      },
+      {
        "node_id": "pl_exceptional_items__total_exceptional_items",
        "canonical_key": "pl_exceptional_items__total_exceptional_items",
        "label": "Total Exceptional items",
@@ -1299,11 +1361,14 @@
         "op": "sum",
         "children": [
          "pl_exceptional_items__share_of_profit_of_associates_and_jvs",
+         "pl_exceptional_items__share_of_profits_and_losses_of_associates",
+         "pl_exceptional_items__share_of_profits_and_losses_of_joint_ventures",
          "pl_exceptional_items__gain_on_derecognition_of_financial_assets_at_amortised_cost",
          "pl_exceptional_items__fair_value_change_gains",
          "pl_exceptional_items__credit_impairment_losses",
          "pl_exceptional_items__asset_impairment_losses",
-         "pl_exceptional_items__gains_on_asset_disposal"
+         "pl_exceptional_items__gains_on_asset_disposal",
+         "pl_exceptional_items__others"
         ]
        }
       }
@@ -1686,10 +1751,31 @@
        "node_id": "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
        "canonical_key": "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
        "label": "Cash generated from operations",
-       "role": "line",
+       "role": "subtotal",
        "label_i18n": {
         "en": "Cash generated from operations",
         "zh": "经营活动产生的现金"
+       },
+       "rollup": {
+        "op": "sum",
+        "children": [
+         "cf_cash_flow_from_operating_activities__profit_before_tax",
+         "cf_cash_flow_from_operating_activities__income_tax_expense",
+         "cf_cash_flow_from_operating_activities__depreciation_and_amortisation",
+         "cf_cash_flow_from_operating_activities__finance_costs",
+         "cf_cash_flow_from_operating_activities__interest_income",
+         "cf_cash_flow_from_operating_activities__share_of_results_of_associates_and_joint_ventures",
+         "cf_cash_flow_from_operating_activities__fair_value_changes_on_financial_instruments",
+         "cf_cash_flow_from_operating_activities__impairment_losses_on_financial_and_contract_assets",
+         "cf_cash_flow_from_operating_activities__loss_gain_on_disposal_of_property_plant_and_equipment",
+         "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_receivables",
+         "cf_cash_flow_from_operating_activities__increase_decrease_in_inventories",
+         "cf_cash_flow_from_operating_activities__increase_decrease_in_prepayments_and_other_receivables",
+         "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_payables",
+         "cf_cash_flow_from_operating_activities__increase_decrease_in_contract_liabilities",
+         "cf_cash_flow_from_operating_activities__increase_decrease_in_other_payables_and_accruals",
+         "cf_cash_flow_from_operating_activities__others"
+        ]
        }
       },
       {
@@ -1734,25 +1820,9 @@
        "rollup": {
         "op": "sum",
         "children": [
-         "cf_cash_flow_from_operating_activities__profit_before_tax",
-         "cf_cash_flow_from_operating_activities__income_tax_expense",
-         "cf_cash_flow_from_operating_activities__depreciation_and_amortisation",
-         "cf_cash_flow_from_operating_activities__finance_costs",
-         "cf_cash_flow_from_operating_activities__interest_income",
-         "cf_cash_flow_from_operating_activities__share_of_results_of_associates_and_joint_ventures",
-         "cf_cash_flow_from_operating_activities__fair_value_changes_on_financial_instruments",
-         "cf_cash_flow_from_operating_activities__impairment_losses_on_financial_and_contract_assets",
-         "cf_cash_flow_from_operating_activities__loss_gain_on_disposal_of_property_plant_and_equipment",
-         "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_receivables",
-         "cf_cash_flow_from_operating_activities__increase_decrease_in_inventories",
-         "cf_cash_flow_from_operating_activities__increase_decrease_in_prepayments_and_other_receivables",
-         "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_payables",
-         "cf_cash_flow_from_operating_activities__increase_decrease_in_contract_liabilities",
-         "cf_cash_flow_from_operating_activities__increase_decrease_in_other_payables_and_accruals",
          "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
          "cf_cash_flow_from_operating_activities__interest_received",
-         "cf_cash_flow_from_operating_activities__income_tax_paid",
-         "cf_cash_flow_from_operating_activities__others"
+         "cf_cash_flow_from_operating_activities__income_tax_paid"
         ]
        }
       }

@@ -5839,6 +5839,116 @@
      "其他儲備"
     ]
    }
+  },
+  {
+   "canonical_key": "pl_income__others",
+   "label": "Other income items",
+   "definition": "Other income items: printed lines in this section that no more specific concept covers.",
+   "description": "Other income items: residual bucket for this section.",
+   "value_scope": "exclusive_residual",
+   "extraction_mode": "extract",
+   "include": [
+    "Amounts printed in this section of the statement that no dedicated concept covers."
+   ],
+   "exclude": [
+    "Amounts a dedicated concept covers.",
+    "Section subtotals and statement totals."
+   ],
+   "aliases": [
+    "Other income items"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Other income items"
+    ],
+    "zh": [
+     "其他收入项目"
+    ]
+   }
+  },
+  {
+   "canonical_key": "pl_expenses__others",
+   "label": "Other expense items",
+   "definition": "Other expense items: printed lines in this section that no more specific concept covers.",
+   "description": "Other expense items: residual bucket for this section.",
+   "value_scope": "exclusive_residual",
+   "extraction_mode": "extract",
+   "include": [
+    "Amounts printed in this section of the statement that no dedicated concept covers."
+   ],
+   "exclude": [
+    "Amounts a dedicated concept covers.",
+    "Section subtotals and statement totals."
+   ],
+   "aliases": [
+    "Other expense items"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Other expense items"
+    ],
+    "zh": [
+     "其他费用项目"
+    ]
+   }
+  },
+  {
+   "canonical_key": "pl_exceptional_items__others",
+   "label": "Other exceptional items",
+   "definition": "Other exceptional items: printed lines in this section that no more specific concept covers.",
+   "description": "Other exceptional items: residual bucket for this section.",
+   "value_scope": "exclusive_residual",
+   "extraction_mode": "extract",
+   "include": [
+    "Amounts printed in this section of the statement that no dedicated concept covers."
+   ],
+   "exclude": [
+    "Amounts a dedicated concept covers.",
+    "Section subtotals and statement totals."
+   ],
+   "aliases": [
+    "Other exceptional items"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Other exceptional items"
+    ],
+    "zh": [
+     "其他特殊项目"
+    ]
+   }
+  },
+  {
+   "canonical_key": "bs_net_assets",
+   "label": "Net assets",
+   "definition": "Net assets: total assets less total liabilities, as printed on the balance sheet. Equals total equity.",
+   "description": "Net assets as printed on the face of the balance sheet.",
+   "value_scope": "not_applicable",
+   "extraction_mode": "extract",
+   "include": [
+    "The 'Net assets' / 'NET ASSETS' total printed on the balance sheet."
+   ],
+   "exclude": [
+    "Any individual asset or liability line.",
+    "Total equity itself, which has its own concept."
+   ],
+   "aliases": [
+    "Net assets",
+    "NET ASSETS",
+    "Net asset value"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Net assets",
+     "NET ASSETS",
+     "Net asset value"
+    ],
+    "zh": [
+     "資產淨值",
+     "资产净值",
+     "淨資產"
+    ]
+   }
   }
  ]
 }

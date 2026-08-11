@@ -171,17 +171,32 @@ def test_declared_identity_is_evaluated_from_the_template():
     assert res.expected == 994 and res.actual == 996
 
 
-def test_conflicting_duplicate_mapping_blocks_the_relation():
-    """Two rows on the same concept with different values is an ambiguity; picking one would be
-    a guess, so the relation is not evaluated (and says why)."""
+def test_two_rows_on_one_concept_are_summed_and_a_wrong_pairing_then_fails():
+    """Several printed lines legitimately share one concept — three depreciation lines, two tax
+    payments, anything a section's residual bucket absorbs — so repeated mappings add, exactly as
+    the statement view and the Excel export present them.
+
+    That also detects MORE than refusing to evaluate did. Here the second cost row does not
+    belong on the concept, and the arithmetic says so: 1000 + (-600 - 900) is -500, not the 400
+    reported. Skipping the relation as "ambiguous" reported nothing at all.
+    """
     tpl = load_template(_pl_template())
     items = _items(revenue=1000, cost_of_sales=-600, gross_profit=400)
     items += _items(cost_of_sales=-900)
 
-    report = evaluate_structure(tpl, items)
-    res = _one(report, "rollup:gross_profit")
-    assert res.status == "skipped" and res.details["reason"] == "ambiguous_mapping"
-    assert res.details["keys"] == ["cost_of_sales"]
+    res = _one(evaluate_structure(tpl, items), "rollup:gross_profit")
+    assert res.status == "fail"
+    assert res.expected == -500 and res.actual == 400
+    assert res.details["component_values"]["cost_of_sales"] == "-1500"
+
+
+def test_two_rows_that_do_belong_together_tie():
+    """The same summing, when the two lines genuinely are one concept."""
+    tpl = load_template(_pl_template())
+    items = _items(revenue=1000, cost_of_sales=-600, gross_profit=-500)
+    items += _items(cost_of_sales=-900)
+
+    assert _one(evaluate_structure(tpl, items), "rollup:gross_profit").status == "pass"
 
 
 def test_unweighted_op_is_refused_rather_than_guessed():

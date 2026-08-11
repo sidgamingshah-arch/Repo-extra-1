@@ -50,6 +50,7 @@ def default_pipeline() -> Pipeline:
     from app.stages.confidence import ConfidenceStage
     from app.stages.structural import StructuralStage
     from app.stages.prune_notes import PruneNotesStage
+    from app.stages.residual import ResidualStage
 
     # Table reconstruction is performed inside the extract stage (native pages via the
     # PyMuPDF text layer + shared row_reconstruct; scanned pages via the OCR port), so there
@@ -61,6 +62,9 @@ def default_pipeline() -> Pipeline:
         ClassifyStage(),
         ExtractStage(),
         MapOntologyStage(),
+        # A printed face line that matched no specific concept goes to its own section's
+        # residual bucket rather than vanishing from the statement.
+        ResidualStage(),
         NormalizeStage(),
         LinkNotesStage(),
         ReconcileStage(),

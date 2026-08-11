@@ -149,6 +149,61 @@ class MappingResult:
     agreement: list[str] = field(default_factory=list)      # methods that corroborated the pick
 
 
+# Canonical keys are namespaced by statement SECTION as well as by statement
+# (bs_non_current_liabilities__…, bs_current_assets__…), and a statement prints the same caption
+# under two of them: "Interest-bearing bank and other borrowings" appears once under non-current
+# liabilities and once under current, as do senior notes and lease liabilities. The caption
+# cannot distinguish them; the banner above the row can. Each entry maps a section token found in
+# a key to the words a banner uses for it, in English and in Han (folded to Simplified by
+# ``normalize_label``).
+#
+# Module-level, and free of any ontology: the vocabulary is a property of how statements are
+# printed, and other stages need to read a banner without paying to build a matcher.
+SECTION_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Longest first: "non current liabilities" must not be read as "current liabilities".
+    ("non_current_liabilities", ("non current liabilities", "noncurrent liabilities",
+                                "非流动负债", "长期负债")),
+    ("non_current_assets", ("non current assets", "noncurrent assets",
+                           "非流动资产", "长期资产")),
+    ("current_liabilities", ("current liabilities", "流动负债")),
+    ("current_assets", ("current assets", "流动资产")),
+    ("equity", ("equity", "capital and reserves", "权益", "股本及储备", "资本及储备")),
+    # The cash flow statement is namespaced the same way, and its captions repeat across
+    # activities: "Interest received" and "Dividends received" appear under both operating and
+    # investing, "Acquisition of subsidiaries" under investing and financing.
+    ("cash_flow_from_operating_activities", ("operating activities", "经营活动", "营运活动")),
+    ("cash_flow_from_investing_activities", ("investing activities", "投资活动")),
+    ("cash_flow_from_financing_activities", ("financing activities", "融资活动", "筹资活动")),
+)
+
+
+def section_of_banner(text: str | None) -> str | None:
+    """The section a banner names, or None when it names none we recognise.
+
+    An umbrella banner that spans more than one section ("EQUITY AND LIABILITIES", which IFRS
+    statements print above the Equity / Non-current / Current sub-banners) scopes nothing on its
+    own: reading it as "equity" would refuse every liability concept beneath it. Those return
+    None so the constraint simply does not apply.
+    """
+    if not text:
+        return None
+    folded = normalize_label(text)
+    if ("equity" in folded or "权益" in folded) and ("liabilit" in folded or "负债" in folded):
+        return None
+    for token, words in SECTION_WORDS:
+        if any(w in folded for w in words):
+            return token
+    return None
+
+
+def section_of_key(canonical_key: str) -> str | None:
+    """The section namespace a canonical key sits in, or None for a key that has none
+    (``bs_total_assets``, ``pl_profit_before_tax``). Matched longest-first, since
+    "bs_non_current_liabilities__x" also contains "_current_liabilities__".
+    """
+    return next((tok for tok, _ in SECTION_WORDS if f"_{tok}__" in canonical_key), None)
+
+
 class OntologyMatcher:
     """Runs the ensemble for one ontology + locale."""
 
@@ -463,48 +518,8 @@ class OntologyMatcher:
             return True
         return prefix == want
 
-    # Canonical keys are further namespaced by statement SECTION
-    # (bs_non_current_liabilities__…, bs_current_assets__…), and a statement prints the same
-    # caption under two of them: "Interest-bearing bank and other borrowings" appears once
-    # under non-current liabilities and once under current, as do senior notes and lease
-    # liabilities. The caption cannot distinguish them; the banner above the row can. Each
-    # entry maps a section token found in a key to the words a banner uses for it, in English
-    # and in Han (folded to Simplified by ``normalize_label``).
-    _SECTION_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-        # Longest first: "non current liabilities" must not be read as "current liabilities".
-        ("non_current_liabilities", ("non current liabilities", "noncurrent liabilities",
-                                    "非流动负债", "长期负债")),
-        ("non_current_assets", ("non current assets", "noncurrent assets",
-                               "非流动资产", "长期资产")),
-        ("current_liabilities", ("current liabilities", "流动负债")),
-        ("current_assets", ("current assets", "流动资产")),
-        ("equity", ("equity", "capital and reserves", "权益", "股本及储备", "资本及储备")),
-        # The cash flow statement is namespaced the same way, and its captions repeat across
-        # activities: "Interest received" and "Dividends received" appear under both operating
-        # and investing, "Acquisition of subsidiaries" under investing and financing.
-        ("cash_flow_from_operating_activities", ("operating activities", "经营活动", "营运活动")),
-        ("cash_flow_from_investing_activities", ("investing activities", "投资活动")),
-        ("cash_flow_from_financing_activities", ("financing activities", "融资活动", "筹资活动")),
-    )
-
     def _section_of(self, text: str | None) -> str | None:
-        """The section a banner names, or None when it names none we recognise.
-
-        An umbrella banner that spans more than one section ("EQUITY AND LIABILITIES", which
-        IFRS statements print above the Equity / Non-current / Current sub-banners) scopes
-        nothing on its own: reading it as "equity" would refuse every liability concept
-        beneath it. Those return None so the constraint simply does not apply.
-        """
-        if not text:
-            return None
-        folded = normalize_label(text)
-        if ("equity" in folded or "权益" in folded) and (
-                "liabilit" in folded or "负债" in folded):
-            return None
-        for token, words in self._SECTION_WORDS:
-            if any(w in folded for w in words):
-                return token
-        return None
+        return section_of_banner(text)
 
     def _in_section(self, canonical_key: str, section: str | None) -> bool:
         """False only when the key belongs to a DIFFERENT section than the banner names.
@@ -513,12 +528,10 @@ class OntologyMatcher:
         and unrecognised banners are always allowed: like the statement constraint, this
         suppresses a confident wrong answer without dropping concepts it cannot place.
         """
-        want = self._section_of(section)
+        want = section_of_banner(section)
         if not want:
             return True
-        known = [tok for tok, _ in self._SECTION_WORDS]
-        # The key's own section token, matched longest-first for the same reason as above.
-        have = next((tok for tok in known if f"_{tok}__" in canonical_key), None)
+        have = section_of_key(canonical_key)
         if have is None:
             return True
         return have == want

@@ -34,8 +34,12 @@ _NOTE_HDR = re.compile(r"^(notes?|附註|附注)$", re.IGNORECASE)
 
 
 def _is_note_number(t: str) -> bool:
-    """A bare 1–2 digit integer — the shape of a note reference (never a formatted amount)."""
-    return re.fullmatch(r"\d{1,2}", t.strip().strip(".")) is not None
+    """A bare 1–2 digit integer — the shape of a note reference (never a formatted amount).
+
+    A row often cites several notes ("14, 16(b)", "8, 13"), so the token carries the separator
+    that followed it; it is still a note reference, not an amount.
+    """
+    return re.fullmatch(r"\d{1,2}", t.strip().strip(".,;")) is not None
 
 
 def _is_money_like(t: str, fmt=None) -> bool:
@@ -340,6 +344,62 @@ def _basis_for(x: float, bands: list[tuple[Basis, float]]) -> Basis:
     if not bands:
         return Basis.CONSOLIDATED
     return min(bands, key=lambda b: abs(b[1] - x))[0]
+
+
+# Value columns are printed on a tight vertical alignment — every figure in the current-period
+# column shares an x-centre to within a fraction of the column gap. This is the width within
+# which two figures are taken to be in the same column.
+_COL_TOL = 0.035
+# A column has to be used by several rows to be a column at all, so a stray figure in a footnote
+# or a page number never becomes one.
+_COL_MIN_ROWS = 3
+
+
+def _value_column_bands(value_xs: list[list[tuple[float, str]]]) -> list[float]:
+    """The x-centres of the statement's value columns, from the figures on the page.
+
+    A row's period CANNOT be taken from the order of its own values. When a filing reports a line
+    in one period only — "Pledged deposits" with a prior-year figure and no current one — the
+    single figure sits under the PRIOR column, and reading it as "the first value, therefore
+    current" files real money against the wrong year. It is silent: the row looks fine, and only
+    the section subtotal reveals it, over-stating one period and under-stating the other by the
+    same amount.
+
+    A note-reference column is excluded, because it is not a period. Statements print note refs
+    in their own narrow column, and where enough rows carry one it aligns as tightly as any money
+    column — so taken as column 0 it makes every real figure on the page one period too late, and
+    a whole page of current-year figures is filed against the prior year. What distinguishes it is
+    its contents: bare 1–2 digit integers, never formatted amounts.
+
+    Returns [] when the page has no columnar structure to speak of, and the caller falls back to
+    positional order.
+    """
+    flat = sorted((x, t) for xs in value_xs for x, t in xs)
+    if not flat:
+        return []
+    clusters: list[list[tuple[float, str]]] = [[flat[0]]]
+    for item in flat[1:]:
+        if item[0] - clusters[-1][-1][0] <= _COL_TOL:
+            clusters[-1].append(item)
+        else:
+            clusters.append([item])
+
+    def is_note_column(cluster: list[tuple[float, str]]) -> bool:
+        notes = sum(1 for _, t in cluster if _is_note_number(t))
+        return notes >= max(2, int(0.8 * len(cluster)))
+
+    kept = [c for c in clusters if len(c) >= _COL_MIN_ROWS and not is_note_column(c)]
+    if len(kept) < 2:
+        return []                       # nothing to disambiguate; order is as good as position
+    return [sorted(x for x, _ in c)[len(c) // 2] for c in kept]   # median resists one outlier
+
+
+def _column_index(x: float, bands: list[float]) -> int | None:
+    """Which value column a figure sits in, or None when it is nowhere near one."""
+    if not bands:
+        return None
+    idx = min(range(len(bands)), key=lambda i: abs(bands[i] - x))
+    return idx if abs(bands[idx] - x) <= _COL_TOL * 2 else None
 
 
 def _detect_note_column(rows: list[list[Word]]) -> float | None:
@@ -825,6 +885,18 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
     bands = _basis_bands(rows)
     period_bands = _period_bands(rows)          # real period-end dates for column headers, if any
     note_x = _detect_note_column(rows)          # x of the note-ref column, so it isn't read as a value
+    # Where the value columns actually are. A first pass over the page's figures (after the note
+    # column is removed, so note references never look like a column) so a row reporting only one
+    # of two periods still files that figure under the period it is printed in.
+    col_xs: list[list[tuple[float, str]]] = []
+    for row in rows:
+        _lw, _nr, _vw = _scan_row(row, number_format)
+        _nr, _vw = _resolve_note_column(_nr, _vw, note_x, number_format)
+        xs = [((w.bbox.x0 + w.bbox.x1) / 2, w.text) for w in _vw
+              if _num(w.text, number_format) is not None]
+        if xs:
+            col_xs.append(xs)
+    value_bands = _value_column_bands(col_xs)
     section: str | None = None
     for row in rows:
         label_words, note_ref, value_words = _scan_row(row, number_format)
@@ -854,21 +926,41 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
         li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
                       section_hint=section, source=ValueSource.MACHINE)
         label_bbox = _union([w.bbox for w in label_words])
-        # Group value columns by basis (via the header band), then order within each basis.
+        # Group value columns by basis (via the header band), then place each value in its own
+        # column within that basis — by position when the page has columns, else by order.
         per_basis: dict[Basis, int] = {}
+        basis_cols: dict[Basis, list[int]] = {}
+        if value_bands:
+            for i, bx in enumerate(value_bands):
+                basis_cols.setdefault(_basis_for(bx, bands), []).append(i)
+        # Once the page's value columns are known, a figure that sits under NONE of them is not
+        # a figure: it is a note reference the note-column heuristics did not catch, printed in
+        # its own narrow column to the left. Taken as a value it claims the current period and
+        # displaces the row's real figures. Only dropped when the row has at least one figure
+        # that IS under a column, so a row the bands do not describe still reports positionally.
+        in_col = {id(w): _column_index((w.bbox.x0 + w.bbox.x1) / 2, value_bands)
+                  for w in value_words}
+        drop_outliers = bool(value_bands) and any(v is not None for v in in_col.values())
         for vw in sorted(value_words, key=lambda w: w.bbox.x0):
             dec = _num(vw.text, number_format)
             if dec is None:
                 continue
-            basis = _basis_for((vw.bbox.x0 + vw.bbox.x1) / 2, bands)
+            if drop_outliers and in_col[id(vw)] is None:
+                continue
+            xc = (vw.bbox.x0 + vw.bbox.x1) / 2
+            basis = _basis_for(xc, bands)
+            # The column this figure is printed in decides its period. Order is the fallback for
+            # a page with no columnar structure, and for a figure that sits under no column.
             k = per_basis.get(basis, 0)
-            per_basis[basis] = k + 1
+            col = _column_index(xc, value_bands)
+            if col is not None and col in basis_cols.get(basis, []):
+                k = basis_cols[basis].index(col)
+            per_basis[basis] = max(per_basis.get(basis, 0), k) + 1
             prov = Provenance(
                 document_id=document_id, page_index=page_index, bbox=vw.bbox,
                 value_bbox=vw.bbox, label_bbox=label_bbox, text_snippet=label,
                 source_kind=source_kind, producer=f"extract:{source_kind}@0.1.0",
             )
-            xc = (vw.bbox.x0 + vw.bbox.x1) / 2
             li.set_value(ExtractedValue(
                 value_raw=dec, value=dec, basis=basis,
                 period_label="current" if k == 0 else "prior" if k == 1 else f"col{k}",

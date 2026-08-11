@@ -70,6 +70,13 @@ def parse_number(text: str, fmt: NumberFormat | None = None) -> ParsedNumber:
     if not s:
         return ParsedNumber(None, None, False, False)
 
+    # A number cannot END with its group separator. "8," is a note reference inside a list of
+    # them ("8, 13"), not eight: accepting it invented a value in the note-reference column,
+    # which then aligned as tightly as a money column and shifted a whole page of figures one
+    # period to the right — every current-year amount filed against the prior year.
+    if fmt.thousands and s.endswith(fmt.thousands):
+        return ParsedNumber(None, None, False, False)
+
     # Remove thousands separators, normalise decimal to '.'.
     if fmt.thousands:
         s = s.replace(fmt.thousands, "")

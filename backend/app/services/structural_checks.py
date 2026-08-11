@@ -10,9 +10,15 @@ mapped line items, so nothing about a particular framework is hardcoded here.
 Two rules keep it honest on partial extractions (the normal case for a 270-page filing):
 
 * A relation is evaluated only when the total AND every declared component was actually
-  extracted and mapped for that (basis, period). Everything else is reported as *skipped* with
-  a reason, never as a mismatch — a template subtotal lists every line the framework allows,
-  so treating an absent child as zero would fail essentially every subtotal in the document.
+  extracted and mapped for that (basis, period) — *unless* the relation sums a statement
+  section that owns a residual bucket. There, an absent child is genuinely nil and is taken as
+  zero, so the relation is checked rather than skipped. The difference is completeness: once
+  every printed line in a section is routed either to a specific concept or to that section's
+  "Others" (see ``stages.residual``), a child that is still absent is a line the filing does
+  not print — and a line a filing omits is zero, not unknown. Without that guarantee the same
+  assumption would fail nearly every subtotal, which is why it is gated on the bucket existing
+  rather than applied everywhere. Keys taken as zero are listed in ``assumed_zero`` on the
+  result, so a pass is never mistaken for full extraction.
 * No value is derived, defaulted or back-filled to make a relation balance. A concept mapped
   twice with conflicting values is likewise refused rather than resolved by picking one.
 
@@ -57,26 +63,36 @@ class Relation:
 
 @dataclass
 class MappedValues:
-    """Mapped values per canonical_key per (basis, period), with the unusable keys called out."""
+    """Mapped values per canonical_key per (basis, period).
+
+    Several printed lines legitimately share one concept — three depreciation lines under
+    "Depreciation and amortisation", two tax payments under "Income tax paid", and everything a
+    section's residual bucket absorbs — so repeated mappings are ADDED, exactly as the statement
+    view and the Excel export present them. ``contributors`` records how many lines each figure
+    came from.
+
+    Summing rather than refusing also detects more: if two lines wrongly land on one concept the
+    subtotal stops tying and the rollup FAILS, which names the problem. Treating the key as
+    unusable instead skipped the relation and said nothing at all.
+    """
 
     values: dict[str, dict[Slot, Decimal]] = field(default_factory=dict)
     scales: dict[str, dict[Slot, Decimal]] = field(default_factory=dict)
-    # Keys mapped more than once with conflicting values for the same slot. Choosing between
-    # them would be a guess, so any relation touching one is not evaluated.
+    contributors: dict[str, dict[Slot, int]] = field(default_factory=dict)
+    # Retained for callers that still ask; nothing populates it now that repeats are summed.
     ambiguous: set[str] = field(default_factory=set)
 
     def get(self, key: str, slot: Slot) -> Decimal | None:
-        if key in self.ambiguous:
-            return None
         return self.values.get(key, {}).get(slot)
 
     def slots(self, key: str) -> list[Slot]:
-        if key in self.ambiguous:
-            return []
         return list(self.values.get(key, {}))
 
     def scale(self, key: str, slot: Slot) -> Decimal:
         return self.scales.get(key, {}).get(slot, Decimal(1))
+
+    def sources(self, key: str, slot: Slot) -> int:
+        return self.contributors.get(key, {}).get(slot, 0)
 
 
 def _printed(ev) -> Decimal | None:
@@ -98,10 +114,8 @@ def collect_values(items: Iterable[LineItem]) -> MappedValues:
                 continue
             slot: Slot = (ev.basis.value, ev.period_label)
             seen = out.values.setdefault(key, {})
-            if slot in seen and seen[slot] != val:
-                out.ambiguous.add(key)
-                continue
-            seen[slot] = val
+            seen[slot] = val if slot not in seen else seen[slot] + val
+            out.contributors.setdefault(key, {})[slot] = out.sources(key, slot) + 1
             out.scales.setdefault(key, {})[slot] = ev.unit_ctx.scale_factor
     return out
 
@@ -195,19 +209,31 @@ def evaluate_structure(template: TemplateDefinition,
             report.results.append(_skip(rel, [], "target_not_extracted", {}))
             continue
 
+        # A section that owns a residual bucket has a home for every printed line, so a child
+        # still absent is one the filing does not print — nil, not unknown. See the module
+        # docstring; this is what makes the section subtotals checkable at all.
+        zero_fill = rel.kind == "rollup" and rel.op == "sum" and any(
+            c.endswith("__others") for c in rel.components)
+
         unmapped: dict[Slot, list[str]] = {}
         mixed: list[Slot] = []
         for slot in target_slots:
             missing = [c for c in rel.components if vals.get(c, slot) is None]
-            if missing:
+            if missing and not zero_fill:
+                unmapped[slot] = missing
+                continue
+            # Every component missing means nothing was extracted for this section at all;
+            # "0 == 0" would be a vacuous pass, so it stays a skip.
+            if missing and len(missing) == len(rel.components):
                 unmapped[slot] = missing
                 continue
             # Values are not unit-normalized, so a relation may only be evaluated where every
             # participant shares one scale — otherwise the sum compares thousands to millions.
-            if len({vals.scale(k, slot) for k in keys}) > 1:
+            present = [k for k in keys if vals.get(k, slot) is not None]
+            if len({vals.scale(k, slot) for k in present}) > 1:
                 mixed.append(slot)
                 continue
-            report.results.append(_check(rel, slot, vals))
+            report.results.append(_check(rel, slot, vals, assumed_zero=missing))
 
         if unmapped:
             missing_keys = sorted({k for ks in unmapped.values() for k in ks})
@@ -226,8 +252,16 @@ def evaluate_structure(template: TemplateDefinition,
     return report
 
 
-def _check(rel: Relation, slot: Slot, vals: MappedValues) -> RuleResult:
-    parts = {c: vals.get(c, slot) for c in rel.components}
+def _check(rel: Relation, slot: Slot, vals: MappedValues,
+           assumed_zero: Sequence[str] = ()) -> RuleResult:
+    """Evaluate one relation for one (basis, period).
+
+    ``assumed_zero`` names components the filing does not print, taken as nil. They are
+    recorded on the result so a reader can see the relation was checked against a section the
+    filing states partially — a pass is a genuine pass, but not evidence every line was found.
+    """
+    zeroed = set(assumed_zero)
+    parts = {c: (Decimal(0) if c in zeroed else vals.get(c, slot)) for c in rel.components}
     actual = vals.get(rel.target, slot)
     expected = _expected(rel.op, list(parts.values()))
     diff = actual - expected
@@ -242,6 +276,7 @@ def _check(rel: Relation, slot: Slot, vals: MappedValues) -> RuleResult:
             "statement": rel.statement, "basis": slot[0], "period_label": slot[1],
             "tolerance": str(tol),
             "component_values": {k: str(v) for k, v in parts.items()},
+            "assumed_zero": sorted(zeroed),
             "sign_suspect": (None if ok else _sign_suspect(rel.target, actual, expected,
                                                            parts, tol)),
         },
