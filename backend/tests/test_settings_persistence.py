@@ -169,3 +169,22 @@ def test_one_row_per_setting_so_separate_edits_do_not_clobber_each_other(client)
     _restart()
     ex = get_settings().extraction
     assert ex.fuzzy_accept == 0.61 and ex.mapping_margin == 0.11
+
+
+def test_whether_the_sample_project_is_loaded_also_survives_a_restart(client):
+    """Loading or clearing the sample is a deliberate admin action, so it persists like the
+    other flags — an admin who loaded it should still have it after a restart.
+
+    The consequence is that the app's INITIAL state now depends on stored state, which is what
+    broke a browser test that assumed a fresh process always starts empty. Recorded here so the
+    behaviour is a decision rather than a surprise: anything needing the sample on or off must
+    set it, not assume it.
+    """
+    h = _admin(client)
+    client.patch("/api/v1/settings", headers=h, json={"seed_demo": True})
+    _restart()
+    assert client.get("/api/v1/settings", headers=h).json()["features"]["seed_demo"] is True
+
+    client.patch("/api/v1/settings", headers=h, json={"seed_demo": False})
+    _restart()
+    assert client.get("/api/v1/settings", headers=h).json()["features"]["seed_demo"] is False

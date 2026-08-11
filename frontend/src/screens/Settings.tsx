@@ -48,13 +48,16 @@ function SectionCard({ title, children, note }: { title: string; children: React
 
 /** A clickable toggle row bound to a boolean setting. */
 function ToggleRow({
-  on, onToggle, canEdit, saving, title, help,
+  on, onToggle, canEdit, saving, title, help, testId,
 }: {
-  on: boolean; onToggle: () => void; canEdit: boolean; saving: boolean; title: React.ReactNode; help: string;
+  on: boolean; onToggle: () => void; canEdit: boolean; saving: boolean; title: React.ReactNode;
+  help: string; testId?: string;
 }) {
   const t = useT();
   return (
     <div
+      data-testid={testId}
+      data-on={on ? "true" : "false"}
       onClick={() => canEdit && !saving && onToggle()}
       style={{
         display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 12px", borderRadius: 9,
@@ -657,6 +660,7 @@ export default function SettingsScreen() {
           saving={patch.isPending}
           title={t("st.seedDemo")}
           help={t("st.seedDemoHelp")}
+          testId="seed-demo"
         />
         {!canEdit && <div style={{ fontSize: 11, color: color.muted, marginTop: 4 }}>{t("st.adminOnly")}</div>}
         <div style={{ marginTop: 12 }}>

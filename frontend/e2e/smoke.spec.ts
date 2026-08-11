@@ -9,10 +9,26 @@ async function loginAs(page: Page, role: "admin" | "reviewer" | "analyst") {
   await expect(page.getByText(/FinExtract/)).toBeVisible();
 }
 
+/** Put the sample project into a known state. Whether it is loaded is a PERSISTED admin
+ *  setting, so it carries across a restart and across suite runs — a test that needs it on or
+ *  off has to say so rather than inherit whatever the last run left behind. */
+async function setSampleLoaded(page: Page, want: boolean) {
+  await page.goto("/settings", DCL);
+  const row = page.getByTestId("seed-demo");
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  if ((await row.getAttribute("data-on")) !== String(want)) {
+    await row.click();
+    await expect(row).toHaveAttribute("data-on", String(want), { timeout: 15_000 });
+  }
+}
+
 test.describe.configure({ mode: "serial" });
 
 test("greenfield: the app is empty before any project is loaded", async ({ page }) => {
   await loginAs(page, "admin");
+  // Establish the precondition instead of assuming it: "no project loaded" is now durable
+  // state, so a previous run having loaded the sample must not decide this test's outcome.
+  await setSampleLoaded(page, false);
   await page.goto("/workspace", DCL);
   await expect(page.getByRole("heading", { name: "No project yet" })).toBeVisible();
   await expect(page.getByText("Trade receivables")).toHaveCount(0);
