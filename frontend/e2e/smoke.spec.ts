@@ -300,6 +300,34 @@ test("admin tunes the extraction thresholds and they persist", async ({ page }) 
   await expect(page.getByTestId("ex-fuzzy_accept")).toHaveValue(original, { timeout: 15_000 });
 });
 
+test("a saved threshold is still in force for a browser that never saw the edit", async ({
+  page, browser,
+}) => {
+  // The reason these are persisted: an admin's change must not evaporate. A second browser
+  // context shares nothing with the first except the server, so reading the saved value back
+  // there is what proves it left the first tab.
+  await loginAs(page, "admin");
+  await page.goto("/settings", DCL);
+  await expect(page.getByTestId("ex-mapping_margin")).toBeVisible({ timeout: 15_000 });
+  const original = await page.getByTestId("ex-mapping_margin").inputValue();
+
+  await page.getByTestId("ex-mapping_margin").fill("0.17");
+  await page.getByTestId("ex-save").click();
+  await expect(page.getByTestId("ex-save")).toBeDisabled({ timeout: 15_000 });
+
+  const fresh = await browser.newContext();
+  const other = await fresh.newPage();
+  try {
+    await loginAs(other, "admin");
+    await other.goto("/settings", DCL);
+    await expect(other.getByTestId("ex-mapping_margin")).toHaveValue("0.17", { timeout: 15_000 });
+  } finally {
+    await page.getByTestId("ex-reset").click();
+    await expect(page.getByTestId("ex-mapping_margin")).toHaveValue(original, { timeout: 15_000 });
+    await fresh.close();
+  }
+});
+
 test("an analyst cannot reach the extraction thresholds at all", async ({ page }) => {
   // Settings is an admin-only SCREEN (see SCREENS_BY_ROLE): these knobs change how every
   // future extraction behaves, so an analyst gets neither the controls nor the screen.

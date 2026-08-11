@@ -1,9 +1,12 @@
 /** Settings (admin) — surfaces backend configuration on the frontend and lets an admin
  * edit the runtime-mutable pieces: interface localization, the reviewer sign-off step,
  * the LLM configuration (provider / model / endpoint / params), and the FX rate master
- * used for presentation currency conversion. The API key is never entered or shown here —
- * only the name of the env var it is read from. Everything else is config.toml / env
- * driven and shown read-only. */
+ * used for presentation currency conversion, and the extraction thresholds. The API key is
+ * never entered or shown here — only the name of the env var it is read from. Everything else
+ * is config.toml / env driven and shown read-only.
+ *
+ * Edits are SAVED: the backend persists them and re-applies them at startup, so a change holds
+ * across a restart. "Restore defaults" puts back what config.toml shipped. */
 import { useEffect, useState } from "react";
 
 import { Card, ScreenHeader, Toggle } from "../components/ui";
@@ -163,6 +166,17 @@ function LlmConfigCard({ s, canEdit }: { s: AppSettings; canEdit: boolean }) {
             <span style={{ fontSize: 11, color: color.greenFg, fontWeight: 600 }}>✓ {t("st.saved")}</span>
           )}
           <button
+            data-testid="llm-reset"
+            onClick={() => patch.mutate({ reset_llm: true })}
+            disabled={patch.isPending}
+            style={{ fontSize: 12, fontWeight: 600, color: color.sec2, background: "#fff",
+                     border: `1px solid ${color.controlBorder}`, borderRadius: 8,
+                     padding: "8px 14px", cursor: patch.isPending ? "default" : "pointer" }}
+          >
+            {t("st.restoreDefaults")}
+          </button>
+          <button
+            data-testid="llm-save"
             onClick={() => patch.mutate({ llm: form })}
             disabled={patch.isPending}
             style={{

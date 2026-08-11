@@ -143,3 +143,37 @@ class ExtractionRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     document: Mapped["Document"] = relationship(back_populates="runs")
+
+
+class SettingOverride(Base):
+    """One administrator-changed setting, so a change survives a restart.
+
+    Everything else in ``config.toml`` is deployment configuration and changes on redeploy;
+    these are the values an admin sets from the Settings screen and expects to stay set.
+
+    One row per setting rather than a single blob: adding a knob then needs no schema change
+    and no migration of an existing row, and two admins changing different knobs cannot
+    clobber each other's edit the way a whole-document write would.
+
+    ``scope`` groups a setting to the object it is applied onto — "features", "llm",
+    "extraction" — because the same short name could exist in more than one of them.
+
+    NO SECRETS. The LLM API key is never written here; only the NAME of the environment
+    variable it is read from (``api_key_env``), which is what the rest of the app stores too.
+    The value column is JSON so a bool, a number and a string all round-trip as themselves
+    instead of being stringified and guessed at on the way back.
+    """
+
+    __tablename__ = "setting_overrides"
+    __table_args__ = (
+        UniqueConstraint("scope", "key", name="uq_setting_override_scope_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    scope: Mapped[str] = mapped_column(String(32), index=True)
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    # {"v": <json value>} rather than a bare scalar: SQLite's JSON support stores a bare
+    # ``null`` indistinguishably from SQL NULL, and "explicitly set to null" has to remain
+    # different from "no row".
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

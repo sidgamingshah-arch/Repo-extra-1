@@ -109,6 +109,8 @@ export interface SettingsPatch {
   review_required?: boolean;
   seed_demo?: boolean;
   llm?: LlmConfigPatch;
+  /** Restore the LLM configuration to what config.toml shipped. */
+  reset_llm?: boolean;
   /** Mapping / reconciliation thresholds. Out-of-range values are refused by the API (422). */
   extraction?: Record<string, number | boolean | string>;
   /** Restore every extraction knob to the value config.toml shipped. */

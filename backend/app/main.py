@@ -39,6 +39,11 @@ def create_app() -> FastAPI:
     @application.on_event("startup")
     def _startup() -> None:  # pragma: no cover - trivial
         init_db()
+        # Re-apply the administrator's saved settings (feature flags, LLM config, extraction
+        # thresholds) onto this process. After init_db so the table exists on a fresh database.
+        from app.services.settings_state import load_persisted
+
+        load_persisted()
         # Seed the reference template + ontology so uploaded docs can be mapped out of the box.
         from app.db.base import SessionLocal
         from app.sample.reference import ensure_reference_data

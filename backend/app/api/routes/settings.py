@@ -31,6 +31,7 @@ from app.services.settings_state import (
     get_ui_localization,
     set_llm_config,
     reset_extraction_config,
+    reset_llm_config,
     set_extraction_config,
     set_review_required,
     set_seed_demo,
@@ -100,6 +101,8 @@ class SettingsPatch(BaseModel):
     review_required: bool | None = None
     seed_demo: bool | None = None  # load (true) / clear (false) the sample project
     llm: LlmConfigPatch | None = None
+    # Restore the LLM configuration to what config.toml shipped.
+    reset_llm: bool | None = None
     # Mapping / reconciliation thresholds, as {knob: value}. Deliberately NOT a field-per-knob
     # model: that is a second list of the knobs, and it silently drifted from the real one —
     # a knob missing from it was dropped by validation while the request still returned 200.
@@ -118,6 +121,8 @@ def update_settings(body: SettingsPatch) -> dict:
         set_review_required(body.review_required)
     if body.seed_demo is not None:
         set_seed_demo(body.seed_demo)
+    if body.reset_llm:
+        reset_llm_config()
     if body.llm is not None:
         set_llm_config(**body.llm.model_dump(exclude_none=True))
     if body.reset_extraction:
