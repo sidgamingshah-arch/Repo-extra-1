@@ -926,6 +926,64 @@ export default function WorkspaceScreen() {
                     ? "Manually edited from the front-end — the cell now carries the formula above. Original extraction confidence is retained."
                     : insp?.note ?? ""}
                 </div>
+
+                {/* A combined figure matches no single line on the page, so every line that went
+                    into it is listed with its own amount and its own page — click one to jump
+                    the viewer straight to where it was printed. */}
+                {selRowObj?.contributions?.length ? (
+                  <div
+                    style={{
+                      marginTop: 9,
+                      border: `1px solid ${color.controlBorder}`,
+                      borderRadius: radius.control,
+                      background: "#fff",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {selRowObj.contributions.map((c, i) => {
+                      const jump = usingReal ? toPicked(c.source ?? null, c.label) : null;
+                      return (
+                        <div
+                          key={`${c.label}-${i}`}
+                          onClick={() => jump && setPicked(jump)}
+                          title={jump ? `Show ${c.src} in the document` : undefined}
+                          style={{
+                            display: "flex",
+                            alignItems: "baseline",
+                            gap: 8,
+                            padding: "6px 10px",
+                            borderTop: i === 0 ? "none" : `1px solid ${color.cardBorder}`,
+                            cursor: jump ? "pointer" : "default",
+                          }}
+                        >
+                          <span style={{ fontFamily: font.mono, fontSize: 10.5, color: color.muted,
+                                         minWidth: 14 }}>
+                            {i === 0 ? "" : "+"}
+                          </span>
+                          <span style={{ fontSize: 11.5, color: color.ink, flex: 1,
+                                         textDecoration: jump ? "underline dotted" : "none" }}>
+                            {c.label}
+                          </span>
+                          {c.residual ? (
+                            <span style={{ fontSize: 9.5, fontWeight: 600, padding: "1px 6px",
+                                           borderRadius: radius.pill, background: color.amberBg,
+                                           color: color.amberFg }}>
+                              routed
+                            </span>
+                          ) : null}
+                          <span style={{ fontFamily: font.mono, fontSize: 11, color: color.sec2,
+                                         minWidth: 46, textAlign: "right" }}>
+                            {c.src}
+                          </span>
+                          <span style={{ fontFamily: font.mono, fontSize: 11.5, fontWeight: 600,
+                                         color: color.ink, minWidth: 92, textAlign: "right" }}>
+                            {present(c.v1)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </>
             )}
           </div>

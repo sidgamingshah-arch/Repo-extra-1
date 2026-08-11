@@ -174,6 +174,20 @@ SECTION_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("cash_flow_from_operating_activities", ("operating activities", "经营活动", "营运活动")),
     ("cash_flow_from_investing_activities", ("investing activities", "投资活动")),
     ("cash_flow_from_financing_activities", ("financing activities", "融资活动", "筹资活动")),
+    # The income statement ends with the SAME two captions twice — "Owners of the parent" and
+    # "Non-controlling interests" — once splitting profit for the year and once splitting total
+    # comprehensive income. Only the sub-heading above them tells the pairs apart; without it
+    # both land on one concept and are added into a meaningless total. The comprehensive-income
+    # heading is tested first because it contains "attributable to" as well.
+    # "comprehensive" is the whole distinction, and it has to be matched on its own: a filing
+    # reporting a loss prints "Total comprehensive LOSS attributable to", and a filing covering
+    # both prints "income/(loss)". Requiring the word "income" missed every one of those, which
+    # sent the comprehensive-income split into the profit split — the exact collapse this entry
+    # exists to prevent. The profit split never says "comprehensive".
+    ("total_comprehensive_income_attributable_to", ("comprehensive", "全面收", "全面亏")),
+    ("profit_attributable_to",
+     ("profit attributable", "loss attributable", "attributable to",
+      "溢利归属", "亏损归属", "应占溢利")),
 )
 
 
@@ -234,7 +248,13 @@ class OntologyMatcher:
 
         # Precompute normalized alias → key index for exact/fuzzy tiers, and a concept
         # index (key → mapping) for description lookups.
-        self._alias_index: dict[str, str] = {}
+        # alias → EVERY concept that claims it. Two sections legitimately share a caption:
+        # "Owners of the parent" and "Non-controlling interests" appear under both the profit
+        # split and the comprehensive-income split, and "Others" appears in every section. Keeping
+        # one key per alias made the section-appropriate concept unreachable — the caption
+        # resolved to the wrong section's concept, was refused by the section gate, and the row
+        # ended up unmapped even though its concept existed.
+        self._alias_index: dict[str, list[str]] = {}
         self._alias_by_key: dict[str, list[str]] = {}
         self._by_key: dict[str, OntologyMapping] = {}
         # Alias embeddings, indexed by canonical key — computed lazily on first embedding use.
@@ -252,15 +272,27 @@ class OntologyMatcher:
             ))
             self._alias_by_key[m.canonical_key] = [normalize_label(a) for a in aliases]
             for a in aliases:
-                self._alias_index.setdefault(normalize_label(a), m.canonical_key)
+                keys = self._alias_index.setdefault(normalize_label(a), [])
+                if m.canonical_key not in keys:
+                    keys.append(m.canonical_key)
 
     # -- individual tiers -------------------------------------------------
 
-    def _exact(self, norm: str) -> Candidate | None:
-        key = self._alias_index.get(norm)
-        if key:
-            return Candidate(key, MappingMethod.EXACT, 1.0)
-        return None
+    def _exact(self, norm: str, allowed=None) -> Candidate | None:
+        """An exact alias hit, preferring one the caller's scoping allows.
+
+        ``allowed`` is a predicate over canonical keys (the statement/section/exclusion gate).
+        When several concepts share the alias, the one that fits where the caption was printed
+        wins; with no predicate the first claimant does, as before.
+        """
+        keys = self._alias_index.get(norm) or []
+        if not keys:
+            return None
+        if allowed is not None:
+            keys = [k for k in keys if allowed(k)] or []
+        if not keys:
+            return None
+        return Candidate(keys[0], MappingMethod.EXACT, 1.0)
 
     def _vetoed(self, canonical_key: str, caption: str) -> bool:
         """Whether the concept's ``exclude_hints`` rule this caption out.
@@ -589,8 +621,13 @@ class OntologyMatcher:
         # 1. Exact normalized-alias identity — unambiguous and free. Tried on the caption and,
         #    for a bilingual line, on each script's half (either alone can be an exact alias).
         for seg in segments:
-            exact = self._exact(normalize_label(seg))
-            if exact and self._allowed(exact.canonical_key, statement, section, raw_label):
+            # The scoping gate is handed to the alias lookup rather than applied after it: when
+            # two concepts claim the same alias, the one that fits where this caption was printed
+            # has to be the one returned.
+            exact = self._exact(
+                normalize_label(seg),
+                allowed=lambda k: self._allowed(k, statement, section, raw_label))
+            if exact:
                 return MappingResult(exact.canonical_key, exact.method, 1.0, [exact], False,
                                      {"exact": 1.0}, allocation_status="direct_exclusive")
 

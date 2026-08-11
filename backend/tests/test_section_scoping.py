@@ -105,3 +105,64 @@ def test_the_banner_is_carried_from_the_page_onto_each_row():
     items, _ = build_line_items(words, page_index=0, document_id=None, source_kind="native")
     banners = [li.section_hint for li in items]
     assert banners == ["NON-CURRENT LIABILITIES", "CURRENT LIABILITIES"], banners
+
+
+def test_two_concepts_may_claim_the_same_alias_and_the_banner_decides(matcher):
+    """The income statement prints "Owners of the parent" and "Non-controlling interests" TWICE
+    — once splitting profit for the year, once splitting total comprehensive income. Both
+    concepts legitimately claim the bare caption, so the alias index has to keep both: keeping
+    one made the other unreachable, and the row came back unmapped even though its concept
+    existed."""
+    profit = matcher.match("Non-controlling interests 非控股權益", statement="profit_and_loss",
+                           section="Profit/(loss) attributable to")
+    assert profit.canonical_key == "pl_profit_attributable_to__non_controlling_interests"
+
+    tci = matcher.match("Non-controlling interests 非控股權益", statement="profit_and_loss",
+                        section="Total comprehensive loss attributable to")
+    assert tci.canonical_key == (
+        "pl_total_comprehensive_income_attributable_to__non_controlling_interests")
+
+
+def test_a_loss_making_filing_still_names_the_comprehensive_income_split(matcher):
+    """A filing reporting a loss prints "Total comprehensive LOSS attributable to", and one
+    covering both prints "income/(loss)". Matching on the word "income" missed every such
+    heading and sent the comprehensive-income split into the profit split."""
+    from app.services.mapping import section_of_banner
+
+    for heading in ("Total comprehensive loss attributable to",
+                    "Total comprehensive income attributable to",
+                    "Total comprehensive income/(loss) attributable to",
+                    "下列各項應佔全面虧損總額"):
+        assert section_of_banner(heading) == "total_comprehensive_income_attributable_to", heading
+    # ...while the profit split is still its own section.
+    assert section_of_banner("Profit/(loss) attributable to") == "profit_attributable_to"
+
+
+def test_a_heading_printed_on_the_same_line_as_its_first_figure_still_scopes_the_rows():
+    """Bilingual filings routinely print a heading and its first amount on one line:
+    "Total comprehensive loss attributable to: ... Owners of the parent  (1,234)". The heading
+    never appears as a label-only row, but it still scopes that row and the ones below it."""
+    from app.core.models.geometry import BBox
+    from app.services.row_reconstruct import Word, build_line_items
+
+    def word(text: str, x: float, y: float) -> Word:
+        return Word(text=text, bbox=BBox(x0=x, y0=y, x1=x + 0.05, y1=y + 0.01))
+
+    words = [
+        *[word(t, 0.10 + i * 0.05, 0.10) for i, t in
+          enumerate("Profit attributable to: Owners of the parent".split())],
+        word("1,000", 0.74, 0.10), word("2,000", 0.86, 0.10),
+        *[word(t, 0.10 + i * 0.05, 0.14) for i, t in enumerate("Non-controlling interests".split())],
+        word("100", 0.74, 0.14), word("200", 0.86, 0.14),
+        *[word(t, 0.10 + i * 0.05, 0.18) for i, t in
+          enumerate("Total comprehensive loss attributable to: Owners of the parent".split())],
+        word("3,000", 0.74, 0.18), word("4,000", 0.86, 0.18),
+        *[word(t, 0.10 + i * 0.05, 0.22) for i, t in enumerate("Non-controlling interests".split())],
+        word("300", 0.74, 0.22), word("400", 0.86, 0.22),
+    ]
+    items, _ = build_line_items(words, page_index=0, document_id=None, source_kind="native")
+    hints = [i.section_hint for i in items]
+    # The second "Non-controlling interests" is scoped by the comprehensive-income heading, not
+    # by the profit heading four rows above it.
+    assert hints[1] == "Profit attributable to"
+    assert hints[3] == "Total comprehensive loss attributable to"

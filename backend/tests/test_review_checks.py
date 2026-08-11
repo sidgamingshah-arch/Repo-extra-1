@@ -161,8 +161,9 @@ def test_several_printed_lines_mapping_to_one_concept_are_summed_not_dropped():
     stmt = _build_statement(rows, None, "cash_flow", "f.pdf")
     row = next(r for r in stmt["rows"] if r["id"] == key)
     assert row["v1"] == -604405                      # both lines, not just the first
-    assert "Sum of 2 printed lines" in row["inspector"]["note"]
-    assert "land appreciation" in row["inspector"]["note"]
+    # What went into it is enumerated, not described — see the traceability test below.
+    assert [c["label"] for c in row["contributions"]] == ["PRC corporate income tax paid",
+                                                         "PRC land appreciation tax paid"]
 
 
 def test_a_concept_with_one_source_line_is_unchanged():
@@ -173,4 +174,62 @@ def test_a_concept_with_one_source_line_is_unchanged():
              "values": [{"basis": "consolidated", "period_label": "current", "value": "-100"}]}]
     row = next(r for r in _build_statement(rows, None, "cash_flow", "f.pdf")["rows"]
                if r["id"] == key)
-    assert row["v1"] == -100 and "Sum of" not in row["inspector"]["note"]
+    assert row["v1"] == -100 and row["contributions"] is None
+
+
+def test_a_combined_figure_lists_every_contributing_line_with_its_own_source():
+    """Clicking a combined figure — "Others", or any concept several printed lines map to — has
+    to show the arithmetic and let each part be traced back. A figure that matches no single line
+    on the page is otherwise unexplainable: the analyst cannot tell a correct aggregation from a
+    mis-mapping without seeing which lines went in and where each was printed."""
+    from app.api.routes.documents import _build_statement
+
+    key = "cf_cash_flow_from_operating_activities__income_tax_paid"
+
+    def src(page):
+        return {"source_kind": "native", "page_index": page,
+                "bbox": {"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.21}}
+
+    rows = [
+        {"canonical_key": key, "source_label": "PRC corporate income tax paid",
+         "mapping_method": "exact",
+         "values": [{"basis": "consolidated", "period_label": "current", "value": "-559917",
+                     "provenance": src(109)},
+                    {"basis": "consolidated", "period_label": "prior", "value": "-846790",
+                     "provenance": src(109)}]},
+        {"canonical_key": key, "source_label": "PRC land appreciation tax paid",
+         "mapping_method": "residual",
+         "values": [{"basis": "consolidated", "period_label": "current", "value": "-44488",
+                     "provenance": src(110),
+                     "confidence": {"flags": ["residual_combined"]}}]},
+    ]
+    row = next(r for r in _build_statement(rows, None, "cash_flow", "f.pdf")["rows"]
+               if r["id"] == key)
+
+    assert row["v1"] == -604405
+    # The arithmetic is shown, not described.
+    assert row["formula"] == "-559,917 + -44,488"
+    assert row["inspector"]["result"] == "-604,405"
+
+    got = row["contributions"]
+    assert [c["label"] for c in got] == ["PRC corporate income tax paid",
+                                         "PRC land appreciation tax paid"]
+    assert [c["v1"] for c in got] == [-559917.0, -44488.0]
+    assert got[0]["v2"] == -846790.0 and got[1]["v2"] is None
+    # Each part keeps the page it was printed on, and a structured location to jump to.
+    assert [c["src"] for c in got] == ["p.110", "p.111"]
+    assert all(c["source"]["bbox"] for c in got)
+    # A line that was ROUTED here is distinguished from one positively identified.
+    assert [c["residual"] for c in got] == [False, True]
+
+
+def test_a_single_source_row_carries_no_contributions():
+    """Nothing to trace, so no breakdown is offered."""
+    from app.api.routes.documents import _build_statement
+
+    key = "cf_cash_flow_from_operating_activities__income_tax_paid"
+    rows = [{"canonical_key": key, "source_label": "Income tax paid",
+             "values": [{"basis": "consolidated", "period_label": "current", "value": "-100"}]}]
+    row = next(r for r in _build_statement(rows, None, "cash_flow", "f.pdf")["rows"]
+               if r["id"] == key)
+    assert row["contributions"] is None

@@ -25,6 +25,9 @@ from decimal import Decimal, InvalidOperation
 from app.core.models.enums import Basis, LineRole, ValueSource
 from app.core.models.geometry import BBox, Provenance
 from app.core.models.line_item import ExtractedValue, LineItem, NoteRef, UnitContext
+# The section vocabulary is a property of how statements are PRINTED, not of any ontology, so
+# reading a banner here uses the same function mapping does rather than a second copy of it.
+from app.services.mapping import section_of_banner
 
 _NUM = re.compile(r"^\(?-?[\d,]*\.?\d+\)?%?$")
 _NOTE = re.compile(r"^note[s]?\.?$", re.IGNORECASE)
@@ -908,13 +911,19 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
             # scopes every row beneath it — the same caption under two banners is two different
             # concepts. Remember it before dropping the row.
             #
-            # A sub-heading ("Adjustments for:", "Represented by:") introduces a group WITHIN
-            # the section rather than a new one, so it must not displace it: the rows under
+            # A sub-heading ending in a colon usually introduces a group WITHIN the section
+            # rather than a new one, so by default it must not displace it: the rows under
             # "Adjustments for:" are still operating-activities rows, and losing that scope is
             # what lets an operating add-back resolve to an investing concept.
-            if label and not value_words and _looks_like_header(label_words) \
-                    and not label.rstrip().endswith(":"):
-                section = label
+            #
+            # Unless the sub-heading names a section in its own right. The income statement
+            # splits both profit and total comprehensive income with "Attributable to:" /
+            # "Total comprehensive income attributable to:", printing the same two captions
+            # under each — so that colon heading is the only thing distinguishing them.
+            if label and not value_words and _looks_like_header(label_words):
+                names_a_section = section_of_banner(label) is not None
+                if names_a_section or not label.rstrip().endswith(":"):
+                    section = label
             continue
 
         # Drop running-header / statement-title / period-caption lines that leaked in as rows
@@ -922,6 +931,15 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
         row_vals = [d for d in (_num(w.text, number_format) for w in value_words) if d is not None]
         if _is_noise_row(label, row_vals):
             continue
+
+        # A heading is often printed on the SAME line as its first figure, so it never appears as
+        # a label-only row: "Total comprehensive loss attributable to: … Owners of the parent"
+        # is one row carrying the owners' amount. The heading still scopes this row and the rows
+        # under it — without that, the second "Non-controlling interests" of the income statement
+        # stays under the profit split and is added to the first, which is meaningless.
+        head = re.split(r"[:：]", label)[0] if re.search(r"[:：]", label) else ""
+        if head and section_of_banner(head) is not None:
+            section = head.strip()
 
         li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
                       section_hint=section, source=ValueSource.MACHINE)

@@ -3776,14 +3776,20 @@
     "Total comprehensive income attributable to owners of the parent",
     "Total comprehensive loss attributable to owners of the parent",
     "Total comprehensive income/(loss) attributable to owners of the parent",
-    "Total comprehensive income attributable to equity holders of the parent"
+    "Total comprehensive income attributable to equity holders of the parent",
+    "Owners of the parent",
+    "Equity holders of the parent",
+    "Owners of the Company"
    ],
    "aliases_i18n": {
     "en": [
      "Total comprehensive income attributable to owners of the parent",
      "Total comprehensive loss attributable to owners of the parent",
      "Total comprehensive income/(loss) attributable to owners of the parent",
-     "Total comprehensive income attributable to equity holders of the parent"
+     "Total comprehensive income attributable to equity holders of the parent",
+     "Owners of the parent",
+     "Equity holders of the parent",
+     "Owners of the Company"
     ],
     "zh": [
      "下列各項應佔全面虧損總額 母公司擁有人",
@@ -3792,7 +3798,10 @@
      "母公司擁有人應佔全面虧損總額",
      "母公司拥有人应占全面亏损总额",
      "本公司擁有人應佔全面收益總額",
-     "本公司拥有人应占全面收益总额"
+     "本公司拥有人应占全面收益总额",
+     "母公司擁有人",
+     "本公司擁有人",
+     "母公司權益持有人"
     ]
    },
    "decomposition_rule": "Total comprehensive income for the year = owners of the parent + non-controlling interests. The two attribution lines are components of that total and are never added to it.",
@@ -3833,13 +3842,17 @@
    "aliases": [
     "Total comprehensive income attributable to non-controlling interests",
     "Total comprehensive loss attributable to non-controlling interests",
-    "Total comprehensive income/(loss) attributable to non-controlling interests"
+    "Total comprehensive income/(loss) attributable to non-controlling interests",
+    "Non-controlling interests",
+    "Non-controlling shareholders"
    ],
    "aliases_i18n": {
     "en": [
      "Total comprehensive income attributable to non-controlling interests",
      "Total comprehensive loss attributable to non-controlling interests",
-     "Total comprehensive income/(loss) attributable to non-controlling interests"
+     "Total comprehensive income/(loss) attributable to non-controlling interests",
+     "Non-controlling interests",
+     "Non-controlling shareholders"
     ],
     "zh": [
      "非控股權益應佔全面收益總額",
@@ -3847,7 +3860,9 @@
      "非控股權益應佔全面虧損總額",
      "非控股权益应占全面亏损总额",
      "少數股東應佔全面收益總額",
-     "少数股东应占全面收益总额"
+     "少数股东应占全面收益总额",
+     "非控股權益",
+     "非控股股東"
     ]
    },
    "decomposition_rule": "Total comprehensive income for the year = owners of the parent + non-controlling interests. The two attribution lines are components of that total and are never added to it.",

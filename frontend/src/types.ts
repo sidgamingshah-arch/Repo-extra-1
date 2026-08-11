@@ -191,6 +191,24 @@ export interface Inspector {
   note: string;
 }
 
+/** One printed line that went into a combined figure.
+ *
+ * Several printed lines legitimately share one concept — three depreciation lines, two tax
+ * payments, whatever a section's residual "Others" bucket absorbs. The combined figure then
+ * matches no single line on the page, so each contributor carries its own values and its own
+ * source location and can be traced back to where it was printed. */
+export interface RowContribution {
+  label: string;
+  canonical_key?: string | null;
+  v1: number | null;
+  v2: number | null;
+  method?: string | null;
+  /** Routed here because nothing more specific matched, rather than positively identified. */
+  residual?: boolean;
+  src: string;
+  source?: ExtractionProvenance | null;
+}
+
 export interface StatementRow {
   id: string;
   label: string;
@@ -204,6 +222,8 @@ export interface StatementRow {
   editable?: boolean;
   formula?: string | null;
   inspector?: Inspector;
+  /** Present only when more than one printed line was combined into this figure. */
+  contributions?: RowContribution[] | null;
   v1: number | null;
   v2: number | null;
   source?: ExtractionProvenance | null;  // real docs: current-period value's source location

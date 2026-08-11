@@ -1284,18 +1284,47 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                 if pv is not None:
                     v2 = pv if v2 is None else v2 + pv
         inspector = _inspector(r, cur)
+        formula = r.get("formula")
+        contributions: list[dict] = []
         if len(group) > 1:
-            printed = "; ".join(str(x.get("source_label") or "") for x in group)
-            inspector = {**inspector, "tag": "aggregated",
-                         "note": f"{inspector.get('note', '')} Sum of {len(group)} printed "
-                                 f"lines mapped to this concept: {printed}"}
+            # A combined figure has to be auditable line by line: each contributing caption with
+            # its OWN values and its OWN source location, so every part can be traced back to the
+            # page it was printed on. A prose summary cannot be clicked.
+            for x in group:
+                c, p = _cur_prior(x, basis)
+                contributions.append({
+                    "label": x.get("source_label") or "",
+                    "canonical_key": x.get("canonical_key"),
+                    "v1": _to_num((c or {}).get("value")),
+                    "v2": _to_num((p or {}).get("value")),
+                    "method": x.get("mapping_method"),
+                    # Whether this line was ROUTED here (no specific concept matched) rather than
+                    # identified — the difference an analyst needs before accepting the figure.
+                    "residual": any("residual_combined" in ((v.get("confidence") or {})
+                                                            .get("flags") or [])
+                                    for v in (x.get("values") or [])),
+                    "src": _prov_label((c or {}).get("provenance")),
+                    "source": (c or {}).get("provenance"),
+                })
+            terms = [f"{c['v1']:,.0f}" if c["v1"] is not None else "—" for c in contributions]
+            formula = " + ".join(terms)
+            inspector = {**inspector, "tag": "combined",
+                         "formula": formula,
+                         "result": "" if v1 is None else f"{v1:,.0f}",
+                         "src": " · ".join(dict.fromkeys(
+                             c["src"] for c in contributions if c["src"])),
+                         "note": f"Combined from {len(group)} printed lines that map to this "
+                                 f"concept. Each line below keeps its own figure and page — "
+                                 f"click one to jump to it in the document."}
         return {
             "id": key, "label": label or r.get("source_label"),
             "source_label": r.get("source_label"), "kind": kind,
             "note": next((x.get("note") for x in group if x.get("note")), None),
             "note2": None, "status": "edited" if edited else None,
             "confidence": {"cat": cat, "pct": pct}, "editable": True,
-            "formula": r.get("formula"), "inspector": inspector,
+            "formula": formula, "inspector": inspector,
+            # Present only when more than one printed line was combined into this figure.
+            "contributions": contributions or None,
             "v1": v1, "v2": v2,
             # Structured source location of the current-period value, so the Workspace's live
             # viewer can hyperlink this row to its page+bbox (PDF) or sheet+cell (Excel).

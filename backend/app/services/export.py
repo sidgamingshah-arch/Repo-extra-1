@@ -186,13 +186,39 @@ def _label(node: dict, locale: str) -> str:
     return (node.get("label_i18n") or {}).get(locale) or node.get("label") or node.get("canonical_key") or ""
 
 
-def _cell_value(row: dict | None, basis: str, period: str):
-    if not row:
+def _cell_value(group, basis: str, period: str):
+    """The figure for one concept in one (basis, period) — the SUM when several printed lines
+    map to it, matching what the statement view and the structural checks use."""
+    if not group:
         return None
-    for v in row.get("values") or []:
-        if (v.get("basis") or "consolidated") == basis and v.get("period_label") == period:
-            return _num(v.get("value"))
-    return None
+    rows = group if isinstance(group, list) else [group]
+    total = None
+    for row in rows:
+        for v in (row or {}).get("values") or []:
+            if (v.get("basis") or "consolidated") == basis and v.get("period_label") == period:
+                n = _num(v.get("value"))
+                if n is not None:
+                    total = n if total is None else total + n
+    return total
+
+
+def _contribution_note(group: list[dict], basis: str, period: str) -> str | None:
+    """The audit trail for a combined figure: every contributing caption with its own amount and
+    the page it was printed on. A combined figure matches no single line in the document, so
+    without this the workbook shows a number the reader cannot find anywhere."""
+    if not group or len(group) <= 1:
+        return None
+    lines = [f"Combined from {len(group)} printed lines:"]
+    for row in group:
+        amount = _cell_value([row], basis, period)
+        vals = row.get("values") or []
+        where = _prov_str(vals[0].get("provenance")) if vals else ""
+        shown = "—" if amount is None else f"{amount:,.0f}"
+        lines.append(f"  {row.get('source_label') or ''} = {shown}"
+                     + (f"  [{where}]" if where else ""))
+    total = _cell_value(group, basis, period)
+    lines.append(f"  Total = {'—' if total is None else f'{total:,.0f}'}")
+    return "\n".join(lines)
 
 
 def _num(s):
@@ -224,7 +250,13 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
-    by_key = {r["canonical_key"]: r for r in rows if r.get("canonical_key")}
+    # Grouped, not overwritten. Several printed lines legitimately share one concept — three
+    # depreciation lines, two tax payments, a section's residual "Others" bucket — and keeping
+    # only the last silently dropped the rest from the exported statement.
+    by_key: dict[str, list[dict]] = {}
+    for r in rows:
+        if r.get("canonical_key"):
+            by_key.setdefault(r["canonical_key"], []).append(r)
     bases = _bases_present(rows)
 
     ink = "1f2937"
@@ -503,7 +535,8 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
     for node in nodes:
         role = node.get("role")
         key = node.get("canonical_key")
-        row = by_key.get(key)
+        group = by_key.get(key) or []
+        row = group[0] if group else None
         label = _label(node, locale)
 
         if role == "header":
@@ -527,7 +560,7 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
 
         for (b, p) in period_cols:
             ci = first_val + period_cols.index((b, p))
-            val = _cell_value(row, b, p)
+            val = _cell_value(group, b, p)
             if val is not None and scale != 1.0:
                 val = round(val * scale)
             cell = ws.cell(r, ci, val)
@@ -537,15 +570,30 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
                 cell.font = Font(bold=True)
 
         if row is not None:
-            conf = row.get("mapping_confidence")
-            ws.cell(r, conf_col, f"{round(conf * 100)}%" if isinstance(conf, (int, float)) else "")
-            vals = row.get("values") or []
-            ws.cell(r, src_col, _prov_str(vals[0].get("provenance")) if vals else "")
+            confs = [x.get("mapping_confidence") for x in group
+                     if isinstance(x.get("mapping_confidence"), (int, float))]
+            conf = min(confs) if confs else None
+            ws.cell(r, conf_col, f"{round(conf * 100)}%" if conf is not None else "")
+            # Every page a contributing line came from, so the source column stays truthful for
+            # a combined figure instead of naming only the first.
+            srcs = []
+            for x in group:
+                vals = x.get("values") or []
+                where = _prov_str(vals[0].get("provenance")) if vals else ""
+                if where and where not in srcs:
+                    srcs.append(where)
+            ws.cell(r, src_col, " · ".join(srcs))
+            notes = []
             # Edited items carry their formula into the workbook as a cell note (the value is
             # the applied result; the formula is preserved for audit).
             if row.get("edited") and row.get("formula"):
+                notes.append(f"Edited · formula: {row['formula']}")
+            trace = _contribution_note(group, *period_cols[0]) if period_cols else None
+            if trace:
+                notes.append(trace)
+            if notes:
                 from openpyxl.comments import Comment
-                lab.comment = Comment(f"Edited · formula: {row['formula']}", "FinExtract")
+                lab.comment = Comment("\n\n".join(notes), "FinExtract")
 
         if role == "subtotal":
             for c in range(1, src_col + 1):
