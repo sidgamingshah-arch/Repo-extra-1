@@ -207,8 +207,12 @@ def test_a_combined_figure_lists_every_contributing_line_with_its_own_source():
                if r["id"] == key)
 
     assert row["v1"] == -604405
-    # The arithmetic is shown, not described.
-    assert row["formula"] == "-559,917 + -44,488"
+    # The arithmetic is shown, not described — as DISPLAY. It must not travel in `formula`, which
+    # the client prefills into its formula box and sends back with the next edit: the server would
+    # then evaluate "-559,917 + -44,488" and its result would override the figure the analyst had
+    # just typed.
+    assert row["arithmetic"] == "-559,917 + -44,488"
+    assert row["formula"] is None
     assert row["inspector"]["result"] == "-604,405"
 
     got = row["contributions"]

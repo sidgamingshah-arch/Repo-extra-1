@@ -272,6 +272,16 @@ export interface StatementRow {
    *                             the printed figure is shown UNVERIFIED and is in the review queue.
    */
   origin?: "extracted" | "calculated" | "manual" | "reported_uncomputed";
+  /** Per-period origin. The row-level `origin` is a summary for the chip; these are what each
+   *  column actually is, and they can differ — a figure corrected this year says nothing about
+   *  last year, and a period whose components were not extracted is not made computable by the
+   *  other period's being so. */
+  origin1?: StatementRow["origin"];
+  origin2?: StatementRow["origin"];
+  /** How the figure was reached, rendered for READING ("12,800 + 2,150 + 3,410"). Display only:
+   *  it is not an expression, and sending it back as `formula` would have the server evaluate it
+   *  and overwrite whatever the analyst typed. */
+  arithmetic?: string | null;
   /** What the DOCUMENT printed for a calculated line. Never the line's displayed value — a
    *  subtotal that contradicts its components is a finding, not a figure — but kept so the
    *  divergence can be stated. */

@@ -95,8 +95,8 @@ def extract_workbook(data: bytes, *, document_id: str | None = None) -> list[Lin
             note_col = _detect_note_col(rows, label_col, value_cols)
             if note_col is not None and note_col in value_cols:
                 value_cols = [c for c in value_cols if c != note_col]
-            headers = _period_headers(rows, value_cols)
             basis_map = _detect_basis_bands(rows, value_cols)
+            headers = _period_headers(rows, value_cols, basis_map)
             for r_idx, row in enumerate(rows):
                 if label_col >= len(row):
                     continue
@@ -179,9 +179,38 @@ def _detect_columns(rows: list[list]) -> tuple[int | None, list[int]]:
 _BASIS_TOKENS = ("consolidated", "standalone", "separate")
 
 
-def _period_headers(rows: list[list], value_cols: list[int]) -> dict[int, str]:
-    """Best-effort period label per value column, taken from the first text header row. Rows
-    that name the basis (Consolidated/Standalone band) are skipped — those aren't periods."""
+def _positional(i: int, c: int) -> str:
+    return "current" if i == 0 else "prior" if i == 1 else f"col{c}"
+
+
+def _period_headers(rows: list[list], value_cols: list[int],
+                    basis_map=None) -> dict[int, tuple[str, str | None]]:
+    """(period_label, period_display) per value column, from the first text header row.
+
+    A header that NAMES A PERIOD ("31 December 2024", "FY2025", "2023") is labelled positionally —
+    current, prior, colN — with the printed text kept as the display, exactly as the native-PDF
+    path does. Storing the text as the label instead looked harmless and silently defeated
+    current/prior resolution for every spreadsheet: nothing downstream recognised the column, the
+    positional fallback fired for every row, and a line with a figure in the prior column only had
+    that figure reported as the current year.
+
+    A header that names something other than a period ("Retained profits") is an equity component,
+    and its identity IS its name — so that is kept as the label.
+
+    Rows that name the basis (a Consolidated/Standalone band) are skipped; those aren't periods.
+
+    Position is counted WITHIN a basis: a Consolidated | Standalone sheet has four value columns
+    and two of each period, so "current" is the first column of its own band. Counting across the
+    whole row would label the standalone pair col2/col3 and leave the standalone statement with no
+    current or prior column at all.
+    """
+    from app.services.periods import looks_like_period
+
+    def positional(c: int) -> str:
+        band = (basis_map or {}).get(c, Basis.CONSOLIDATED)
+        within = [x for x in value_cols if (basis_map or {}).get(x, Basis.CONSOLIDATED) == band]
+        return _positional(within.index(c) if c in within else 0, c)
+
     for row in rows:
         if any(c < len(row) and isinstance(row[c], str) and row[c].strip() for c in value_cols):
             has_numbers = any(_to_decimal(row[c]) is not None for c in value_cols)
@@ -189,11 +218,18 @@ def _period_headers(rows: list[list], value_cols: list[int]) -> dict[int, str]:
                                 and any(tok in row[c].lower() for tok in _BASIS_TOKENS)
                                 for c in value_cols)
             if not has_numbers and not is_basis_band:
-                return {c: (str(row[c]).strip() if c < len(row) and row[c] else f"col{c}")
-                        for c in value_cols}
-    # Fall back to positional labels (first value column = current period).
-    return {c: ("current" if i == 0 else "prior" if i == 1 else f"col{c}")
-            for i, c in enumerate(value_cols)}
+                out: dict[int, tuple[str, str | None]] = {}
+                for c in value_cols:
+                    text = str(row[c]).strip() if c < len(row) and row[c] else ""
+                    if not text:
+                        out[c] = (positional(c), None)
+                    elif looks_like_period(text):
+                        out[c] = (positional(c), text)
+                    else:
+                        out[c] = (text, text)          # an equity component names itself
+                return out
+    # No text header row at all: positional, first value column of each basis = current period.
+    return {c: (positional(c), None) for c in value_cols}
 
 
 def _note_from_cell(v) -> str | None:
@@ -233,8 +269,9 @@ def _row_item(sheet, sheet_index, r_idx, label, row, label_col, value_cols, head
             label_cell=f"{_col_letter(label_col + 1)}{r_idx + 1}",
             text_snippet=label, source_kind="spreadsheet", producer=_PRODUCER,
         )
+        label_, display_ = headers.get(c, (f"col{c}", None))
         ev = ExtractedValue(value_raw=dec, value=dec, basis=basis,
-                            period_label=headers.get(c, f"col{c}"),
+                            period_label=label_, period_display=display_,
                             unit_ctx=UnitContext(), provenance=prov)
         li.set_value(ev)
         got = True

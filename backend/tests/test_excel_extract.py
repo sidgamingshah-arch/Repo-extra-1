@@ -31,16 +31,23 @@ def test_excel_values_and_cell_provenance():
     assert "Particulars" not in labels  # header row is not a data row
 
     rev = next(li for li in items if li.source_label == "Revenue from operations")
-    cur = rev.get_value(Basis.CONSOLIDATED, period_label="FY2025")
+    # A period header is labelled POSITIONALLY and keeps its printed text as the display, exactly
+    # as the native-PDF path does. Storing "FY2025" as the label meant nothing downstream
+    # recognised the column, so current/prior resolution fell back to position for every
+    # spreadsheet row — and a line with a figure in the prior column only had it reported as the
+    # current year.
+    cur = rev.get_value(Basis.CONSOLIDATED, period_label="current")
     assert cur is not None and int(cur.value) == 964700
+    assert cur.period_display == "FY2025"
     # Exact, verifiable provenance — sheet + cell — with no OCR/LLM involved.
     assert cur.provenance is not None
     assert cur.provenance.sheet == "P&L"
     assert cur.provenance.cell == "B2"          # row 2, first value column
     assert cur.provenance.label_cell == "A2"
     assert cur.provenance.source_kind == "spreadsheet"
-    prior = rev.get_value(Basis.CONSOLIDATED, period_label="FY2024")
+    prior = rev.get_value(Basis.CONSOLIDATED, period_label="prior")
     assert prior is not None and cur.provenance.cell != prior.provenance.cell
+    assert prior.period_display == "FY2024"
 
 
 def test_cell_context_windows_around_the_target():

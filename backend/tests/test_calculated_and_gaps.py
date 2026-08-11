@@ -438,3 +438,118 @@ def test_an_edit_carries_a_comment_that_travels_with_the_row_and_the_export(clie
     d2 = client.get(f"/api/v1/documents/{doc_id}/statement",
                     params={"statement": "balance_sheet", "basis": "consolidated"}).json()
     assert next(x for x in d2["rows"] if x["id"] == "bs_ca__cash")["comments"] is None
+
+
+# --------------------------------------------------------------------------------------
+# Defects an adversarial review confirmed. Each of these shipped, and each one broke a
+# promise this batch had just made, so they are pinned individually.
+# --------------------------------------------------------------------------------------
+def test_the_printed_sum_is_never_published_as_a_re_evaluatable_formula():
+    """The display rendering must not travel in `formula`.
+
+    It did, and the consequence was the silent edit this whole batch existed to remove: the client
+    prefilled its formula box with "100 + 50", sent it back with the next value edit, the server
+    evaluated it, and `computed` took precedence over the typed figure — so typing 200 showed 150.
+    """
+    from app.services.formula import evaluate
+
+    rows = [_row("bs_x__others", "Sundry A", 100, 90),
+            _row("bs_x__others", "Sundry B", 50, 40)]
+    row = _row_of(_stmt(rows), "bs_x__others")
+    assert row["v1"] == 150
+    assert row["arithmetic"] == "100 + 50"      # readable
+    assert row["formula"] is None               # and NOT re-evaluatable
+    # The rendering would evaluate cleanly if it were ever sent, which is exactly why it must not
+    # be published in the field the client sends back.
+    assert evaluate("100 + 50", lambda n: 0.0) == 150.0
+
+
+def test_a_calculated_rows_arithmetic_is_display_only_too():
+    rows = [_row("bs_ca__inventories", "Inventories", 100),
+            _row("bs_ca__cash", "Cash", 30)]
+    row = _row_of(_stmt(rows), "bs_ca__total")
+    assert row["arithmetic"] == "100 + 30 + —"
+    assert row["formula"] is None
+
+
+def test_editing_one_period_leaves_the_other_periods_origin_alone():
+    """Origin is decided per period. Deciding it at row level meant correcting this year flipped
+    last year's total from computed back to the printed figure."""
+    rows = [_row("bs_ca__inventories", "Inventories", 100, 90),
+            _row("bs_ca__cash", "Cash", 30, 20),
+            {**_row("bs_ca__total", "Total current assets", 555, 888),
+             "edited": True, "edited_slots": ["consolidated/current"]}]
+    row = _row_of(_stmt(rows), "bs_ca__total")
+    assert (row["v1"], row["origin1"]) == (555, "manual")      # typed
+    assert (row["v2"], row["origin2"]) == (110, "calculated")   # still its components, not 888
+
+
+def test_a_period_that_cannot_be_computed_keeps_its_printed_figure():
+    """Computability is per period. Entering the calculated branch because the OTHER period
+    computed blanked this one out entirely."""
+    rows = [_row("bs_ca__inventories", "Inventories", 100),         # current only
+            _row("bs_ca__total", "Total current assets", 100, 888)]
+    row = _row_of(_stmt(rows), "bs_ca__total")
+    assert (row["v1"], row["origin1"]) == (100, "calculated")
+    assert (row["v2"], row["origin2"]) == (888, "reported_uncomputed")
+
+
+def test_a_manual_value_on_a_subtotal_reaches_the_total_above_it():
+    """A rollup must stop preferring its own computation at a line the analyst answered for.
+
+    It did not: `figure()` short-circuited to the nested computed value, so an override ON a
+    subtotal was honoured for that row and ignored one row up — the spread then showed a total its
+    own components contradicted.
+    """
+    rows = [_row("bs_ca__inventories", "Inventories", 100),
+            _row("bs_ca__cash", "Cash", 30),
+            {**_row("bs_ca__total", "Total current assets", 900),
+             "edited": True, "edited_slots": ["consolidated/current"]},
+            _row("bs_cl__payables", "Payables", 50)]
+    d = _stmt(rows)
+    assert _row_of(d, "bs_ca__total")["v1"] == 900
+    # 900 − 50, not 130 − 50: the total is built from the figure shown beneath it.
+    assert _row_of(d, "bs_net_current")["v1"] == 850
+
+
+def test_two_printed_lines_on_one_off_template_concept_are_one_row():
+    """Emitting a row each gave them the same id, which the client uses as its React key, its
+    selection key and its edit address."""
+    rows = [{"canonical_key": "commit_capital", "source_label": "Contracted for",
+             "mapping_confidence": 0.8, "values": [_v("current", 900)]},
+            {"canonical_key": "commit_capital", "source_label": "Authorised not contracted",
+             "mapping_confidence": 0.7, "values": [_v("current", 100)]}]
+    d = _build_statement(rows, TEMPLATE, "additional_items", "f.pdf")
+    items = [r for r in d["rows"] if r["kind"] == "item"]
+    assert len(items) == 1
+    assert [r["id"] for r in items] == ["commit_capital"]
+    assert items[0]["v1"] == 1000                                   # summed, as the face does
+    assert [c["label"] for c in items[0]["contributions"]] == [
+        "Contracted for", "Authorised not contracted"]
+    assert len({r["id"] for r in d["rows"]}) == len(d["rows"])       # every id unique
+
+
+def test_a_kpi_input_that_resolves_differently_per_period_still_reports_both():
+    """The prior input was looked up by the key the CURRENT period resolved to, so a fallback
+    keyspec that landed on a different key last year reported the prior input as absent."""
+    rows = [
+        # DIO: inventories / cost base, where the cost base has candidate keys tried in order.
+        _row("bs_current_assets__inventories", "Inventories", 100, 80),
+        _row("pl_expenses__cost_of_goods_sold", "Cost of goods sold", 500, None),
+        _row("pl_expenses__total_operating_cost", "Total operating cost", None, 400),
+    ]
+    d = _build_statement(rows, None, "kpi", "f.pdf")
+    row = _row_of(d, "kpi_dio")
+    den = row["contributions"][-1]
+    # Current resolved to cost of goods sold, prior to total operating cost — both reported.
+    assert den["v1"] == 500 and den["v2"] == 400
+
+
+def test_the_french_kpi_headings_are_in_french():
+    rows = [_row("bs_current_assets__total_current_assets", "Total current assets", 300, 200),
+            _row("bs_current_liabilities__total_current_liabilities",
+                 "Total current liabilities", 150, 200)]
+    d = _build_statement(rows, None, "kpi", "f.pdf", locale="fr")
+    headings = [r["label"] for r in d["rows"] if r["kind"] == "section"]
+    assert "Rentabilité" in headings
+    assert "الربحية" not in headings          # the Arabic string had been copied into `fr`

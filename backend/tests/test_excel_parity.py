@@ -41,10 +41,10 @@ def test_excel_note_column_and_dual_basis():
     tr = next(li for li in items if "Trade receivables" in li.source_label)
     assert tr.note_number == "15"                                   # Note column captured (m5)
 
-    cc = tr.get_value(Basis.CONSOLIDATED, period_label="Current")
-    cp = tr.get_value(Basis.CONSOLIDATED, period_label="Prior")
-    sc = tr.get_value(Basis.STANDALONE, period_label="Current")
-    sp = tr.get_value(Basis.STANDALONE, period_label="Prior")
+    cc = tr.get_value(Basis.CONSOLIDATED, period_label="current")
+    cp = tr.get_value(Basis.CONSOLIDATED, period_label="prior")
+    sc = tr.get_value(Basis.STANDALONE, period_label="current")
+    sp = tr.get_value(Basis.STANDALONE, period_label="prior")
     assert cc and int(cc.value) == 3410 and cp and int(cp.value) == 2900     # consolidated
     assert sc and int(sc.value) == 3100 and sp and int(sp.value) == 2700     # standalone (m3)
     # The note number is not swallowed as a value.

@@ -14,8 +14,29 @@ exactly the case the naive "first value is the current one" fallback gets wrong.
 """
 from __future__ import annotations
 
+import re
+
 CURRENT = "current"
 PRIOR = "prior"
+
+# A column header that names a PERIOD rather than a component. Excel carries the sheet's own
+# header text, so this is what separates "31 December 2023" (a period, which must be labelled
+# positionally so current/prior resolution works) from "Retained profits" (an equity component,
+# whose identity IS its name).
+_POSITIONAL = re.compile(r"^(current|prior|col\d+)$", re.IGNORECASE)
+_PERIOD_LIKE = re.compile(r"(19|20)\d{2}|\bfy\b|\bq[1-4]\b|年", re.IGNORECASE)
+
+
+def looks_like_period(label) -> bool:
+    """Whether a column header names a period (a year, a date, FY/Q, or a positional key)."""
+    text = str(label or "").strip()
+    return bool(text) and bool(_POSITIONAL.match(text) or _PERIOD_LIKE.search(text))
+
+
+def names_a_component(label) -> bool:
+    """Whether a column header names something that is NOT a period — an equity component."""
+    text = str(label or "").strip()
+    return bool(text) and not looks_like_period(text)
 
 
 def _named(v: dict) -> str:

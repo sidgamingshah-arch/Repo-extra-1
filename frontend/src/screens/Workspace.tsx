@@ -566,7 +566,8 @@ function RowDetail({
   useEffect(() => { setNote(row.comments?.[period]?.text ?? ""); }, [row.id, period, row.comments]);
   useEffect(() => { setFormula(row.formula ?? ""); }, [row.id, row.formula]);
 
-  const origin = row.origin ?? "extracted";
+  // The panel talks about ONE period, so it uses that period's origin, not the row summary.
+  const origin = (period === "current" ? row.origin1 : row.origin2) ?? row.origin ?? "extracted";
   const chip = ORIGIN_CHIP[origin];
   const cs = row.confidence ? confStyle(row.confidence.cat) : null;
   const reported = period === "current" ? row.reported1 : row.reported2;
@@ -678,14 +679,14 @@ function RowDetail({
 
         {/* the arithmetic — read-only for a computed line (its formula IS the template's rollup),
             typeable for an ordinary one, where a formula referencing other lines drives the value */}
-        {origin === "calculated" && row.formula ? (
+        {origin === "calculated" && (row.arithmetic || row.formula) ? (
           <div style={{ marginTop: 10 }}>
             <div style={sectionTitle}>Computed as</div>
             <div style={{ fontFamily: font.mono, fontSize: 11, color: color.sec,
                           background: "#fff", border: `1px solid ${color.controlBorder}`,
                           borderRadius: radius.control, padding: "7px 9px", lineHeight: 1.6,
                           wordBreak: "break-word" }}>
-              {row.formula}
+              {row.arithmetic ?? row.formula}
             </div>
           </div>
         ) : canEdit ? (
@@ -722,11 +723,11 @@ function RowDetail({
               References other line items by canonical key; the result becomes this figure.
             </div>
           </div>
-        ) : row.formula ? (
+        ) : (row.arithmetic || row.formula) ? (
           <div style={{ marginTop: 10 }}>
-            <div style={sectionTitle}>Formula</div>
+            <div style={sectionTitle}>{row.arithmetic ? "Made up of" : "Formula"}</div>
             <div style={{ fontFamily: font.mono, fontSize: 11, color: color.sec,
-                          wordBreak: "break-word" }}>{row.formula}</div>
+                          wordBreak: "break-word" }}>{row.arithmetic ?? row.formula}</div>
           </div>
         ) : null}
 
@@ -956,7 +957,11 @@ export default function WorkspaceScreen() {
   // A single, unambiguous caption for the whole output panel: the active magnitude, plus the
   // conversion when re-currencied — with the rate, the date it is AS OF, and a derived marker
   // naming the stored pair we inverted. Figures are never silently transformed.
-  const activeUnits = unitTarget === "as_reported" ? d.units : t(`ws.units.${unitTarget}`).toLowerCase();
+  // A raw view (the KPIs) is in no magnitude at all: the selector is hidden and `present` does
+  // not scale, so captioning it with a leftover "millions" would describe figures that are not in
+  // millions.
+  const activeUnits = rawView ? ""
+    : unitTarget === "as_reported" ? d.units : t(`ws.units.${unitTarget}`).toLowerCase();
   const fxCaption = appliedFx
     ? `${srcCcy || "?"} → ${targetCcy} @ ${fmtRate(appliedFx.rate)} · ${t("ws.asOf")} ${appliedFx.as_of}`
       + (appliedFx.derived ? ` · ${t("ws.derived")} (${appliedFx.path.join(" → ")})` : "")

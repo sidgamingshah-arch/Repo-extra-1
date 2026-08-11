@@ -97,7 +97,7 @@ def evaluate_rows(template_def: dict | None, rows: list[dict], basis: str, perio
     ``periods.concept_value``, which means a component's manual correction flows straight into
     every subtotal above it.
     """
-    from app.services.periods import concept_value
+    from app.services.periods import concept_value, edited_for
 
     groups: dict[str, list[dict]] = {}
     for r in rows:
@@ -108,7 +108,11 @@ def evaluate_rows(template_def: dict | None, rows: list[dict], basis: str, perio
     def reported(key: str):
         return concept_value(groups.get(key, []), basis, period)
 
-    return evaluate(template_def, reported, labels=node_labels(template_def, locale))
+    def overridden(key: str) -> bool:
+        return any(edited_for(x, basis, period) for x in groups.get(key, []))
+
+    return evaluate(template_def, reported, labels=node_labels(template_def, locale),
+                    overridden=overridden)
 
 
 def _order(nodes: dict[str, dict]) -> tuple[list[str], set[str]]:
@@ -140,7 +144,7 @@ def _order(nodes: dict[str, dict]) -> tuple[list[str], set[str]]:
 
 
 def evaluate(template_def: dict | None, reported, *, labels: dict[str, str] | None = None,
-             prefer_calculated: bool = True) -> dict[str, Calculated]:
+             prefer_calculated: bool = True, overridden=None) -> dict[str, Calculated]:
     """Evaluate every calculated line for one (basis, period).
 
     ``reported(key)`` returns the figure the DOCUMENT gives for a canonical key — the extracted
@@ -155,6 +159,12 @@ def evaluate(template_def: dict | None, reported, *, labels: dict[str, str] | No
     out: dict[str, Calculated] = {}
 
     def figure(key: str) -> float | None:
+        # A line an analyst has answered for is settled: their value is what the grid shows, so it
+        # is what every total above it must be built from. Preferring the computation there would
+        # accept the override on the line itself and ignore it one row up — the spread would show
+        # a subtotal that its own components contradict.
+        if overridden is not None and overridden(key):
+            return reported(key)
         if prefer_calculated and key in out and out[key].computable:
             return out[key].value
         return reported(key)

@@ -16,7 +16,7 @@ from app.security import Permission, Principal, Role, current_principal, require
 from app.services.documents import analyze_document, content_hash
 from app.services.periods import (
     basis_values as _basis_values_of, concept_value as _concept_value, edited_for as _edited_for,
-    period_displays, slot_for, split_current_prior)
+    names_a_component, period_displays, slot_for, split_current_prior)
 from app.services.reconcile import tie_status
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -1492,9 +1492,12 @@ _PERIOD_LIKE = re.compile(r"(19|20)\d{2}|\bfy\b|\bq[1-4]\b|年", re.IGNORECASE)
 
 def _is_named_column(label) -> bool:
     """Whether a value's column is NAMED — an equity component ("Retained profits") — as opposed
-    to a period, whether that period was labelled positionally or by its own printed date."""
-    s = str(label or "").strip()
-    return bool(s) and not _POSITIONAL_PERIOD.match(s) and not _PERIOD_LIKE.search(s)
+    to a period, whether that period was labelled positionally or by its own printed date.
+
+    Delegates to services.periods so the Excel reader (which decides how to LABEL a column) and
+    the statement builder (which decides how to READ one) cannot disagree.
+    """
+    return names_a_component(label)
 
 
 def _matrix_cells(row: dict, basis: str) -> dict[str, object]:
@@ -1667,12 +1670,13 @@ def _calculated_note(origin: str, diff: float | None, n_components: int, locale:
 
 
 def _calculated(rows: list[dict], template_def: dict | None, basis: str, period: str,
-                locale: str) -> dict:
+                locale: str, netted: dict[str, float] | None = None) -> dict:
     """Evaluate the template's calculated lines for one (basis, period).
 
     Inputs are read through ``concept_value``, so a calculated line is built from exactly the
-    figures the grid shows for its components — including an analyst's manual correction to one
-    of them, which is the point: fixing a component has to fix every subtotal above it.
+    figures the grid shows for its components — including an analyst's manual correction to one of
+    them, and any netting restatement, which is the point: whatever a component shows is what its
+    subtotal is built from.
     """
     from app.services.rollups import evaluate, node_labels
 
@@ -1683,9 +1687,21 @@ def _calculated(rows: list[dict], template_def: dict | None, basis: str, period:
             groups.setdefault(k, []).append(r)
 
     def reported(key: str):
+        if netted and key in netted:
+            return netted[key]
         return _concept_value(groups.get(key, []), basis, period)
 
-    return evaluate(template_def, reported, labels=node_labels(template_def, locale))
+    def overridden(key: str) -> bool:
+        """Whether this concept carries a MANUAL value for this (basis, period).
+
+        A rollup must stop preferring its own computation at a line an analyst has answered for:
+        the typed value is the figure the grid shows, so it is the figure every total above it has
+        to be built from.
+        """
+        return any(_edited_for(x, basis, period) for x in groups.get(key, []))
+
+    return evaluate(template_def, reported, labels=node_labels(template_def, locale),
+                    overridden=overridden)
 
 
 _KPI_CATEGORY_I18N = {
@@ -1693,7 +1709,7 @@ _KPI_CATEGORY_I18N = {
     "Leverage": {"zh": "杠杆", "ar": "الرافعة المالية", "fr": "Endettement"},
     "Coverage": {"zh": "偿付能力", "ar": "التغطية", "fr": "Couverture"},
     "Efficiency": {"zh": "运营效率", "ar": "الكفاءة", "fr": "Efficacité"},
-    "Profitability": {"zh": "盈利能力", "ar": "الربحية", "fr": "الربحية"},
+    "Profitability": {"zh": "盈利能力", "ar": "الربحية", "fr": "Rentabilité"},
 }
 
 
@@ -1703,7 +1719,10 @@ def _key_provenance(rows: list[dict], basis: str) -> dict[str, tuple[dict | None
     out: dict[str, tuple[dict | None, dict | None]] = {}
     for r in rows:
         k = r.get("canonical_key")
-        if not k or k in out:
+        # Skip a row carrying nothing for THIS basis: taking the first row with the key regardless
+        # left a consolidated-only line with no location on the standalone view, so the KPI inputs
+        # advertised a click-through they could not deliver.
+        if not k or k in out or not _basis_values(r, basis):
             continue
         cur, prior = _cur_prior(r, basis)
         out[k] = ((cur or {}).get("provenance"), (prior or {}).get("provenance"))
@@ -1717,12 +1736,16 @@ def _kpi_inputs_as_contributions(inputs: dict, prior_inputs: dict, provs: dict,
     out: list[dict] = []
     for side, sign_label in (("numerator", _t("numerator", locale)),
                              ("denominator", _t("denominator", locale))):
-        prior_by = {str(i.get("canonical_key")): i for i in (prior_inputs.get(side) or [])}
-        for i in inputs.get(side) or []:
+        # Matched by POSITION in the term list, not by resolved key: a term may name several
+        # candidate keys and resolve to a different one in each period (cost of goods sold this
+        # year, total operating cost last year), and keying on the current period's answer then
+        # reported the prior input as absent even though the prior ratio used it.
+        prior_side = list(prior_inputs.get(side) or [])
+        for pos, i in enumerate(inputs.get(side) or []):
             key = str(i.get("canonical_key") or "")
             cur_prov, prior_prov = provs.get(key, (None, None))
             sign = i.get("sign") or 1
-            pv = prior_by.get(key, {}).get("value")
+            pv = prior_side[pos].get("value") if pos < len(prior_side) else None
             out.append({
                 "label": f"{sign_label}: {i.get('label') or ''}",
                 "canonical_key": key or None,
@@ -1848,57 +1871,90 @@ def _build_additional_items_statement(rows: list[dict], template_def: dict | Non
     on_matrix = {id(r) for r, _cells in _matrix_rows(rows, basis)}
 
     unmapped: list[dict] = []
-    off_template: list[dict] = []
+    off_template: dict[str, list[dict]] = {}
     for r in rows:
         if not _basis_values(r, basis) or id(r) in on_matrix:
             continue
         key = r.get("canonical_key") or ""
         if key and key.split("_", 1)[0] in prefixes:
             continue                      # reaches a face statement (or its "Other extracted")
-        (off_template if key else unmapped).append(r)
+        if key:
+            # Grouped by concept, exactly as the face statements group. Several printed lines can
+            # map to one off-template concept, and emitting a row each gave them the same id —
+            # which the client uses as its React key, its selection key AND its edit address, so
+            # selecting one selected the other and an edit landed on whichever came first.
+            off_template.setdefault(key, []).append(r)
+        else:
+            unmapped.append(r)
 
-    def row_of(r: dict, idx: int) -> dict:
-        cur, prior = _cur_prior(r, basis)
-        cat, pct = _conf_cat(r.get("mapping_confidence"))
+    def row_of(group: list[dict], idx: int) -> dict:
+        r = group[0]
         key = r.get("canonical_key")
+        cur, prior = _cur_prior(r, basis)
+        confs = [x.get("mapping_confidence") for x in group
+                 if isinstance(x.get("mapping_confidence"), (int, float))]
+        cat, pct = _conf_cat(min(confs) if confs else None)
+        # One reader for the figure, as everywhere else: the sum when several printed lines share
+        # the concept, or the analyst's manual value replacing it.
+        v1 = _concept_value(group, basis, "current") if key else \
+            _to_num((cur or {}).get("value"))
+        v2 = _concept_value(group, basis, "prior") if key else \
+            _to_num((prior or {}).get("value"))
+        contributions = None
+        if len(group) > 1:
+            contributions = [{
+                "label": x.get("source_label") or "",
+                "canonical_key": key,
+                "v1": _to_num((_cur_prior(x, basis)[0] or {}).get("value")),
+                "v2": _to_num((_cur_prior(x, basis)[1] or {}).get("value")),
+                "method": x.get("mapping_method"), "residual": False,
+                "src": _prov_label((_cur_prior(x, basis)[0] or {}).get("provenance")),
+                "source": (_cur_prior(x, basis)[0] or {}).get("provenance"),
+                "src2": _prov_label((_cur_prior(x, basis)[1] or {}).get("provenance")),
+                "source2": (_cur_prior(x, basis)[1] or {}).get("provenance"),
+            } for x in group]
         return {
             # Rows with no concept have no canonical key to address, so the id is positional.
             "id": key or f"extra:{idx}:{(r.get('source_label') or '')[:40]}",
             "label": r.get("source_label") or "", "source_label": r.get("source_label"),
-            "kind": "item", "note": r.get("note"), "note2": None,
-            "status": "edited" if _edited_for(r, basis) else None,
-            "confidence": {"cat": cat, "pct": pct} if r.get("mapping_confidence") else None,
+            "kind": "item", "note": next((x.get("note") for x in group if x.get("note")), None),
+            "note2": None,
+            "status": "edited" if any(_edited_for(x, basis) for x in group) else None,
+            "confidence": {"cat": cat, "pct": pct} if confs else None,
             # Editing addresses a CONCEPT, so a line mapped to none cannot be edited here —
             # give it a concept on the Review screen first.
             "editable": bool(key),
-            "formula": r.get("formula"),
+            "formula": r.get("formula"), "arithmetic": None,
             "inspector": {
                 "tag": (r.get("mapping_method") or "unmapped") if key else _t("unmapped", locale),
                 "src": _prov_label((cur or {}).get("provenance")),
                 "formula": r.get("formula") or "",
-                "result": str((cur or {}).get("value") or ""),
+                "result": "" if v1 is None else f"{v1:,.0f}",
                 "note": _t("Mapped to a concept the active template has no line for.", locale)
                         if key else
                         _t("No concept matched this caption, so it appears on no statement. "
                            "Map it from the Review queue to bring it onto the face.", locale),
             },
-            "contributions": None,
-            "v1": _to_num((cur or {}).get("value")), "v2": _to_num((prior or {}).get("value")),
+            "contributions": contributions,
+            "v1": v1, "v2": v2,
             "source": (cur or {}).get("provenance"),
             "source2": (prior or {}).get("provenance"),
         }
 
     out: list[dict] = []
     idx = 0
-    for label, group in ((_t("Not mapped to any concept", locale), unmapped),
-                         (_t("Mapped, but not on any statement in this template", locale),
-                          off_template)):
-        if not group:
+    groups: list[tuple[str, list[list[dict]]]] = [
+        (_t("Not mapped to any concept", locale), [[r] for r in unmapped]),
+        (_t("Mapped, but not on any statement in this template", locale),
+         list(off_template.values())),
+    ]
+    for label, members in groups:
+        if not members:
             continue
         out.append({"id": f"extra_sec_{len(out)}", "label": label, "kind": "section",
                     "v1": None, "v2": None})
-        for r in group:
-            out.append(row_of(r, idx))
+        for group in members:
+            out.append(row_of(group, idx))
             idx += 1
 
     return {
@@ -1967,8 +2023,21 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     # printed one puts a figure on the face that its own components contradict. So the computed
     # figure is what the grid shows, the printed one is kept for the review queue, and their
     # difference becomes a finding rather than a silent inconsistency.
-    calc_cur = _calculated(rows, template_def, basis, "current", locale)
-    calc_prior = _calculated(rows, template_def, basis, "prior", locale)
+    # Netting is resolved FIRST. It restates a component's displayed figure, and a subtotal
+    # computed before that restatement no longer equals the components printed beneath it — the
+    # spread would contradict itself on its own face.
+    net_cur: dict = {}
+    net_prior: dict = {}
+    if netting_rules:
+        from app.services.netting import compute_netting
+
+        net_cur = compute_netting(rows, netting_rules, basis=basis, period="current")
+        net_prior = compute_netting(rows, netting_rules, basis=basis, period="prior")
+    netted_cur = {k: _to_num(v["net"]) for k, v in net_cur.items() if v.get("net") is not None}
+    netted_prior = {k: _to_num(v["net"]) for k, v in net_prior.items() if v.get("net") is not None}
+
+    calc_cur = _calculated(rows, template_def, basis, "current", locale, netted_cur)
+    calc_prior = _calculated(rows, template_def, basis, "prior", locale, netted_prior)
 
     # A template child's presentation kind (subtotal / total rows are styled differently in
     # the grid); anything else is a plain line item.
@@ -1994,30 +2063,42 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         if c1 is None and c2 is None:
             return row                                   # not a calculated line
         row["reported1"], row["reported2"] = row["v1"], row["v2"]
-        if row.get("status") == "edited":
-            # A manual value stands. Still say what the components come to, so the analyst can
-            # see what they overrode.
-            row["origin"] = "manual"
-            row["calculated1"] = c1.value if c1 else None
-            row["calculated2"] = c2.value if c2 else None
-        elif (c1 and c1.computable) or (c2 and c2.computable):
-            row["origin"] = "calculated"
-            row["v1"] = c1.value if (c1 and c1.computable) else None
-            row["v2"] = c2.value if (c2 and c2.computable) else None
-            row["calculated1"], row["calculated2"] = row["v1"], row["v2"]
+        group = by_key.get(key, [])
+
+        def resolve(period: str, calc, reported):
+            """This period's figure and where it came from — decided for THIS period alone.
+
+            Every part of this is per-period on purpose. An analyst who corrects the current
+            column has said nothing about last year, and a period whose components were not
+            extracted is not made computable by the other period's being so. Deciding either
+            question at row level silently rewrites the column nobody touched.
+            """
+            if any(_edited_for(x, basis, period) for x in group):
+                return reported, "manual"
+            if calc is not None and calc.computable:
+                return calc.value, "calculated"
+            return reported, "reported_uncomputed"
+
+        row["v1"], o1 = resolve("current", c1, row["reported1"])
+        row["v2"], o2 = resolve("prior", c2, row["reported2"])
+        row["calculated1"] = c1.value if (c1 and c1.computable) else None
+        row["calculated2"] = c2.value if (c2 and c2.computable) else None
+        row["origin1"], row["origin2"] = o1, o2
+        # The row-level chip summarises the two: a manual value is the most important thing to
+        # say about the line, then that anything on it was computed.
+        row["origin"] = ("manual" if "manual" in (o1, o2)
+                         else "calculated" if "calculated" in (o1, o2)
+                         else "reported_uncomputed")
+        if row.get("status") == "missing" and (row["v1"] is not None or row["v2"] is not None):
             # The document not printing this line is no longer a gap: the template says what it
             # is made of, and the components were there.
-            if row.get("status") == "missing":
-                row["status"] = None
-        else:
-            # Nothing to compute from: no component of this line was extracted. Showing the
-            # printed figure beats showing a blank, but it is labelled as unverified.
-            row["origin"] = "reported_uncomputed"
-            row["calculated1"] = row["calculated2"] = None
+            row["status"] = None
 
         source = c1 if (c1 and c1.components) else c2
         if source is not None:
-            row["formula"] = source.formula or row.get("formula")
+            # Display only — see item_row. A rollup's rendering ("12,800 + 2,150 + 3,410") is not
+            # an expression the server may evaluate on the next edit.
+            row["arithmetic"] = source.formula or row.get("arithmetic")
             # The components ARE the traceability: each with its own figure and the page it was
             # printed on, so a computed subtotal can be taken apart line by line.
             row["contributions"] = [{
@@ -2033,14 +2114,14 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                 "source2": provs.get(comp.canonical_key, (None, None))[1],
             } for i, comp in enumerate(source.components)]
         diff = None
-        if row["origin"] == "calculated" and row["v1"] is not None \
+        if row.get("origin1") == "calculated" and row["v1"] is not None \
                 and row["reported1"] is not None:
             diff = row["v1"] - row["reported1"]
         row["inspector"] = {
             "tag": {"calculated": _t("calculated", locale),
                     "manual": _t("manual override", locale),
                     "reported_uncomputed": _t("printed, not computable", locale)}[row["origin"]],
-            "src": "", "formula": row.get("formula") or "",
+            "src": "", "formula": row.get("arithmetic") or row.get("formula") or "",
             "result": "" if row["v1"] is None else f"{row['v1']:,.0f}",
             "note": _calculated_note(row["origin"], diff, len(source.components) if source else 0,
                                     locale),
@@ -2074,6 +2155,7 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         v2 = _concept_value(group, basis, "prior")
         inspector = _inspector(r, cur)
         formula = (edited_row or r).get("formula")
+        arithmetic: str | None = None      # display-only rendering of how the figure was reached
         contributions: list[dict] = []
         if len(group) > 1:
             # A combined figure has to be auditable line by line: each contributing caption with
@@ -2101,9 +2183,14 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                 })
             terms = [f"{c['v1']:,.0f}" if c["v1"] is not None else "—" for c in contributions]
             printed = " + ".join(terms)
-            formula = formula or printed
+            # DISPLAY only. This is a rendering of the figures, not an expression: publishing it
+            # in `formula` meant the client prefilled its formula box with "100 + 50", sent it
+            # back with the next edit, and the server EVALUATED it — so a typed 200 was silently
+            # replaced by the recomputed 150. `formula` is reserved for an expression an analyst
+            # actually stored.
+            arithmetic = printed
             inspector = {**inspector, "tag": "combined",
-                         "formula": formula,
+                         "formula": printed,
                          "result": "" if v1 is None else f"{v1:,.0f}",
                          "src": " · ".join(dict.fromkeys(
                              c["src"] for c in contributions if c["src"])),
@@ -2127,7 +2214,7 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
             "origin": "manual" if edited else "extracted",
             # Why a figure was overridden, per period — kept beside the number it explains.
             "comments": notes or None,
-            "formula": formula, "inspector": inspector,
+            "formula": formula, "arithmetic": arithmetic, "inspector": inspector,
             # Present only when more than one printed line was combined into this figure.
             "contributions": contributions or None,
             "v1": v1, "v2": v2,
@@ -2152,7 +2239,7 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                           "result": "", "note": _t("This template line was not found in the "
                                                     "document's extraction for this basis. Enter "
                                                     "a value to record it manually.", locale)},
-            "v1": None, "v2": None, "source": None, "source2": None,
+            "v1": None, "v2": None, "source": None, "source2": None, "arithmetic": None,
         })
 
     # Show the full template skeleton only when this statement+basis is actually present in the
@@ -2206,19 +2293,20 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     # Face-line containment netting: reduce a target line by the lines already included in it
     # (e.g. cost of sales inclusive of admin / S&M), showing the net value + formula. Signed and
     # non-destructive — the raw figure is preserved in the inspector for audit.
-    if netting_rules:
-        from app.services.netting import compute_netting
-
-        net_cur = compute_netting(rows, netting_rules, basis=basis, period="current")
-        net_prior = compute_netting(rows, netting_rules, basis=basis, period="prior")
+    if net_cur or net_prior:
         for r in out:
             if r.get("kind") != "item":
                 continue
-            # A figure the analyst typed is the answer for that line; an automatic restatement
-            # must not quietly overwrite it.
-            if r.get("status") == "edited":
-                continue
             nc, np = net_cur.get(r["id"]), net_prior.get(r["id"])
+            # A figure the analyst typed is the answer for that line; an automatic restatement
+            # must not quietly overwrite it. Decided per period: an edit to the current column
+            # says nothing about last year, and suppressing netting there would silently show the
+            # gross figure instead.
+            group = by_key.get(r["id"], [])
+            if nc and any(_edited_for(x, basis, "current") for x in group):
+                nc = None
+            if np and any(_edited_for(x, basis, "prior") for x in group):
+                np = None
             if not nc and not np:
                 continue
             info = nc or np
