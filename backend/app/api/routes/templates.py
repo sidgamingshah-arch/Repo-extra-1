@@ -15,7 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import db
-from app.schemas.loader import load_template, validate_template
+from app.schemas.loader import load_template, unknown_keys, validate_template
 from app.security import Permission, require
 
 router = APIRouter(prefix="/templates", tags=["templates"])
@@ -35,6 +35,19 @@ def _publish(session: Session, definition: dict) -> dict:
         template = load_template(definition)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"Invalid template schema: {exc}") from exc
+
+    # A key the schema does not declare is refused HERE, at the door, where there is a request to
+    # fail and an author to tell. Silently dropping it published a template that did not contain
+    # what was written — a mistyped `canonical_keys`, a `weights` on a rollup, an `inherits`
+    # carried over from another format — and the first symptom was an extraction behaving as
+    # though the edit had never been made. Deliberately not enforced when READING a stored
+    # definition: see loader.unknown_keys.
+    stray = unknown_keys(definition, template)
+    if stray:
+        raise HTTPException(
+            status_code=422,
+            detail={"errors": [{"location": p, "message": "key is not part of the template schema"}
+                               for p in stray]})
 
     errors = validate_template(template)
     if errors:

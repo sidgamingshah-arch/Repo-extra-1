@@ -148,3 +148,128 @@ def test_per_statement_batch_maps_all_lines_in_one_call():
     assert res["b"].canonical_key == "cash_and_equivalents"
     assert res["c"].canonical_key == "trade_receivables"
     assert m.usage["input_tokens"] == 300
+
+
+# --- the batch path's own hazards -------------------------------------------------------------
+# Everything below had zero coverage, which is how an item_id the model made up survived long
+# enough to crash a whole extraction run.
+
+def _prefixed_ontology() -> OntologyDefinition:
+    """Keys carrying a STATEMENT namespace, so the statement gate can actually filter them —
+    the unprefixed keys in `_ontology` are allowed on every statement by design."""
+    return OntologyDefinition(
+        ontology_key="t", target_template_key="t",
+        mappings=[
+            OntologyMapping(
+                canonical_key="bs_current_assets__trade_receivables", label="Trade receivables",
+                description="amounts owed by customers", aliases=["Trade receivables"],
+            ),
+        ],
+    )
+
+
+class _RecordingLlm:
+    """Answers with whatever it is told to, and keeps the payload it was sent.
+
+    Dispatches on `response_schema`: the batch path and the per-line fallback ask for different
+    shapes from the SAME provider, and a fake that ignores that hands `_llm` a batch decision to
+    read `.canonical_key` off.
+    """
+
+    id = "fake"
+
+    def __init__(self, mappings):
+        self._mappings = mappings
+        self.payloads: list[dict] = []
+        self.systems: list[str] = []
+
+    def complete_structured(self, *, system, messages, response_schema, temperature=0.0,
+                            max_tokens=2048):
+        meta = {"model": "fake-llm", "input_tokens": 10, "output_tokens": 5}
+        if response_schema is LlmBatchDecision:
+            self.payloads.append(json.loads(messages[0]["content"]))
+            self.systems.append(system)
+            return LlmBatchDecision(mappings=list(self._mappings)), meta
+        # Per-line fallback: abstain, so the deterministic tiers decide and the test is not
+        # measuring this fake's opinion.
+        return LlmMappingDecision(canonical_key="", confidence=0.0), meta
+
+
+def test_batch_discards_an_item_id_it_never_asked_about():
+    """An invented / mistyped item_id must not reach the caller: `by_id[iid]` in the stage is a
+    KeyError, which killed the entire extraction run rather than one line."""
+    llm = _RecordingLlm([
+        LlmBatchItem(item_id="a", canonical_key="trade_receivables", confidence=0.9),
+        LlmBatchItem(item_id="ghost", canonical_key="cash_and_equivalents", confidence=0.9),
+    ])
+    m = OntologyMatcher(_ontology(), settings=get_settings(), llm_provider=llm)
+    res = m.match_batch([("a", "Amounts due from customers")])
+
+    assert set(res) == {"a"}                     # only what was asked about comes back
+    assert "ghost" not in res
+    assert m.usage["batch_unknown_ids"] == 1     # and the discard is counted, not silent
+
+
+def test_batch_sends_the_normalised_section_and_omits_an_unrecognised_banner():
+    """The banner is what the answer is graded on, so the model is told it — normalised, because
+    the gate compares normalised tokens. A banner that normalises to nothing is omitted rather
+    than passed through as raw text, which would imply a constraint the gate does not apply."""
+    llm = _RecordingLlm([LlmBatchItem(item_id="a", canonical_key="trade_receivables",
+                                      confidence=0.9)])
+    m = OntologyMatcher(_ontology(), settings=get_settings(), llm_provider=llm)
+    m.match_batch(
+        [("a", "Trade debtors"), ("b", "Something else")],
+        sections={"a": "CURRENT ASSETS", "b": "EQUITY AND LIABILITIES"},
+    )
+    items = {i["item_id"]: i for i in llm.payloads[0]["source_items"]}
+    assert items["a"]["section"] == "current_assets"   # normalised, not "CURRENT ASSETS"
+    assert "section" not in items["b"]                # umbrella banner → no constraint claimed
+
+
+def test_batch_prompt_keeps_printed_order_and_explains_sections():
+    llm = _RecordingLlm([])
+    m = OntologyMatcher(_ontology(), settings=get_settings(), llm_provider=llm)
+    order = [("a", "First"), ("b", "Second"), ("c", "Third")]
+    m.match_batch(order, sections={"a": "CURRENT ASSETS"})
+
+    assert [i["item_id"] for i in llm.payloads[0]["source_items"]] == ["a", "b", "c"]
+    # The base instruction says "a single raw line-item caption"; the batch path must not inherit
+    # that framing, and must define the section it is now handing over.
+    assert "several captions" in llm.systems[0].lower()
+    assert "section" in llm.systems[0].lower()
+    assert m._system != m._batch_system            # per-line prompt left alone
+
+
+def test_batch_does_not_call_the_provider_with_an_empty_candidate_list():
+    """A statement the ontology covers no concepts for is not a question worth asking. The
+    shipped ontology has no `eq_` keys at all, so changes-in-equity used to spend a real provider
+    call on an empty candidate list and then fall back per line anyway."""
+    llm = _RecordingLlm([])
+    m = OntologyMatcher(_prefixed_ontology(), settings=get_settings(), llm_provider=llm)
+    res = m.match_batch([("a", "Trade receivables")], statement="cash_flow")
+
+    assert llm.payloads == []                    # the batch never reached the provider
+    assert m.usage["calls"] == 0
+    # And the row is still answered — unmatched, because the statement gate refuses a bs_ concept
+    # on a cash-flow page for the same reason the candidate list was empty. The point is that no
+    # call was spent to arrive there.
+    assert res["a"].canonical_key is None
+    assert res["a"].method is MappingMethod.UNMATCHED
+
+
+def test_batch_failure_is_recorded_not_swallowed():
+    """A refused or truncated batch used to fall back per line in silence, so a run whose every
+    batch failed still reported itself as LLM-mapped with no error to point at."""
+
+    class _Boom:
+        id = "fake"
+
+        def complete_structured(self, **_kw):
+            raise RuntimeError("truncated JSON")
+
+    m = OntologyMatcher(_ontology(), settings=get_settings(), llm_provider=_Boom())
+    res = m.match_batch([("a", "Trade receivables")])
+
+    assert m.usage["failures"] == 1
+    assert "truncated JSON" in m.usage["last_error"]
+    assert res["a"].canonical_key == "trade_receivables"   # fell back, still answered

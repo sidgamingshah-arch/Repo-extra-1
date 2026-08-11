@@ -13,6 +13,7 @@ from app.api.deps import db
 from app.schemas.loader import (
     load_ontology,
     load_template,
+    unknown_keys,
     validate_ontology_against_template,
 )
 from app.security import Permission, require
@@ -39,6 +40,18 @@ def create_ontology(body: OntologyCreate, session: Session = Depends(db)) -> dic
         ontology = load_ontology(definition)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"Invalid ontology schema: {exc}") from exc
+
+    # An undeclared key is refused on UPLOAD — pydantic would otherwise drop it in silence and
+    # publish a rulebook missing the thing that was authored. Not applied to the inline-edit path
+    # (`_publish_edit`), which derives its definition from a row already stored: refusing there
+    # would make one stray key in an old row block every future edit to it. See
+    # loader.unknown_keys for why this is not `extra='forbid'` on the models.
+    stray = unknown_keys(definition, ontology)
+    if stray:
+        raise HTTPException(
+            status_code=422,
+            detail={"errors": [{"location": p, "message": "key is not part of the ontology schema"}
+                               for p in stray]})
 
     # Validate against the latest matching template version.
     tpl_row = session.execute(

@@ -78,6 +78,24 @@ _LLM_SYSTEM = (
     "relates to parents/children."
 )
 
+# Appended for the BATCH path only. The base instruction opens "You map a single raw line-item
+# caption", which is false when several are decided at once, and it never says what a section is —
+# so a model told an item's section had no way to know the word was binding. Kept separate from
+# `_LLM_SYSTEM` so correcting the batch framing cannot silently rewrite the per-line prompt.
+_LLM_BATCH_ADDENDUM = (
+    "\n\nThis request carries SEVERAL captions from one statement at once, in the order they are "
+    "printed in the document. Decide them together: a caption's meaning is often fixed by the "
+    "lines around it — a parent and the children that make it up, a subtotal and the lines above "
+    "it, a residual 'Others' that is whatever the section's named lines do not account for.\n"
+    "An item may carry a `section`: the normalised heading it was printed under (for example "
+    "`current_assets`, `equity`, `current_liabilities`). It is BINDING — choose a concept whose "
+    "canonical_key belongs to that section. It is what separates captions the document prints "
+    "identically in more than one place: an 'Others' line, or the 'Non-controlling interests' "
+    "printed once under the profit split and again under the total-comprehensive split. An item "
+    "with no `section` is unconstrained: decide it on meaning alone.\n"
+    "Return one entry per item_id you were given, and never an item_id that was not given to you."
+)
+
 
 def _cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity of two equal-length vectors; 0 for a zero or mismatched vector."""
@@ -283,10 +301,17 @@ class OntologyMatcher:
         # `failures`/`last_error` exist so a run whose LLM calls all failed can report itself
         # as deterministic (what it actually was) instead of as LLM-mapped.
         self.usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0, "model": "",
-                      "failures": 0, "last_error": ""}
+                      "failures": 0, "last_error": "",
+                      # Batch decisions thrown away, counted so the cost of the batch path is
+                      # measurable: ids we never asked about, and answers the scoping gate
+                      # refused. Both used to vanish on a bare `continue`.
+                      "batch_unknown_ids": 0, "batch_refused": 0}
         # System prompt = the base instruction + the ontology's own extraction policies and
         # worked examples, so the LLM follows one consistent, auditable rulebook.
         self._system = self._build_system()
+        # The batch path decides many captions at once and is told each row's section, neither of
+        # which the base instruction describes. Additive, so the per-line prompt is unchanged.
+        self._batch_system = self._system + _LLM_BATCH_ADDENDUM
 
         # Precompute normalized alias → key index for exact/fuzzy tiers, and a concept
         # index (key → mapping) for description lookups.
@@ -784,41 +809,84 @@ class OntologyMatcher:
     def match_batch(self, items: list[tuple[str, str]],
                     statement: str | None = None,
                     sections: dict[str, str | None] | None = None) -> dict[str, MappingResult]:
-        """Per-statement mapping: decide ALL captions in one grounded LLM call so
-        cross-line judgements (containment, residual, 'Others') have full context. The
-        model references the provided item_ids and candidate keys — it never invents a
-        value; values/provenance stay on the deterministic LineItems. Falls back to
-        per-line matching for anything the batch call can't resolve, or entirely when no
-        LLM is configured.
+        """Batch mapping: decide many captions in one grounded LLM call so cross-line judgements
+        (containment, residual, 'Others') have context. The model references the provided item_ids
+        and candidate keys — it never invents a value; values/provenance stay on the deterministic
+        LineItems. Falls back to per-line matching for anything the batch call can't resolve, or
+        entirely when no LLM is configured.
+
+        The batch is ONE SOURCE PAGE, not one statement, because that is how the caller groups
+        (``stages.map_ontology``). A statement printed across two pages is therefore decided in two
+        calls and does not see itself whole — which matters most for exactly the judgements above,
+        since a subtotal and the lines it is made of can straddle the break. The setting that
+        selects this path is still named ``per_statement``; treat that as naming the intent, not
+        the unit. Changing the unit is a measured behaviour change (fewer, much larger calls,
+        against a fixed response-token cap) and belongs in its own change, not in this docstring.
 
         ``items`` is a list of (item_id, source_label). ``sections`` maps an item_id to the
         section banner that item was printed under; a batch spans a whole page and therefore
-        several sections, so the banner is per item, not per batch."""
+        several sections, so the banner is per item, not per batch.
+
+        The banner is given to the MODEL as well as being enforced after it answers. It used to
+        be enforcement only: the model decided blind to the banner and a cross-section answer was
+        then discarded, dropping the row to the weaker per-line path. Withholding the one piece of
+        context the answer is graded on is how a caption that only its banner can disambiguate
+        ("Others", the two "Non-controlling interests" of a comprehensive-income statement) got
+        decided wrong and then thrown away."""
         sec = sections or {}
         if not self.llm_enabled or not items:
             return {iid: self.match(label, statement=statement, section=sec.get(iid))
                     for iid, label in items}
 
         # Only concepts from THIS statement are offered, so the batch cannot place a caption
-        # in another statement (see `match`). Section scoping is applied per decision below,
-        # since one batch covers rows from several sections.
+        # in another statement (see `match`). Section scoping is ALSO applied per decision
+        # below, since one batch covers rows from several sections.
         candidates = self._concept_payload(
             [k for k in self._extractable_keys() if self._in_statement(k, statement)])
+        # No candidate to choose from is not a question worth asking. `_llm` already guards this;
+        # the batch path did not, so a statement the ontology covers no concepts for (changes in
+        # equity against the shipped ontology) spent a real provider call on an empty candidate
+        # list and then fell back per line anyway.
+        if not candidates:
+            return {iid: self.match(label, statement=statement, section=sec.get(iid))
+                    for iid, label in items}
+        caption_by_id = dict(items)
+        # The section given to the model is the NORMALISED token, not the raw banner: the gate
+        # downstream compares `section_of_key` against `section_of_banner`, so naming the raw text
+        # would hand the model a vocabulary its answer is not judged in. A banner that normalises
+        # to nothing — an umbrella ("EQUITY AND LIABILITIES"), a group heading ("Adjustments
+        # for:"), anything unrecognised — is omitted rather than passed through, because the gate
+        # lets those rows go anywhere and the prompt must not imply a constraint that is not real.
+        def _sec_token(iid: str) -> str | None:
+            return section_of_banner(sec.get(iid))
+
         user = json.dumps({
             "instruction": "Map each source_item to exactly one candidate canonical_key by "
                            "meaning, applying the policies. Reference item_id and canonical_key; "
-                           "do not output values.",
-            "source_items": [{"item_id": iid, "caption": label} for iid, label in items],
+                           "do not output values. source_items are in the order they are printed "
+                           "in the document. When an item carries a `section`, the concept you "
+                           "choose must belong to that section.",
+            "source_items": [
+                {"item_id": iid, "caption": label,
+                 **({"section": tok} if (tok := _sec_token(iid)) else {})}
+                for iid, label in items
+            ],
             "candidates": candidates,
         }, ensure_ascii=False, indent=2)
         try:
             decision, meta = self.llm_provider.complete_structured(
-                system=self._system,
+                system=self._batch_system,
                 messages=[{"role": "user", "content": user}],
                 response_schema=LlmBatchDecision,
                 max_tokens=4096,
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            # Record WHY, as `_llm` does. A truncated or refused batch used to fall back per line
+            # in complete silence, so a run whose every batch failed still reported itself as
+            # LLM-mapped with no error to point at.
+            self.usage["failures"] += 1
+            if not self.usage["last_error"]:
+                self.usage["last_error"] = f"{type(exc).__name__}: {exc}"[:200]
             return {iid: self.match(label, statement=statement, section=sec.get(iid))
                     for iid, label in items}
         self.usage["calls"] += 1
@@ -829,13 +897,26 @@ class OntologyMatcher:
         acc = self.settings.extraction.auto_accept_confidence
         out: dict[str, MappingResult] = {}
         for d in decision.mappings:
+            # An item_id we did not ask about is not a decision about anything. Unchecked, it
+            # reached the caller and crashed the stage (`by_id[iid]` → KeyError, killing the whole
+            # extraction), and an id that happened to be another group's real row silently applied
+            # this statement's decision to that one. It also defeated the gate: the caption lookup
+            # returned "" for an unknown id, and both caption-dependent arms of `_allowed` are
+            # skipped when the caption is empty.
+            if d.item_id not in caption_by_id:
+                self.usage["batch_unknown_ids"] += 1
+                continue
             key = (d.canonical_key or "").strip()
             if not key or key not in self._by_key:
                 continue
             # A concept from a different section than the row's banner is refused here for the
-            # same reason it is refused in `match`.
-            caption = next((lbl for iid, lbl in items if iid == d.item_id), "")
+            # same reason it is refused in `match`. The model is now TOLD the section, so this is
+            # a backstop rather than the only line of defence — and it still carries the two arms
+            # that have nothing to do with sections: the concept's own exclusion criteria, and a
+            # caption naming a mutually exclusive class.
+            caption = caption_by_id[d.item_id]
             if not self._allowed(key, statement, sec.get(d.item_id), caption):
+                self.usage["batch_refused"] += 1
                 continue
             conf = max(0.0, min(1.0, d.confidence))
             alloc = (d.allocation_status or "").strip() or (

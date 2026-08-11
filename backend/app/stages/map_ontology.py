@@ -89,7 +89,16 @@ class MapOntologyStage:
                     statement=_statement_of(group[0]),
                     # One page spans several section banners, so the banner is per row.
                     sections={str(li.id): li.section_hint for li in group})
+                # Only ids from THIS group are applied. `by_id` spans the whole document, so an
+                # id echoed from another group would otherwise apply this statement's decision to
+                # a row in a different one — and an id belonging to no row at all crashed the run
+                # outright. The matcher now filters these too; this is the belt to that braces,
+                # because the cost of getting it wrong is a wrong figure on the face.
+                in_group = {str(li.id) for li in group}
                 for iid, res in results.items():
+                    if iid not in in_group:
+                        ctx.log(f"map_ontology:foreign_item_id_ignored({iid})")
+                        continue
                     if _apply(by_id[iid], res):
                         mapped += 1
         else:

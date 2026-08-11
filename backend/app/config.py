@@ -143,10 +143,12 @@ class ExtractionSettings(BaseModel):
     # candidates. Set false to force the deterministic ensemble even with an LLM present.
     llm_mapping: bool = True
     llm_candidate_cap: int = 40   # max candidate concepts shown to the LLM per line
-    # Mapping granularity. "per_statement" (default, most accurate) maps all of a
-    # statement's lines in ONE LLM call so cross-line judgements — parent/child
-    # containment, residualisation, "Others" handling — have full context. "per_line"
-    # maps each line independently (cheaper, less context-aware).
+    # Mapping granularity. "per_statement" (default, most accurate) batches lines into ONE LLM
+    # call so cross-line judgements — parent/child containment, residualisation, "Others"
+    # handling — have context. The batch is one SOURCE PAGE in practice, so a statement spanning
+    # two pages is decided in two calls; the name states the intent rather than the unit (see
+    # services.mapping.match_batch). "per_line" maps each line independently (cheaper, less
+    # context-aware).
     mapping_scope: Literal["per_statement", "per_line"] = "per_statement"
     # Gap closing. When a section subtotal computed from the template's lines differs from the
     # one the document printed, offer the model the extracted lines that reached no statement and
