@@ -255,6 +255,15 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
             by_key.setdefault(r["canonical_key"], []).append(r)
     bases = _bases_present(rows)
 
+    # The template's CALCULATED lines, evaluated from their components — the same evaluation the
+    # statement view uses, so the workbook and the screen cannot show a different subtotal. What
+    # the document printed goes into the cell's comment instead of the cell: a subtotal that
+    # contradicts its own components is a finding, not the figure to hand to a reader.
+    from app.services.rollups import evaluate_rows
+
+    calc = {(b, p): evaluate_rows(template_def, rows, b, p, locale)
+            for b in bases for p in ("current", "prior")}
+
     ink = "1f2937"
     section_fill = PatternFill("solid", fgColor="EEF1F6")
     total_fill = PatternFill("solid", fgColor="E7ECF5")
@@ -310,7 +319,7 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
         r = hc + 1
         r = _emit_nodes(ws, stmt.get("sections", []), by_key, period_cols, first_val, conf_col,
                         src_col, locale, r, section_fill, total_fill, thin_top, dbl_top, right,
-                        num_fmt, ink, scale)
+                        num_fmt, ink, scale, calc)
 
         ws.freeze_panes = ws.cell(hc + 1, 1)
         ws.column_dimensions["A"].width = 46
@@ -524,7 +533,8 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
 
 
 def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, locale, r,
-                section_fill, total_fill, thin_top, dbl_top, right, num_fmt, ink, scale=1.0):
+                section_fill, total_fill, thin_top, dbl_top, right, num_fmt, ink, scale=1.0,
+                calc=None):
     from openpyxl.styles import Alignment, Font
 
     for node in nodes:
@@ -544,7 +554,7 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
             for child in node.get("children", []):
                 r = _emit_nodes(ws, [child], by_key, period_cols, first_val, conf_col, src_col,
                                 locale, r, section_fill, total_fill, thin_top, dbl_top, right,
-                                num_fmt, ink, scale)
+                                num_fmt, ink, scale, calc)
             continue
 
         is_bold = role in ("subtotal", "total")
@@ -553,9 +563,31 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
         lab.alignment = Alignment(indent=0 if is_bold else 1)
         ws.cell(r, 2, (row or {}).get("note") or "")
 
+        calc_notes: list[str] = []
         for (b, p) in period_cols:
             ci = first_val + period_cols.index((b, p))
-            val = _cell_value(group, b, p)
+            printed = _cell_value(group, b, p)
+            computed = ((calc or {}).get((b, p), {}) or {}).get(key)
+            if computed is not None and computed.computable and not (row or {}).get("edited"):
+                # A calculated line carries its computed figure. The printed one is recorded in
+                # the comment, and named as a difference when it disagrees.
+                val = computed.value
+                label_p = _col("Current" if p == "current" else "Prior", locale)
+                bits = [f"{label_p}: computed {val:,.0f} = {computed.formula}"]
+                if printed is not None and abs(printed - val) > 0.5:
+                    bits.append(f"document printed {printed:,.0f} "
+                                f"(difference {printed - val:,.0f})")
+                elif printed is not None:
+                    bits.append(f"agrees with the printed {printed:,.0f}")
+                else:
+                    bits.append("the document did not print this subtotal")
+                calc_notes.append(" · ".join(bits))
+            else:
+                val = printed
+                if computed is not None and not computed.computable and printed is not None:
+                    calc_notes.append(f"{_col('Current' if p == 'current' else 'Prior', locale)}: "
+                                      f"printed {printed:,.0f}; none of this line's components "
+                                      f"were extracted, so it could not be recomputed")
             if val is not None and scale != 1.0:
                 val = round(val * scale)
             cell = ws.cell(r, ci, val)
@@ -583,12 +615,23 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
             # the applied result; the formula is preserved for audit).
             if row.get("edited") and row.get("formula"):
                 notes.append(f"Edited · formula: {row['formula']}")
+            for slot, meta in sorted((row.get("edit_comments") or {}).items()):
+                if (meta or {}).get("text"):
+                    who = f" — {meta['by']}" if meta.get("by") else ""
+                    when = f" ({meta['at']})" if meta.get("at") else ""
+                    notes.append(f"Edit note [{slot}]{who}{when}: {meta['text']}")
             trace = _contribution_note(group, *period_cols[0]) if period_cols else None
             if trace:
                 notes.append(trace)
+            notes += calc_notes
             if notes:
                 from openpyxl.comments import Comment
                 lab.comment = Comment("\n\n".join(notes), "FinExtract")
+        elif calc_notes:
+            # A calculated line the document never printed has no extracted row of its own, so
+            # this is the only place its arithmetic can be recorded.
+            from openpyxl.comments import Comment
+            lab.comment = Comment("\n\n".join(calc_notes), "FinExtract")
 
         if role == "subtotal":
             for c in range(1, src_col + 1):

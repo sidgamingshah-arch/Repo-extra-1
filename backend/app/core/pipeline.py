@@ -51,6 +51,7 @@ def default_pipeline() -> Pipeline:
     from app.stages.structural import StructuralStage
     from app.stages.prune_notes import PruneNotesStage
     from app.stages.residual import ResidualStage
+    from app.stages.gap_closing import GapClosingStage
 
     # Table reconstruction is performed inside the extract stage (native pages via the
     # PyMuPDF text layer + shared row_reconstruct; scanned pages via the OCR port), so there
@@ -72,5 +73,9 @@ def default_pipeline() -> Pipeline:
         # which needs every extracted note to check the note->face ties.
         PruneNotesStage(),
         ConfidenceStage(),
+        # A subtotal that still does not tie may be missing a line the mapper could not place.
+        # Asked BEFORE the structural checks, so a gap the model closes reports as tied rather
+        # than as a defect the analyst has to chase down themselves.
+        GapClosingStage(),
         StructuralStage(),
     ])

@@ -54,6 +54,10 @@ class DocumentModel(BaseModel):
     links: list[FaceNoteLink] = Field(default_factory=list)
     reconciliation: ReconciliationReport | None = None
     structural: StructuralReport | None = None   # template rollup/identity validation
+    # Confirmed gap-closing decisions: leftover lines a model placed in a section's Others to
+    # reconcile a printed subtotal with its components (see stages.gap_closing). Kept so the
+    # routing is visible and auditable rather than an unexplained change of mapping.
+    gap_routings: list[dict] = Field(default_factory=list)
     unit_context: UnitContext | None = None    # detected source currency + scale ("in ₹ crore")
 
     def face_pages(self) -> list[PageSource]:

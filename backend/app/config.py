@@ -148,6 +148,12 @@ class ExtractionSettings(BaseModel):
     # containment, residualisation, "Others" handling — have full context. "per_line"
     # maps each line independently (cheaper, less context-aware).
     mapping_scope: Literal["per_statement", "per_line"] = "per_statement"
+    # Gap closing. When a section subtotal computed from the template's lines differs from the
+    # one the document printed, offer the model the extracted lines that reached no statement and
+    # ask which belong in that section's "Others". Arithmetic bounds the choice — an option must
+    # close the difference in BOTH periods — but the placement is the model's judgement. Off, or
+    # with no provider configured, the difference stays a review item instead.
+    llm_gap_routing: bool = True
 
 
 class Settings(BaseSettings):

@@ -520,10 +520,12 @@ def _structural_checks(structural: list[dict], locale: str, covered: set[str]) -
 
 
 def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str,
-                       structural: list[dict] | None = None) -> list[dict]:
+                       structural: list[dict] | None = None,
+                       template_def: dict | None = None) -> list[dict]:
     """Failed accounting validations for the review queue (Req 11): the balance-sheet
-    identity, note→face ties, and the template's structural relations. Computed from the real
-    extracted values."""
+    identity, note→face ties, the template's structural relations, and — since the face now
+    carries the COMPUTED figure for every calculated line — what the document printed instead.
+    Computed from the real extracted values."""
     def L(s: str) -> str:
         return _t(s, locale)
 
@@ -593,12 +595,95 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
         })
     checks += _structural_checks(structural or [], locale,
                                  covered={c["target"] for c in checks})
+    checks += _calculated_checks(rows, template_def, locale,
+                                 covered={c["target"] for c in checks})
     return checks
+
+
+def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
+                       covered: set[str]) -> list[dict]:
+    """Review items for the template's CALCULATED lines — the face now shows the computed figure,
+    so the printed one has to be accounted for somewhere.
+
+    Two findings, and the distinction is what an analyst does next:
+
+    * the document printed a subtotal that its own components do not come to. Either a component
+      is mis-mapped or missing, or the filing's own arithmetic is being read wrongly. Either way
+      the face is showing the computed figure, and this says what was printed instead.
+    * a calculated line had NO extracted components at all, so there was nothing to compute from
+      and the printed figure is on the face unverified.
+
+    Relations that already have their own check (the balance identity) are left to it, so the same
+    difference is never raised twice.
+    """
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    from app.services.rollups import node_labels
+
+    if not template_def:
+        return []
+    names = node_labels(template_def, locale)
+    out: list[dict] = []
+    for basis in ("consolidated", "standalone"):
+        calc = _calculated(rows, template_def, basis, "current", locale)
+        if not any(c.components for c in calc.values()):
+            continue
+        groups: dict[str, list[dict]] = {}
+        for r in rows:
+            k = r.get("canonical_key")
+            if k:
+                groups.setdefault(k, []).append(r)
+        # Only report on a basis the document actually presented.
+        if not any(_basis_values(r, basis) for r in rows):
+            continue
+        for key, c in calc.items():
+            if key in covered or c.cycle:
+                continue
+            reported = _concept_value(groups.get(key, []), basis, "current")
+            label = names.get(key, key)
+            where = f"{label} · {basis}/current"
+            parts = [[comp.label, "—" if comp.value is None else f"{comp.value:,.0f}", False]
+                     for comp in c.components]
+            if not c.computable:
+                if reported is None:
+                    continue        # neither printed nor computable: nothing to say about it
+                out.append({
+                    "id": f"chk-uncomputed-{basis}-{key}", "type": "uncomputed", "icon": "∅",
+                    "title": L("Printed subtotal could not be verified"),
+                    "where": where, "severity": L("Not computable"), "tone": "med",
+                    "delta": "—", "target": key,
+                    "calc": [[L("Printed in the document"), f"{reported:,.0f}", True],
+                             [L("Components extracted"), "0", False], *parts],
+                    "fix": L("None of the lines this subtotal is made of were extracted, so it "
+                             "could not be recomputed. The printed figure is on the face "
+                             "unverified — map its components, or accept it as reported."),
+                })
+                continue
+            if reported is None:
+                continue            # computed cleanly and the document never printed it: fine
+            diff = c.value - reported
+            if abs(diff) <= _CALC_TOLERANCE:
+                continue            # the printed figure and the components agree
+            out.append({
+                "id": f"chk-calc-{basis}-{key}", "type": "calculated_mismatch", "icon": "≠",
+                "title": L("Printed subtotal differs from its components"),
+                "where": where, "severity": L("Check failed"), "tone": "high",
+                "delta": f"{diff:,.0f}", "target": key,
+                "calc": [[L("Printed in the document"), f"{reported:,.0f}", False],
+                         [L("Computed from components"), f"{c.value:,.0f}", True],
+                         [L("Difference"), f"{diff:,.0f}", False], *parts],
+                "fix": L("The face shows the computed figure. The document printed a different "
+                         "one, so a component is mis-mapped, missing, or double-counted — check "
+                         "the components below against the page."),
+            })
+    return out
 
 
 def _build_review(rows: list[dict], filename: str, locale: str = "en",
                   reconciliation: list[dict] | None = None,
-                  structural: list[dict] | None = None) -> dict:
+                  structural: list[dict] | None = None,
+                  template_def: dict | None = None) -> dict:
     """Derive the human-in-the-loop review queue from a real extraction: failed accounting
     checks (balance identity, note ties, template structure) plus unmapped and low-confidence
     line items become review items (the QA the analyst works before export). No demo data
@@ -610,7 +695,8 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                      "line item, or add an alias so future runs map it automatically.")
     _LOWCONF_FIX = ("The mapping is uncertain. Confirm the concept is correct or reassign it; "
                     "the value and its source location are shown so you can verify against the document.")
-    accounting = _accounting_checks(rows, reconciliation or [], locale, structural or [])
+    accounting = _accounting_checks(rows, reconciliation or [], locale, structural or [],
+                                    template_def)
     checks: list[dict] = list(accounting)
     unmapped = low_conf = 0
     for i, r in enumerate(rows):
@@ -812,7 +898,7 @@ def get_document_commentary(document_id: str, locale: str = Query("en"),
                 "strengths": [], "weaknesses": [], "data_quality": "", "basis": ""}
     rows = run.result.get("rows", [])
     review = _build_review(rows, "", locale, run.result.get("reconciliation", []),
-                           run.result.get("structural", []))
+                           run.result.get("structural", []), _template_for_run(session, run))
     units = run.result.get("units") or {}
     c = build_commentary_from_rows(
         rows, open_review_items=review["summary"]["open"], basis=basis,
@@ -835,7 +921,7 @@ def get_document_review(document_id: str, locale: str = Query("en"),
                 "summary": {"open": 0, "passed": 0}}
     return _build_review(run.result.get("rows", []), doc.filename or "document", locale,
                          run.result.get("reconciliation", []),
-                         run.result.get("structural", []))
+                         run.result.get("structural", []), _template_for_run(session, run))
 
 
 class LineItemEdit(BaseModel):
@@ -845,14 +931,18 @@ class LineItemEdit(BaseModel):
     # Which set of figures is being edited. Without it every edit landed on the consolidated
     # column, so an analyst working the standalone statement saw nothing change.
     basis: str = "consolidated"
+    # WHY the figure was changed. A manual value overrides what the document says and what the
+    # template computes, so the reason it was overridden is part of the record — it travels with
+    # the row, into the export, and to whoever reviews the spread after the analyst.
+    comment: str = ""
 
 
 def _template_concept(template_def: dict | None, canonical_key: str,
                       locale: str = "en") -> tuple[str, str] | None:
     """``(label, role)`` for a canonical key the template defines, else None."""
     for stmt in (template_def or {}).get("statements", []):
-        for sec in stmt.get("sections", []):
-            for c in sec.get("children", []):
+        for sec in stmt.get("sections") or []:
+            for c in sec.get("children") or []:
                 if c.get("canonical_key") == canonical_key:
                     label = (c.get("label_i18n") or {}).get(locale) or c.get("label") \
                         or canonical_key
@@ -864,10 +954,17 @@ def _slot_id(basis: str, period: str) -> str:
     return f"{basis}/{period}"
 
 
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 @router.patch("/{document_id}/line-items/{canonical_key:path}",
               dependencies=[Depends(require(Permission.EXTRACTION_EDIT)), Depends(authorized_document)])
 def edit_document_line_item(document_id: str, canonical_key: str, body: LineItemEdit,
-                            session: Session = Depends(db)) -> dict:
+                            session: Session = Depends(db),
+                            principal: Principal = Depends(current_principal)) -> dict:
     """Edit one figure of a real extraction: a concept, in one basis, for one period.
 
     Three cases, all of which an analyst hits in the grid, and all of which used to fail
@@ -972,9 +1069,21 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
     slot.setdefault("basis", body.basis)
     target["formula"] = body.formula or None
     target["edited"] = True
+    slot_id = _slot_id(body.basis, body.period)
     # Which figures were typed, so an edit to one basis doesn't claim the other.
-    target["edited_slots"] = sorted(set(target.get("edited_slots") or [])
-                                    | {_slot_id(body.basis, body.period)})
+    target["edited_slots"] = sorted(set(target.get("edited_slots") or []) | {slot_id})
+    comments = dict(target.get("edit_comments") or {})
+    if body.comment.strip():
+        comments[slot_id] = {"text": body.comment.strip()[:2000],
+                             "by": getattr(principal, "username", "") or "",
+                             "at": _now_iso()}
+    else:
+        # Clearing the box removes the note rather than leaving a stale reason on a new figure.
+        comments.pop(slot_id, None)
+    if comments:
+        target["edit_comments"] = comments
+    else:
+        target.pop("edit_comments", None)
 
     result["rows"] = rows
     run.result = result
@@ -983,6 +1092,7 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
     return {"ok": True, "canonical_key": canonical_key, "basis": body.basis,
             "period": body.period, "value": slot["value"], "formula": target.get("formula"),
             "status": "edited", "label": target.get("source_label") or "",
+            "comment": (target.get("edit_comments") or {}).get(slot_id, {}).get("text", ""),
             # What the grid will now show for this concept, so the caller can confirm the
             # figure it typed is the figure that took effect.
             "current": _concept_value(group or [target], body.basis, "current"),
@@ -1032,6 +1142,7 @@ def revert_document_line_item(document_id: str, canonical_key: str,
         target.pop("formula", None)
         target["edited"] = False
         target.pop("edited_slots", None)
+        target.pop("edit_comments", None)
 
     result["rows"] = rows
     run.result = result
@@ -1237,7 +1348,7 @@ def _stmt_prefix(template_def: dict | None, statement_type: str) -> str:
     node = _stmt_node(template_def, statement_type)
     if node:
         for sec in node.get("sections", []):
-            for c in sec.get("children", []):
+            for c in sec.get("children") or []:
                 k = c.get("canonical_key") or ""
                 if "_" in k:
                     return k.split("_", 1)[0]
@@ -1517,6 +1628,66 @@ def _equity_closing(rows: list[dict], basis: str) -> tuple[str, float] | None:
     return last
 
 
+# A computed subtotal and the printed one are read from the same page in the same units, so any
+# real difference is a whole currency unit or more. Below that it is float noise from the sum.
+_CALC_TOLERANCE = 0.5
+
+
+def _component_value(calc: dict, owner_key: str, index: int):
+    """One component's figure for the period `calc` was evaluated for.
+
+    Read from that period's own evaluation rather than from another period's component list: a
+    Calculated is evaluated for ONE period, so reusing its figures would print this year's
+    components under last year's total.
+    """
+    own = calc.get(owner_key)
+    if own is not None and index < len(own.components):
+        return own.components[index].value
+    return None
+
+
+_CALC_NOTES = {
+    "calculated": "Computed from the {n} template lines below, each of which clicks through to "
+                  "the page it was printed on. The document's own printed figure is held for "
+                  "review, not shown here — a subtotal that contradicts its components is a "
+                  "finding rather than a number.",
+    "manual": "A value entered by hand, which stands over the computed one. The components below "
+              "are what the template says this line is made of.",
+    "reported_uncomputed": "None of the components this line is made of were extracted, so there "
+                           "was nothing to compute from and the document's printed figure is "
+                           "shown unverified. It is in the review queue.",
+}
+
+
+def _calculated_note(origin: str, diff: float | None, n_components: int, locale: str) -> str:
+    note = _t(_CALC_NOTES[origin], locale).replace("{n}", str(n_components))
+    if diff is not None and abs(diff) > _CALC_TOLERANCE:
+        note = f"{note} {_t('The printed figure differs by', locale)} {diff:,.0f}."
+    return note
+
+
+def _calculated(rows: list[dict], template_def: dict | None, basis: str, period: str,
+                locale: str) -> dict:
+    """Evaluate the template's calculated lines for one (basis, period).
+
+    Inputs are read through ``concept_value``, so a calculated line is built from exactly the
+    figures the grid shows for its components — including an analyst's manual correction to one
+    of them, which is the point: fixing a component has to fix every subtotal above it.
+    """
+    from app.services.rollups import evaluate, node_labels
+
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        k = r.get("canonical_key")
+        if k:
+            groups.setdefault(k, []).append(r)
+
+    def reported(key: str):
+        return _concept_value(groups.get(key, []), basis, period)
+
+    return evaluate(template_def, reported, labels=node_labels(template_def, locale))
+
+
 _KPI_CATEGORY_I18N = {
     "Liquidity": {"zh": "流动性", "ar": "السيولة", "fr": "Liquidité"},
     "Leverage": {"zh": "杠杆", "ar": "الرافعة المالية", "fr": "Endettement"},
@@ -1790,10 +1961,95 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     def has_basis(r: dict) -> bool:
         return bool(_basis_values(r, basis))
 
+    # The template's calculated lines — subtotals, totals, net figures — evaluated from the
+    # components the template says they are made of. A subtotal printed on the page is a fourth
+    # opinion alongside the lines it is meant to be the sum of; when they disagree, showing the
+    # printed one puts a figure on the face that its own components contradict. So the computed
+    # figure is what the grid shows, the printed one is kept for the review queue, and their
+    # difference becomes a finding rather than a silent inconsistency.
+    calc_cur = _calculated(rows, template_def, basis, "current", locale)
+    calc_prior = _calculated(rows, template_def, basis, "prior", locale)
+
     # A template child's presentation kind (subtotal / total rows are styled differently in
     # the grid); anything else is a plain line item.
     def _kind_for(role: str | None) -> str:
         return {"subtotal": "subtotal", "total": "total"}.get(role or "", "item")
+
+    provs = _key_provenance(rows, basis)
+
+    def as_calculated(row: dict) -> dict:
+        """Put the COMPUTED figure on a calculated line, and keep the printed one out of sight.
+
+        The template says this line is made of other lines, so that is the figure the face
+        carries. What the document printed is retained as ``reported1``/``reported2`` — not shown
+        as the line's value, because a subtotal that contradicts its own components is a finding,
+        not a number — and the review queue is built from exactly that difference.
+
+        Precedence is manual > computed > printed. An analyst's typed value is their answer for
+        the line and outranks the arithmetic; a line whose components were never extracted has
+        nothing to compute from, so it falls back to the printed figure and says so.
+        """
+        key = row["id"]
+        c1, c2 = calc_cur.get(key), calc_prior.get(key)
+        if c1 is None and c2 is None:
+            return row                                   # not a calculated line
+        row["reported1"], row["reported2"] = row["v1"], row["v2"]
+        if row.get("status") == "edited":
+            # A manual value stands. Still say what the components come to, so the analyst can
+            # see what they overrode.
+            row["origin"] = "manual"
+            row["calculated1"] = c1.value if c1 else None
+            row["calculated2"] = c2.value if c2 else None
+        elif (c1 and c1.computable) or (c2 and c2.computable):
+            row["origin"] = "calculated"
+            row["v1"] = c1.value if (c1 and c1.computable) else None
+            row["v2"] = c2.value if (c2 and c2.computable) else None
+            row["calculated1"], row["calculated2"] = row["v1"], row["v2"]
+            # The document not printing this line is no longer a gap: the template says what it
+            # is made of, and the components were there.
+            if row.get("status") == "missing":
+                row["status"] = None
+        else:
+            # Nothing to compute from: no component of this line was extracted. Showing the
+            # printed figure beats showing a blank, but it is labelled as unverified.
+            row["origin"] = "reported_uncomputed"
+            row["calculated1"] = row["calculated2"] = None
+
+        source = c1 if (c1 and c1.components) else c2
+        if source is not None:
+            row["formula"] = source.formula or row.get("formula")
+            # The components ARE the traceability: each with its own figure and the page it was
+            # printed on, so a computed subtotal can be taken apart line by line.
+            row["contributions"] = [{
+                "label": comp.label,
+                "canonical_key": comp.canonical_key,
+                "v1": _component_value(calc_cur, key, i),
+                "v2": _component_value(calc_prior, key, i),
+                "method": "calculated" if comp.canonical_key in calc_cur else None,
+                "residual": comp.value is None,
+                "src": _prov_label(provs.get(comp.canonical_key, (None, None))[0]),
+                "source": provs.get(comp.canonical_key, (None, None))[0],
+                "src2": _prov_label(provs.get(comp.canonical_key, (None, None))[1]),
+                "source2": provs.get(comp.canonical_key, (None, None))[1],
+            } for i, comp in enumerate(source.components)]
+        diff = None
+        if row["origin"] == "calculated" and row["v1"] is not None \
+                and row["reported1"] is not None:
+            diff = row["v1"] - row["reported1"]
+        row["inspector"] = {
+            "tag": {"calculated": _t("calculated", locale),
+                    "manual": _t("manual override", locale),
+                    "reported_uncomputed": _t("printed, not computable", locale)}[row["origin"]],
+            "src": "", "formula": row.get("formula") or "",
+            "result": "" if row["v1"] is None else f"{row['v1']:,.0f}",
+            "note": _calculated_note(row["origin"], diff, len(source.components) if source else 0,
+                                    locale),
+        }
+        if diff is not None and abs(diff) > _CALC_TOLERANCE:
+            # A divergence is the finding; the review queue carries it with the arithmetic.
+            row["status"] = "recon"
+        row["confidence"] = row.get("confidence")
+        return row
 
     def item_row(key: str, label: str, group: list[dict], kind: str = "item") -> dict:
         """One statement row from every extracted row that mapped to this concept.
@@ -1856,12 +2112,21 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                                   f"click one to jump to it in the document.")
                                  + (f" A manual value replaces the combined figure; the printed "
                                     f"lines still add to {printed}." if edited else "")}
-        return {
+        notes = {}
+        for x in group:
+            for slot, meta in (x.get("edit_comments") or {}).items():
+                b, _, per = str(slot).partition("/")
+                if b == basis and (meta or {}).get("text"):
+                    notes[per] = meta
+        return as_calculated({
             "id": key, "label": label or r.get("source_label"),
             "source_label": r.get("source_label"), "kind": kind,
             "note": next((x.get("note") for x in group if x.get("note")), None),
             "note2": None, "status": "edited" if edited else None,
             "confidence": {"cat": cat, "pct": pct}, "editable": True,
+            "origin": "manual" if edited else "extracted",
+            # Why a figure was overridden, per period — kept beside the number it explains.
+            "comments": notes or None,
             "formula": formula, "inspector": inspector,
             # Present only when more than one printed line was combined into this figure.
             "contributions": contributions or None,
@@ -1871,21 +2136,24 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
             # they were printed at — the prior year is a number a reviewer checks too.
             "source": (cur or {}).get("provenance"),
             "source2": (prior or {}).get("provenance"),
-        }
+        })
 
     # A template line that wasn't extracted (or has no value for this basis) still appears, so
     # the analyst sees the FULL template skeleton and can spot/fill gaps — just with blank values.
+    # A CALCULATED line is a different case entirely: the document never had to print it for the
+    # spread to carry it, so as_calculated fills it in from its components.
     def blank_row(key: str, label: str, kind: str = "item") -> dict:
-        return {
+        return as_calculated({
             "id": key, "label": label, "source_label": None, "kind": kind,
             "note": None, "note2": None, "status": "missing",
-            "confidence": None, "editable": True, "formula": None,
+            "confidence": None, "editable": True, "formula": None, "origin": "extracted",
+            "comments": None,
             "inspector": {"tag": _t("not extracted", locale), "src": "", "formula": "",
                           "result": "", "note": _t("This template line was not found in the "
                                                     "document's extraction for this basis. Enter "
                                                     "a value to record it manually.", locale)},
             "v1": None, "v2": None, "source": None, "source2": None,
-        }
+        })
 
     # Show the full template skeleton only when this statement+basis is actually present in the
     # document. If the basis wasn't extracted at all (e.g. no standalone figures), the grid stays
@@ -1898,24 +2166,29 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     seen: set[str] = set()
     stmt = next((s for s in (template_def or {}).get("statements", [])
                  if s.get("type") == statement_type), None)
+    def emit(key: str, label: str, kind: str) -> None:
+        seen.add(key)
+        group = [r for r in by_key.get(key, []) if has_basis(r)]
+        out.append(item_row(key, label, group, kind) if group
+                   else blank_row(key, label, kind))
+
     if stmt and basis_present:
-        for sec in stmt.get("sections", []):
-            children = [c for c in sec.get("children", []) if c.get("canonical_key")]
+        for sec in stmt.get("sections") or []:
+            children = [c for c in sec.get("children") or [] if c.get("canonical_key")]
             if not children:
+                # A statement-level total — gross profit, profit before tax, total assets, net
+                # assets, closing cash — is declared as a section with no children of its own.
+                # These were being skipped, which left a P&L with no "Profit for the year" on it:
+                # exactly the calculated lines a reader looks for first. They are single rows.
+                if sec.get("canonical_key"):
+                    emit(sec["canonical_key"], _loc(sec, locale), _kind_for(sec.get("role")))
                 continue
             # Show every section and every template line (extracted or not) so the whole
             # template is represented, not only the lines that happened to be extracted.
             out.append({"id": f"sec_{sec.get('node_id', '')}", "label": _loc(sec, locale),
                         "kind": "section", "v1": None, "v2": None})
             for c in children:
-                k = c["canonical_key"]
-                seen.add(k)
-                kind = _kind_for(c.get("role"))
-                group = [r for r in by_key.get(k, []) if has_basis(r)]
-                if group:
-                    out.append(item_row(k, _loc(c, locale), group, kind))
-                else:
-                    out.append(blank_row(k, _loc(c, locale), kind))
+                emit(c["canonical_key"], _loc(c, locale), _kind_for(c.get("role")))
 
     # Concepts this statement extracted that the template has no node for — shown so a mapped
     # figure is never invisible just because the template skeleton omits its line.

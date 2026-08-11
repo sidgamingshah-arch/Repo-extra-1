@@ -115,6 +115,25 @@ def main(path: str) -> int:
             print(f"  {x['label'][:50]:50s} v1={x['v1']} v2={x['v2']} "
                   f"src={(x.get('source') or {}).get('page_index')} editable={x['editable']}")
 
+        # --- calculated lines: what the face now shows -----------------------------------
+        print("\n=== calculated lines (computed vs printed) ===")
+        for kind in ("balance_sheet", "profit_and_loss", "cash_flow"):
+            d = stmt(kind)
+            calc = [x for x in d["rows"] if x.get("origin") == "calculated"]
+            unc = [x for x in d["rows"] if x.get("origin") == "reported_uncomputed"]
+            diff = [x for x in calc if x.get("reported1") is not None
+                    and abs(x["v1"] - x["reported1"]) > 0.5] if calc else []
+            print(f"{kind:17s} rows={len(d['rows'])} calculated={len(calc)} "
+                  f"not-computable={len(unc)} diverging={len(diff)}")
+            for x in calc[:8]:
+                rep = "—" if x.get("reported1") is None else f"{x['reported1']:,.0f}"
+                mark = "" if x.get("reported1") is None or abs(x["v1"] - x["reported1"]) <= 0.5 \
+                       else "  <-- DIFFERS"
+                print(f"    {x['label'][:44]:44s} computed={x['v1']:>15,.0f} printed={rep:>15s}{mark}")
+            for x in diff:
+                print(f"    DIVERGES {x['label'][:40]:40s} "
+                      f"computed={x['v1']:,.0f} printed={x['reported1']:,.0f}")
+
         # --- the equity matrix must survive the period-vs-component tightening ------------
         print("\n=== changes in equity (matrix) ===")
         e = stmt("changes_in_equity")
@@ -168,8 +187,13 @@ def main(path: str) -> int:
                       s.get("expected"), s.get("actual"))
 
         rev = c.get(f"/api/v1/documents/{doc}/review").json()
-        print(f"\nreview queue: {len(rev.get('checks', []))} checks, "
-              f"{len(rev.get('items', []))} items")
+        from collections import Counter as _C
+        print(f"\nreview queue: {len(rev.get('checks', []))} checks")
+        print("  by type:", dict(_C(x.get("type") for x in rev.get("checks", []))))
+        for x in rev.get("checks", []):
+            if x.get("type") in ("calculated_mismatch", "uncomputed"):
+                print(f"    {x['type']}: {x['where'][:60]:60s} delta={x['delta']}")
+        print("gap routings:", run["result"].get("gap_routings"))
     return 0
 
 

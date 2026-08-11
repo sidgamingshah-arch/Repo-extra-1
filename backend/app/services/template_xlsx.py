@@ -130,9 +130,9 @@ def build_template_xlsx(definition: dict, *, filename_hint: str = "template") ->
     for stmt in definition.get("statements", []):
         st = str(stmt.get("type") or "")
         title = _STATEMENT_TITLE.get(st, st.replace("_", " ").capitalize())
-        for sec in stmt.get("sections", []):
+        for sec in stmt.get("sections") or []:
             write(sec, title, "")
-            for child in sec.get("children", []):
+            for child in sec.get("children") or []:
                 write(child, title, sec.get("node_id") or "")
 
     ws.freeze_panes = "A2"

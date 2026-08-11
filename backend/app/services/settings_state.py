@@ -81,6 +81,11 @@ EXTRACTION_KNOBS: tuple[Knob, ...] = (
          "When an LLM provider is configured, concepts are chosen by MEANING from each "
          "candidate's definition and criteria, and the lexical tiers only shortlist. Turn this "
          "off to force the deterministic ensemble even with a provider available."),
+    Knob("llm_gap_routing", "bool", "Close subtotal gaps (LLM)",
+         "When a section subtotal computed from the template's lines differs from the printed "
+         "one, offer the model the extracted lines that reached no statement and ask which "
+         "belong in that section's Others. Only groups that close the difference in BOTH "
+         "periods are offered. Off, the difference stays a review item."),
     Knob("mapping_scope", "choice", "Mapping granularity",
          "per_statement decides all of a statement's captions in one call, so cross-line "
          "judgements (parent/child containment, residuals, 'Others') have full context. "

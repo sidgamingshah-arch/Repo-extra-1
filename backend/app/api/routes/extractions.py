@@ -242,6 +242,9 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             # could not be checked, so partial coverage is visible rather than implied.
             "structural": ([r.model_dump(mode="json") for r in structural.results]
                            if structural else []),
+            # Leftover lines a model placed in a section's Others to reconcile a printed subtotal
+            # with its components — kept so the routing is inspectable, not silent.
+            "gap_routings": list(doc_model.gap_routings or []),
             "units": (doc_model.unit_context.model_dump(mode="json")
                       if doc_model.unit_context else None),
             # How mapping ran. Surfaced (not just logged) so a deterministic-only run — the
