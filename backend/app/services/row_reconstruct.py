@@ -271,6 +271,110 @@ def _is_wrapped_head(head: list[Word], cont: list[Word]) -> bool:
     return bool(_HEAD_INCOMPLETE.search(head_latin)) or bool(_CONT_STARTS.match(cont_text))
 
 
+_ARABIC = re.compile(r"[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]")
+_LATIN = re.compile(r"[A-Za-z]")
+
+
+def _script_of(text: str) -> str | None:
+    """Which script a token is written in, or None for digits/punctuation that belong to
+    whichever script surrounds them."""
+    if _HAN.search(text):
+        return "han"
+    if _ARABIC.search(text):
+        return "arabic"
+    if _LATIN.search(text):
+        return "latin"
+    return None
+
+
+def _label_lines(words: list[Word]) -> list[list[Word]]:
+    """A label's words split back into the physical lines they were printed on.
+
+    A merged caption arrives as line-one's words followed by line-two's, so consecutive words
+    with the same vertical centre are one printed line.
+    """
+    if not words:
+        return []
+    heights = sorted(max(w.bbox.y1 - w.bbox.y0, 1e-6) for w in words)
+    tol = heights[len(heights) // 2] * 0.6
+    lines: list[list[Word]] = []
+    cur = [words[0]]
+    ref = (words[0].bbox.y0 + words[0].bbox.y1) / 2
+    for w in words[1:]:
+        yc = (w.bbox.y0 + w.bbox.y1) / 2
+        if abs(yc - ref) <= tol:
+            cur.append(w)
+        else:
+            lines.append(cur)
+            cur = [w]
+            ref = yc
+    lines.append(cur)
+    return lines
+
+
+def _regroup_scripts(words: list[Word]) -> list[Word]:
+    """Keep each language contiguous in a caption that wrapped across printed lines.
+
+    A bilingual filing sets the two languages side by side in the label column and lets the pair
+    wrap together::
+
+        Share of other comprehensive      應佔合營公司其他
+        income of joint ventures          全面收益
+
+    Reading that in printed order — which is what merging the two lines does — splices the
+    languages into each other: "Share of other comprehensive 應佔合營公司其他 income of joint
+    ventures 全面收益". The figures are right and the caption is complete, but neither language is
+    a phrase any more, so an alias cannot match it and a model reading it has to reassemble two
+    interleaved sentences before it can decide what the line is. Grouping the runs by script
+    restores both: "Share of other comprehensive income of joint ventures" followed by
+    "應佔合營公司其他全面收益".
+
+    Applied only to a caption that genuinely spans more than one line, and only when the scripts
+    actually alternate more than once. A single line reading "Goodwill (商譽) impairment" is in the
+    order it was written, and reordering it would be the mistake this avoids.
+    """
+    if len(_label_lines(words)) < 2:
+        return words
+    runs: list[tuple[str | None, list[Word]]] = []
+    for w in words:
+        s = _script_of(w.text)
+        if runs and (s is None or s == runs[-1][0]):
+            runs[-1][1].append(w)
+        else:
+            runs.append((s, [w]))
+    # A leading run of digits or punctuation belongs to whatever script follows it.
+    if len(runs) > 1 and runs[0][0] is None:
+        runs[1][1][:0] = runs[0][1]
+        runs.pop(0)
+    scripts = [s for s, _ in runs if s is not None]
+    # Two runs is one language after the other — already contiguous, nothing to regroup.
+    if len(set(scripts)) < 2 or len(runs) <= 2:
+        return words
+    order: list[str] = []
+    for s in scripts:
+        if s not in order:
+            order.append(s)
+    out: list[Word] = []
+    for script in order:
+        for s, ws in runs:
+            if s == script:
+                out.extend(ws)
+    return out if len(out) == len(words) else words
+
+
+def _join_words(words: list[Word]) -> str:
+    """Words as a caption. No space is inserted between two Han tokens: Chinese is not written
+    with spaces, and one inserted between "應佔合營公司其他" and "全面收益" stops the caption
+    matching the alias an ontology actually lists."""
+    parts: list[str] = []
+    for w in words:
+        if parts and _HAN.search(w.text) and _HAN.search(parts[-1][-1:]):
+            parts[-1] = parts[-1] + w.text
+        else:
+            parts.append(w.text)
+    return " ".join(parts).strip()
+
+
 def _merge_wrapped_labels(rows: list[list[Word]], fmt=None) -> list[list[Word]]:
     """Fold a label-only line into the following valued row when the two are clearly one
     wrapped label: tight vertical spacing *and* left-alignment inside the label column.
@@ -805,7 +909,7 @@ def _matrix_items(m: _Matrix, names: list[str], *, page_index: int, document_id:
         if tail is not None and not _tight_below(tail, _row_box(label_words or row)):
             pending = []
         label_words, pending, tail = pending + label_words, [], None
-        label = " ".join(w.text for w in label_words).strip()
+        label = _join_words(_regroup_scripts(label_words))
         if not label:
             continue
         vals = [d for d in (_num(_cell_text(w.text), fmt) for w in cells) if d is not None]
@@ -914,7 +1018,7 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
         label_words, note_ref, value_words = _scan_row(row, number_format)
         note_ref, value_words = _resolve_note_column(note_ref, value_words, note_x, number_format)
 
-        label = " ".join(w.text for w in label_words).strip()
+        label = _join_words(_regroup_scripts(label_words))
         if not label or not value_words:
             # A label-only banner ("NON-CURRENT LIABILITIES", 流動負債) carries no amount, but it
             # scopes every row beneath it — the same caption under two banners is two different

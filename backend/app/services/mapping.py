@@ -218,6 +218,48 @@ def section_of_key(canonical_key: str) -> str | None:
     return next((tok for tok, _ in SECTION_WORDS if f"_{tok}__" in canonical_key), None)
 
 
+# Vocabularies a caption can name only ONE member of. IAS 7 divides cash flows into exactly three
+# activities and a statement labels each subtotal with its own, so a caption saying "financing
+# activities" is not the investing subtotal under any reading.
+#
+# This is not a similarity judgement the fuzzy scorer may trade off. "Net cash used in investing
+# activities" and "Net cash flows used in financing activities" differ by one word in seven, which
+# token similarity scores at 0.92 — above any threshold anyone would pick. The consequence is
+# silent and expensive: the financing figure is filed under investing, investing then shows two
+# figures summed, and the financing line has none. The structural check catches the arithmetic
+# afterwards, but the caption said which line it was all along.
+#
+# Add a vocabulary here only when naming one member genuinely rules out the others for every
+# filing — this gate cannot be overridden by evidence, so a merely-usually-true grouping would
+# refuse correct mappings.
+EXCLUSIVE_VOCABULARIES: tuple[tuple[str, ...], ...] = (
+    ("operating", "investing", "financing"),
+)
+_WORD = {w: re.compile(rf"\b{w}\b", re.IGNORECASE)
+         for vocab in EXCLUSIVE_VOCABULARIES for w in vocab}
+
+
+def _names_a_different_class(canonical_key: str, caption: str) -> bool:
+    """Whether the caption names a member of an exclusive vocabulary that the concept is not in.
+
+    Read off the canonical key, so it needs no ontology authoring and holds for any template that
+    names its sections after the thing they contain
+    (``cf_cash_flow_from_investing_activities__…``).
+    """
+    key = (canonical_key or "").lower()
+    for vocab in EXCLUSIVE_VOCABULARIES:
+        in_key = [w for w in vocab if w in key]
+        if len(in_key) != 1:
+            continue                      # the concept is not in this vocabulary, or is ambiguous
+        in_caption = [w for w in vocab if _WORD[w].search(caption)]
+        # Only refuse when the caption names exactly one member and it is not the concept's own.
+        # A caption naming two ("cash flows from operating and investing activities") is a genuine
+        # combined line and is left to the ordinary tiers to judge.
+        if len(in_caption) == 1 and in_caption[0] != in_key[0]:
+            return True
+    return False
+
+
 class OntologyMatcher:
     """Runs the ensemble for one ontology + locale."""
 
@@ -572,14 +614,15 @@ class OntologyMatcher:
                  section: str | None, caption: str = "") -> bool:
         """Whether a concept may be considered for a caption printed here.
 
-        Two of the three constraints are structural, not lexical: the statement the page is,
-        and the section banner the row sits under. The third is the concept's own declared
-        exclusions. They are combined in one place so no call site can apply only part of the
-        scoping.
+        Two of the four constraints are structural, not lexical: the statement the page is, and
+        the section banner the row sits under. The third is the concept's own declared exclusions,
+        and the fourth is the caption naming a mutually exclusive class the concept is not in.
+        They are combined in one place so no call site can apply only part of the scoping.
         """
         return (self._in_statement(canonical_key, statement)
                 and self._in_section(canonical_key, section)
-                and not (caption and self._vetoed(canonical_key, caption)))
+                and not (caption and self._vetoed(canonical_key, caption))
+                and not (caption and _names_a_different_class(canonical_key, caption)))
 
     @staticmethod
     def _best_per_key(cands: list[Candidate]) -> list[Candidate]:
