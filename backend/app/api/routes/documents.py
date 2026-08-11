@@ -1,6 +1,7 @@
 """Document endpoints: upload (+ upfront integrity/classification) and fetch."""
 from __future__ import annotations
 
+import copy
 import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
@@ -13,6 +14,9 @@ from app.api.deps import db, object_store
 from app.ports.object_store import LocalObjectStore
 from app.security import Permission, Principal, Role, current_principal, require
 from app.services.documents import analyze_document, content_hash
+from app.services.periods import (
+    basis_values as _basis_values_of, concept_value as _concept_value, edited_for as _edited_for,
+    period_displays, slot_for, split_current_prior)
 from app.services.reconcile import tie_status
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -44,6 +48,26 @@ def authorized_document(
 # a real run localizes like the demo path. Dynamic parts (source labels, finding messages)
 # stay verbatim — they're data, not chrome.
 _TR: dict[str, dict[str, str]] = {
+    # KPI / Additional-items views
+    "KPIs": {"zh": "关键指标", "ar": "المؤشرات الرئيسية", "fr": "Indicateurs clés"},
+    "Computed KPIs": {"zh": "计算得出的关键指标", "ar": "مؤشرات محسوبة",
+                      "fr": "Indicateurs calculés"},
+    "Additional items": {"zh": "其他项目", "ar": "بنود إضافية", "fr": "Postes supplémentaires"},
+    "Extracted, not on a statement": {"zh": "已提取，但不在报表中",
+                                      "ar": "مستخرج، وليس في أي قائمة",
+                                      "fr": "Extrait, hors états financiers"},
+    "computed": {"zh": "计算值", "ar": "محسوب", "fr": "calculé"},
+    "unmapped": {"zh": "未映射", "ar": "غير مُعيَّن", "fr": "non mappé"},
+    "inputs not extracted": {"zh": "输入项未提取", "ar": "المدخلات غير مستخرجة",
+                             "fr": "entrées non extraites"},
+    "numerator": {"zh": "分子", "ar": "البسط", "fr": "numérateur"},
+    "denominator": {"zh": "分母", "ar": "المقام", "fr": "dénominateur"},
+    "Not mapped to any concept": {"zh": "未映射到任何概念", "ar": "غير مُعيَّن إلى أي مفهوم",
+                                  "fr": "Non rattaché à un concept"},
+    "Mapped, but not on any statement in this template":
+        {"zh": "已映射，但不在此模板的任何报表中",
+         "ar": "مُعيَّن، لكنه ليس في أي قائمة في هذا القالب",
+         "fr": "Rattaché, mais absent des états de ce modèle"},
     # integrity grades
     "Not analyzed": {"zh": "未分析", "ar": "لم يُحلَّل", "fr": "Non analysé"},
     "Blocked": {"zh": "已阻止", "ar": "محظور", "fr": "Bloqué"},
@@ -414,16 +438,13 @@ def _low_conf_threshold() -> float:
 
 
 def _row_value(rows: list[dict], key: str, basis: str = "consolidated", period: str = "current"):
-    for r in rows:
-        if r.get("canonical_key") != key:
-            continue
-        for v in r.get("values") or []:
-            if (v.get("basis") or "consolidated") == basis and v.get("period_label") == period:
-                try:
-                    return float(str(v.get("value")).replace(",", ""))
-                except (TypeError, ValueError):
-                    return None
-    return None
+    """One concept's figure — exactly the figure the statement grid shows for it.
+
+    Read through ``concept_value`` so the accounting checks validate the number on screen: the
+    sum when several printed lines map to the concept, or the analyst's manual value when one
+    was entered. Checking a different number than the grid displays is worse than not checking.
+    """
+    return _concept_value([r for r in rows if r.get("canonical_key") == key], basis, period)
 
 
 def _balance_sides(rows: list[dict], basis: str, period: str) -> tuple[float | None, float | None,
@@ -821,15 +842,47 @@ class LineItemEdit(BaseModel):
     value: float | None = None
     formula: str = ""
     period: str = "current"
+    # Which set of figures is being edited. Without it every edit landed on the consolidated
+    # column, so an analyst working the standalone statement saw nothing change.
+    basis: str = "consolidated"
+
+
+def _template_concept(template_def: dict | None, canonical_key: str,
+                      locale: str = "en") -> tuple[str, str] | None:
+    """``(label, role)`` for a canonical key the template defines, else None."""
+    for stmt in (template_def or {}).get("statements", []):
+        for sec in stmt.get("sections", []):
+            for c in sec.get("children", []):
+                if c.get("canonical_key") == canonical_key:
+                    label = (c.get("label_i18n") or {}).get(locale) or c.get("label") \
+                        or canonical_key
+                    return label, (c.get("role") or "line")
+    return None
+
+
+def _slot_id(basis: str, period: str) -> str:
+    return f"{basis}/{period}"
 
 
 @router.patch("/{document_id}/line-items/{canonical_key:path}",
               dependencies=[Depends(require(Permission.EXTRACTION_EDIT)), Depends(authorized_document)])
 def edit_document_line_item(document_id: str, canonical_key: str, body: LineItemEdit,
                             session: Session = Depends(db)) -> dict:
-    """Edit a value (and optional formula) on a real extraction. The override is persisted
-    onto the latest run so the statement, export and review all reflect it; the row is
-    flagged 'edited' while its original provenance is retained."""
+    """Edit one figure of a real extraction: a concept, in one basis, for one period.
+
+    Three cases, all of which an analyst hits in the grid, and all of which used to fail
+    silently:
+
+    * the concept was extracted once — the ordinary case, the value is overlaid on that row;
+    * SEVERAL printed lines map to the concept (a section's "Others", three depreciation
+      lines) and the grid shows their sum — a typed figure then REPLACES that sum rather than
+      joining it, so what was entered is what appears;
+    * the template defines the line but the document never yielded it (a blank row in the
+      grid) — the figure is recorded as a manual entry against that concept instead of 404ing.
+
+    The overlay is persisted onto the latest run, so the statement, export, checks and review
+    all read it; the machine-extracted numbers are snapshotted first so a revert is exact.
+    """
     from app.db.models import Document
 
     if session.get(Document, document_id) is None:
@@ -837,42 +890,65 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
     run = _latest_run(session, document_id)
     if run is None or not run.result:
         raise HTTPException(status_code=404, detail="No extraction run yet for this document")
+    if body.basis not in ("consolidated", "standalone"):
+        raise HTTPException(status_code=422, detail=f"Unknown basis '{body.basis}'")
     result = dict(run.result)
     rows = result.get("rows", [])
-    target = next((r for r in rows if r.get("canonical_key") == canonical_key), None)
-    if target is None:
-        raise HTTPException(status_code=404, detail="Line item not found in this run")
+    group = [r for r in rows if r.get("canonical_key") == canonical_key]
+    if group:
+        # The whole concept's manual figure lives on ONE row — its first, in run order — which
+        # is the row the statement view and the export look to for an override. Every other
+        # contributing line keeps its printed figure, so the composition stays auditable.
+        target = group[0]
+    else:
+        concept = _template_concept(_template_for_run(session, run), canonical_key)
+        if concept is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"'{canonical_key}' is neither in this extraction nor in its template")
+        label, role = concept
+        target = {"canonical_key": canonical_key, "source_label": label, "role": role,
+                  "values": [], "mapping_method": "manual", "mapping_confidence": None,
+                  # Entered by hand rather than read off the page: a revert removes the row
+                  # entirely instead of restoring a figure that never existed.
+                  "manual": True}
+        rows.append(target)
 
-    values = target.get("values") or []
-    # Snapshot the machine-extracted values ONCE, before the first edit, so a revert can
-    # restore the original numbers exactly (edits are overlays, never a lossy overwrite).
+    values = target.setdefault("values", [])
+    # Snapshot the machine-extracted values ONCE, before this concept's first edit, so a revert
+    # restores the original numbers exactly (edits are overlays, never a lossy overwrite). The
+    # WHOLE list is copied rather than a (basis, period) → value map: a row can legitimately hold
+    # two values that share a basis and period label, and a map would collapse them and hand both
+    # the same figure back on revert.
     if not target.get("edited"):
-        target["_original"] = {v.get("period_label"): v.get("value") for v in values}
+        target["_original"] = copy.deepcopy(values)
 
-    slot = next((v for v in values if v.get("period_label") == body.period), None)
+    # The slot the grid shows for this (basis, period) — matched by the period it names, so an
+    # edit to the prior column cannot land on the current one (or vice versa).
+    slot = slot_for(target, body.basis, body.period)
     if slot is None:
-        slot = {"period_label": body.period, "value": None, "provenance": None}
+        slot = {"period_label": body.period, "basis": body.basis, "value": None,
+                "provenance": None}
         values.append(slot)
-        target["values"] = values
 
-    # A formula drives the value: evaluate it against the other line items (same period), so a
-    # real formula shows its computed result. If a formula is given alongside an explicit value
-    # and can't be evaluated (e.g. free-form references), the explicit value stands and the
-    # formula is kept as an annotation. A formula-ONLY edit that can't evaluate is a 422.
+    # A formula drives the value: evaluate it against the other line items (same basis and
+    # period), so a real formula shows its computed result. If a formula is given alongside an
+    # explicit value and can't be evaluated (e.g. free-form references), the explicit value
+    # stands and the formula is kept as an annotation. A formula-ONLY edit that can't evaluate
+    # is a 422.
     computed: float | None = None
     formula_error: str | None = None
     if body.formula and body.formula.strip().lstrip("=").strip():
         from app.services.formula import FormulaError, evaluate
 
         def _resolve(name: str) -> float:
-            row = next((r for r in rows if r.get("canonical_key") == name), None)
-            if row is None:
+            # Resolve a reference the way the grid renders it: the concept's figure, summed
+            # across every printed line that maps to it (or its own manual override).
+            n = _concept_value([r for r in rows if r.get("canonical_key") == name],
+                               body.basis, body.period)
+            if n is None:
                 raise KeyError(name)
-            v = next((x for x in (row.get("values") or [])
-                      if x.get("period_label") == body.period), None)
-            if v is None or v.get("value") is None:
-                raise KeyError(name)
-            return float(str(v["value"]).replace(",", ""))
+            return n
 
         try:
             computed = evaluate(body.formula, _resolve)
@@ -893,15 +969,25 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
     else:
         fv = float(new_val)
         slot["value"] = str(int(fv)) if fv == int(fv) else str(fv)
+    slot.setdefault("basis", body.basis)
     target["formula"] = body.formula or None
     target["edited"] = True
+    # Which figures were typed, so an edit to one basis doesn't claim the other.
+    target["edited_slots"] = sorted(set(target.get("edited_slots") or [])
+                                    | {_slot_id(body.basis, body.period)})
 
     result["rows"] = rows
     run.result = result
     flag_modified(run, "result")
     session.commit()
-    return {"ok": True, "canonical_key": canonical_key, "period": body.period,
-            "value": slot["value"], "formula": target.get("formula"), "status": "edited"}
+    return {"ok": True, "canonical_key": canonical_key, "basis": body.basis,
+            "period": body.period, "value": slot["value"], "formula": target.get("formula"),
+            "status": "edited", "label": target.get("source_label") or "",
+            # What the grid will now show for this concept, so the caller can confirm the
+            # figure it typed is the figure that took effect.
+            "current": _concept_value(group or [target], body.basis, "current"),
+            "prior": _concept_value(group or [target], body.basis, "prior"),
+            "combined_from": len(group) if len(group) > 1 else 0}
 
 
 @router.delete("/{document_id}/line-items/{canonical_key:path}",
@@ -909,7 +995,7 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
 def revert_document_line_item(document_id: str, canonical_key: str,
                               session: Session = Depends(db)) -> dict:
     """Revert an edited line item to its original machine-extracted values, dropping the
-    manual value(s) and formula."""
+    manual value(s) and formula. A line that only ever existed as a manual entry is removed."""
     from app.db.models import Document
 
     if session.get(Document, document_id) is None:
@@ -919,19 +1005,33 @@ def revert_document_line_item(document_id: str, canonical_key: str,
         raise HTTPException(status_code=404, detail="No extraction run yet for this document")
     result = dict(run.result)
     rows = result.get("rows", [])
-    target = next((r for r in rows if r.get("canonical_key") == canonical_key), None)
+    target = next((r for r in rows
+                   if r.get("canonical_key") == canonical_key and r.get("edited")), None)
+    if target is None:
+        target = next((r for r in rows if r.get("canonical_key") == canonical_key), None)
     if target is None:
         raise HTTPException(status_code=404, detail="Line item not found in this run")
     if not target.get("edited"):
         return {"ok": True, "canonical_key": canonical_key, "reverted": False, "status": None}
 
-    original = target.get("_original") or {}
-    for v in target.get("values") or []:
-        if v.get("period_label") in original:
-            v["value"] = original[v["period_label"]]
-    target.pop("_original", None)
-    target.pop("formula", None)
-    target["edited"] = False
+    if target.get("manual"):
+        # Nothing to restore: the line came from the analyst, not the document.
+        rows = [r for r in rows if r is not target]
+    else:
+        original = target.get("_original")
+        if isinstance(original, dict):
+            # Runs edited before the snapshot was a full list: restore by period label alone.
+            for v in target.get("values") or []:
+                if v.get("period_label") in original:
+                    v["value"] = original[v["period_label"]]
+        elif original is not None:
+            # Restore the machine-extracted values wholesale. Slots that exist only because an
+            # edit created them are not in the snapshot and go away with the edit.
+            target["values"] = copy.deepcopy(original)
+        target.pop("_original", None)
+        target.pop("formula", None)
+        target["edited"] = False
+        target.pop("edited_slots", None)
 
     result["rows"] = rows
     run.result = result
@@ -1170,15 +1270,13 @@ def _to_num(v):
 
 def _basis_values(r: dict, basis: str) -> list[dict]:
     """Values for the requested basis; values with no basis are treated as consolidated."""
-    return [v for v in (r.get("values") or []) if (v.get("basis") or "consolidated") == basis]
+    return _basis_values_of(r, basis)
 
 
 def _cur_prior(r: dict, basis: str = "consolidated") -> tuple[dict | None, dict | None]:
-    vals = _basis_values(r, basis)
-    by = {v.get("period_label"): v for v in vals}
-    cur = by.get("current") or (vals[0] if vals else None)
-    prior = by.get("prior") or (vals[1] if len(vals) > 1 else None)
-    return cur, prior
+    """This row's current- and prior-period values. A period the row has no figure for stays
+    None — see services.periods for why the positional fallback must not fire here."""
+    return split_current_prior(_basis_values(r, basis))
 
 
 def _inspector(r: dict, cur: dict | None) -> dict:
@@ -1242,15 +1340,31 @@ def _disp_period(lbl: str | None, idx: int, locale: str) -> str:
 def _period_labels(rows: list[dict], basis: str, locale: str) -> list[str]:
     """The two period-column headers for the statement. Uses the real headers the extractor
     captured (Excel carries the year/date text); falls back to Current/Prior (e.g. native PDF,
-    where the column header date isn't yet detected)."""
+    where the column header date isn't yet detected).
+
+    Each header is looked up by the period it NAMES, across every row, rather than taken
+    positionally from the first row that carries any value at all — a row printed for one year
+    only would otherwise label both columns with that year's period.
+    """
+    found: dict[str, str | None] = {}
+    positional: list[str | None] | None = None
     for r in rows:
         vals = _basis_values(r, basis)
-        if len(vals) >= 1:
-            # Prefer the real period-end date the extractor captured (Excel header text or a
-            # PDF-detected column date); fall back to the positional key for Current/Prior.
-            labels = [(v.get("period_display") or v.get("period_label")) for v in vals]
-            return [_disp_period(labels[0] if labels else None, 0, locale),
-                    _disp_period(labels[1] if len(labels) > 1 else None, 1, locale)]
+        if not vals:
+            continue
+        for period, disp in period_displays(vals).items():
+            found.setdefault(period, disp)
+        if positional is None and not period_displays(vals):
+            # A row whose columns are unnamed (col0/col1) still tells us the header order.
+            positional = [(v.get("period_display") or v.get("period_label")) for v in vals]
+        if "current" in found and "prior" in found:
+            break
+    if found:
+        return [_disp_period(found.get("current"), 0, locale),
+                _disp_period(found.get("prior"), 1, locale)]
+    if positional:
+        return [_disp_period(positional[0] if positional else None, 0, locale),
+                _disp_period(positional[1] if len(positional) > 1 else None, 1, locale)]
     return [_t("Current", locale), _t("Prior", locale)]
 
 
@@ -1259,10 +1373,17 @@ def _period_labels(rows: list[dict], basis: str, locale: str) -> list[str]:
 # ("Issued capital", "Retained profits"). That is the discriminator between the two shapes, and
 # it needs no extra plumbing: the label already travels with every value.
 _POSITIONAL_PERIOD = re.compile(r"^(current|prior|col\d+)$", re.IGNORECASE)
+# A column header that reads as a period rather than a component. Excel carries the sheet's real
+# header TEXT in period_label ("2023", "31 December 2023", "FY2024"), so without this every
+# spreadsheet row looks like an equity movement with two component columns.
+_PERIOD_LIKE = re.compile(r"(19|20)\d{2}|\bfy\b|\bq[1-4]\b|年", re.IGNORECASE)
 
 
 def _is_named_column(label) -> bool:
-    return bool(label) and not _POSITIONAL_PERIOD.match(str(label))
+    """Whether a value's column is NAMED — an equity component ("Retained profits") — as opposed
+    to a period, whether that period was labelled positionally or by its own printed date."""
+    s = str(label or "").strip()
+    return bool(s) and not _POSITIONAL_PERIOD.match(s) and not _PERIOD_LIKE.search(s)
 
 
 def _matrix_cells(row: dict, basis: str) -> dict[str, object]:
@@ -1340,7 +1461,9 @@ def _build_matrix_statement(rows: list[dict], statement_type: str, filename: str
             "inspector": _inspector(r, {"value": next(iter(cells.values()), None),
                                         "provenance": prov}),
             "contributions": None, "cells": cells,
-            "v1": None, "v2": None, "source": prov,
+            # A matrix has no prior COLUMN — its columns are components — so there is no second
+            # period provenance to carry.
+            "v1": None, "v2": None, "source": prov, "source2": None,
         })
 
     basis_label = _t("Consolidated" if basis == "consolidated" else "Standalone", locale)
@@ -1394,6 +1517,237 @@ def _equity_closing(rows: list[dict], basis: str) -> tuple[str, float] | None:
     return last
 
 
+_KPI_CATEGORY_I18N = {
+    "Liquidity": {"zh": "流动性", "ar": "السيولة", "fr": "Liquidité"},
+    "Leverage": {"zh": "杠杆", "ar": "الرافعة المالية", "fr": "Endettement"},
+    "Coverage": {"zh": "偿付能力", "ar": "التغطية", "fr": "Couverture"},
+    "Efficiency": {"zh": "运营效率", "ar": "الكفاءة", "fr": "Efficacité"},
+    "Profitability": {"zh": "盈利能力", "ar": "الربحية", "fr": "الربحية"},
+}
+
+
+def _key_provenance(rows: list[dict], basis: str) -> dict[str, tuple[dict | None, dict | None]]:
+    """canonical key → (current, prior) provenance of the first line that carried it, so a
+    derived figure can still be traced to the page its inputs were printed on."""
+    out: dict[str, tuple[dict | None, dict | None]] = {}
+    for r in rows:
+        k = r.get("canonical_key")
+        if not k or k in out:
+            continue
+        cur, prior = _cur_prior(r, basis)
+        out[k] = ((cur or {}).get("provenance"), (prior or {}).get("provenance"))
+    return out
+
+
+def _kpi_inputs_as_contributions(inputs: dict, prior_inputs: dict, provs: dict,
+                                 locale: str) -> list[dict]:
+    """A ratio's inputs in the same shape as a combined line's contributions, so the inspector
+    shows the arithmetic with each figure clickable through to where it was printed."""
+    out: list[dict] = []
+    for side, sign_label in (("numerator", _t("numerator", locale)),
+                             ("denominator", _t("denominator", locale))):
+        prior_by = {str(i.get("canonical_key")): i for i in (prior_inputs.get(side) or [])}
+        for i in inputs.get(side) or []:
+            key = str(i.get("canonical_key") or "")
+            cur_prov, prior_prov = provs.get(key, (None, None))
+            sign = i.get("sign") or 1
+            pv = prior_by.get(key, {}).get("value")
+            out.append({
+                "label": f"{sign_label}: {i.get('label') or ''}",
+                "canonical_key": key or None,
+                "v1": None if i.get("value") is None else sign * float(i["value"]),
+                "v2": None if pv is None else sign * float(pv),
+                "method": None,
+                # An input the filing never reported: shown, and shown as absent.
+                "residual": i.get("value") is None,
+                "src": _prov_label(cur_prov), "source": cur_prov,
+                "src2": _prov_label(prior_prov), "source2": prior_prov,
+            })
+    return out
+
+
+def _build_kpi_statement(rows: list[dict], filename: str, *, basis: str, locale: str,
+                         company: str | None, doc_format: str, page_count: int,
+                         template_def: dict | None) -> dict:
+    """The KPI view — the ratio catalog computed from THIS extraction, current beside prior.
+
+    A ratio is not a currency amount: it carries its own unit (×, %, days) and is untouched by
+    the presentation currency or magnitude an analyst picks for the statements. So every figure
+    ships a formatted ``display`` string beside the raw number and the grid renders that
+    verbatim, instead of scaling a current ratio of 1.35 into "thousands".
+
+    Ratios whose inputs the filing never reported are listed as unavailable rather than dropped:
+    which KPIs a document cannot support is itself a finding.
+    """
+    from app.services.derived import compute_ratios
+
+    cur = compute_ratios(rows, basis=basis, period="current", locale=locale)
+    prior = {r["key"]: r for r in compute_ratios(rows, basis=basis, period="prior", locale=locale)}
+    provs = _key_provenance(rows, basis)
+
+    out: list[dict] = []
+    seen_cat: set[str] = set()
+    for ratio in cur:
+        cat = ratio.get("category") or "Profitability"
+        if cat not in seen_cat:
+            seen_cat.add(cat)
+            out.append({"id": f"kpi_sec_{cat.lower()}",
+                        "label": _KPI_CATEGORY_I18N.get(cat, {}).get(locale, cat),
+                        "kind": "section", "v1": None, "v2": None})
+        p = prior.get(ratio["key"], {})
+        contributions = _kpi_inputs_as_contributions(
+            ratio.get("inputs") or {}, p.get("inputs") or {}, provs, locale)
+        out.append({
+            "id": f"kpi_{ratio['key']}", "label": ratio["label"], "source_label": None,
+            "kind": "item", "note": None, "note2": None,
+            "status": None if ratio.get("available") else "missing",
+            "confidence": None,
+            # Derived, not extracted: there is no single figure on a page to correct, so the fix
+            # for a wrong ratio is to fix the line items it is computed from.
+            "editable": False,
+            "formula": ratio.get("formula"),
+            "inspector": {
+                "tag": _t("computed", locale) if ratio.get("available")
+                       else _t("inputs not extracted", locale),
+                "src": "", "formula": ratio.get("formula") or "",
+                "result": ratio.get("display") or "",
+                "note": _t("Computed from the extracted line items below — each one clicks "
+                           "through to the page it was printed on. Correct a KPI by correcting "
+                           "its inputs.", locale),
+            },
+            "contributions": contributions or None,
+            "v1": ratio.get("value"), "v2": p.get("value"),
+            # Pre-formatted with the ratio's own unit; the grid shows these instead of applying
+            # the statements' currency/magnitude presentation.
+            "display1": ratio.get("display") or "—", "display2": p.get("display") or "—",
+            "source": None, "source2": None,
+        })
+
+    return {
+        "statement": "kpi", "label": _t("KPIs", locale), "basis": basis,
+        "layout": "comparative", "periods": _period_labels(rows, basis, locale),
+        # Ratios are unitless: no currency, no magnitude, nothing for the presentation
+        # selectors to scale. `display1`/`display2` are already in each ratio's own unit.
+        "currency": "", "currency_symbol": "", "units": "", "units_scale_factor": 1.0,
+        "presentation": "raw",
+        "format": doc_format, "page_count": page_count,
+        "rows": out,
+        "viewer": {
+            "company": company or filename, "subtitle": _t("Computed KPIs", locale),
+            "chips": [{"label": _t("Consolidated" if basis == "consolidated" else "Standalone",
+                                   locale), "active": True}],
+            "callout": _t("Every KPI is computed from this document's own extracted figures. "
+                          "Select one to see its inputs and jump to where each was printed.",
+                          locale),
+        },
+    }
+
+
+def _face_prefixes(template_def: dict | None) -> set[str]:
+    """The canonical-key prefixes that DO reach a face statement, so anything else can be
+    recognised as not being on one."""
+    out = {p for p in _STMT_PREFIX.values()}
+    for stmt in (template_def or {}).get("statements", []):
+        t = stmt.get("type")
+        if t:
+            p = _stmt_prefix(template_def, t)
+            if p:
+                out.add(p)
+    return out
+
+
+def _build_additional_items_statement(rows: list[dict], template_def: dict | None, filename: str,
+                                      *, basis: str, locale: str, units_ctx: dict | None,
+                                      company: str | None, doc_format: str,
+                                      page_count: int) -> dict:
+    """Everything extracted that reaches NO face statement — the honest remainder.
+
+    A figure the pipeline read off the page but could not place is the one thing a spreading tool
+    must never hide: silence there reads as "the document did not contain it". Two kinds end up
+    here, and the distinction is what an analyst acts on:
+
+    * lines mapped to no concept at all — the mapper found nothing close enough, so they need a
+      concept (or an ontology alias) before they can join a statement;
+    * lines mapped to a concept that belongs to no statement in the active template — correctly
+      identified, but the template has nowhere to print them.
+
+    Rows that are part of the changes-in-equity matrix are excluded: they are on a face already.
+    """
+    prefixes = _face_prefixes(template_def)
+    on_matrix = {id(r) for r, _cells in _matrix_rows(rows, basis)}
+
+    unmapped: list[dict] = []
+    off_template: list[dict] = []
+    for r in rows:
+        if not _basis_values(r, basis) or id(r) in on_matrix:
+            continue
+        key = r.get("canonical_key") or ""
+        if key and key.split("_", 1)[0] in prefixes:
+            continue                      # reaches a face statement (or its "Other extracted")
+        (off_template if key else unmapped).append(r)
+
+    def row_of(r: dict, idx: int) -> dict:
+        cur, prior = _cur_prior(r, basis)
+        cat, pct = _conf_cat(r.get("mapping_confidence"))
+        key = r.get("canonical_key")
+        return {
+            # Rows with no concept have no canonical key to address, so the id is positional.
+            "id": key or f"extra:{idx}:{(r.get('source_label') or '')[:40]}",
+            "label": r.get("source_label") or "", "source_label": r.get("source_label"),
+            "kind": "item", "note": r.get("note"), "note2": None,
+            "status": "edited" if _edited_for(r, basis) else None,
+            "confidence": {"cat": cat, "pct": pct} if r.get("mapping_confidence") else None,
+            # Editing addresses a CONCEPT, so a line mapped to none cannot be edited here —
+            # give it a concept on the Review screen first.
+            "editable": bool(key),
+            "formula": r.get("formula"),
+            "inspector": {
+                "tag": (r.get("mapping_method") or "unmapped") if key else _t("unmapped", locale),
+                "src": _prov_label((cur or {}).get("provenance")),
+                "formula": r.get("formula") or "",
+                "result": str((cur or {}).get("value") or ""),
+                "note": _t("Mapped to a concept the active template has no line for.", locale)
+                        if key else
+                        _t("No concept matched this caption, so it appears on no statement. "
+                           "Map it from the Review queue to bring it onto the face.", locale),
+            },
+            "contributions": None,
+            "v1": _to_num((cur or {}).get("value")), "v2": _to_num((prior or {}).get("value")),
+            "source": (cur or {}).get("provenance"),
+            "source2": (prior or {}).get("provenance"),
+        }
+
+    out: list[dict] = []
+    idx = 0
+    for label, group in ((_t("Not mapped to any concept", locale), unmapped),
+                         (_t("Mapped, but not on any statement in this template", locale),
+                          off_template)):
+        if not group:
+            continue
+        out.append({"id": f"extra_sec_{len(out)}", "label": label, "kind": "section",
+                    "v1": None, "v2": None})
+        for r in group:
+            out.append(row_of(r, idx))
+            idx += 1
+
+    return {
+        "statement": "additional_items", "label": _t("Additional items", locale), "basis": basis,
+        "layout": "comparative", "periods": _period_labels(rows, basis, locale),
+        "currency": (units_ctx or {}).get("currency") or "",
+        "currency_symbol": "", "units": (units_ctx or {}).get("units_label") or "",
+        "units_scale_factor": _to_num((units_ctx or {}).get("scale_factor")) or 1.0,
+        "format": doc_format, "page_count": page_count,
+        "rows": out,
+        "viewer": {
+            "company": company or filename, "subtitle": _t("Extracted, not on a statement", locale),
+            "chips": [{"label": _t("Consolidated" if basis == "consolidated" else "Standalone",
+                                   locale), "active": True}],
+            "callout": _t("Figures read from the document that reach no face statement. Click one "
+                          "to see where it was printed.", locale),
+        },
+    }
+
+
 def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
                      filename: str, basis: str = "consolidated", locale: str = "en",
                      units_ctx: dict | None = None, company: str | None = None,
@@ -1413,6 +1767,16 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
             rows, statement_type, filename, basis=basis, locale=locale, units_ctx=units_ctx,
             company=company, doc_format=doc_format, page_count=page_count,
             template_def=template_def)
+    # Two views that are not statements the document prints, but which the document's figures
+    # determine: the KPIs computed off them, and everything extracted that reaches no face.
+    if statement_type == "kpi":
+        return _build_kpi_statement(
+            rows, filename, basis=basis, locale=locale, company=company,
+            doc_format=doc_format, page_count=page_count, template_def=template_def)
+    if statement_type == "additional_items":
+        return _build_additional_items_statement(
+            rows, template_def, filename, basis=basis, locale=locale, units_ctx=units_ctx,
+            company=company, doc_format=doc_format, page_count=page_count)
     # Several printed lines legitimately share one concept: three depreciation lines roll into
     # "Depreciation and amortisation", two tax payments into "Income tax paid", and an "Others"
     # bucket exists precisely to absorb a handful. Keeping only the first row would drop the
@@ -1437,24 +1801,23 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         With a single source row this is that row. With several, the values are summed and the
         inspector says how many printed lines went into the figure, so a total that does not
         match any one line on the page is explainable rather than mysterious. Provenance stays
-        on the first contributing line, which is where click-to-source lands.
+        on the first contributing line, which is where click-to-source lands — carried for BOTH
+        periods, because last year's figure is printed somewhere too and is just as much a
+        number a reviewer needs to check against the page.
         """
         r = group[0]
         cur, prior = _cur_prior(r, basis)
         cat, pct = _conf_cat(min((x.get("mapping_confidence") or 0) for x in group)
                              if len(group) > 1 else r.get("mapping_confidence"))
-        edited = any(bool(x.get("edited")) for x in group)
-        v1, v2 = _to_num((cur or {}).get("value")), _to_num((prior or {}).get("value"))
-        if len(group) > 1:
-            for extra in group[1:]:
-                c, p = _cur_prior(extra, basis)
-                cv, pv = _to_num((c or {}).get("value")), _to_num((p or {}).get("value"))
-                if cv is not None:
-                    v1 = cv if v1 is None else v1 + cv
-                if pv is not None:
-                    v2 = pv if v2 is None else v2 + pv
+        # An edit to the consolidated figures does not make the standalone ones edited.
+        edited_row = next((x for x in group if _edited_for(x, basis)), None)
+        edited = edited_row is not None
+        # One reader for the figure — the sum of the printed lines, or the analyst's manual
+        # value replacing it. See services.periods.concept_value.
+        v1 = _concept_value(group, basis, "current")
+        v2 = _concept_value(group, basis, "prior")
         inspector = _inspector(r, cur)
-        formula = r.get("formula")
+        formula = (edited_row or r).get("formula")
         contributions: list[dict] = []
         if len(group) > 1:
             # A combined figure has to be auditable line by line: each contributing caption with
@@ -1475,17 +1838,24 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                                     for v in (x.get("values") or [])),
                     "src": _prov_label((c or {}).get("provenance")),
                     "source": (c or {}).get("provenance"),
+                    # …and the same for the prior period, which sits in its own column on its
+                    # own page in a filing that reprints last year's statement.
+                    "src2": _prov_label((p or {}).get("provenance")),
+                    "source2": (p or {}).get("provenance"),
                 })
             terms = [f"{c['v1']:,.0f}" if c["v1"] is not None else "—" for c in contributions]
-            formula = " + ".join(terms)
+            printed = " + ".join(terms)
+            formula = formula or printed
             inspector = {**inspector, "tag": "combined",
                          "formula": formula,
                          "result": "" if v1 is None else f"{v1:,.0f}",
                          "src": " · ".join(dict.fromkeys(
                              c["src"] for c in contributions if c["src"])),
-                         "note": f"Combined from {len(group)} printed lines that map to this "
-                                 f"concept. Each line below keeps its own figure and page — "
-                                 f"click one to jump to it in the document."}
+                         "note": (f"Combined from {len(group)} printed lines that map to this "
+                                  f"concept. Each line below keeps its own figure and page — "
+                                  f"click one to jump to it in the document.")
+                                 + (f" A manual value replaces the combined figure; the printed "
+                                    f"lines still add to {printed}." if edited else "")}
         return {
             "id": key, "label": label or r.get("source_label"),
             "source_label": r.get("source_label"), "kind": kind,
@@ -1496,9 +1866,11 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
             # Present only when more than one printed line was combined into this figure.
             "contributions": contributions or None,
             "v1": v1, "v2": v2,
-            # Structured source location of the current-period value, so the Workspace's live
-            # viewer can hyperlink this row to its page+bbox (PDF) or sheet+cell (Excel).
+            # Structured source location of each period's value, so the Workspace's live viewer
+            # can hyperlink BOTH figures in the row to the page+bbox (PDF) or sheet+cell (Excel)
+            # they were printed at — the prior year is a number a reviewer checks too.
             "source": (cur or {}).get("provenance"),
+            "source2": (prior or {}).get("provenance"),
         }
 
     # A template line that wasn't extracted (or has no value for this basis) still appears, so
@@ -1510,8 +1882,9 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
             "confidence": None, "editable": True, "formula": None,
             "inspector": {"tag": _t("not extracted", locale), "src": "", "formula": "",
                           "result": "", "note": _t("This template line was not found in the "
-                                                    "document's extraction for this basis.", locale)},
-            "v1": None, "v2": None, "source": None,
+                                                    "document's extraction for this basis. Enter "
+                                                    "a value to record it manually.", locale)},
+            "v1": None, "v2": None, "source": None, "source2": None,
         }
 
     # Show the full template skeleton only when this statement+basis is actually present in the
@@ -1567,6 +1940,10 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         net_prior = compute_netting(rows, netting_rules, basis=basis, period="prior")
         for r in out:
             if r.get("kind") != "item":
+                continue
+            # A figure the analyst typed is the answer for that line; an automatic restatement
+            # must not quietly overwrite it.
+            if r.get("status") == "edited":
                 continue
             nc, np = net_cur.get(r["id"]), net_prior.get(r["id"])
             if not nc and not np:
@@ -1752,10 +2129,8 @@ def get_document_note(document_id: str, note_no: int, session: Session = Depends
         d = details[note_no]
         detail_rows = []
         for row in d.get("rows", []):
-            vals = row.get("values") or []
-            by = {v.get("period_label"): v for v in vals}
-            cur = by.get("current") or (vals[0] if vals else {})
-            prior = by.get("prior") or (vals[1] if len(vals) > 1 else {})
+            cur_v, prior_v = split_current_prior(row.get("values") or [])
+            cur, prior = cur_v or {}, prior_v or {}
             detail_rows.append({
                 "label": row.get("label", ""),
                 "v1": _to_num(cur.get("value")) or 0,

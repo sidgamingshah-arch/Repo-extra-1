@@ -280,18 +280,29 @@ export const useDocumentNote = (documentId: string | undefined, no: number) =>
     retry: false,
   });
 
-/** Edit a value/formula on a real extraction; refreshes the document's statement/run/export. */
+/** Everything a manual value changes. An edit moves the statement figure, and with it the
+ *  accounting checks, the KPIs, the commentary and the export — refreshing only the grid left
+ *  the rest of the app showing the pre-edit number. */
+function invalidateAfterEdit(qc: ReturnType<typeof useQueryClient>, documentId: string | undefined) {
+  for (const key of ["document-statement", "document-run", "document-review",
+                     "document-analysis", "document-commentary"]) {
+    qc.invalidateQueries({ queryKey: [key, documentId] });
+  }
+}
+
+/** Edit ONE figure on a real extraction — a concept, in one basis, for one period.
+ *  Errors are NOT swallowed: the caller shows the server's reason and keeps the editor open,
+ *  because a rejected edit that closes the editor looks exactly like a saved one. */
 export function useEditDocumentLineItem(documentId: string | undefined) {
   const qc = useQueryClient();
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ["document-statement", documentId] });
-    qc.invalidateQueries({ queryKey: ["document-run", documentId] });
-    qc.invalidateQueries({ queryKey: ["document-review", documentId] });
-  };
   return useMutation({
-    mutationFn: (vars: { key: string; value: number | null; formula: string }) =>
-      api.editDocumentLineItem(documentId as string, vars.key, vars.value, vars.formula),
-    onSuccess: invalidate,
+    mutationFn: (vars: {
+      key: string; value: number | null; formula: string;
+      basis: Basis; period: "current" | "prior";
+    }) =>
+      api.editDocumentLineItem(documentId as string, vars.key, vars.value, vars.formula,
+                               vars.basis, vars.period),
+    onSuccess: () => invalidateAfterEdit(qc, documentId),
   });
 }
 
@@ -300,13 +311,42 @@ export function useRevertDocumentLineItem(documentId: string | undefined) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (key: string) => api.revertDocumentLineItem(documentId as string, key),
+    onSuccess: () => invalidateAfterEdit(qc, documentId),
+  });
+}
+
+/** Publish an edited template workbook as a new template version; refreshes the template lists
+ *  so the new version is immediately selectable on Upload. */
+export function useUploadTemplateXlsx() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { file: File; templateKey: string; name: string }) =>
+      api.uploadTemplateXlsx(vars.file, vars.templateKey, vars.name),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["document-statement", documentId] });
-      qc.invalidateQueries({ queryKey: ["document-run", documentId] });
-      qc.invalidateQueries({ queryKey: ["document-review", documentId] });
+      qc.invalidateQueries({ queryKey: ["templates"] });
+      qc.invalidateQueries({ queryKey: ["template-detail"] });
+      qc.invalidateQueries({ queryKey: ["project"] });
     },
   });
 }
+
+/** Upload an ontology (the extraction rulebook) against a template. */
+export function useUploadOntology() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { definition: unknown; targetTemplateKey?: string }) =>
+      api.createOntology(vars.definition, vars.targetTemplateKey),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ontologies"] });
+      qc.invalidateQueries({ queryKey: ["template-detail"] });
+    },
+  });
+}
+
+/** What the template workbook's columns mean — read from the reader that enforces them, so the
+ *  screen can never describe a contract the API doesn't hold to. */
+export const useTemplateXlsxColumns = () =>
+  useQuery({ queryKey: ["template-xlsx-columns"], queryFn: api.templateXlsxColumns });
 
 /** Latest extraction run for a document (Export preview/counts). */
 export const useDocumentRun = (documentId: string | undefined) =>

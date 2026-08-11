@@ -294,3 +294,44 @@ def make_xlsx() -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+def make_comparative_pdf() -> bytes:
+    """A two-column comparative balance sheet — this year beside last year.
+
+    Deliberately includes a line printed for the PRIOR YEAR ONLY ("Pledged deposits", released
+    during the year). That row is the one a positional reader mis-files as the current year, and
+    it is also the case a reviewer has to be able to click through to last year's page for.
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _, height = A4
+    y = height - 72
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(72, y, "Consolidated Statement of Financial Position")
+    y -= 20
+    c.setFont("Helvetica-Bold", 9)
+    c.drawRightString(430, y, "31 December 2024")
+    c.drawRightString(520, y, "31 December 2023")
+    c.setFont("Helvetica", 10)
+    rows = [
+        ("Property, plant and equipment", "Note 5", "12,800", "11,400"),
+        ("Inventories", "Note 8", "2,150", "1,980"),
+        ("Trade receivables", "Note 15", "3,410", "3,120"),
+        ("Cash and cash equivalents", "Note 14", "1,204", "990"),
+        ("Pledged deposits", "Note 14", "", "2,031"),          # prior year only
+        ("Total assets", "", "19,564", "21,521"),
+    ]
+    for label, note, cur, prior in rows:
+        y -= 24
+        c.drawString(72, y, label)
+        c.drawString(300, y, note)
+        if cur:
+            c.drawRightString(430, y, cur)
+        if prior:
+            c.drawRightString(520, y, prior)
+    c.showPage()
+    c.save()
+    return buf.getvalue()

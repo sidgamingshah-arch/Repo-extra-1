@@ -44,6 +44,53 @@ Confidence shown as colorblind-safe color + badge with a low-confidence filter/s
 mode. Units/currency switching is a **display-time transform only** — formulas operate
 on stored source-unit numbers.
 
+### Both periods are figures
+
+Each period's value carries its own provenance (`source`, `source2`), so **both**
+columns are click-to-source: clicking last year's number drives the viewer to the page
+last year's number was printed on. A reviewer checks the comparative as much as the
+current year, and linking only the current column left half the grid dead.
+
+### Editing
+
+The inspector edits either period, and sends only the columns actually retyped — so
+correcting this year does not restate last year as a manual value and detach it from
+the page. A save closes the editor **only when the server accepted it**; a refusal
+shows the server's own reason (wrong basis, unknown concept, bad formula) and stays
+open. Closing unconditionally was indistinguishable from success: the figure simply
+never changed and nothing said why. Rows that are not correctable figures — a computed
+KPI, a line mapped to no concept, an equity movement — carry `editable: false` and get
+no control, rather than one that cannot work.
+
+## Derived views: KPIs and Additional items
+
+Two Workspace views are not statements the document prints but are determined by its
+figures. Both are real-extraction only (`DERIVED_STATEMENTS`), so the demo falls back
+to the balance sheet rather than asking for a view the demo endpoint cannot serve.
+
+* **KPIs** — the ratio catalog computed from this extraction, current beside prior,
+  grouped by category. Every ratio lists the extracted figures it used, each with its
+  sign and its own page, so the arithmetic is checkable and an absent input is visibly
+  absent rather than silently zero. A ratio is not an amount: the response is
+  `presentation: "raw"`, rows carry pre-formatted `display1`/`display2` in their own
+  unit (×, %, days), and the currency/magnitude selectors are absent rather than inert.
+  KPIs are read-only — the fix for a wrong ratio is to fix the line items it came from.
+* **Additional items** — everything extracted that reaches no face statement, split
+  into *not mapped to any concept* (the mapper found nothing close enough) and *mapped,
+  but to a concept no statement in this template carries*. Equity-matrix rows are
+  excluded: they are on the changes-in-equity face already. A figure the pipeline read
+  but could not place is the one thing a spreading tool must never hide — silence there
+  reads as "the document did not contain it".
+
+## Template & ontology authoring (admin)
+
+The Template screen opens with an authoring panel: pick a template version, download it
+as a workbook, upload the edited workbook back as a new version, and upload an ontology
+(JSON) **against the template on screen** — which is the one it is validated against, so
+a rule for a line the template does not define comes back naming the key. The workbook's
+column contract is read from the endpoint that enforces it (`GET /templates/xlsx/columns`),
+so the screen cannot describe columns the API would reject.
+
 ## Extraction mode — auto vs. confirm page scope
 
 Chosen on the Upload screen (`extractMode` in the Zustand store, default **auto**).

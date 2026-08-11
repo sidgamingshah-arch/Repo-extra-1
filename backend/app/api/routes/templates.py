@@ -1,7 +1,15 @@
-"""Template CRUD (versioned) with schema validation on create."""
+"""Template CRUD (versioned) with schema validation on create.
+
+Templates are authored two ways, and both land in the same validated, versioned place: a JSON
+definition, or the Excel workbook a reviewer edits (see services.template_xlsx) — which is the
+route an analyst actually uses, because deciding what a spread should contain is a
+spreadsheet job, not a JSON one.
+"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import re
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -12,17 +20,19 @@ from app.security import Permission, require
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
 
 class TemplateCreate(BaseModel):
     definition: dict
 
 
-@router.post("", status_code=201, dependencies=[Depends(require(Permission.CONFIG_TEMPLATE))])
-def create_template(body: TemplateCreate, session: Session = Depends(db)) -> dict:
+def _publish(session: Session, definition: dict) -> dict:
+    """Validate a definition and store it as the next version of its template key."""
     from app.db.models import TemplateVersion
 
     try:
-        template = load_template(body.definition)
+        template = load_template(definition)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"Invalid template schema: {exc}") from exc
 
@@ -41,11 +51,91 @@ def create_template(body: TemplateCreate, session: Session = Depends(db)) -> dic
         template_key=template.template_key,
         name=template.name,
         version=version,
-        definition=body.definition,
+        definition=definition,
     )
     session.add(row)
     session.commit()
-    return {"id": row.id, "template_key": template.template_key, "version": version}
+    return {"id": row.id, "template_key": template.template_key, "name": template.name,
+            "version": version,
+            "line_items": len([n for n in template.all_nodes() if n.role.value != "header"])}
+
+
+@router.post("", status_code=201, dependencies=[Depends(require(Permission.CONFIG_TEMPLATE))])
+def create_template(body: TemplateCreate, session: Session = Depends(db)) -> dict:
+    return _publish(session, body.definition)
+
+
+def _slug(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_")
+
+
+@router.get("/{template_id}/xlsx")
+def download_template_xlsx(template_id: str, session: Session = Depends(db)) -> Response:
+    """The template as an editable workbook — one row per line, with the extracted-vs-calculated
+    column and each calculated line's components. Upload the edited file back to /templates/xlsx."""
+    from app.db.models import TemplateVersion
+    from app.services.template_xlsx import build_template_xlsx
+
+    row = session.get(TemplateVersion, template_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    data = build_template_xlsx(row.definition or {}, filename_hint=row.name or row.template_key)
+    fname = f"{_slug(row.template_key) or 'template'}_v{row.version}_template.xlsx"
+    return Response(content=data, media_type=_XLSX_MIME,
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/xlsx", status_code=201,
+             dependencies=[Depends(require(Permission.CONFIG_TEMPLATE))])
+async def create_template_from_xlsx(
+    file: UploadFile = File(...),
+    template_key: str = Form(""),
+    name: str = Form(""),
+    session: Session = Depends(db),
+) -> dict:
+    """An edited template workbook → a NEW template version.
+
+    Uploading onto an existing ``template_key`` publishes the next version of it rather than
+    replacing anything: a past extraction still explains itself against the version it actually
+    ran with. Leave the key blank to start a new template from the workbook's own name.
+    """
+    from app.services.template_xlsx import TemplateSheetError, parse_template_xlsx
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=422, detail="The uploaded file is empty.")
+    stem = re.sub(r"\.(xlsx|xlsm)$", "", file.filename or "template", flags=re.IGNORECASE)
+    title = (name or stem).strip() or "Template"
+    key = _slug(template_key) or _slug(title) or "template"
+    try:
+        definition = parse_template_xlsx(raw, template_key=key, name=title)
+    except TemplateSheetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — a corrupt/foreign workbook
+        raise HTTPException(
+            status_code=422,
+            detail=f"That file could not be read as a template workbook ({exc}). Download the "
+                   f"current template, edit it, and upload that.") from exc
+    return _publish(session, definition)
+
+
+@router.get("/xlsx/columns")
+def template_xlsx_columns() -> dict:
+    """What the workbook's columns mean — so the upload screen can state the contract it enforces
+    instead of the user discovering it from a 422."""
+    from app.services.template_xlsx import COLUMNS, KIND_CALCULATED, KIND_EXTRACTED, KIND_HEADING
+
+    return {
+        "columns": [{"key": k, "header": h} for k, h in COLUMNS],
+        "kinds": [
+            {"value": KIND_EXTRACTED,
+             "help": "Read off the document by the mapper."},
+            {"value": KIND_CALCULATED,
+             "help": "Computed from other lines and never mapped; needs 'Calculated from'."},
+            {"value": KIND_HEADING, "help": "A section heading; carries no figure."},
+        ],
+        "required": ["Statement", "Canonical key", "Label (en)", "Kind"],
+    }
 
 
 @router.get("")

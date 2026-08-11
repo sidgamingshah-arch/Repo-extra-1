@@ -45,6 +45,52 @@ subtotals are recomputed and compared to extracted values. Statement `identities
 cash = BS cash; P&L net income = equity movement) are declarative. Nodes carry
 `label_i18n` for output parity. Duplicate canonical keys are rejected at load.
 
+### Authoring a template as a workbook (`app/services/template_xlsx.py`)
+
+JSON is the right shape for the pipeline and the wrong shape for the person deciding
+what a spread should contain, so the template round-trips through Excel:
+`GET /templates/{id}/xlsx` renders one row per line and `POST /templates/xlsx`
+(multipart, admin) reads an edited workbook back as the **next version** of a template
+key — nothing is overwritten, so an extraction that already ran still explains itself
+against the version it used.
+
+Two columns carry the decisions:
+
+* **Kind** — `extracted` (mapped off the document), `calculated` (computed from other
+  lines and never mapped), `heading`. A calculated line marked extracted would take a
+  figure from the page instead of from its components, so this is the reviewable fact.
+* **Calculated from** — the canonical keys a calculated line is made of, one per cell
+  line. This is exactly what the structural checks recompute, so editing it changes
+  what gets validated.
+
+The reader is deliberately strict and names the offending row: a calculated line with
+no components, an extracted line *with* components, a component key not in the sheet,
+a duplicate canonical key, a line above its section heading, or an unknown statement
+name are all `422` rather than a guess. Columns are matched on header TEXT, so a
+reordered sheet or an extra notes column still reads correctly. `Identities` and
+`Read me` sheets carry the statement equalities and the column contract.
+
+## Reading a figure: one resolver (`app/services/periods.py`)
+
+Every consumer of an extracted row — the statement view, the Excel export, the note
+tables, the accounting checks, the ratios — has to answer the same two questions, and
+answering them differently is how a prior-year figure gets printed under the current
+year or a validated total stops being the total on screen. Both answers live here.
+
+* `split_current_prior(values)` — a value that NAMES its period (`current`/`prior`)
+  wins, and a period nothing was printed for stays `None`. The positional fallback
+  (first value is current) applies **only** when no value names a period at all
+  (columns read as `col0`/`col1`, or a matrix row's component columns). Filings print
+  lines for one year only — a deposit pledged last year and released since — and the
+  positional read reported that figure as this year's, inventing a current-year number
+  the document never contained.
+* `concept_value(group, basis, period)` — several printed lines legitimately map to one
+  concept (three depreciation lines; a section's residual "Others"), so the default is
+  their **sum**. A manual edit **replaces** it: entering 200 over a combined 150 shows
+  200, not 350. Edits are recorded per `(basis, period)` in `edited_slots`, so
+  correcting the consolidated current column does not restate the standalone or the
+  prior one.
+
 ## Ontology schema (`app/schemas/ontology.py`)
 
 Per canonical key: `aliases` + `aliases_i18n`, `keyword_hints`, `regex_hints`,

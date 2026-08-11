@@ -169,11 +169,20 @@ export const api = {
     req<NotesResponse>(`/documents/${documentId}/notes`),
   documentNote: (documentId: string, no: number) =>
     req<NoteDetail>(`/documents/${documentId}/notes/${no}`),
-  /** Edit a value/formula on a real extraction (persists onto the latest run). */
-  editDocumentLineItem: (documentId: string, key: string, value: number | null, formula: string) =>
-    req<{ status: string; value: string | null }>(
+  /** Edit ONE figure of a real extraction: a concept, in one basis, for one period.
+   *  Basis and period are required, not defaulted — without them every edit landed on the
+   *  consolidated current column, so editing the standalone grid or the prior year did nothing
+   *  visible. The response echoes the figures the grid will now show. */
+  editDocumentLineItem: (
+    documentId: string, key: string, value: number | null, formula: string,
+    basis: Basis, period: "current" | "prior",
+  ) =>
+    req<{
+      status: string; value: string | null; label: string;
+      current: number | null; prior: number | null; combined_from: number;
+    }>(
       `/documents/${documentId}/line-items/${encodeURIComponent(key)}`,
-      { method: "PATCH", body: JSON.stringify({ value, formula }) },
+      { method: "PATCH", body: JSON.stringify({ value, formula, basis, period }) },
     ),
   /** Revert an edited line item to its original machine-extracted values. */
   revertDocumentLineItem: (documentId: string, key: string) =>
@@ -266,9 +275,45 @@ export const api = {
   createTemplate: (definition: unknown) =>
     req<{ id: string; template_key: string; version: number }>(
       `/templates`, { method: "POST", body: JSON.stringify({ definition }) }),
-  createOntology: (definition: unknown) =>
-    req<{ id: string; ontology_key: string; version: number }>(
-      `/ontologies`, { method: "POST", body: JSON.stringify({ definition }) }),
+  /** Upload an ontology (the extraction rulebook) FOR a template. `targetTemplateKey` re-points
+   *  a rulebook written against another template; it still has to validate against the one named,
+   *  so a key the template doesn't define comes back as a 422 listing it. */
+  createOntology: (definition: unknown, targetTemplateKey?: string) =>
+    req<{ id: string; ontology_key: string; target_template_key: string; version: number;
+          mappings: number }>(
+      `/ontologies`, {
+        method: "POST",
+        body: JSON.stringify({ definition, target_template_key: targetTemplateKey ?? null }),
+      }),
+  /** A stored ontology's full definition — for "download, edit, upload back". */
+  ontologyDetail: (id: string) =>
+    req<{ id: string; ontology_key: string; target_template_key: string; version: number;
+          definition: unknown }>(`/ontologies/${id}`),
+  /** What the template workbook's columns mean, straight from the reader that enforces them. */
+  templateXlsxColumns: () =>
+    req<{ columns: { key: string; header: string }[];
+          kinds: { value: string; help: string }[]; required: string[] }>(
+      `/templates/xlsx/columns`),
+  /** Publish an edited template workbook as a NEW version of `templateKey` (blank = a new
+   *  template named after the file). Nothing is overwritten: a past run still explains itself
+   *  against the version it actually used. */
+  uploadTemplateXlsx: async (
+    file: File, templateKey: string, name: string,
+  ): Promise<{ id: string; template_key: string; name: string; version: number;
+               line_items: number }> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("template_key", templateKey);
+    fd.append("name", name);
+    const res = await fetch(`${BASE}/templates/xlsx`,
+                            { method: "POST", headers: { ...authHeader() }, body: fd });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`,
+                         errorDetail(text));
+    }
+    return res.json();
+  },
   /** Edit ONE concept's rules inline — aliases, sign, and the mapping criteria the model
    *  reasons over. The server validates the result and publishes a NEW ontology version (so a
    *  past extraction still explains itself against the version it actually used); the
@@ -306,6 +351,27 @@ export async function downloadExport(body: {
   const a = document.createElement("a");
   a.href = url;
   a.download = body.format === "excel" ? "spread.xlsx" : "extract.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** Download a template as the editable workbook (auth'd fetch → blob, like the exports).
+ *  The filename comes from the server so the version is on the file the user edits. */
+export async function downloadTemplateXlsx(templateId: string, fallbackName: string): Promise<void> {
+  const res = await fetch(`${BASE}/templates/${templateId}/xlsx`, { headers: { ...authHeader() } });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, `${res.status} ${res.statusText}`, errorDetail(text));
+  }
+  const disp = res.headers.get("content-disposition") || "";
+  const named = /filename="?([^";]+)"?/.exec(disp)?.[1];
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = named || `${fallbackName}.xlsx`;
   document.body.appendChild(a);
   a.click();
   a.remove();

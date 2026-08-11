@@ -9,7 +9,9 @@ import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/u
 import { EmptyState } from "../components/EmptyState";
 import { ExcelGrid, PageStack, toPicked, type Picked } from "../components/SourceViewer";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
+import { DERIVED_STATEMENTS } from "../types";
 import type { Basis, FxRateResolution, StatementColumn, StatementKey, StatementResponse, StatementRow } from "../types";
+import { ApiError } from "../lib/api";
 import { useDocumentStatement, useEditDocumentLineItem, useFxRateResolution, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
@@ -149,6 +151,22 @@ function fmtRate(rate: string): string {
   const n = Number(rate);
   if (!Number.isFinite(n) || n === 0) return rate;
   return Number(n.toPrecision(6)).toString();
+}
+
+/** A rejected edit, in words the analyst can act on. The server's own `detail` is preferred —
+ *  it names the concept, the basis or the bad formula — and only falls back to the status code
+ *  when there is nothing better, because "something went wrong" is what silence already said. */
+function editErrorText(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.detail) return err.detail;
+    // A structured detail (e.g. {"error":"bad_formula","message":…}) travels in the body text.
+    const m = /"message"\s*:\s*"([^"]+)"/.exec(err.message);
+    if (m) return m[1];
+    if (err.status === 403) return "Your role cannot edit extracted values.";
+    if (err.status === 404) return "This line is not part of the extraction or its template.";
+    return `The server refused the edit (${err.status}).`;
+  }
+  return err instanceof Error ? err.message : "The edit could not be saved.";
 }
 
 /* Accounting formatter with an explicit decimal count (fmtIN forces 0dp). */
@@ -319,7 +337,8 @@ function OutputRow({
   sel: string;
   present: (raw: number | null) => string;
   linkable: boolean;   // real doc whose value resolves to a source location
-  onSelect: (id: string) => void;
+  /** Selecting a row also drives the source viewer — to the period whose figure was clicked. */
+  onSelect: (id: string, period?: "current" | "prior") => void;
   onOpenNote: (ref: string) => void;
 }) {
   const k = row.kind;
@@ -343,17 +362,21 @@ function OutputRow({
   const vwt = isSt || isTot ? 600 : selected ? 600 : 400;
   const vfg = isTot ? color.indigo : color.ink;
   const showV = isItem || isSt || isTot;
-  const v1 = showV ? present(row.v1) : "";
-  const v2 = showV ? present(row.v2) : "";
+  // A row that carries its own formatted figures (a KPI's 1.35× / 12.4% / 45 days) renders them
+  // verbatim: they are not amounts, so the currency/magnitude presentation must not touch them.
+  const v1 = showV ? (row.display1 ?? present(row.v1)) : "";
+  const v2 = showV ? (row.display2 ?? present(row.v2)) : "";
   // One NOTE column, but keep BOTH references when a row cites different notes per period
   // (e.g. note "10" current, "10a" prior) — collapsing to one would drop the second linkage.
   const noteRefs = [row.note, row.note2 && row.note2 !== row.note ? row.note2 : null].filter(
     (n): n is string => !!n,
   );
-  // The value itself is the hyperlink: clicking the row selects it and drives the live viewer
-  // to the value's page+bbox (or cell). We only decorate the number as a link when the row
-  // actually resolves to a source location.
-  const valueLinks = linkable && isItem && !!row.source && toPicked(row.source, row.label) !== null;
+  // The value itself is the hyperlink: clicking a figure selects the row and drives the live
+  // viewer to THAT figure's page+bbox (or cell). Each period is decorated independently — last
+  // year's number is printed in its own column, often on its own page, and a reviewer checks it
+  // just as much as this year's, so linking only the current column left half the grid dead.
+  const links1 = linkable && isItem && !!row.source && toPicked(row.source, row.label) !== null;
+  const links2 = linkable && isItem && !!row.source2 && toPicked(row.source2, row.label) !== null;
 
   return (
     <div
@@ -393,7 +416,9 @@ function OutputRow({
       </div>
       {isItem ? (
         <span
-          title={valueLinks ? "Click to show this figure in the source document" : undefined}
+          data-testid={`v1-${row.id}`}
+          onClick={(e) => { e.stopPropagation(); onSelect(row.id, "current"); }}
+          title={links1 ? "Click to show this figure in the source document" : undefined}
           style={{
             ...colDiv,
             display: "flex",
@@ -402,12 +427,12 @@ function OutputRow({
             fontFamily: font.mono,
             fontSize: 12,
             fontWeight: vwt,
-            color: selected && valueLinks ? color.indigo : vfg,
-            cursor: valueLinks ? "pointer" : "default",
+            color: selected && links1 ? color.indigo : vfg,
+            cursor: links1 ? "pointer" : "default",
           }}
         >
           <span
-            style={valueLinks
+            style={links1
               ? { borderBottom: `1px dashed ${selected ? color.indigo : color.dashed}` }
               : undefined}
           >
@@ -420,8 +445,23 @@ function OutputRow({
           {v1}
         </span>
       )}
-      <span style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end",
-                     fontFamily: font.mono, fontSize: 12, color: color.muted }}>{v2}</span>
+      <span
+        data-testid={isItem ? `v2-${row.id}` : undefined}
+        onClick={isItem ? (e) => { e.stopPropagation(); onSelect(row.id, "prior"); } : undefined}
+        title={links2 ? "Click to show last year's figure in the source document" : undefined}
+        style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end",
+                 fontFamily: font.mono, fontSize: 12,
+                 color: selected && links2 ? color.indigo : color.muted,
+                 cursor: links2 ? "pointer" : "default" }}
+      >
+        <span
+          style={links2
+            ? { borderBottom: `1px dashed ${selected ? color.indigo : color.dashed}` }
+            : undefined}
+        >
+          {v2}
+        </span>
+      </span>
       <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
         {row.confidence ? <ConfidencePill cat={row.confidence.cat} /> : null}
       </div>
@@ -429,28 +469,67 @@ function OutputRow({
   );
 }
 
-/* ---- inspector edit-mode body (local input state, remounts per selection) ---- */
+/* ---- inspector edit-mode body (local input state, remounts per selection) ----
+ *
+ * Both periods are editable, and the save only closes the editor when the server accepted it.
+ * The previous version wrote one column and closed unconditionally, so a rejected edit — a wrong
+ * basis, an unknown concept, a bad formula — looked exactly like a saved one: the figure on
+ * screen simply never changed and nothing said why. */
+type PeriodEdit = { period: "current" | "prior"; value: number | null };
+
 function InspectorEditor({
   row,
+  periods,
+  saving,
+  error,
   onSave,
   onCancel,
 }: {
   row: StatementRow;
-  onSave: (value: number | null, formula: string) => void;
+  periods: string[];
+  saving: boolean;
+  error: string | null;
+  onSave: (edits: PeriodEdit[], formula: string) => void;
   onCancel: () => void;
 }) {
   const initFormula = row.formula ?? row.inspector?.formula ?? "";
   const [formula, setFormula] = useState(initFormula);
-  const [value, setValue] = useState(fmtPlain(row.v1));
+  const [v1, setV1] = useState(fmtPlain(row.v1));
+  const [v2, setV2] = useState(fmtPlain(row.v2));
 
   useEffect(() => {
     setFormula(row.formula ?? row.inspector?.formula ?? "");
-    setValue(fmtPlain(row.v1));
-  }, [row.id, row.formula, row.v1, row.inspector]);
+    setV1(fmtPlain(row.v1));
+    setV2(fmtPlain(row.v2));
+  }, [row.id, row.formula, row.v1, row.v2, row.inspector]);
 
   const commit = () => {
-    onSave(parseAccounting(value), formula);
+    // Only the columns actually retyped are sent. Sending both would restate last year's figure
+    // as a manual value every time this year's is corrected, quietly detaching it from the page.
+    const edits: PeriodEdit[] = [];
+    if (v1 !== fmtPlain(row.v1)) edits.push({ period: "current", value: parseAccounting(v1) });
+    if (v2 !== fmtPlain(row.v2)) edits.push({ period: "prior", value: parseAccounting(v2) });
+    onSave(edits, formula);
   };
+
+  const numInput = (val: string, set: (s: string) => void, testId: string) => (
+    <input
+      value={val}
+      spellCheck={false}
+      data-testid={testId}
+      onChange={(e) => set(e.target.value)}
+      style={{
+        width: 120,
+        fontFamily: font.mono,
+        fontSize: 12,
+        textAlign: "right",
+        border: `1px solid ${color.controlBorder}`,
+        borderRadius: 6,
+        padding: "6px 9px",
+        outline: "none",
+      }}
+    />
+  );
 
   return (
     <>
@@ -470,6 +549,7 @@ function InspectorEditor({
         <input
           value={formula}
           spellCheck={false}
+          data-testid="edit-formula"
           onChange={(e) => setFormula(e.target.value)}
           style={{
             fontFamily: font.mono,
@@ -482,37 +562,27 @@ function InspectorEditor({
           }}
         />
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 9 }}>
-        <span style={{ fontSize: 11, color: color.muted }}>Value</span>
-        <input
-          value={value}
-          spellCheck={false}
-          onChange={(e) => setValue(e.target.value)}
-          style={{
-            width: 120,
-            fontFamily: font.mono,
-            fontSize: 12,
-            textAlign: "right",
-            border: `1px solid ${color.controlBorder}`,
-            borderRadius: 6,
-            padding: "6px 9px",
-            outline: "none",
-          }}
-        />
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 9, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: color.muted }}>{periods[0] || "Current"}</span>
+        {numInput(v1, setV1, "edit-v1")}
+        <span style={{ fontSize: 11, color: color.muted }}>{periods[1] || "Prior"}</span>
+        {numInput(v2, setV2, "edit-v2")}
         <button
           onClick={commit}
+          disabled={saving}
+          data-testid="edit-save"
           style={{
             fontSize: 12,
             fontWeight: 600,
             color: "#fff",
-            background: color.indigo,
+            background: saving ? color.muted : color.indigo,
             border: "none",
             borderRadius: radius.controlSm,
             padding: "7px 15px",
-            cursor: "pointer",
+            cursor: saving ? "default" : "pointer",
           }}
         >
-          Save edit
+          {saving ? "Saving…" : "Save edit"}
         </button>
         <button
           onClick={onCancel}
@@ -529,10 +599,21 @@ function InspectorEditor({
         >
           Cancel
         </button>
-        <span style={{ fontSize: 11, color: color.muted, flex: 1 }}>
-          Enter a number, or a formula referencing notes / other line items — the formula is stored with the cell.
+        <span style={{ fontSize: 11, color: color.muted, flex: 1, minWidth: 200 }}>
+          Enter a number in either period, or a formula referencing other line items — the formula
+          is stored with the cell. Only the columns you change are saved.
         </span>
       </div>
+      {error && (
+        <div
+          data-testid="edit-error"
+          style={{ marginTop: 9, padding: "7px 11px", background: color.redBg,
+                   border: `1px solid ${color.redFg}22`, borderRadius: radius.control,
+                   fontSize: 11.5, color: color.redFg, lineHeight: 1.5 }}
+        >
+          <strong style={{ fontWeight: 600 }}>Not saved.</strong> {error}
+        </div>
+      )}
     </>
   );
 }
@@ -557,10 +638,15 @@ export default function WorkspaceScreen() {
   };
   const activeDocumentId = useUI((s) => s.activeDocumentId);
   const usingReal = !!activeDocumentId;
-  const editable = true;   // both the demo and the real workspace support value editing
   const loaded = useProjectLoaded();
-  const realQ = useDocumentStatement(activeDocumentId ?? undefined, statement, dataset, locale);
-  const demoQ = useStatement(statement, dataset, locale, !usingReal);
+  // KPIs and the additional-items remainder are derived from a REAL extraction; there is no demo
+  // data behind them, so the demo workspace falls back to the balance sheet rather than asking
+  // for a view the demo endpoint cannot serve.
+  const derived = DERIVED_STATEMENTS.includes(statement);
+  const effectiveStatement: StatementKey = !usingReal && derived ? "balance_sheet" : statement;
+  const realQ = useDocumentStatement(activeDocumentId ?? undefined, effectiveStatement, dataset,
+                                     locale);
+  const demoQ = useStatement(effectiveStatement, dataset, locale, !usingReal);
   const data = usingReal ? realQ.data : demoQ.data;
   const isPending = usingReal ? realQ.isPending : demoQ.isPending;
   const editMut = useEditLineItem();
@@ -568,6 +654,8 @@ export default function WorkspaceScreen() {
   const realRevertMut = useRevertDocumentLineItem(activeDocumentId ?? undefined);
   // The value's source location for the live viewer — set when a row is selected (real docs).
   const [picked, setPicked] = useState<Picked | null>(null);
+  // Why the last save was refused, shown in the editor. Null while nothing has been rejected.
+  const [editError, setEditError] = useState<string | null>(null);
   // A highlight belongs to one statement/basis; clear it when either changes so the viewer
   // never keeps pointing at a page/cell from the statement the user just navigated away from.
   useEffect(() => { setPicked(null); }, [statement, dataset]);
@@ -575,10 +663,14 @@ export default function WorkspaceScreen() {
   // cannot be called conditionally. `converting` is false until a real target is picked, so
   // the query stays disabled and no request goes out in the default (no conversion) case.
   const srcCcy = data?.currency || "";
+  // A "raw" view (the KPIs) has no currency and no magnitude — its figures are ratios. A target
+  // currency left selected from a statement must not follow the analyst into it and raise "no
+  // rate for ? → USD" about numbers that were never in a currency.
+  const rawView = data?.presentation === "raw";
   // `wantConvert` is the user's request; `converting` is whether it is even askable — a document
   // whose own currency was never determined has no pair to look up, so we say "not converted"
   // instead of firing a lookup for "? → USD".
-  const wantConvert = !!targetCcy && targetCcy !== srcCcy;
+  const wantConvert = !rawView && !!targetCcy && targetCcy !== srcCcy;
   const converting = wantConvert && !!srcCcy;
   const fxQ = useFxRateResolution(converting ? srcCcy : undefined, converting ? targetCcy : undefined);
 
@@ -589,15 +681,17 @@ export default function WorkspaceScreen() {
   }
 
   const d: StatementResponse = data;
-  // Selecting a row also drives the live source viewer: resolve the row's provenance to a pick
-  // so the document scrolls to and highlights the value's page+bbox (PDF) or cell (Excel).
-  const handleSelect = (id: string) => {
+  // Selecting a row also drives the live source viewer: resolve the clicked figure's provenance
+  // to a pick so the document scrolls to and highlights that value's page+bbox (PDF) or cell
+  // (Excel). Clicking last year's number goes to last year's figure, not this year's.
+  const handleSelect = (id: string, period: "current" | "prior" = "current") => {
     selRow(id);
     if (usingReal) {
       const row = d.rows.find((r) => r.id === id);
-      // Set (or clear, when the row has no resolvable source) the live-viewer highlight so a
+      const prov = period === "prior" ? (row?.source2 ?? null) : (row?.source ?? null);
+      // Set (or clear, when the figure has no resolvable source) the live-viewer highlight so a
       // row without provenance never leaves a stale highlight from a previously clicked row.
-      setPicked(toPicked(row?.source ?? null, row?.label ?? ""));
+      setPicked(toPicked(prov, row?.label ?? ""));
     }
   };
   // Units presentation: convert relative to the source's own magnitude (default 1 = ones).
@@ -617,8 +711,11 @@ export default function WorkspaceScreen() {
   // presentation path already is (toLocaleString) — the exact decimal arithmetic, including
   // the reciprocal of an inverted rate, is done server-side in Decimal.
   const fx = appliedFx ? Number(appliedFx.rate) : 1;
+  // On a raw view the only amounts left are a KPI's own inputs, shown in the inspector. Those are
+  // statement figures AS REPORTED — the KPI response declares no magnitude, so scaling them by
+  // the statements' selection (÷1000 against a scale of 1) would misstate them.
   const present = (raw: number | null) =>
-    presentValue(raw == null ? null : raw * fx, srcScale, unitTarget);
+    rawView ? fmtIN(raw) : presentValue(raw == null ? null : raw * fx, srcScale, unitTarget);
   // A single, unambiguous caption for the whole output panel: the active magnitude, plus the
   // conversion when re-currencied — with the rate, the date it is AS OF, and a derived marker
   // naming the stored pair we inverted. Figures are never silently transformed.
@@ -642,6 +739,41 @@ export default function WorkspaceScreen() {
   const insp = selRowObj?.inspector;
   const isEdited = selRowObj?.status === "edited";
   const cs = selRowObj?.confidence ? confStyle(selRowObj.confidence.cat) : confStyle("med");
+  // Not every row is a figure someone can correct. A KPI is computed (fix its inputs instead), a
+  // line mapped to no concept has no address to save against, and an equity movement is a
+  // component grid. Offering a control that cannot work is how "editing doesn't work" starts.
+  const canEditSel = !!selRowObj && selRowObj.editable !== false
+    && (selRowObj.kind === "item" || selRowObj.kind === "subtotal" || selRowObj.kind === "total");
+  const saving = realEditMut.isPending || editMut.isPending;
+
+  /** Save the columns the analyst retyped, one figure at a time, and keep the editor open with
+   *  the server's reason if any of them is refused. */
+  const saveEdit = async (edits: PeriodEdit[], formula: string) => {
+    if (!selRowObj) return;
+    // A formula on its own is still an edit: it recomputes the current period.
+    const work: PeriodEdit[] = edits.length
+      ? edits
+      : [{ period: "current", value: selRowObj.v1 }];
+    try {
+      for (const e of work) {
+        if (usingReal) {
+          await realEditMut.mutateAsync({ key: selRowObj.id, value: e.value, formula,
+                                          basis: dataset, period: e.period });
+        } else if (e.period === "current") {
+          await editMut.mutateAsync({ id: selRowObj.id, value: e.value, formula });
+        } else {
+          throw new Error("The sample project only supports editing the current period. "
+                          + "Upload a document to edit both.");
+        }
+      }
+      setEditError(null);
+      stopEditing();
+    } catch (err) {
+      // Deliberately stays in edit mode: the figures on screen did not change, and closing the
+      // editor as if they had is the failure this replaces.
+      setEditError(editErrorText(err));
+    }
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -671,10 +803,17 @@ export default function WorkspaceScreen() {
             { value: "profit_and_loss", label: t("ws.stmt.profit_and_loss") },
             { value: "cash_flow", label: t("ws.stmt.cash_flow") },
             { value: "changes_in_equity", label: t("ws.stmt.changes_in_equity") },
+            // Derived from the extraction, so offered only when there IS one.
+            ...(usingReal
+              ? [{ value: "kpi" as StatementKey, label: t("ws.stmt.kpi") },
+                 { value: "additional_items" as StatementKey,
+                   label: t("ws.stmt.additional_items") }]
+              : []),
           ]}
-          value={statement}
+          value={effectiveStatement}
           onChange={setStatement}
         />
+        {!rawView && (
         <ToolSelect<string>
           label={t("ws.currency")}
           value={targetCcy || srcCcy}
@@ -684,6 +823,7 @@ export default function WorkspaceScreen() {
           ]}
           onChange={(v) => setTargetCcy(v === srcCcy ? "" : v)}
         />
+        )}
         {fxUnavailable && (
           <span
             title={fxRes && !fxRes.resolved ? fxRes.detail : undefined}
@@ -694,6 +834,9 @@ export default function WorkspaceScreen() {
             {fxLookupFailed ? t("ws.rateFailed") : t("ws.noRate")} {srcCcy || "?"} → {targetCcy}
           </span>
         )}
+        {/* A ratio has no magnitude to present — offering "in thousands" over 1.35× would only
+            invite a nonsense reading, so the selector is absent on a raw view rather than inert. */}
+        {!rawView && (
         <ToolSelect<UnitTarget>
           label={t("ws.units")}
           value={unitTarget}
@@ -705,6 +848,7 @@ export default function WorkspaceScreen() {
           ]}
           onChange={setUnitTarget}
         />
+        )}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9 }}>
           <span
             style={{
@@ -1020,9 +1164,10 @@ export default function WorkspaceScreen() {
                     ↺ Revert
                   </button>
                 )}
-                {!editing && editable && (
+                {!editing && canEditSel && (
                   <button
-                    onClick={startEdit}
+                    data-testid="edit-value"
+                    onClick={() => { setEditError(null); startEdit(); }}
                     style={{
                       fontSize: 11,
                       fontWeight: 600,
@@ -1040,16 +1185,15 @@ export default function WorkspaceScreen() {
               </div>
             </div>
 
-            {editing && editable && selRowObj ? (
+            {editing && canEditSel && selRowObj ? (
               <InspectorEditor
                 key={selRowObj.id}
                 row={selRowObj}
-                onSave={(value, formula) => {
-                  if (usingReal) realEditMut.mutate({ key: selRowObj.id, value, formula });
-                  else editMut.mutate({ id: selRowObj.id, value, formula });
-                  stopEditing();
-                }}
-                onCancel={cancelEdit}
+                periods={d.periods}
+                saving={saving}
+                error={editError}
+                onSave={saveEdit}
+                onCancel={() => { setEditError(null); cancelEdit(); }}
               />
             ) : (
               <>

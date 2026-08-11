@@ -7,61 +7,245 @@ import { Card } from "../components/ui";
 import { useAppLocale, useUI } from "../store";
 import { color, font, radius } from "../theme";
 import type {
-  Locale, NettingRuleEdit, NettingRuleView, NodeConfig, ValueScope,
+  Locale, NettingRuleEdit, NettingRuleView, NodeConfig, TemplateRef, ValueScope,
 } from "../types";
-import { useTemplateDetail, useTemplates } from "../lib/queries";
-import { ApiError, api } from "../lib/api";
+import {
+  useTemplateDetail, useTemplateXlsxColumns, useTemplates, useUploadOntology,
+  useUploadTemplateXlsx,
+} from "../lib/queries";
+import { ApiError, api, downloadTemplateXlsx } from "../lib/api";
 import { useCan } from "../lib/rbac";
 import { NATIVE_NAME, useT } from "../i18n";
 
-/** Admin-only: create a template/ontology by importing a validated JSON definition. Persisted
- *  and versioned server-side, then selectable on Upload — the frontend authoring path (Req 4). */
-function ImportTemplate() {
-  const t = useT();
-  const qc = useQueryClient();
-  const fileRef = useRef<HTMLInputElement>(null);
+/** Admin-only: the authoring desk for templates and ontologies.
+ *
+ * Deciding what a spread should contain is a spreadsheet job, so the primary path is the round
+ * trip: download the active template as a workbook, mark each line extracted or calculated (and
+ * for a calculated one, what it is calculated FROM), upload it back. That publishes a new
+ * VERSION — nothing is overwritten, so an extraction that already ran still explains itself
+ * against the template it actually used. The ontology (the extraction rulebook) is uploaded
+ * against a named template and validated against it, so a rule for a line the template does not
+ * define is refused with the key in the message rather than silently ignored.
+ */
+function TemplateAuthoring({
+  templates,
+  selectedId,
+  onSelect,
+  t,
+}: {
+  templates: TemplateRef[];
+  selectedId: string | undefined;
+  onSelect: (id: string) => void;
+  t: (k: string) => string;
+}) {
+  const xlsxRef = useRef<HTMLInputElement>(null);
+  const ontRef = useRef<HTMLInputElement>(null);
+  const jsonRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  // Upload onto the selected template's key (a new version of it) or start a fresh template.
+  const [asNew, setAsNew] = useState(false);
+  const uploadXlsx = useUploadTemplateXlsx();
+  const uploadOnt = useUploadOntology();
+  const cols = useTemplateXlsxColumns();
 
-  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+  const selected = templates.find((x) => x.id === selectedId);
+
+  const fail = (err: unknown) => {
+    const text = err instanceof ApiError ? (err.detail ?? err.message)
+      : err instanceof Error ? err.message : String(err);
+    setMsg({ ok: false, text: text.slice(0, 400) });
+  };
+
+  async function download() {
+    if (!selected) return;
+    setBusy("xlsx");
+    setMsg(null);
+    try {
+      await downloadTemplateXlsx(selected.id, selected.template_key);
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onXlsx(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
-    setBusy(true);
+    setBusy("upload");
+    setMsg(null);
+    try {
+      const res = await uploadXlsx.mutateAsync({
+        file: f,
+        templateKey: asNew ? "" : (selected?.template_key ?? ""),
+        name: asNew ? f.name.replace(/\.(xlsx|xlsm)$/i, "") : (selected?.name ?? ""),
+      });
+      onSelect(res.id);
+      setMsg({ ok: true, text: t("tp.auth.publishedTemplate")
+        .replace("{key}", res.template_key).replace("{v}", String(res.version))
+        .replace("{n}", String(res.line_items)) });
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(null);
+      if (xlsxRef.current) xlsxRef.current.value = "";
+    }
+  }
+
+  async function onOntology(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setBusy("ontology");
+    setMsg(null);
+    try {
+      const definition = JSON.parse(await f.text());
+      const res = await uploadOnt.mutateAsync({
+        definition,
+        // Point the rulebook at the template on screen — that is the one it will be checked
+        // against, and checking it against something else would be the wrong answer quietly.
+        targetTemplateKey: selected?.template_key,
+      });
+      setMsg({ ok: true, text: t("tp.auth.publishedOntology")
+        .replace("{key}", res.ontology_key).replace("{v}", String(res.version))
+        .replace("{n}", String(res.mappings)).replace("{tpl}", res.target_template_key) });
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(null);
+      if (ontRef.current) ontRef.current.value = "";
+    }
+  }
+
+  async function onJson(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setBusy("json");
     setMsg(null);
     try {
       const def = JSON.parse(await f.text());
       const isOntology = "target_template_key" in def || "mappings" in def;
       const res = isOntology ? await api.createOntology(def) : await api.createTemplate(def);
       const key = "template_key" in res ? res.template_key : res.ontology_key;
-      setMsg({ ok: true, text: t("tp.importOk").replace("{key}", key).replace("{v}", String(res.version)) });
-      qc.invalidateQueries({ queryKey: ["templates"] });
-      qc.invalidateQueries({ queryKey: ["ontologies"] });
+      setMsg({ ok: true, text: t("tp.importOk").replace("{key}", key)
+        .replace("{v}", String(res.version)) });
+      if ("template_key" in res) onSelect(res.id);
     } catch (err) {
-      const m = err instanceof Error ? err.message : String(err);
-      setMsg({ ok: false, text: `${t("tp.importErr")} ${m}`.slice(0, 300) });
+      fail(err);
     } finally {
-      setBusy(false);
-      if (fileRef.current) fileRef.current.value = "";
+      setBusy(null);
+      if (jsonRef.current) jsonRef.current.value = "";
     }
   }
 
+  const btn = (primary: boolean): CSSProperties => ({
+    fontSize: 12, fontWeight: 600,
+    color: primary ? "#fff" : color.indigo,
+    background: primary ? color.indigo : "#fff",
+    border: primary ? "none" : `1px solid ${color.indigoBorder2}`,
+    borderRadius: radius.control, padding: "8px 14px",
+    cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap",
+  });
+
   return (
-    <div style={{ flex: "0 0 auto", padding: "11px 14px", borderTop: `1px solid ${color.hairline3}` }}>
-      <input ref={fileRef} type="file" accept="application/json,.json" onChange={onFile} style={{ display: "none" }} />
-      <button
-        onClick={() => fileRef.current?.click()}
-        disabled={busy}
-        style={{
-          width: "100%", fontSize: 12, fontWeight: 600, color: color.indigo, background: "#fff",
-          border: `1px dashed ${color.indigoBorder2}`, borderRadius: radius.control, padding: 9,
-          cursor: busy ? "wait" : "pointer",
-        }}
-      >
-        {busy ? t("tp.importing") : t("tp.importTemplate")}
-      </button>
+    <div
+      data-testid="template-authoring"
+      style={{
+        background: color.surface, border: `1px solid ${color.cardBorder}`,
+        borderRadius: radius.card, padding: 18, marginBottom: 22,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 9, marginBottom: 4 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{t("tp.auth.title")}</span>
+        <span style={{ fontSize: 11, color: color.muted }}>{t("tp.auth.versioned")}</span>
+      </div>
+      <p style={{ margin: "0 0 14px", fontSize: 12, color: color.sec, lineHeight: 1.55 }}>
+        {t("tp.auth.hint")}
+      </p>
+
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12,
+                      fontSize: 12, color: color.sec }}>
+        <span style={{ color: color.muted }}>{t("tp.auth.active")}</span>
+        <select
+          value={selectedId ?? ""}
+          data-testid="template-picker"
+          onChange={(e) => onSelect(e.target.value)}
+          style={{ fontSize: 12, fontWeight: 600, fontFamily: font.sans, color: color.ink,
+                   border: `1px solid ${color.controlBorder}`, borderRadius: radius.controlSm,
+                   padding: "6px 9px", background: "#fff", cursor: "pointer", maxWidth: 420 }}
+        >
+          {templates.map((x) => (
+            <option key={x.id} value={x.id}>{`${x.name || x.template_key} · v${x.version}`}</option>
+          ))}
+        </select>
+      </label>
+
+      <input ref={xlsxRef} type="file" data-testid="tpl-xlsx-input" style={{ display: "none" }}
+             onChange={onXlsx}
+             accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+      <input ref={ontRef} type="file" accept="application/json,.json" data-testid="tpl-ont-input"
+             style={{ display: "none" }} onChange={onOntology} />
+      <input ref={jsonRef} type="file" accept="application/json,.json" data-testid="tpl-json-input"
+             style={{ display: "none" }} onChange={onJson} />
+
+      <div style={{ display: "flex", gap: 9, flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={download} disabled={!!busy || !selected} data-testid="tpl-download-xlsx"
+                style={btn(false)}>
+          {busy === "xlsx" ? t("tp.auth.working") : t("tp.auth.download")}
+        </button>
+        <button onClick={() => xlsxRef.current?.click()} disabled={!!busy}
+                data-testid="tpl-upload-xlsx" style={btn(true)}>
+          {busy === "upload" ? t("tp.auth.working") : t("tp.auth.upload")}
+        </button>
+        <button onClick={() => ontRef.current?.click()} disabled={!!busy}
+                data-testid="tpl-upload-ontology" style={btn(false)}>
+          {busy === "ontology" ? t("tp.auth.working") : t("tp.auth.uploadOntology")}
+        </button>
+        <button onClick={() => jsonRef.current?.click()} disabled={!!busy}
+                data-testid="tpl-import-json"
+                style={{ ...btn(false), color: color.sec2,
+                         border: `1px solid ${color.controlBorder}` }}>
+          {busy === "json" ? t("tp.auth.working") : t("tp.importTemplate")}
+        </button>
+      </div>
+
+      <label style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 11,
+                      fontSize: 11.5, color: color.sec }}>
+        <input type="checkbox" checked={asNew} data-testid="tpl-as-new"
+               onChange={(e) => setAsNew(e.target.checked)} />
+        {t("tp.auth.asNew")}
+      </label>
+
+      {/* The workbook's contract, read from the reader that enforces it — so this screen can
+          never describe columns the API does not actually accept. */}
+      {cols.data && (
+        <div style={{ marginTop: 13, paddingTop: 12, borderTop: `1px solid ${color.hairline}`,
+                      fontSize: 11.5, color: color.sec, lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 600, color: color.ink, marginBottom: 4 }}>
+            {t("tp.auth.columns")}
+          </div>
+          <div style={{ fontFamily: font.mono, fontSize: 10.5, color: color.sec2,
+                        marginBottom: 7 }}>
+            {cols.data.columns.map((c) => c.header).join(" · ")}
+          </div>
+          {cols.data.kinds.map((k) => (
+            <div key={k.value}>
+              <span style={{ fontFamily: font.mono, fontWeight: 600, color: color.ink }}>
+                {k.value}
+              </span>{" — "}{k.help}
+            </div>
+          ))}
+        </div>
+      )}
+
       {msg && (
-        <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5,
-                      color: msg.ok ? color.greenFg : color.redFg }}>
+        <div
+          data-testid="tpl-auth-message"
+          style={{ marginTop: 12, padding: "8px 11px", borderRadius: radius.control,
+                   fontSize: 11.5, lineHeight: 1.55,
+                   background: msg.ok ? color.indigoTint : color.redBg,
+                   color: msg.ok ? color.indigo : color.redFg }}
+        >
           {msg.text}
         </div>
       )}
@@ -948,7 +1132,11 @@ export default function TemplateScreen() {
         <div style={{ fontSize: 28, marginBottom: 10 }}>◆</div>
         <h1 style={{ fontSize: 18, fontWeight: 600, color: color.ink, marginBottom: 8 }}>{t("tp.emptyTitle")}</h1>
         <p style={{ fontSize: 12.5, lineHeight: 1.6 }}>{t("tp.emptyHint")}</p>
-        <div style={{ maxWidth: 320, margin: "18px auto 0" }}><ImportTemplate /></div>
+        {canEdit && (
+          <div style={{ maxWidth: 560, margin: "18px auto 0", textAlign: "left" }}>
+            <TemplateAuthoring templates={[]} selectedId={undefined} onSelect={setSelId} t={t} />
+          </div>
+        )}
       </div>
     );
   }
@@ -1053,12 +1241,15 @@ export default function TemplateScreen() {
           })}
         </div>
 
-        {canEdit && <ImportTemplate />}
       </div>
 
       {/* RIGHT: node editor */}
       <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 30px" }}>
         <div style={{ maxWidth: 680 }}>
+          {canEdit && tplList.data && (
+            <TemplateAuthoring templates={tplList.data} selectedId={selId} onSelect={setSelId}
+                               t={t} />
+          )}
           <div style={{ fontSize: 11, color: color.muted, marginBottom: 3 }}>{cfg.breadcrumb}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 3 }}>
             <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>{cfg.label}</h1>

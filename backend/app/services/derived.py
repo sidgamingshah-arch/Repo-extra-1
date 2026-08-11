@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import re
 
+from app.services.periods import concept_value
+
 # --- 1. Ratios -------------------------------------------------------------
 # Each ratio references canonical keys; num/den are (key, sign) so we can net inventories
 # out of the quick ratio etc. A ratio is computed only when ALL its inputs are present.
@@ -235,14 +237,25 @@ def _num(v) -> float | None:
         return None
 
 
+def _group_by_key(rows: list[dict]) -> dict[str, list[dict]]:
+    """Extracted rows grouped by the concept they map to — several printed lines can share one."""
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        k = r.get("canonical_key")
+        if k:
+            out.setdefault(k, []).append(r)
+    return out
+
+
 def _value(by_key: dict, key: str, basis: str, period: str) -> float | None:
-    row = by_key.get(key)
-    if not row:
+    """One concept's figure, read the same way the statement grid reads it — summed across every
+    printed line that maps to the concept, or the analyst's manual value where one replaced it.
+    A ratio computed off a different number than the statement shows is not a ratio of that
+    statement."""
+    group = by_key.get(key)
+    if not group:
         return None
-    for v in row.get("values") or []:
-        if (v.get("basis") or "consolidated") == basis and v.get("period_label") == period:
-            return _num(v.get("value"))
-    return None
+    return concept_value(group if isinstance(group, list) else [group], basis, period)
 
 
 def _term_value(by_key, keyspec, basis, period) -> float | None:
@@ -279,6 +292,55 @@ def _side(by_key, terms, basis, period) -> float | None:
     return total if present else None
 
 
+def _term_label(by_key, key) -> str:
+    """A readable name for a ratio input: the caption the document printed for it when the line
+    was extracted, else the canonical key made readable."""
+    keys = list(key) if isinstance(key, (tuple, list)) else [key]
+    for k in keys:
+        group = by_key.get(k)
+        if group:
+            rows = group if isinstance(group, list) else [group]
+            lbl = next((r.get("source_label") for r in rows if r.get("source_label")), None)
+            if lbl:
+                return lbl
+    tail = str(keys[0]).split("__")[-1]
+    return tail.replace("_", " ").capitalize()
+
+
+def _resolved_key(by_key, keyspec, basis, period) -> str:
+    """Which canonical key a term actually resolved to.
+
+    A term may name several candidates tried in order (cost of goods sold → total operating cost),
+    so the key that carried the figure is the one the analyst has to be able to click through to.
+    Falls back to the first candidate when none had a value, so the row still names what it wanted.
+    """
+    keys = list(keyspec) if isinstance(keyspec, (tuple, list)) else [keyspec]
+    for k in keys:
+        if _value(by_key, k, basis, period) is not None:
+            return str(k)
+    return str(keys[0]) if keys else ""
+
+
+def _side_inputs(by_key, terms, basis, period) -> list[dict]:
+    """Every input that went into one side of a ratio, with the value actually used.
+
+    A ratio the analyst cannot take apart is a number to be taken on trust. Listing the inputs —
+    each with its own canonical key, its sign and its figure — makes the arithmetic checkable
+    against the statement, and an absent input visibly absent rather than silently zero.
+    """
+    out = []
+    for term in terms:
+        key, sign = term[0], term[1]
+        mode = term[2] if len(term) > 2 else "req"
+        val = _term_value(by_key, key, basis, period)
+        out.append({
+            "canonical_key": _resolved_key(by_key, key, basis, period),
+            "label": _term_label(by_key, key), "sign": sign, "value": val,
+            "optional": mode == "opt",
+        })
+    return out
+
+
 # unit → (multiplier applied to num/den, suffix formatter)
 _UNIT_SCALE = {"x": 1, "%": 100, "days": 365}
 
@@ -303,7 +365,7 @@ def compute_ratios(rows: list[dict], *, basis: str = "consolidated", period: str
     """Compute the ratio catalog from the extracted values. Ratios missing an input are
     returned as unavailable (never fabricated), so the UI/export can show the full set,
     grouped by category (liquidity / leverage / coverage / efficiency / profitability)."""
-    by_key = {r["canonical_key"]: r for r in rows if r.get("canonical_key")}
+    by_key = _group_by_key(rows)
     computed: dict[str, float | None] = {}
     out: list[dict] = []
     for d in _RATIOS:
@@ -318,6 +380,9 @@ def compute_ratios(rows: list[dict], *, basis: str = "consolidated", period: str
             "key": d["key"], "label": label, "category": d.get("category", "Profitability"),
             "unit": unit, "formula": d["formula"], "value": value,
             "display": _display(value, unit), "available": available,
+            # The arithmetic, openable: which extracted figures were used, and with what sign.
+            "inputs": {"numerator": _side_inputs(by_key, d["num"], basis, period),
+                       "denominator": _side_inputs(by_key, d["den"], basis, period)},
         })
 
     # Cash conversion cycle is a combination of the day-based ratios (DSO + DIO − DPO), so it is
@@ -711,7 +776,7 @@ def _fmt(n: float | None) -> str:
 def build_free_notes(rows: list[dict], *, basis: str = "consolidated", locale: str = "en") -> list[dict]:
     """Plain-language notes generated strictly from the extracted numbers: period movements
     for headline lines, and a one-line read on liquidity/profitability from the ratios."""
-    by_key = {r["canonical_key"]: r for r in rows if r.get("canonical_key")}
+    by_key = _group_by_key(rows)
     notes: list[dict] = []
 
     for key, label_en, label_i18n in _NOTE_LINES:

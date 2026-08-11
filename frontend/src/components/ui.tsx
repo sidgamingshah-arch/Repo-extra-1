@@ -163,6 +163,9 @@ export function Segmented<T extends string>({
           <span
             key={o.value}
             onClick={() => onChange(o.value)}
+            // Which option is active is styling, which a test cannot read. `data-on` states it.
+            data-testid={`seg-${o.value}`}
+            data-on={on ? "true" : "false"}
             style={{
               fontSize: 12,
               fontWeight: 600,

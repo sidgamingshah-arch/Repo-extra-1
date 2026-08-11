@@ -12,6 +12,7 @@ import io
 import json
 
 from app.sample.demo import CONF_PCT
+from app.services.periods import concept_value, split_current_prior
 
 # Statement titles for the formatted export, localized like the rest of the app. Line-item
 # labels come from the TEMPLATE's label_i18n, so the export is fully template-driven.
@@ -153,9 +154,9 @@ def build_rows_xlsx(rows: list[dict], *, filename: str, scale: float = 1.0) -> b
     ws.append(headers)
     for i, r in enumerate(rows, start=1):
         values = r.get("values") or []
-        by_period = {v.get("period_label"): v.get("value") for v in values}
-        current = by_period.get("current") or (values[0].get("value") if values else None)
-        prior = by_period.get("prior") or (values[1].get("value") if len(values) > 1 else None)
+        cur_v, prior_v = split_current_prior(values)
+        current = (cur_v or {}).get("value")
+        prior = (prior_v or {}).get("value")
         conf = r.get("mapping_confidence")
         ws.append([
             i,
@@ -187,19 +188,14 @@ def _label(node: dict, locale: str) -> str:
 
 
 def _cell_value(group, basis: str, period: str):
-    """The figure for one concept in one (basis, period) — the SUM when several printed lines
-    map to it, matching what the statement view and the structural checks use."""
+    """The figure for one concept in one (basis, period) — read through the same resolver the
+    statement view and the accounting checks use, so the workbook cannot disagree with the
+    screen: the SUM when several printed lines map to the concept, or the analyst's manual
+    value when one replaced it."""
     if not group:
         return None
-    rows = group if isinstance(group, list) else [group]
-    total = None
-    for row in rows:
-        for v in (row or {}).get("values") or []:
-            if (v.get("basis") or "consolidated") == basis and v.get("period_label") == period:
-                n = _num(v.get("value"))
-                if n is not None:
-                    total = n if total is None else total + n
-    return total
+    rows = [r for r in (group if isinstance(group, list) else [group]) if r]
+    return concept_value(rows, basis, period)
 
 
 def _contribution_note(group: list[dict], basis: str, period: str) -> str | None:
@@ -406,9 +402,8 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
         ri += 1
         for row in note.get("rows", []):
             vals = row.get("values") or []
-            by = {v.get("period_label"): v for v in vals}
-            cur = (by.get("current") or (vals[0] if vals else {})) or {}
-            prior = (by.get("prior") or (vals[1] if len(vals) > 1 else {})) or {}
+            cur_v, prior_v = split_current_prior(vals)
+            cur, prior = cur_v or {}, prior_v or {}
             lab = ws.cell(ri, 1, row.get("label", "")); lab.alignment = Alignment(indent=1)
             c = ws.cell(ri, 2, _num(cur.get("value"))); c.number_format = num_fmt; c.alignment = right
             c = ws.cell(ri, 3, _num(prior.get("value"))); c.number_format = num_fmt; c.alignment = right

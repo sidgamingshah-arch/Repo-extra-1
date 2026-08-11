@@ -410,3 +410,98 @@ test("the thresholds are still editable against a backend that omits the descrip
   await page.unroute("**/api/v1/settings");
   await resetThresholds(page);
 });
+
+test("real extraction: prior-year links, an edit that sticks, KPIs and Additional items",
+     async ({ page }) => {
+  test.setTimeout(240_000);
+  await loginAs(page, "analyst");
+  await page.goto("/upload", DCL);
+  // A two-column comparative, including a line printed for the PRIOR YEAR ONLY.
+  await page.setInputFiles('input[type="file"]', "e2e/fixtures/comparative.pdf");
+  await expect(page.getByTestId("doc-row").filter({ hasText: "comparative.pdf" }))
+    .toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: /Extract directly/ }).click();
+  await expect(page.getByRole("heading", { name: "Extracted data" }))
+    .toBeVisible({ timeout: 30_000 });
+
+  await page.goto("/workspace", DCL);
+  await expect(page.getByText("Trade receivables").first()).toBeVisible({ timeout: 20_000 });
+
+  // --- last year's figure is its own hyperlink ---------------------------------------------
+  // The title only exists when THAT period's value resolves to a source location, so clicking
+  // it has to drive the viewer to the page it was printed on.
+  const priorLink = page.locator('[title*="last year"]').first();
+  await expect(priorLink).toBeVisible({ timeout: 15_000 });
+  await priorLink.click();
+  await expect(page.getByTestId("prov-highlight")).toBeVisible({ timeout: 15_000 });
+
+  // --- an edit becomes the figure in the grid ----------------------------------------------
+  await page.getByText("Trade receivables").first().click();
+  await page.getByTestId("edit-value").click();
+  await page.getByTestId("edit-v1").fill("55555");
+  await page.getByTestId("edit-save").click();
+  // Saved → the editor closes. A refused save must NOT close it, so this doubles as the
+  // assertion that nothing was silently rejected.
+  await expect(page.getByTestId("edit-v1")).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByTestId("edit-error")).toHaveCount(0);
+  await expect(page.getByText("55,555").first()).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole("button", { name: /Revert/ }).click();
+  await expect(page.getByText("55,555")).toHaveCount(0, { timeout: 15_000 });
+
+  // --- KPIs -------------------------------------------------------------------------------
+  await page.getByTestId("seg-kpi").click();
+  await expect(page.getByTestId("seg-kpi")).toHaveAttribute("data-on", "true");
+  await expect(page.getByText("Liquidity").first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Current ratio").first()).toBeVisible();
+  // A ratio has no magnitude, so the presentation controls are absent rather than inert.
+  await expect(page.getByText("Units", { exact: true })).toHaveCount(0);
+  // Selecting one shows the extracted figures it was computed from.
+  await page.getByText("Current ratio").first().click();
+  await expect(page.getByText(/numerator:/).first()).toBeVisible({ timeout: 15_000 });
+
+  // --- Additional items -------------------------------------------------------------------
+  await page.getByTestId("seg-additional_items").click();
+  await expect(page.getByTestId("seg-additional_items")).toHaveAttribute("data-on", "true");
+  await expect(page.getByTestId("seg-kpi")).toHaveAttribute("data-on", "false");
+
+  // Back to a statement: the magnitude selector returns, because these ARE amounts.
+  await page.getByTestId("seg-balance_sheet").click();
+  await expect(page.getByText("Units", { exact: true })).toBeVisible({ timeout: 15_000 });
+});
+
+test("an admin downloads the template as a workbook and publishes an edited version",
+     async ({ page }) => {
+  test.setTimeout(120_000);
+  await loginAs(page, "admin");
+  await page.goto("/template", DCL);
+  await expect(page.getByTestId("template-authoring")).toBeVisible({ timeout: 20_000 });
+
+  // Download the active template's workbook.
+  const picker = page.getByTestId("template-picker");
+  await expect(picker).toBeVisible();
+  const before = await picker.locator("option").allTextContents();
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByTestId("tpl-download-xlsx").click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/\.xlsx$/);
+  const path = await download.path();
+  expect(path).toBeTruthy();
+
+  // Upload it straight back: a NEW version of the same template, nothing overwritten.
+  await page.getByTestId("tpl-xlsx-input").setInputFiles(path as string);
+  const msg = page.getByTestId("tpl-auth-message");
+  await expect(msg).toBeVisible({ timeout: 30_000 });
+  await expect(msg).toContainText(/Published .* v\d+ — \d+ line items/);
+  const after = await picker.locator("option").allTextContents();
+  expect(after.length).toBe(before.length + 1);
+});
+
+test("an analyst gets no template authoring affordances", async ({ page }) => {
+  await loginAs(page, "analyst");
+  await page.goto("/template", DCL);
+  // The screen itself is admin-only; whichever way it is refused, the controls must not exist.
+  await expect(page.getByTestId("template-authoring")).toHaveCount(0);
+  await expect(page.getByTestId("tpl-upload-xlsx")).toHaveCount(0);
+});

@@ -193,8 +193,13 @@ export type FxRateResolution =
       reason: "no_rate_configured";
       detail: string;
     };
+/** The views the Workspace can show. The first four are statements the document prints; the
+ *  last two are determined by its figures — the KPIs computed off the statements, and everything
+ *  extracted that reaches no face statement. Both are real-extraction only. */
 export type StatementKey = "balance_sheet" | "profit_and_loss" | "cash_flow"
-  | "changes_in_equity";
+  | "changes_in_equity" | "kpi" | "additional_items";
+/** Views that exist only for a real extraction (there is no demo data behind them). */
+export const DERIVED_STATEMENTS: StatementKey[] = ["kpi", "additional_items"];
 export type RowKind = "section" | "subhead" | "item" | "subtotal" | "total";
 export type ExportFmt = "excel" | "json";
 
@@ -227,6 +232,9 @@ export interface RowContribution {
   residual?: boolean;
   src: string;
   source?: ExtractionProvenance | null;
+  /** …and the same for the prior period, printed in its own column on its own page. */
+  src2?: string;
+  source2?: ExtractionProvenance | null;
 }
 
 export interface StatementRow {
@@ -249,7 +257,13 @@ export interface StatementRow {
   /** Matrix layouts only: the row's figures keyed by column name (see StatementResponse.layout).
    *  v1/v2 stay null there, because a component is not a period. */
   cells?: Record<string, number | null> | null;
-  source?: ExtractionProvenance | null;  // real docs: current-period value's source location
+  source?: ExtractionProvenance | null;   // real docs: current-period value's source location
+  source2?: ExtractionProvenance | null;  // …and the prior period's, which is a figure too
+  /** Pre-formatted figures in the row's OWN unit (a KPI's ×, %, days). When present the grid
+   *  renders these verbatim and applies no currency/magnitude presentation — scaling a current
+   *  ratio into "thousands" would be nonsense. */
+  display1?: string | null;
+  display2?: string | null;
 }
 
 /** A named column of a matrix statement — an equity component, not a period. */
@@ -280,6 +294,9 @@ export interface StatementResponse {
   currency_symbol: string;
   units: string;
   units_scale_factor?: number;  // detected source magnitude (e.g. 1000 for "in thousands"); default 1
+  /** "raw" means the rows carry their own formatted figures (display1/display2) and must not be
+   *  re-scaled or re-currencied. Absent means ordinary monetary presentation. */
+  presentation?: "raw" | "monetary";
   rows: StatementRow[];
   viewer: ViewerMeta;
   format?: string;       // real docs: "pdf" | "xlsx" | … → chooses the live source viewer

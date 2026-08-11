@@ -22,14 +22,21 @@ router = APIRouter(prefix="/ontologies", tags=["ontologies"])
 
 class OntologyCreate(BaseModel):
     definition: dict
+    # Which template this rulebook is FOR. An ontology carries its own target, but a rulebook
+    # written against one template is routinely re-pointed at a newly authored one — saying so on
+    # the request beats hand-editing the JSON, and it still has to validate against that template.
+    target_template_key: str | None = None
 
 
 @router.post("", status_code=201, dependencies=[Depends(require(Permission.CONFIG_ONTOLOGY))])
 def create_ontology(body: OntologyCreate, session: Session = Depends(db)) -> dict:
     from app.db.models import OntologyVersion, TemplateVersion
 
+    definition = body.definition
+    if body.target_template_key:
+        definition = {**definition, "target_template_key": body.target_template_key}
     try:
-        ontology = load_ontology(body.definition)
+        ontology = load_ontology(definition)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"Invalid ontology schema: {exc}") from exc
 
@@ -59,11 +66,13 @@ def create_ontology(body: OntologyCreate, session: Session = Depends(db)) -> dic
         ontology_key=ontology.ontology_key,
         target_template_key=ontology.target_template_key,
         version=version,
-        definition=body.definition,
+        definition=definition,
     )
     session.add(row)
     session.commit()
-    return {"id": row.id, "ontology_key": ontology.ontology_key, "version": version}
+    return {"id": row.id, "ontology_key": ontology.ontology_key,
+            "target_template_key": ontology.target_template_key, "version": version,
+            "mappings": len(ontology.mappings)}
 
 
 @router.get("")
