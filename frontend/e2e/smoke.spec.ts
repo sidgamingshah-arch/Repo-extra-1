@@ -338,3 +338,38 @@ test("an analyst cannot reach the extraction thresholds at all", async ({ page }
   await expect(page.getByTestId("ex-save")).toHaveCount(0);
   await expect(page.getByText("Fuzzy auto-accept")).toHaveCount(0);
 });
+
+test("the thresholds are still editable against a backend that omits the descriptors", async ({
+  page,
+}) => {
+  // An older API returns the extraction VALUES without the field descriptions. Rendering from an
+  // empty descriptor list produced a card with a Save button and no fields in it — visibly
+  // broken, and silent about why. The controls are inferred from the values instead, and the
+  // card says the ranges are not being checked locally.
+  await page.route("**/api/v1/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const res = await route.fetch();
+    const body = await res.json();
+    delete body.extraction_fields;
+    delete body.extraction_defaults;
+    await route.fulfill({ response: res, json: body });
+  });
+
+  await loginAs(page, "admin");
+  await page.goto("/settings", DCL);
+
+  // Inferred from the value's own type: a number input for a threshold…
+  const fuzzy = page.getByTestId("ex-fuzzy_accept");
+  await expect(fuzzy).toBeVisible({ timeout: 15_000 });
+  await expect(fuzzy).toHaveAttribute("type", "number");
+  // …a toggle for the boolean, and a readable label rather than the raw key.
+  await expect(page.getByTestId("ex-llm_mapping")).toBeVisible();
+  await expect(page.getByText("Fuzzy accept")).toBeVisible();
+  // And it is honest about the degraded mode.
+  await expect(page.getByText(/did not describe these settings/i)).toBeVisible();
+
+  // Still genuinely editable: the save round-trips through the real endpoint.
+  await fuzzy.fill("0.58");
+  await page.getByTestId("ex-save").click();
+  await expect(page.getByTestId("ex-save")).toBeDisabled({ timeout: 15_000 });
+});

@@ -22,7 +22,7 @@ import {
   useUpsertFxRate,
 } from "../lib/queries";
 import { color, font, radius } from "../theme";
-import type { AppSettings, FxRate, FxRateInput, LlmConfigPatch } from "../types";
+import type { AppSettings, ExtractionField, FxRate, FxRateInput, LlmConfigPatch } from "../types";
 
 /** Read-only key/value row. */
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -197,6 +197,36 @@ function LlmConfigCard({ s, canEdit }: { s: AppSettings; canEdit: boolean }) {
   );
 }
 
+/** Turn a snake_case setting key into something readable, for a backend that reports the
+ *  values but not the descriptors. */
+function humanise(key: string): string {
+  const words = key.replace(/_/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Controls inferred from the VALUES alone.
+ *
+ * The backend normally describes each knob (label, bounds, step, explanation) and this screen
+ * renders from that. An older backend returns the values without the descriptors — and rendering
+ * from an empty descriptor list produced a card with a Save button and no fields in it, which
+ * looks broken and says nothing about why. Inferring the control from each value's own type
+ * keeps the screen usable against any backend; only the bounds are unknown, and the API refuses
+ * an out-of-range value anyway. */
+function inferFields(values: Record<string, number | boolean | string>): ExtractionField[] {
+  return Object.entries(values).map(([key, v]) => ({
+    key,
+    kind: typeof v === "boolean" ? "bool" : typeof v === "number" ? "number" : "choice",
+    label: humanise(key),
+    help: "",
+    min: null,
+    max: null,
+    step: typeof v === "number" && Number.isInteger(v) ? 1 : 0.01,
+    // A string value with no declared options can only be offered as its current value; the
+    // real choice list lives on the backend.
+    choices: typeof v === "string" ? [v] : [],
+  }));
+}
+
 /** The mapping / reconciliation thresholds, tunable by an admin.
  *
  * Every control is rendered from the backend's own field descriptors — label, bounds, step and
@@ -206,15 +236,18 @@ function LlmConfigCard({ s, canEdit }: { s: AppSettings; canEdit: boolean }) {
 function ExtractionConfigCard({ s, canEdit }: { s: AppSettings; canEdit: boolean }) {
   const t = useT();
   const patch = usePatchSettings();
-  const fields = s.extraction_fields ?? [];
-  const [form, setForm] = useState<Record<string, number | boolean | string>>(s.extraction);
+  const described = s.extraction_fields ?? [];
+  const values = s.extraction ?? {};
+  const inferred = described.length === 0 && Object.keys(values).length > 0;
+  const fields = inferred ? inferFields(values) : described;
+  const [form, setForm] = useState<Record<string, number | boolean | string>>(values);
   const [dirty, setDirty] = useState(false);
 
   // Re-sync when the server's view changes (a save, or a reset) — but never clobber an edit in
   // progress, which would silently discard what the admin is typing.
   useEffect(() => {
-    if (!dirty) setForm(s.extraction);
-  }, [s.extraction, dirty]);
+    if (!dirty) setForm(values);
+  }, [values, dirty]);
 
   const set = (k: string, v: number | boolean | string) => {
     setDirty(true);
@@ -234,15 +267,27 @@ function ExtractionConfigCard({ s, canEdit }: { s: AppSettings; canEdit: boolean
     return null;
   };
   const invalid = localError();
-  const changed = fields.some((f) => String(form[f.key]) !== String(s.extraction[f.key]));
+  const changed = fields.some((f) => String(form[f.key]) !== String(values[f.key]));
+  const defaults = s.extraction_defaults ?? {};
   const movedFromDefault = (k: string) =>
-    String(s.extraction[k]) !== String((s.extraction_defaults ?? {})[k]);
+    k in defaults && String(values[k]) !== String(defaults[k]);
+
+  // Nothing to show at all — an older backend that reports no extraction block.
+  if (fields.length === 0) {
+    return (
+      <SectionCard title={t("st.extraction")} note={t("st.readOnly")}>
+        <div style={{ fontSize: 11.5, color: color.sec2, lineHeight: 1.55 }}>
+          {t("st.extractionUnavailable")}
+        </div>
+      </SectionCard>
+    );
+  }
 
   if (!canEdit) {
     return (
       <SectionCard title={t("st.extraction")} note={t("st.readOnly")}>
         {fields.map((f) => (
-          <Row key={f.key} label={f.label} value={String(s.extraction[f.key])} />
+          <Row key={f.key} label={f.label} value={String(values[f.key])} />
         ))}
       </SectionCard>
     );
@@ -252,6 +297,11 @@ function ExtractionConfigCard({ s, canEdit }: { s: AppSettings; canEdit: boolean
     <SectionCard title={t("st.extraction")} note={t("st.editable")}>
       <div style={{ fontSize: 11, color: color.sec2, marginBottom: 12, lineHeight: 1.55 }}>
         {t("st.extractionNote")}
+        {inferred && (
+          <span style={{ display: "block", marginTop: 5, color: color.amberFg, fontWeight: 600 }}>
+            {t("st.extractionInferred")}
+          </span>
+        )}
       </div>
 
       <div style={{ display: "grid", gap: 12 }}>
@@ -264,7 +314,7 @@ function ExtractionConfigCard({ s, canEdit }: { s: AppSettings; canEdit: boolean
               <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                 <span style={{ fontSize: 12.5, fontWeight: 600, color: color.ink }}>{f.label}</span>
                 {movedFromDefault(f.key) && (
-                  <span title={`Default: ${String((s.extraction_defaults ?? {})[f.key])}`}
+                  <span title={`Default: ${String(defaults[f.key])}`}
                         style={{ fontSize: 9.5, fontWeight: 600, padding: "1px 6px",
                                  borderRadius: radius.pill, background: color.amberBg,
                                  color: color.amberFg }}>
@@ -293,7 +343,7 @@ function ExtractionConfigCard({ s, canEdit }: { s: AppSettings; canEdit: boolean
             ) : f.kind === "choice" ? (
               <select data-testid={`ex-${f.key}`} value={String(form[f.key])}
                       onChange={(e) => set(f.key, e.target.value)} style={inputStyle}>
-                {f.choices.map((c) => <option key={c} value={c}>{c}</option>)}
+                {f.choices.map((c: string) => <option key={c} value={c}>{c}</option>)}
               </select>
             ) : (
               <input
