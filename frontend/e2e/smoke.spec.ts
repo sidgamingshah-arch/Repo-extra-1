@@ -22,6 +22,20 @@ async function setSampleLoaded(page: Page, want: boolean) {
   }
 }
 
+/** Put the extraction thresholds back to what config.toml shipped.
+ *
+ * These are PERSISTED, so a test that changes one and walks away hands its override to the next
+ * run — which is how the suite started failing on its second consecutive run. Any test touching
+ * them restores them, and any test asserting "back to the default" establishes that baseline
+ * first rather than trusting the value it happens to find. */
+async function resetThresholds(page: Page) {
+  await page.goto("/settings", DCL);
+  const reset = page.getByTestId("ex-reset");
+  await expect(reset).toBeVisible({ timeout: 15_000 });
+  await reset.click();
+  await expect(page.getByTestId("ex-save")).toBeDisabled({ timeout: 15_000 });
+}
+
 test.describe.configure({ mode: "serial" });
 
 test("greenfield: the app is empty before any project is loaded", async ({ page }) => {
@@ -286,13 +300,15 @@ test("an analyst gets no ontology editing affordances at all", async ({ page }) 
 
 test("admin tunes the extraction thresholds and they persist", async ({ page }) => {
   await loginAs(page, "admin");
-  await page.goto("/settings", DCL);
+  // The shipped configuration is the baseline this test compares against, so start from it
+  // rather than from whatever a previous run left saved.
+  await resetThresholds(page);
 
   // Every control is rendered from the backend's field descriptors, so the knob is present
   // without the screen knowing anything about mapping.
   const fuzzy = page.getByTestId("ex-fuzzy_accept");
   await expect(fuzzy).toBeVisible({ timeout: 15_000 });
-  const original = await fuzzy.inputValue();
+  const shipped = await fuzzy.inputValue();
 
   // Save is inert until something actually changes.
   await expect(page.getByTestId("ex-save")).toBeDisabled();
@@ -311,9 +327,10 @@ test("admin tunes the extraction thresholds and they persist", async ({ page }) 
   await expect(page.getByTestId("ex-save")).toBeDisabled();
   await expect(page.getByTestId("ex-message")).toContainText("at most 1");
 
-  // Restore defaults puts the shipped configuration back.
+  // Restore defaults puts the shipped configuration back — and leaves nothing behind for the
+  // next run to inherit.
   await page.getByTestId("ex-reset").click();
-  await expect(page.getByTestId("ex-fuzzy_accept")).toHaveValue(original, { timeout: 15_000 });
+  await expect(page.getByTestId("ex-fuzzy_accept")).toHaveValue(shipped, { timeout: 15_000 });
 });
 
 test("a saved threshold is still in force for a browser that never saw the edit", async ({
@@ -388,4 +405,8 @@ test("the thresholds are still editable against a backend that omits the descrip
   await fuzzy.fill("0.58");
   await page.getByTestId("ex-save").click();
   await expect(page.getByTestId("ex-save")).toBeDisabled({ timeout: 15_000 });
+
+  // Hand nothing to the next run: the save above is persisted.
+  await page.unroute("**/api/v1/settings");
+  await resetThresholds(page);
 });
