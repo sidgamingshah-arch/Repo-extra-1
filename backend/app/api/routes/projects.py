@@ -110,6 +110,10 @@ def get_pages(project_id: str, locale: str = Query("en")) -> dict:
     return {"pages": pages, "filters": filters, "focused": 14, "total": 84, "skipped": 70}
 
 
+# Every statement the app can ask for. The sample project carries only some of them.
+_KNOWN_STATEMENTS = ("balance_sheet", "profit_and_loss", "cash_flow", "changes_in_equity")
+
+
 def _scale(v, basis: str):
     if v is None:
         return None
@@ -126,6 +130,13 @@ def get_statement(project_id: str, statement: str,
                 "viewer": {"company": "", "subtitle": "", "chips": [], "callout": ""}}
     st = DEMO["statements"].get(statement)
     if st is None:
+        # A statement the app knows about but this sample does not carry (the demo has no
+        # statement of changes in equity) is an EMPTY statement, not an error — the tab exists
+        # for every document, and 404 would surface as a failure rather than "nothing here".
+        if statement in _KNOWN_STATEMENTS:
+            return {"statement": statement, "label": "", "basis": basis, "periods": ["", ""],
+                    "currency": "", "currency_symbol": "", "units": "", "rows": [],
+                    "viewer": {"company": "", "subtitle": "", "chips": [], "callout": ""}}
         raise HTTPException(404, f"Unknown statement {statement!r}")
     proj = DEMO["project"]
     rows = []

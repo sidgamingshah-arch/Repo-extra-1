@@ -126,7 +126,16 @@ def _is_noise_row(label: str, vals: list) -> bool:
 @dataclass
 class Word:
     text: str
-    bbox: BBox   # normalized [0,1], page top-left origin
+    bbox: BBox   # normalized [0,1] in READING space — what row/column logic uses
+    # Where the word actually sits on the rendered page, when that differs from reading space
+    # (a page whose text runs sideways — see ``services.pdf_extract._reading_space``). Provenance
+    # and therefore click-to-source must use THIS box: the viewer highlights the page as drawn,
+    # so a reading-space box would land the highlight in the wrong place.
+    page_bbox: BBox | None = None
+
+    @property
+    def source_bbox(self) -> BBox:
+        return self.page_bbox or self.bbox
 
 
 def _num(t: str, fmt=None) -> Decimal | None:
@@ -805,7 +814,7 @@ def _matrix_items(m: _Matrix, names: list[str], *, page_index: int, document_id:
 
         li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
                       source=ValueSource.MACHINE)
-        label_bbox = _union([w.bbox for w in label_words])
+        label_bbox = _union([w.source_bbox for w in label_words])
         for cw in cells:
             # A nil dash is printed for "no movement"; it is not a figure, so no value is
             # emitted for it — the same reason the two-column path never invents a zero.
@@ -943,7 +952,7 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
 
         li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
                       section_hint=section, source=ValueSource.MACHINE)
-        label_bbox = _union([w.bbox for w in label_words])
+        label_bbox = _union([w.source_bbox for w in label_words])
         # Group value columns by basis (via the header band), then place each value in its own
         # column within that basis — by position when the page has columns, else by order.
         per_basis: dict[Basis, int] = {}
@@ -975,8 +984,8 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
                 k = basis_cols[basis].index(col)
             per_basis[basis] = max(per_basis.get(basis, 0), k) + 1
             prov = Provenance(
-                document_id=document_id, page_index=page_index, bbox=vw.bbox,
-                value_bbox=vw.bbox, label_bbox=label_bbox, text_snippet=label,
+                document_id=document_id, page_index=page_index, bbox=vw.source_bbox,
+                value_bbox=vw.source_bbox, label_bbox=label_bbox, text_snippet=label,
                 source_kind=source_kind, producer=f"extract:{source_kind}@0.1.0",
             )
             li.set_value(ExtractedValue(

@@ -9,7 +9,7 @@ import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/u
 import { EmptyState } from "../components/EmptyState";
 import { ExcelGrid, PageStack, toPicked, type Picked } from "../components/SourceViewer";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
-import type { Basis, FxRateResolution, StatementKey, StatementResponse, StatementRow } from "../types";
+import type { Basis, FxRateResolution, StatementColumn, StatementKey, StatementResponse, StatementRow } from "../types";
 import { useDocumentStatement, useEditDocumentLineItem, useFxRateResolution, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
 import { useUI } from "../store";
 import { useT } from "../i18n";
@@ -165,6 +165,145 @@ function presentValue(raw: number | null, srcScale: number, target: UnitTarget):
   let dp = Math.abs(scaled) >= 1000 ? 0 : 2;
   while (scaled !== 0 && Number(scaled.toFixed(dp)) === 0 && dp < 6) dp += 2;
   return fmtDec(scaled, dp);
+}
+
+/* ---- matrix statement grid (equity components as columns, movements as rows) ----
+ *
+ * A statement of changes in equity is not a two-column comparative: its columns are equity
+ * components (issued capital, each reserve, retained profits, non-controlling interests, total
+ * equity) and its rows are movements through the year. There can be a dozen or more columns, so
+ * the table scrolls horizontally with the caption column pinned — the caption is what makes any
+ * cell readable, and losing it while scrolling makes the figures meaningless. */
+function MatrixGrid({
+  columns,
+  rows,
+  sel,
+  present,
+  linkable,
+  onSelect,
+}: {
+  columns: StatementColumn[];
+  rows: StatementRow[];
+  sel: string;
+  present: (raw: number | null) => string;
+  linkable: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const LABEL_W = 300;
+  const CELL_W = 118;
+  const cell: CSSProperties = {
+    ...colDiv,
+    width: CELL_W,
+    flex: "0 0 auto",
+    padding: "0 10px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    fontFamily: font.mono,
+    fontSize: 11.5,
+  };
+  const pinned: CSSProperties = {
+    width: LABEL_W,
+    flex: "0 0 auto",
+    position: "sticky",
+    left: 0,
+    zIndex: 1,
+    padding: "0 12px",
+    display: "flex",
+    alignItems: "center",
+  };
+
+  return (
+    <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+      <div style={{ display: "inline-block", minWidth: "100%" }}>
+        {/* column header */}
+        <div
+          style={{
+            display: "flex",
+            height: 46,
+            position: "sticky",
+            top: 0,
+            zIndex: 2,
+            background: "#f7f8fa",
+            borderBottom: `1px solid ${color.cardBorder}`,
+          }}
+        >
+          <div style={{ ...pinned, background: "#f7f8fa", fontSize: 11, fontWeight: 700,
+                        color: color.sec2, textTransform: "uppercase", letterSpacing: 0.3 }}>
+            Movement
+          </div>
+          {columns.map((c) => (
+            <div
+              key={c.key}
+              title={c.label}
+              style={{ ...cell, alignItems: "flex-end", paddingBottom: 6, fontFamily: font.sans,
+                       fontSize: 10.5, fontWeight: 700, color: color.sec2, textAlign: "right",
+                       lineHeight: 1.25 }}
+            >
+              <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis",
+                             whiteSpace: "normal", maxHeight: 28 }}>
+                {c.label}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {rows.map((r) => {
+          const isBalance = r.kind === "subtotal" || r.kind === "total";
+          const selected = r.id === sel;
+          const jump = linkable && !!r.source && toPicked(r.source, r.label) !== null;
+          const bg = selected ? color.indigoTint3 : isBalance ? color.rowAltBg : color.surface;
+          return (
+            <div
+              key={r.id}
+              onClick={() => onSelect(r.id)}
+              title={jump ? "Click to show this row in the source document" : undefined}
+              style={{
+                display: "flex",
+                height: 34,
+                borderBottom: `1px solid ${color.hairline}`,
+                background: bg,
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ ...pinned, background: bg }}>
+                <span
+                  style={{
+                    fontSize: 12,
+                    fontWeight: isBalance ? 600 : 400,
+                    color: color.ink,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    borderBottom: jump ? `1px dashed ${selected ? color.indigo : color.dashed}` : "none",
+                  }}
+                >
+                  {r.label}
+                </span>
+              </div>
+              {columns.map((c) => {
+                const v = r.cells?.[c.key] ?? null;
+                return (
+                  <div
+                    key={c.key}
+                    style={{
+                      ...cell,
+                      fontWeight: isBalance ? 600 : 400,
+                      // An empty cell is meaningful here: the movement did not touch that
+                      // component. Showing a dash rather than nothing says so.
+                      color: v === null ? color.faint : color.ink,
+                    }}
+                  >
+                    {v === null ? "–" : present(v)}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 /* ---- right output-panel row ---- */
@@ -496,6 +635,9 @@ export default function WorkspaceScreen() {
     fxCaption,
   ].filter(Boolean).join("  ·  ");
   const lowConfCount = d.rows.filter((r) => r.confidence?.cat === "low").length;
+  // A matrix statement (changes in equity) has NAMED component columns from the document
+  // instead of the fixed current/prior pair, so it renders through MatrixGrid.
+  const isMatrix = d.layout === "matrix";
   const selRowObj = d.rows.find((r) => r.id === sel) ?? d.rows.find((r) => r.inspector);
   const insp = selRowObj?.inspector;
   const isEdited = selRowObj?.status === "edited";
@@ -528,6 +670,7 @@ export default function WorkspaceScreen() {
             { value: "balance_sheet", label: t("ws.stmt.balance_sheet") },
             { value: "profit_and_loss", label: t("ws.stmt.profit_and_loss") },
             { value: "cash_flow", label: t("ws.stmt.cash_flow") },
+            { value: "changes_in_equity", label: t("ws.stmt.changes_in_equity") },
           ]}
           value={statement}
           onChange={setStatement}
@@ -744,7 +887,9 @@ export default function WorkspaceScreen() {
             minHeight: 0,
           }}
         >
-          {/* grid header */}
+          {/* grid header — a matrix carries its own header inside MatrixGrid, because its
+              columns come from the document rather than being the fixed current/prior pair. */}
+          {!isMatrix && (
           <div
             style={{
               display: "grid",
@@ -761,10 +906,11 @@ export default function WorkspaceScreen() {
           >
             <span>{t("col.lineitem")}</span>
             <span style={{ textAlign: "center", ...colDiv }}>{t("col.note")}</span>
-            <span style={{ textAlign: "right", ...colDiv }}>{d.periods[0]}</span>
-            <span style={{ textAlign: "right", ...colDiv }}>{d.periods[1]}</span>
+            <span style={{ textAlign: "right", ...colDiv }}>{d.periods[0] ?? ""}</span>
+            <span style={{ textAlign: "right", ...colDiv }}>{d.periods[1] ?? ""}</span>
             <span style={{ textAlign: "right", ...colDiv }}>{t("col.conf")}</span>
           </div>
+          )}
 
           {/* units caption — labels the magnitude of every figure in the panel */}
           {unitsCaption && (
@@ -798,12 +944,17 @@ export default function WorkspaceScreen() {
           )}
 
           {/* scroll body */}
-          <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-            {d.rows.map((r) => (
-              <OutputRow key={r.id} row={r} sel={sel} present={present} linkable={usingReal}
-                         onSelect={handleSelect} onOpenNote={openNote} />
-            ))}
-          </div>
+          {isMatrix ? (
+            <MatrixGrid columns={d.columns ?? []} rows={d.rows} sel={sel} present={present}
+                        linkable={usingReal} onSelect={handleSelect} />
+          ) : (
+            <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+              {d.rows.map((r) => (
+                <OutputRow key={r.id} row={r} sel={sel} present={present} linkable={usingReal}
+                           onSelect={handleSelect} onOpenNote={openNote} />
+              ))}
+            </div>
+          )}
 
           {/* cell inspector */}
           <div

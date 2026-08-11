@@ -522,6 +522,27 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
             "fix": L("Assets do not equal equity plus liabilities. Check the extracted totals "
                      "and their components against the document."),
         })
+    # The statement of changes in equity must END where the balance sheet says equity stands.
+    # It is the one relation that crosses two statements, and it is worth checking precisely
+    # because the two are extracted by completely different paths — a matrix reader and a
+    # two-column reader — so agreement is real evidence rather than a restatement.
+    eq_close, bs_equity = _equity_closing(rows, "consolidated"), _row_value(
+        rows, "bs_equity__total_equity")
+    if eq_close is not None and bs_equity is not None and abs(eq_close[1] - bs_equity) > 1:
+        checks.append({
+            "id": "chk-equity-closing", "type": "equity_tie", "icon": "≠",
+            "title": L("Equity statement does not close at the balance sheet's equity"),
+            "where": L("Statement of changes in equity"),
+            "severity": L("Check failed"), "tone": "high",
+            "delta": f"{eq_close[1] - bs_equity:,.0f}", "target": "bs_equity__total_equity",
+            "calc": [
+                [eq_close[0], f"{eq_close[1]:,.0f}", False],
+                [L("Total equity per the balance sheet"), f"{bs_equity:,.0f}", True],
+                [L("Difference"), f"{eq_close[1] - bs_equity:,.0f}", False],
+            ],
+            "fix": L("The closing balance of the equity statement should equal total equity on "
+                     "the balance sheet. Check both figures against the document."),
+        })
     # Only a note that IS a breakdown of the face figure, yet does not tie, is a finding. An
     # "unconfirmed" entry means the cited note is an analysis/segment/commitments table rather
     # than a decomposition — raising those turned the queue into hundreds of non-findings.
@@ -1233,6 +1254,146 @@ def _period_labels(rows: list[dict], basis: str, locale: str) -> list[str]:
     return [_t("Current", locale), _t("Prior", locale)]
 
 
+# A two-column comparative labels its values positionally — "current", "prior", "col2" for a
+# third numeric column. A matrix labels them with the column header text it read off the page
+# ("Issued capital", "Retained profits"). That is the discriminator between the two shapes, and
+# it needs no extra plumbing: the label already travels with every value.
+_POSITIONAL_PERIOD = re.compile(r"^(current|prior|col\d+)$", re.IGNORECASE)
+
+
+def _is_named_column(label) -> bool:
+    return bool(label) and not _POSITIONAL_PERIOD.match(str(label))
+
+
+def _matrix_cells(row: dict, basis: str) -> dict[str, object]:
+    """This row's named component cells for one basis — empty for a comparative row."""
+    out: dict[str, object] = {}
+    for v in row.get("values") or []:
+        if (v.get("basis") or "consolidated") != basis:
+            continue
+        if _is_named_column(v.get("period_label")):
+            out[str(v["period_label"])] = v
+    return out
+
+
+def _matrix_rows(rows: list[dict], basis: str) -> list[tuple[dict, dict]]:
+    """(row, named cells) for every row that is part of the matrix.
+
+    A movement in equity always touches at least its own component and a total column, so two
+    named cells is the floor — that keeps a stray one-column row out of the statement.
+    """
+    out = []
+    for r in rows:
+        cells = _matrix_cells(r, basis)
+        if len(cells) >= 2:
+            out.append((r, cells))
+    return out
+
+
+def _matrix_columns(rows: list[dict], basis: str) -> list[str]:
+    """The component columns of a matrix statement, in the order they are PRINTED.
+
+    Column identity is the header text extraction already attached to each value; the order is
+    recovered from where the figures sit on the page (the median x of a column's cells), because
+    a dict of values has no left-to-right order of its own and equity statements are read
+    left-to-right — issued capital through to total equity.
+    """
+    xs: dict[str, list[float]] = {}
+    for _r, cells in _matrix_rows(rows, basis):
+        for name, v in cells.items():
+            box = ((v.get("provenance") or {}).get("bbox")) or {}
+            x = box.get("x0")
+            xs.setdefault(name, []).append(0.0 if x is None else float(x))
+    def centre(name: str) -> float:
+        vals = sorted(xs[name])
+        return vals[len(vals) // 2] if vals else 0.0
+    return sorted(xs, key=centre)
+
+
+def _build_matrix_statement(rows: list[dict], statement_type: str, filename: str, *,
+                            basis: str, locale: str, units_ctx: dict | None,
+                            company: str | None, doc_format: str, page_count: int,
+                            template_def: dict | None) -> dict:
+    """A matrix statement: named component columns, one row per movement, in document order.
+
+    Rows keep the caption as printed. A movement's identity in a statement of changes in equity
+    IS its caption ("Profit for the year", "Dividends paid", "Acquisition of a subsidiary"), and
+    there is no section skeleton to slot it into — so the printed order is the statement's order,
+    and every parsed row appears. ``cells`` is keyed by column name; ``v1``/``v2`` stay null so
+    nothing downstream mistakes a component for a period.
+    """
+    columns = _matrix_columns(rows, basis)
+    out: list[dict] = []
+    for r, raw_cells in _matrix_rows(rows, basis):
+        cells = {name: _to_num(v.get("value")) for name, v in raw_cells.items()}
+        prov = next((v.get("provenance") for v in raw_cells.values() if v.get("provenance")), None)
+        cat, pct = _conf_cat(r.get("mapping_confidence"))
+        label = r.get("source_label") or ""
+        out.append({
+            "id": r.get("canonical_key") or f"eq:{len(out)}:{label[:40]}",
+            "label": label, "source_label": label,
+            # A row whose every figure lands in a "total" column is the statement's own subtotal.
+            "kind": "subtotal" if _looks_like_equity_total(label) else "item",
+            "note": r.get("note"), "note2": None, "status": None,
+            "confidence": {"cat": cat, "pct": pct} if r.get("mapping_confidence") else None,
+            "editable": False, "formula": None,
+            "inspector": _inspector(r, {"value": next(iter(cells.values()), None),
+                                        "provenance": prov}),
+            "contributions": None, "cells": cells,
+            "v1": None, "v2": None, "source": prov,
+        })
+
+    basis_label = _t("Consolidated" if basis == "consolidated" else "Standalone", locale)
+    return {
+        "statement": statement_type,
+        "label": _stmt_label(template_def, statement_type, locale),
+        "basis": basis,
+        # The shape the client must render. Absent/"comparative" is the two-column default.
+        "layout": "matrix",
+        "columns": [{"key": c, "label": c} for c in columns],
+        "periods": [],
+        "currency": (units_ctx or {}).get("currency") or "",
+        "currency_symbol": "", "units": (units_ctx or {}).get("units_label") or "",
+        "units_scale_factor": _to_num((units_ctx or {}).get("scale_factor")) or 1.0,
+        "format": doc_format, "page_count": page_count,
+        "rows": out,
+        "viewer": {
+            "company": company or filename, "subtitle": _t("Extracted statement", locale),
+            "chips": [{"label": basis_label, "active": True}],
+            "callout": _t("Columns are equity components as printed, not periods. Click a row "
+                          "to see it in the document.", locale),
+        },
+    }
+
+
+# A movement row whose caption is an opening/closing balance is the matrix's own subtotal line.
+_EQUITY_TOTAL = re.compile(
+    r"^\s*(at|as at|balance(s)? (at|as at))\b|^\s*(於|于|截至)", re.IGNORECASE)
+
+
+def _looks_like_equity_total(label: str) -> bool:
+    return bool(_EQUITY_TOTAL.search(label or ""))
+
+
+def _equity_closing(rows: list[dict], basis: str) -> tuple[str, float] | None:
+    """The equity statement's CLOSING total equity, as (caption, amount).
+
+    The last balance line in document order is the closing one — an equity statement runs
+    opening balance, movements, closing balance, and a two-year statement simply does that
+    twice. Returns None when the document carries no equity matrix at all.
+    """
+    total_col = None
+    last = None
+    for r, cells in _matrix_rows(rows, basis):
+        if total_col is None:
+            total_col = next((c for c in cells if "total equity" in c.lower()), None)
+        if total_col and _looks_like_equity_total(r.get("source_label") or ""):
+            v = _to_num((cells.get(total_col) or {}).get("value"))
+            if v is not None:
+                last = (r.get("source_label") or "", v)
+    return last
+
+
 def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
                      filename: str, basis: str = "consolidated", locale: str = "en",
                      units_ctx: dict | None = None, company: str | None = None,
@@ -1243,6 +1404,15 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     carry a value for the requested `basis` (consolidated / standalone) are shown. Labels are
     resolved in the output `locale` from the template's label_i18n (input=output parity)."""
     prefix = _stmt_prefix(template_def, statement_type)
+    # A statement of changes in equity is not a two-column comparative — its columns are equity
+    # COMPONENTS (issued capital, each reserve, retained profits, non-controlling interests,
+    # total equity) and its rows are movements through the year. Forcing it into current/prior
+    # columns files a component under a period that does not exist, so it gets its own shape.
+    if statement_type == "changes_in_equity":
+        return _build_matrix_statement(
+            rows, statement_type, filename, basis=basis, locale=locale, units_ctx=units_ctx,
+            company=company, doc_format=doc_format, page_count=page_count,
+            template_def=template_def)
     # Several printed lines legitimately share one concept: three depreciation lines roll into
     # "Depreciation and amortisation", two tax payments into "Income tax paid", and an "Others"
     # bucket exists precisely to absorb a handful. Keeping only the first row would drop the

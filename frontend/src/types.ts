@@ -174,7 +174,8 @@ export type FxRateResolution =
       reason: "no_rate_configured";
       detail: string;
     };
-export type StatementKey = "balance_sheet" | "profit_and_loss" | "cash_flow";
+export type StatementKey = "balance_sheet" | "profit_and_loss" | "cash_flow"
+  | "changes_in_equity";
 export type RowKind = "section" | "subhead" | "item" | "subtotal" | "total";
 export type ExportFmt = "excel" | "json";
 
@@ -226,7 +227,16 @@ export interface StatementRow {
   contributions?: RowContribution[] | null;
   v1: number | null;
   v2: number | null;
+  /** Matrix layouts only: the row's figures keyed by column name (see StatementResponse.layout).
+   *  v1/v2 stay null there, because a component is not a period. */
+  cells?: Record<string, number | null> | null;
   source?: ExtractionProvenance | null;  // real docs: current-period value's source location
+}
+
+/** A named column of a matrix statement — an equity component, not a period. */
+export interface StatementColumn {
+  key: string;
+  label: string;
 }
 
 export interface ViewerMeta {
@@ -240,7 +250,13 @@ export interface StatementResponse {
   statement: StatementKey;
   label: string;
   basis: Basis;
-  periods: [string, string];
+  /** Shape of the statement. "matrix" means the columns are NAMED (equity components, not
+   *  periods) and every row carries `cells` instead of v1/v2. Absent means the two-column
+   *  comparative default. */
+  layout?: "comparative" | "matrix";
+  /** Matrix layouts only: the named columns, in the order they are printed. */
+  columns?: StatementColumn[];
+  periods: string[];
   currency: string;
   currency_symbol: string;
   units: string;
