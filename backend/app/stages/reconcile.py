@@ -57,6 +57,11 @@ class ReconcileStage:
     name = "reconcile"
 
     def run(self, doc: DocumentModel, ctx: PipelineContext) -> DocumentModel:
+        ex = ctx.settings.extraction
+        tol_abs = Decimal(str(ex.recon_abs_tolerance))
+        tol_rel = Decimal(str(ex.recon_rel_tolerance))
+        corroboration = Decimal(str(getattr(ex, "recon_corroboration_rel", "0.05")))
+
         report = ReconciliationReport()
         if not doc.links:
             doc.reconciliation = report
@@ -98,7 +103,12 @@ class ReconcileStage:
             raw = ev.value if ev.value is not None else ev.value_raw
             return reconcile_face(ReconcileInput(
                 face_item_id=str(face.id), note_number=note.note_number or "",
-                raw_face_value=Decimal(raw), details=details))
+                raw_face_value=Decimal(raw), details=details,
+                # From configuration, not the dataclass defaults — these are tunable from the
+                # Settings screen, and a knob that does not reach the code it names is worse
+                # than no knob at all.
+                tolerance_abs=tol_abs, tolerance_rel=tol_rel,
+                corroboration_rel=corroboration))
 
         for (face_id, note_number), pairs in tables_by_link.items():
             face = face_by_id[face_id]

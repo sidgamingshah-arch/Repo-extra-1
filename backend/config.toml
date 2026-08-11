@@ -108,5 +108,6 @@ fuzzy_candidate = 0.45          # minimum score to keep a fuzzy match as a candi
 embedding_accept = 0.82         # cosine similarity to accept a semantic match
 mapping_margin = 0.08           # winner must beat the runner-up by this margin, else review
 auto_accept_confidence = 0.80   # combined confidence at/above which a line auto-accepts
+recon_corroboration_rel = 0.05  # how near a note total must be to the face figure to count as its breakdown
 recon_abs_tolerance = 1.0       # absolute tolerance (in base units) for reconciliation ties
 recon_rel_tolerance = 0.005     # relative tolerance (fraction of the face value)

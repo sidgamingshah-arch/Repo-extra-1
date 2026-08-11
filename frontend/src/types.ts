@@ -89,12 +89,30 @@ export interface LlmConfigPatch {
   timeout_seconds?: number;
   api_key_env?: string;
 }
+/** One tunable extraction setting, as DESCRIBED BY THE BACKEND — bounds, step and an
+ *  explanation of what it does. The Settings screen renders and validates from this, so the
+ *  UI cannot disagree with what the API will accept. */
+export interface ExtractionField {
+  key: string;
+  kind: "number" | "bool" | "choice";
+  label: string;
+  help: string;
+  min: number | null;
+  max: number | null;
+  step: number | null;
+  choices: string[];
+}
+
 /** Runtime-mutable settings an admin can PATCH. */
 export interface SettingsPatch {
   ui_localization?: boolean;
   review_required?: boolean;
   seed_demo?: boolean;
   llm?: LlmConfigPatch;
+  /** Mapping / reconciliation thresholds. Out-of-range values are refused by the API (422). */
+  extraction?: Record<string, number | boolean | string>;
+  /** Restore every extraction knob to the value config.toml shipped. */
+  reset_extraction?: boolean;
 }
 
 export interface AppSettings {
@@ -117,15 +135,14 @@ export interface AppSettings {
   };
   ocr: { engine: string; languages: string[]; dpi: number };
   embeddings: { provider: string; model: string };
-  extraction: {
-    fuzzy_accept: number;
-    fuzzy_candidate: number;
-    embedding_accept: number;
-    mapping_margin: number;
-    auto_accept_confidence: number;
-    recon_abs_tolerance: number;
-    recon_rel_tolerance: number;
-  };
+  /** Runtime-tunable pipeline thresholds, keyed by knob name. Rendered from
+   *  `extraction_fields` rather than a hardcoded list, so a knob added on the backend appears
+   *  here with no frontend change. */
+  extraction: Record<string, number | boolean | string>;
+  /** What config.toml shipped for each knob — for "restore defaults" and for showing which
+   *  values have been moved away from them. */
+  extraction_defaults: Record<string, number | boolean | string>;
+  extraction_fields: ExtractionField[];
   auth: { allow_role_header: boolean; demo_mode: boolean; session_ttl_minutes: number };
 }
 

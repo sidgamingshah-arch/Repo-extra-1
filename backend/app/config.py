@@ -132,6 +132,11 @@ class ExtractionSettings(BaseModel):
     auto_accept_confidence: float = 0.80
     recon_abs_tolerance: float = 1.0
     recon_rel_tolerance: float = 0.005
+    # How close a note total must come to the face figure before we accept that the note really
+    # is a BREAKDOWN of it. Beyond this the note is graded "unconfirmed" rather than asserted as
+    # a mismatch — most cited notes are analyses or segment tables, not decompositions. Raising
+    # it turns more near-misses into review items; lowering it reports fewer.
+    recon_corroboration_rel: float = 0.05
     # Mapping strategy. When an LLM provider is configured, mapping is DESCRIPTION-BASED:
     # the model chooses the canonical concept by meaning (using each candidate's
     # description), not string similarity. The lexical/fuzzy tiers only pre-shortlist

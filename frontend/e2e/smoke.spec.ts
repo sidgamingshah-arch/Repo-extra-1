@@ -267,3 +267,46 @@ test("an analyst gets no ontology editing affordances at all", async ({ page }) 
   await expect(page.getByRole("button", { name: "Save rule" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Save changes" })).toHaveCount(0);
 });
+
+test("admin tunes the extraction thresholds and they persist", async ({ page }) => {
+  await loginAs(page, "admin");
+  await page.goto("/settings", DCL);
+
+  // Every control is rendered from the backend's field descriptors, so the knob is present
+  // without the screen knowing anything about mapping.
+  const fuzzy = page.getByTestId("ex-fuzzy_accept");
+  await expect(fuzzy).toBeVisible({ timeout: 15_000 });
+  const original = await fuzzy.inputValue();
+
+  // Save is inert until something actually changes.
+  await expect(page.getByTestId("ex-save")).toBeDisabled();
+
+  await fuzzy.fill("0.62");
+  await expect(page.getByTestId("ex-save")).toBeEnabled();
+  await page.getByTestId("ex-save").click();
+
+  // It round-trips: a reload reads the value back from the server, so the pipeline really
+  // holds it — not just this form.
+  await page.reload(DCL);
+  await expect(page.getByTestId("ex-fuzzy_accept")).toHaveValue("0.62", { timeout: 15_000 });
+
+  // Out of range is refused before it can be sent, and says why.
+  await page.getByTestId("ex-fuzzy_accept").fill("1.4");
+  await expect(page.getByTestId("ex-save")).toBeDisabled();
+  await expect(page.getByTestId("ex-message")).toContainText("at most 1");
+
+  // Restore defaults puts the shipped configuration back.
+  await page.getByTestId("ex-reset").click();
+  await expect(page.getByTestId("ex-fuzzy_accept")).toHaveValue(original, { timeout: 15_000 });
+});
+
+test("an analyst cannot reach the extraction thresholds at all", async ({ page }) => {
+  // Settings is an admin-only SCREEN (see SCREENS_BY_ROLE): these knobs change how every
+  // future extraction behaves, so an analyst gets neither the controls nor the screen.
+  await loginAs(page, "analyst");
+  await page.goto("/settings", DCL);
+
+  await expect(page.getByTestId("ex-fuzzy_accept")).toHaveCount(0);
+  await expect(page.getByTestId("ex-save")).toHaveCount(0);
+  await expect(page.getByText("Fuzzy auto-accept")).toHaveCount(0);
+});

@@ -183,6 +183,164 @@ function LlmConfigCard({ s, canEdit }: { s: AppSettings; canEdit: boolean }) {
   );
 }
 
+/** The mapping / reconciliation thresholds, tunable by an admin.
+ *
+ * Every control is rendered from the backend's own field descriptors — label, bounds, step and
+ * an explanation of what the knob does. Nothing about mapping is hardcoded here, so a knob added
+ * on the backend shows up with no change to this screen, and the bounds the UI enforces are by
+ * construction the bounds the API enforces. */
+function ExtractionConfigCard({ s, canEdit }: { s: AppSettings; canEdit: boolean }) {
+  const t = useT();
+  const patch = usePatchSettings();
+  const fields = s.extraction_fields ?? [];
+  const [form, setForm] = useState<Record<string, number | boolean | string>>(s.extraction);
+  const [dirty, setDirty] = useState(false);
+
+  // Re-sync when the server's view changes (a save, or a reset) — but never clobber an edit in
+  // progress, which would silently discard what the admin is typing.
+  useEffect(() => {
+    if (!dirty) setForm(s.extraction);
+  }, [s.extraction, dirty]);
+
+  const set = (k: string, v: number | boolean | string) => {
+    setDirty(true);
+    setForm((f) => ({ ...f, [k]: v }));
+  };
+
+  /** The first bound a typed value breaks, checked against the backend's own descriptor so the
+   *  Save button never sends something the API will refuse. */
+  const localError = (): string | null => {
+    for (const f of fields) {
+      if (f.kind !== "number") continue;
+      const v = Number(form[f.key]);
+      if (!Number.isFinite(v)) return `${f.label} must be a number`;
+      if (f.min !== null && v < f.min) return `${f.label} must be at least ${f.min}`;
+      if (f.max !== null && v > f.max) return `${f.label} must be at most ${f.max}`;
+    }
+    return null;
+  };
+  const invalid = localError();
+  const changed = fields.some((f) => String(form[f.key]) !== String(s.extraction[f.key]));
+  const movedFromDefault = (k: string) =>
+    String(s.extraction[k]) !== String((s.extraction_defaults ?? {})[k]);
+
+  if (!canEdit) {
+    return (
+      <SectionCard title={t("st.extraction")} note={t("st.readOnly")}>
+        {fields.map((f) => (
+          <Row key={f.key} label={f.label} value={String(s.extraction[f.key])} />
+        ))}
+      </SectionCard>
+    );
+  }
+
+  return (
+    <SectionCard title={t("st.extraction")} note={t("st.editable")}>
+      <div style={{ fontSize: 11, color: color.sec2, marginBottom: 12, lineHeight: 1.55 }}>
+        {t("st.extractionNote")}
+      </div>
+
+      <div style={{ display: "grid", gap: 12 }}>
+        {fields.map((f) => (
+          <div key={f.key}
+               style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 150px", gap: 12,
+                        alignItems: "start", paddingBottom: 10,
+                        borderBottom: `1px solid ${color.hairline}` }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: color.ink }}>{f.label}</span>
+                {movedFromDefault(f.key) && (
+                  <span title={`Default: ${String((s.extraction_defaults ?? {})[f.key])}`}
+                        style={{ fontSize: 9.5, fontWeight: 600, padding: "1px 6px",
+                                 borderRadius: radius.pill, background: color.amberBg,
+                                 color: color.amberFg }}>
+                    {t("st.changed")}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 10.5, color: color.muted, marginTop: 3, lineHeight: 1.5 }}>
+                {f.help}
+              </div>
+            </div>
+            {f.kind === "bool" ? (
+              // Toggle is presentational; the surrounding control carries the interaction.
+              <button
+                data-testid={`ex-${f.key}`}
+                onClick={() => set(f.key, !form[f.key])}
+                style={{ display: "flex", alignItems: "center", gap: 8, background: "none",
+                         border: "none", padding: 0, cursor: "pointer", justifySelf: "start" }}
+              >
+                <Toggle on={Boolean(form[f.key])} />
+                <span style={{ fontSize: 11, fontWeight: 600,
+                               color: form[f.key] ? color.greenFg : color.muted }}>
+                  {form[f.key] ? t("st.on") : t("st.off")}
+                </span>
+              </button>
+            ) : f.kind === "choice" ? (
+              <select data-testid={`ex-${f.key}`} value={String(form[f.key])}
+                      onChange={(e) => set(f.key, e.target.value)} style={inputStyle}>
+                {f.choices.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            ) : (
+              <input
+                data-testid={`ex-${f.key}`}
+                type="number"
+                value={String(form[f.key] ?? "")}
+                step={f.step ?? 0.01}
+                min={f.min ?? undefined}
+                max={f.max ?? undefined}
+                onChange={(e) => set(f.key, e.target.value === "" ? "" : Number(e.target.value))}
+                style={inputStyle}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                    marginTop: 13, gap: 12 }}>
+        <span data-testid="ex-message"
+              style={{ fontSize: 11, color: invalid ? color.redFg : color.muted }}>
+          {invalid
+            ?? (patch.isError
+                  ? `${(patch.error as { detail?: string } | null)?.detail ?? t("st.saveFailed")}`
+                  : "")}
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {patch.isSuccess && !patch.isPending && !changed && (
+            <span style={{ fontSize: 11, color: color.greenFg, fontWeight: 600 }}>
+              ✓ {t("st.saved")}
+            </span>
+          )}
+          <button
+            data-testid="ex-reset"
+            onClick={() => { setDirty(false); patch.mutate({ reset_extraction: true }); }}
+            disabled={patch.isPending}
+            style={{ fontSize: 12, fontWeight: 600, color: color.sec2, background: "#fff",
+                     border: `1px solid ${color.controlBorder}`, borderRadius: 8,
+                     padding: "8px 14px", cursor: patch.isPending ? "default" : "pointer" }}
+          >
+            {t("st.restoreDefaults")}
+          </button>
+          <button
+            data-testid="ex-save"
+            onClick={() => { setDirty(false); patch.mutate({ extraction: form }); }}
+            disabled={patch.isPending || !!invalid || !changed}
+            style={{
+              fontSize: 12, fontWeight: 600, color: "#fff",
+              background: patch.isPending || invalid || !changed ? color.faint : color.indigo,
+              border: "none", borderRadius: 8, padding: "8px 16px",
+              cursor: patch.isPending || invalid || !changed ? "default" : "pointer",
+            }}
+          >
+            {patch.isPending ? t("st.saving") : t("st.save")}
+          </button>
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
 function KeyStatus({ s, t }: { s: AppSettings; t: (k: string) => string }) {
   return (
     <span style={{ color: s.llm.key_configured ? color.greenFg : color.amberFg, fontWeight: 600 }}>
@@ -465,15 +623,7 @@ export default function SettingsScreen() {
       </div>
 
       {/* Extraction & reconciliation */}
-      <SectionCard title={t("st.extraction")} note={readOnlyNote}>
-        <Row label={t("st.fuzzyAccept")} value={s.extraction.fuzzy_accept} />
-        <Row label={t("st.fuzzyCandidate")} value={s.extraction.fuzzy_candidate} />
-        <Row label={t("st.embeddingAccept")} value={s.extraction.embedding_accept} />
-        <Row label={t("st.mappingMargin")} value={s.extraction.mapping_margin} />
-        <Row label={t("st.autoAccept")} value={s.extraction.auto_accept_confidence} />
-        <Row label={t("st.reconAbs")} value={s.extraction.recon_abs_tolerance} />
-        <Row label={t("st.reconRel")} value={s.extraction.recon_rel_tolerance} />
-      </SectionCard>
+      <ExtractionConfigCard s={s} canEdit={canEdit} />
 
       {/* Access & session */}
       <SectionCard title={t("st.access")} note={readOnlyNote}>

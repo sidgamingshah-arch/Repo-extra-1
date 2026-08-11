@@ -55,8 +55,11 @@ TIE_TIED = "tied"
 TIE_UNTIED = "untied"
 TIE_UNCONFIRMED = "unconfirmed"
 
-# The default corroboration band, shared by ``reconcile_face`` and ``tie_status`` so a stored
-# entry is graded exactly as a freshly computed one would be.
+# The default corroboration band. A fresh run uses the CONFIGURED band (the reconcile stage
+# passes ``extraction.recon_corroboration_rel``); this constant is what ``tie_status`` falls back
+# to when grading an entry stored before the grade existed. Deliberately a constant and not the
+# live setting: an old run's grade should reconstruct what that run would have said, not shift
+# because an admin has since moved the slider.
 CORROBORATION_REL = Decimal("0.05")
 
 
