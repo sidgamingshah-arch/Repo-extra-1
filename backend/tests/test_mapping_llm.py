@@ -273,3 +273,49 @@ def test_batch_failure_is_recorded_not_swallowed():
     assert m.usage["failures"] == 1
     assert "truncated JSON" in m.usage["last_error"]
     assert res["a"].canonical_key == "trade_receivables"   # fell back, still answered
+
+
+def test_batch_refuses_a_wrong_section_answer_even_though_the_model_was_told_the_section():
+    """The post-answer gate is a BACKSTOP, not decoration — and the batch path is the one path
+    whose candidate list is not section-filtered before being offered, so a wrong-section answer
+    is reachable only here. Deleting the gate outright used to pass the whole suite."""
+    ont = OntologyDefinition(
+        ontology_key="t", target_template_key="t",
+        mappings=[
+            OntologyMapping(canonical_key="bs_current_assets__trade_receivables",
+                            label="Trade receivables", description="owed by customers"),
+            OntologyMapping(canonical_key="bs_current_liabilities__trade_payables",
+                            label="Trade payables", description="owed to suppliers"),
+        ],
+    )
+    # The model answers with a CURRENT LIABILITIES concept for a row printed under CURRENT ASSETS.
+    llm = _RecordingLlm([LlmBatchItem(item_id="a",
+                                      canonical_key="bs_current_liabilities__trade_payables",
+                                      confidence=0.99)])
+    m = OntologyMatcher(ont, settings=get_settings(), llm_provider=llm)
+    res = m.match_batch([("a", "Amounts due from customers")],
+                        statement="balance_sheet", sections={"a": "CURRENT ASSETS"})
+
+    assert res["a"].canonical_key != "bs_current_liabilities__trade_payables"
+    assert m.usage["batch_refused"] == 1      # refused, and the refusal is counted
+
+
+def test_the_per_line_call_still_gets_the_per_line_prompt():
+    """The batch framing is additive so it cannot rewrite the per-line prompt — asserted at the
+    CALL SITE, because comparing the two attributes does not prove which one is sent."""
+    seen: list[tuple[str, str]] = []
+
+    class _Spy:
+        id = "fake"
+
+        def complete_structured(self, *, system, messages, response_schema, temperature=0.0,
+                                max_tokens=2048):
+            seen.append((response_schema.__name__, system))
+            return LlmMappingDecision(canonical_key="", confidence=0.0), {"model": "fake-llm"}
+
+    m = OntologyMatcher(_ontology(), settings=get_settings(), llm_provider=_Spy())
+    m.match("Amounts due from customers", statement="balance_sheet")
+
+    assert [s for s, _ in seen] == ["LlmMappingDecision"]      # per-line schema, per-line path
+    assert seen[0][1] == m._system
+    assert "SEVERAL captions" not in seen[0][1]                # batch addendum stayed out

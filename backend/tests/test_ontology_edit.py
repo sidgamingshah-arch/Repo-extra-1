@@ -138,10 +138,22 @@ def test_detail_exposes_raw_per_locale_aliases_for_editing(client):
 def test_editing_the_ontology_requires_admin(anon_client, auth):
     rows = anon_client.get(f"{API}/ontologies").json()
     oid = next(r["id"] for r in rows if r["ontology_key"] == "hkfrs_hk_china_v1")
-    payload = {"canonical_key": "bs_non_current_assets__property_plant_and_equipment",
-               "aliases": ["nope"]}
+    key = "bs_non_current_assets__property_plant_and_equipment"
     url = f"{API}/ontologies/{oid}/mappings"
-    assert anon_client.patch(url, json=payload).status_code == 401
-    assert anon_client.patch(url, json=payload, headers=auth("analyst")).status_code == 403
-    assert anon_client.patch(url, json=payload, headers=auth("reviewer")).status_code == 403
-    assert anon_client.patch(url, json=payload, headers=auth("admin")).status_code == 200
+
+    # The refused calls never reach the database, so their payload can be anything.
+    denied = {"canonical_key": key, "aliases": ["nope"]}
+    assert anon_client.patch(url, json=denied).status_code == 401
+    assert anon_client.patch(url, json=denied, headers=auth("analyst")).status_code == 403
+    assert anon_client.patch(url, json=denied, headers=auth("reviewer")).status_code == 403
+
+    # The ACCEPTED one does, and this test is about authorisation, not content: it published a
+    # version whose PPE aliases were ["nope"], which any later test reading the latest ontology
+    # then had to survive. Resending the concept's existing aliases proves admin is allowed
+    # through while leaving what the next test reads exactly as it found it.
+    definition = anon_client.get(f"{API}/ontologies/{oid}",
+                                 headers=auth("admin")).json()["definition"]
+    current = next(m for m in definition["mappings"] if m["canonical_key"] == key)
+    unchanged = {"canonical_key": key, "aliases": current.get("aliases") or [],
+                 "aliases_i18n": current.get("aliases_i18n") or {}}
+    assert anon_client.patch(url, json=unchanged, headers=auth("admin")).status_code == 200

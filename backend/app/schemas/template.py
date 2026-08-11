@@ -50,8 +50,22 @@ class Identity(BaseModel):
 class TemplateStatement(BaseModel):
     type: StatementType
     default_sign_convention: SignConvention = SignConvention.NATURAL
+    # The statement's own heading, per output language. Undeclared until now, but READ in two
+    # places off the raw stored definition — ``documents._stmt_label`` and the Template screen's
+    # tree via ``templates._loc(stmt, locale)`` — so it was authorable only by accident, and
+    # refusing undeclared keys on upload turned "works but is not in the schema" into a 422 for
+    # the one mechanism that gives a statement a localized heading at all. Without it every locale
+    # falls back to the statement type titled ("Balance Sheet"), which is why the shipped
+    # template's heading is untranslated on that screen today.
+    label: str = ""
+    label_i18n: dict[str, str] = Field(default_factory=dict)  # {"en": .., "zh": .., …}
     sections: list[TemplateNode] = Field(default_factory=list)
     identities: list[Identity] = Field(default_factory=list)
+
+    def resolve_label(self, locale: str | None) -> str:
+        if locale and locale in self.label_i18n:
+            return self.label_i18n[locale]
+        return self.label_i18n.get("en", self.label)
 
 
 class CrossStatementTie(BaseModel):
