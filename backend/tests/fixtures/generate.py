@@ -159,11 +159,14 @@ def make_group_and_company_note_pdf() -> bytes:
 
 
 def make_company_limited_header_pdf() -> bytes:
-    """A single-basis face page whose RUNNING HEADER carries the word "Company" as part of the
-    filer's name ("Sunrise Group Holdings Company Limited").
+    """A single-basis face page whose RUNNING HEADER names a "Group" on the left and ends in
+    "Company Limited" on the right, where the value columns are.
 
-    The other negative case: the word appears on every page of a filing, and one occurrence used
-    as a basis caption would band a statement that has only one basis."""
+    The other negative case, and the one that isolates the geometric test: both words a two-basis
+    header needs are on one line, in separate runs, with no amount on it — and the page still has
+    one basis, because a basis caption bands the figures it stands OVER and "Group" here stands
+    over the caption column. Banding on the filer's own name would split the comparative, so last
+    year's figures would be reported as this year's for a second entity."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
@@ -172,8 +175,8 @@ def make_company_limited_header_pdf() -> bytes:
     _, height = A4
     y = height - 50
     c.setFont("Helvetica", 8)
-    c.drawString(72, y, "Sunrise Group Holdings Company Limited")
-    c.drawRightString(523, y, "Company Limited")
+    c.drawString(72, y, "Sunrise Group Holdings Limited")
+    c.drawRightString(523, y, "Sunrise Company Limited")
     c.setFont("Helvetica-Bold", 13)
     y -= 26
     c.drawString(72, y, "Statement of Financial Position")

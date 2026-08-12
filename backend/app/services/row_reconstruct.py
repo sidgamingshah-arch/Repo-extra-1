@@ -274,7 +274,8 @@ def _CJK_ONLY(text: str) -> bool:  # noqa: N802 - reads as a predicate at call s
     return bool(_HAN.search(text)) and not re.search(r"[A-Za-z]{2,}", text)
 
 
-def _is_wrapped_head(head: list[Word], cont: list[Word]) -> bool:
+def _is_wrapped_head(head: list[Word], cont: list[Word],
+                     steps: tuple[tuple[str, object], ...] = ()) -> bool:
     """Whether an ALL-CAPS label-only line is the first line of a WRAPPED caption.
 
     Statement faces print both: banners that head a group ("ASSETS", "NON-CURRENT
@@ -287,6 +288,12 @@ def _is_wrapped_head(head: list[Word], cont: list[Word]) -> bool:
     head_text = " ".join(w.text for w in head).strip()
     cont_text = " ".join(w.text for w in cont).strip()
     if not head_text or not cont_text:
+        return False
+    # A caption ending in a colon INTRODUCES the rows beneath it and never wraps into them —
+    # the same statement `_heads_indented_block` makes on the matrix path. Tested through the
+    # rulebook's fullwidth→halfwidth fold, because a CJK sub-heading ends in "：": untested, it
+    # fell to the bilingual rule below and the heading was glued onto the first row under it.
+    if _ends_with_colon(head_text, steps):
         return False
     # A bilingual filing prints the translation of the SAME caption on the next line. A
     # CJK-only continuation is therefore never a new banner — and without this the Chinese
@@ -429,7 +436,7 @@ def _merge_wrapped_labels(rows: list[list[Word]], fmt=None,
             # An ALL-CAPS banner is not a continuation — unless grammar shows the caption
             # actually wraps into the next line (see `_is_wrapped_head`).
             and (not _looks_like_header(label_words, steps)
-                 or _is_wrapped_head(label_words, _scan_row(nxt, fmt)[0]))
+                 or _is_wrapped_head(label_words, _scan_row(nxt, fmt)[0], steps))
             and _scan_row(nxt, fmt)[2]                  # next row actually carries values
             and _wrap_adjacent(_row_box(row), _row_box(nxt), _scan_row(nxt, fmt)[0])
         )
@@ -549,11 +556,26 @@ def _quoted_examples(step: str) -> tuple[str, ...]:
 
 
 def _fold_for_match(text: str) -> str:
-    """Whitespace- and apostrophe-insensitive form, so "RMB '000" matches the declared "RMB'000"."""
-    t = unicodedata.normalize("NFKC", text).translate(_WIDTH_MAP).lower()
+    """Whitespace- and apostrophe-insensitive form, so "RMB '000" matches the declared "RMB'000".
+
+    Han is folded to Simplified on this side too. The rulebook writes its signals in Traditional
+    (人民幣千元) because that is how a Hong Kong filing prints them, and by the time the annotation
+    step runs the declared t2s fold has already turned the caption Simplified — so comparing the
+    two unfolded matched nothing at all.
+    """
+    t = to_simplified(unicodedata.normalize("NFKC", text)).translate(_WIDTH_MAP).lower()
     for q in "’‘`´":
         t = t.replace(q, "'")
     return re.sub(r"\s+", "", t)
+
+
+_EMPTY_BRACKETS = re.compile(r"[(（\[]\s*[)）\]]")
+
+
+def _drop_empty_brackets(text: str) -> str:
+    """Remove the brackets a stripped annotation was printed inside: "（附註12）" reaches the note
+    pattern already emptied by the literal strip, and "其他應付款項( )" is not a caption."""
+    return _EMPTY_BRACKETS.sub(" ", text)
 
 
 def _strip_literals(text: str, literals: tuple[str, ...]) -> str:
@@ -612,8 +634,10 @@ def _pipeline_steps(norm: Normalisation | None,
             elif sid == "width":
                 out.append((sid, lambda t: t.translate(_WIDTH_MAP)))
             elif sid == "footnote":
-                out.append((sid, lambda t, lits=examples: _TRAILING_PAREN_DIGITS.sub(
-                    "", _SUPERSCRIPT.sub("", _NOTE_MARKER.sub(" ", _strip_literals(t, lits))))))
+                out.append((sid, lambda t, lits=examples: _drop_empty_brackets(
+                    _TRAILING_PAREN_DIGITS.sub(
+                        "", _SUPERSCRIPT.sub("", _NOTE_MARKER.sub(" ",
+                                                                  _strip_literals(t, lits)))))))
             elif sid == "numbering":
                 out.append((sid, lambda t: _LEADING_NUMBERING.sub("", t)))
             elif sid == "trailing_colon":
@@ -622,8 +646,8 @@ def _pipeline_steps(norm: Normalisation | None,
                 # The declared units_and_currency signals are the same annotations printed inline
                 # over a column, so one list serves both jobs.
                 lits = examples + unit_words
-                out.append((sid, lambda t, lits=lits: _AUDIT_STATUS.sub(
-                    " ", _strip_literals(t, lits))))
+                out.append((sid, lambda t, lits=lits: _drop_empty_brackets(
+                    _AUDIT_STATUS.sub(" ", _strip_literals(t, lits)))))
             elif sid == "whitespace":
                 out.append((sid, lambda t: re.sub(r"\s+", " ", _ZERO_WIDTH.sub("", t))))
             else:                                # wrapped_caption — see _PIPELINE_IMPL
@@ -783,8 +807,8 @@ def _nearest_col(x: float, value_bands: list[float]) -> int | None:
 
 def _basis_bands(rows: list[list[Word]], value_bands: list[float] | None = None,
                  area: tuple[float, float] | None = None, *,
-                 signals: tuple[tuple[Basis, str], ...] = (), fmt=None,
-                 log=None, page_index: int | None = None) -> list[tuple[Basis, float]]:
+                 signals: tuple[tuple[Basis, str], ...] = (), fmt=None, log=None,
+                 page_index: int | None = None) -> list[tuple[Basis, float]]:
     """Detect a two-basis column header (Group | Company, Consolidated | Standalone) and return
     each basis caption's horizontal centre, so value columns can be attributed to a basis.
 
@@ -839,9 +863,48 @@ def _basis_bands(rows: list[list[Word]], value_bands: list[float] | None = None,
 
 
 def _basis_for(x: float, bands: list[tuple[Basis, float]]) -> Basis:
+    """The basis nearest to a figure that sits under no detected column — the fallback. Columns
+    themselves are assigned by :func:`_basis_of_columns`, which does not use distance alone."""
     if not bands:
         return Basis.CONSOLIDATED
     return min(bands, key=lambda b: abs(b[1] - x))[0]
+
+
+def _basis_of_columns(value_bands: list[float],
+                      bands: list[tuple[Basis, float]]) -> dict[int, Basis]:
+    """Which basis each value column belongs to.
+
+    A basis caption governs a CONTIGUOUS run of columns — that is what a band is — and it may be
+    anchored anywhere over that run: left-aligned in one filing, centred in another. Nearest-
+    caption assignment therefore breaks on the middle columns of a four-column page: with "Group"
+    printed over its first column and "Company" over its own, the Group's comparative comes out
+    0.001 nearer the Company caption, and last year's Group figures are read as the Company's
+    current year. Equal runs when the columns divide evenly by the number of captions — a
+    two-basis comparative prints the same periods for each entity — and otherwise the nearest
+    caption, made monotonic so the runs stay contiguous.
+    """
+    if not value_bands:
+        return {}
+    if not bands:
+        return {i: Basis.CONSOLIDATED for i in range(len(value_bands))}
+    ordered = [b for b, _ in sorted(bands, key=lambda b: b[1])]
+    # A basis can be captioned twice ("Group" and "Consolidated" over the same pair); dedupe
+    # keeping printed order, or the run count would exceed the number of bands.
+    ordered = list(dict.fromkeys(ordered))
+    n, k = len(value_bands), len(ordered)
+    if k == 1:
+        return {i: ordered[0] for i in range(n)}
+    if n % k == 0:
+        width = n // k
+        return {i: ordered[min(i // width, k - 1)] for i in range(n)}
+    centres = sorted({b[1] for b in bands})
+    out: dict[int, Basis] = {}
+    seen = 0
+    for i, x in enumerate(value_bands):
+        idx = min(range(len(centres)), key=lambda j: abs(centres[j] - x))
+        seen = max(seen, min(idx, k - 1))
+        out[i] = ordered[seen]
+    return out
 
 
 # Value columns are printed on a tight vertical alignment — every figure in the current-period
@@ -947,12 +1010,18 @@ def _resolve_note_column(note_ref: str | None, value_words: list[Word],
 
 _MONTHS = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
            r"aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?")
+# A CJK date, written without spaces: 二零二三年, 十二月三十一日, 二零二三年十二月三十一日.
+_CJK_DATE = r"(?:[〇零一二三四五六七八九十]{1,4}[年月日])+"
 # A single word that can belong to a date-column header phrase.
 _DATEISH_WORD = re.compile(
-    rf"^(?:{_MONTHS}|\d{{1,4}}(?:st|nd|rd|th)?|\d{{1,2}}[./-]\d{{1,2}}[./-]\d{{2,4}}|"
+    rf"^(?:{_MONTHS}|{_CJK_DATE}|\d{{1,4}}(?:st|nd|rd|th)?|\d{{1,2}}[./-]\d{{1,2}}[./-]\d{{2,4}}|"
     r"as|at|year|years?|period|ended|ending|for|the|fy|q[1-4]|h[12]|,)$", re.IGNORECASE)
-# A phrase only counts as a period header if it actually carries a year or month name.
-_DATE_PHRASE = re.compile(rf"(?:19|20)\d{{2}}|{_MONTHS}", re.IGNORECASE)
+# A phrase only counts as a period header if it actually carries a year or month name. The CJK
+# year belongs here too: without it the comparative columns of a Chinese filing carried no
+# heading at all, so which of them was the current period fell back to position — and a filing
+# printing the comparative first had every figure read a year out.
+_DATE_PHRASE = re.compile(rf"(?:19|20)\d{{2}}|{_MONTHS}|[〇零一二三四五六七八九十]{{2,4}}年",
+                          re.IGNORECASE)
 
 
 def _period_bands(rows: list[list[Word]]) -> list[tuple[str, float]]:
@@ -1763,18 +1832,20 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
 
     items: list[LineItem] = []
     ordinal = ordinal_start
-    # The basis header is read from the UNMERGED rows: `_merge_wrapped_labels` glues a label-only
-    # caption onto the next valued line, and a basis caption merged into the period line no longer
-    # sits where it was printed — which defeats every geometric guard in `_basis_bands`.
+    # ALL the page geometry is read from the UNMERGED rows. `_merge_wrapped_labels` folds a
+    # label-only line into the next valued line, so after it a basis caption no longer sits where
+    # it was printed: merged into a statement line, the caption row carries that line's AMOUNTS and
+    # `_basis_bands` correctly refuses it — the page then reads as single-basis and the Company's
+    # column is added to the Group's. (Value words are untouched by the merge, so the note column
+    # and the value columns come out the same either way.)
     raw_rows = _group_rows(words)
-    rows = _merge_wrapped_labels(raw_rows, number_format, steps)
     period_bands = _period_bands(raw_rows)      # real period-end dates for column headers, if any
-    note_x = _detect_note_column(rows)          # x of the note-ref column, so it isn't read as a value
+    note_x = _detect_note_column(raw_rows)      # x of the note-ref column, so it isn't read as a value
     # Where the value columns actually are. A first pass over the page's figures (after the note
     # column is removed, so note references never look like a column) so a row reporting only one
     # of two periods still files that figure under the period it is printed in.
     col_xs: list[list[tuple[float, str]]] = []
-    for row in rows:
+    for row in raw_rows:
         _lw, _nr, _vw = _scan_row(row, number_format)
         _nr, _vw = _resolve_note_column(_nr, _vw, note_x, number_format)
         xs = [((w.bbox.x0 + w.bbox.x1) / 2, w.text) for w in _vw
@@ -1785,6 +1856,7 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
     bands = _basis_bands(raw_rows, value_bands, _value_area(value_bands, col_xs),
                          signals=_entity_signals(scope), fmt=number_format,
                          log=log, page_index=page_index)
+    rows = _merge_wrapped_labels(raw_rows, number_format, steps)
     if not bands and on_face:
         # company_only_markers: "Presence of …__investments_in_subsidiaries on the face is strong
         # evidence the column is company-only, since consolidation eliminates it." A single-basis
@@ -1818,9 +1890,10 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
     unit_ctx = _unit_context(unit, page_index)
     # Group the value columns by basis (via the header band) once for the page, then let each
     # column's own heading date say which period it is.
+    col_basis = _basis_of_columns(value_bands, bands)
     basis_cols: dict[Basis, list[int]] = {}
-    for i, bx in enumerate(value_bands):
-        basis_cols.setdefault(_basis_for(bx, bands), []).append(i)
+    for i in range(len(value_bands)):
+        basis_cols.setdefault(col_basis[i], []).append(i)
     restated = _restated_markers(scope)
     col_periods = _column_periods(basis_cols, value_bands, period_bands, restated=restated,
                                   restated_cols=_restated_columns(raw_rows, value_bands, restated),
@@ -1898,12 +1971,12 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
             if drop_outliers and in_col[id(vw)] is None:
                 continue
             xc = (vw.bbox.x0 + vw.bbox.x1) / 2
-            basis = _basis_for(xc, bands)
+            col = _column_index(xc, value_bands)
+            basis = col_basis[col] if col is not None else _basis_for(xc, bands)
             # The column this figure is printed in decides its period, and the column's HEADING
             # decides which period that is. Order is the fallback for a page with no columnar
             # structure, and for a figure that sits under no column.
             k = per_basis.get(basis, 0)
-            col = _column_index(xc, value_bands)
             if col is not None and col in basis_cols.get(basis, []):
                 k = basis_cols[basis].index(col)
             per_basis[basis] = max(per_basis.get(basis, 0), k) + 1

@@ -1,11 +1,19 @@
-"""Structural validation — the template's own arithmetic, used to catch mis-mapped values.
+"""Structural validation — the arithmetic the template and the rulebook declare, used to catch
+mis-mapped values.
 
 A label matcher can only ever be wrong about *which* concept a number belongs to, and no
 amount of string evidence exposes that. Arithmetic does: if ``Gross profit != Revenue − Cost
 of sales``, or a subtotal misses the sum of its declared children, then a value sits on the
-wrong line or carries the wrong sign. This module evaluates the relations the TEMPLATE already
-declares — ``rollup`` on subtotal/total nodes and statement-level ``identities`` — against the
-mapped line items, so nothing about a particular framework is hardcoded here.
+wrong line or carries the wrong sign. This module evaluates four families of relation, none of
+them hardcoded here:
+
+* the TEMPLATE's ``rollup`` on subtotal/total nodes and its statement-level ``identities``;
+* the RULEBOOK's ``validation.identities`` — one authored ``expr`` per relation, each with its
+  own ``severity``, evaluated exactly as written (see ``ontology_identities``);
+* the RULEBOOK's ``validation.cross_concept_guards`` — pairs that are individually plausible and
+  jointly wrong, which no arithmetic can reach (see ``cross_concept_guards``);
+* the RULEBOOK's ``validation.section_reconciliation`` — every section with a reported subtotal
+  must account for its printed rows (see ``section_relations``).
 
 Two rules keep it honest on partial extractions (the normal case for a 270-page filing):
 
@@ -27,14 +35,20 @@ sales printed in parentheses arrives negative and simply adds). When a relation 
 signed arithmetic can say whether flipping exactly one participant's sign would satisfy it —
 reported as ``sign_suspect``, because a mis-signed value is a different fix from a mis-mapped
 one. It is a hypothesis attached to the finding, never an adjustment.
+
+EVERY relation produces a row, including the ones that could not be run, and each skip carries a
+``reason`` a caller can classify (:mod:`app.services.coverage`). That is what stops "3 relations
+passed" from reading as "the statement is validated".
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 
 from app.core.models import LineItem, RuleResult, StructuralReport
+from app.core.models.enums import LineRole
 from app.schemas.template import TemplateDefinition
 from app.services.reconcile import tolerance
 
@@ -46,19 +60,70 @@ TOLERANCE_REL = Decimal("0.001")
 
 Slot = tuple[str, str | None]          # (basis, period_label)
 
+# A mapping method whose OUTPUT was chosen in order to close the very gap a relation measures.
+# ``stages.gap_closing`` shows the model the failing subtotal and asks which unplaced rows belong
+# in that section's bucket, explicitly so "a subtotal the routing fixes reports as tied". Any
+# relation fed by such a value therefore cannot fail, and reporting it as a pass would be
+# circular: the answer was derived from the question. It is reported as ``derived_input`` and
+# classified TAUTOLOGICAL — not recoverable by better extraction, and never a pass.
+DERIVED_METHODS = ("llm_gap_routing",)
+
 
 @dataclass(frozen=True)
 class Relation:
-    """One arithmetic relation read off the template: ``target = op(components)``."""
+    """One arithmetic relation read off the template or the rulebook: ``target = op(components)``.
+
+    ``signs`` carries a per-component multiplier for a relation authored as a signed expression
+    (``a = b + c - d``); empty means the multiplier follows ``op``. ``severity`` is the rulebook's
+    own consequence-of-a-break, defaulted to blocking for the template's relations so their
+    existing treatment is unchanged. ``broken`` is set when the relation could not be BUILT at all
+    (an unparsable expression, a term naming nothing in the template) — it is reported as a skip
+    with that reason rather than dropped, because a declared relation the engine silently discards
+    is indistinguishable from one that passed.
+    """
 
     id: str
-    kind: str                          # rollup | identity
+    # rollup | identity | ontology_identity | section_reconciliation
+    kind: str
     statement: str
     target: str                        # canonical_key
     components: tuple[str, ...]        # canonical_keys
     op: str
     tol_abs: Decimal = TOLERANCE_ABS
     tol_rel: Decimal = TOLERANCE_REL
+    severity: str = "blocking"
+    signs: tuple[int, ...] = ()
+    note: str = ""
+    # ``residual_framework.reconciliation.tolerance`` is authored as "one rounding unit per
+    # contributing row", which is a per-relation quantity rather than a constant.
+    tol_per_row: bool = False
+    broken: str = ""
+    broken_detail: dict = field(default_factory=dict)
+    extra: dict = field(default_factory=dict)   # merged into the result's details
+
+
+@dataclass(frozen=True)
+class Guard:
+    """One ``validation.cross_concept_guards`` entry, resolved into something evaluable.
+
+    The rulebook authors these as sentences, so both halves of a guard are read OUT of the
+    sentence: the canonical keys it names, and the predicate its wording selects. Renaming a key
+    in the sentence changes which concepts are compared; deleting the sentence deletes the check.
+
+    ``precondition`` is what has to be true of the filing before the guard can say anything.
+    ``"always"`` means nothing does — such a guard must always return pass or fail, so a skip
+    from one is a defect in this module, not thin extraction (see :mod:`app.services.coverage`).
+    """
+
+    id: str
+    predicate: str
+    keys: tuple[str, ...]
+    statement: str
+    precondition: str
+    text: str
+    severity: str = "warning"
+    broken: str = ""
+    broken_detail: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -79,6 +144,9 @@ class MappedValues:
     values: dict[str, dict[Slot, Decimal]] = field(default_factory=dict)
     scales: dict[str, dict[Slot, Decimal]] = field(default_factory=dict)
     contributors: dict[str, dict[Slot, int]] = field(default_factory=dict)
+    # canonical_key -> how its figure came to exist, for the keys that were not simply read off
+    # the page. See ``DERIVED_METHODS``.
+    derived: dict[str, str] = field(default_factory=dict)
     # Retained for callers that still ask; nothing populates it now that repeats are summed.
     ambiguous: set[str] = field(default_factory=set)
 
@@ -93,6 +161,10 @@ class MappedValues:
 
     def sources(self, key: str, slot: Slot) -> int:
         return self.contributors.get(key, {}).get(slot, 0)
+
+    def all_slots(self) -> list[Slot]:
+        seen = {slot for per_key in self.values.values() for slot in per_key}
+        return sorted(seen, key=lambda s: (s[0], s[1] or ""))
 
 
 def _printed(ev) -> Decimal | None:
@@ -117,6 +189,24 @@ def collect_values(items: Iterable[LineItem]) -> MappedValues:
             seen[slot] = val if slot not in seen else seen[slot] + val
             out.contributors.setdefault(key, {})[slot] = out.sources(key, slot) + 1
             out.scales.setdefault(key, {})[slot] = ev.unit_ctx.scale_factor
+        # ``confidence.method`` is the winning mapping method (what the API serves as
+        # ``mapping_method``); ``is_computed`` marks a figure this pipeline calculated rather than
+        # read. Either makes every relation the key participates in circular.
+        if li.confidence.method in DERIVED_METHODS:
+            out.derived[key] = li.confidence.method or ""
+        elif li.is_computed:
+            out.derived.setdefault(key, "computed")
+    return out
+
+
+def _statement_index(template: TemplateDefinition) -> dict[str, str]:
+    """canonical_key → the statement it is printed on, so a relation can be told apart from one
+    belonging to a statement this filing does not contain at all."""
+    out: dict[str, str] = {}
+    for st in template.statements:
+        for node in template._walk(st.sections):
+            if node.canonical_key:
+                out[node.canonical_key] = st.type.value
     return out
 
 
@@ -158,19 +248,237 @@ def relations(template: TemplateDefinition) -> list[Relation]:
     return out
 
 
-# ``weighted_sum`` carries no weights in the schema, so it cannot be evaluated — a relation
-# declaring it is reported as skipped rather than silently treated as a plain sum.
-SUPPORTED_OPS = ("sum", "diff")
+# --- validation.identities ---------------------------------------------------------------------
+# The rulebook authors each identity as one expression over canonical keys. Only ``+`` and ``-``
+# over bare identifiers are accepted: anything else (a literal, a product, a parenthesised group)
+# is reported as ``unparsable_expr`` rather than approximated, because an identity evaluated
+# differently from how it reads is worse than one that is visibly not evaluated.
+_IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
+_EXPR_RE = re.compile(rf"^\s*({_IDENT})\s*=\s*([+-]?\s*{_IDENT}(?:\s*[+-]\s*{_IDENT})*)\s*$")
+_TERM_RE = re.compile(rf"([+-]?)\s*({_IDENT})")
 
 
-def _expected(op: str, parts: Sequence[Decimal]) -> Decimal:
-    if op == "diff":
-        return parts[0] - sum(parts[1:], Decimal(0))
-    return sum(parts, Decimal(0))
+def ontology_identities(template: TemplateDefinition, ontology) -> list[Relation]:
+    """The rulebook's ``validation.identities``, as evaluable relations.
+
+    Evaluated exactly as authored, including the ones that hold only under a stated sign
+    convention: ``pl_gross_profit = revenue + cost_of_goods_sold`` is correct arithmetic *because*
+    ``global_rules.sign_convention`` stores expenses negative. Rewriting it to a subtraction to
+    make it "look right" would pass on a filing whose costs were loaded with the wrong sign, which
+    is the single defect this identity exists to catch.
+    """
+    rules = getattr(ontology, "validation", None)
+    if rules is None:
+        return []
+    key_of = {n.node_id: n.canonical_key for n in template.all_nodes()}
+    known = template.all_canonical_keys()
+    stmt_of = _statement_index(template)
+
+    def resolve(term: str) -> str | None:
+        return key_of.get(term) or (term if term in known else None)
+
+    out: list[Relation] = []
+    for ident in rules.identities:
+        rid = f"ontology_identity:{ident.id}"
+        match = _EXPR_RE.match(ident.expr or "")
+        if match is None:
+            out.append(Relation(id=rid, kind="ontology_identity", statement="", target="",
+                                components=(), op="signed_sum", severity=ident.severity,
+                                note=ident.note, broken="unparsable_expr",
+                                broken_detail={"expr": ident.expr}))
+            continue
+        lhs = resolve(match.group(1))
+        unresolved = [] if lhs else [match.group(1)]
+        comps: list[str] = []
+        signs: list[int] = []
+        for sign, name in _TERM_RE.findall(match.group(2)):
+            key = resolve(name)
+            if key is None:
+                unresolved.append(name)
+                continue
+            comps.append(key)
+            signs.append(-1 if sign == "-" else 1)
+        base = dict(id=rid, kind="ontology_identity", statement=stmt_of.get(lhs or "", ""),
+                    target=lhs or "", components=tuple(comps), op="signed_sum",
+                    signs=tuple(signs), severity=ident.severity, note=ident.note)
+        if unresolved:
+            out.append(Relation(**base, broken="unresolved_terms",
+                                broken_detail={"terms": sorted(set(unresolved))}))
+            continue
+        if len(set(comps)) != len(comps):
+            # ``_check`` keys the component values by canonical_key, so a term appearing twice
+            # would silently be counted once and the identity would evaluate to the wrong figure.
+            out.append(Relation(**base, broken="repeated_term",
+                                broken_detail={"terms": sorted({c for c in comps
+                                                                if comps.count(c) > 1})}))
+            continue
+        out.append(Relation(**base))
+    return out
+
+
+# --- validation.section_reconciliation ---------------------------------------------------------
+
+def section_relations(template: TemplateDefinition, ontology) -> list[Relation]:
+    """One reconciliation per template section, when the rulebook asks for it.
+
+    The rulebook states the rule in prose and states its consequence in the same sentence, so both
+    are read from it: the check exists while the sentence does, it emits the fact the sentence
+    names (``unallocated_gap``), and it blocks what the sentence says it blocks. Empty the field
+    and no section reconciliation is emitted at all — which is the honest behaviour, since nothing
+    else in the pipeline claims a section is complete.
+
+    The arithmetic is ``residual_framework.reconciliation.identity``: reported subtotal minus every
+    concept printed in the section (its residual bucket included, holding the swept rows) is zero.
+    Absent children are taken as nil for the same reason the residual-bucket rollups take them as
+    nil — the sweep gives every printed row a home, so a still-absent child is a row the filing
+    does not print.
+    """
+    rules = getattr(ontology, "validation", None)
+    text = ((rules.section_reconciliation if rules else "") or "").strip()
+    if not text:
+        return []
+    lowered = text.lower()
+    blocks = "auto-approval" in lowered or "auto approval" in lowered
+    emits = "unallocated_gap" if "unallocated_gap" in text else ""
+    framework = getattr(ontology, "residual_framework", None)
+    tol_text = ((framework.reconciliation.tolerance if framework else "") or "").lower()
+    per_row = "per contributing row" in tol_text
+
+    subtotal_roles = (LineRole.SUBTOTAL, LineRole.TOTAL)
+    out: list[Relation] = []
+    for st in template.statements:
+        for section in st.sections:
+            kids = [c for c in section.children if c.canonical_key]
+            if not kids:
+                continue                      # a statement-level total, not a section
+            # The LAST subtotal in printed order, not the first: the operating cash-flow section
+            # prints two ("cash generated from operations", then "net cash from operating
+            # activities"), and only the closing one is the figure every row in the section feeds.
+            # Reconciling to the first would report a phantom gap equal to interest and tax paid.
+            subtotal = next((c.canonical_key for c in reversed(kids)
+                             if c.role in subtotal_roles), "")
+            members = tuple(c.canonical_key for c in kids
+                            if c.canonical_key != subtotal
+                            and c.role not in subtotal_roles
+                            and c.role != LineRole.HEADER)
+            if not members:
+                continue
+            extra = {"section": section.node_id, "blocks_auto_approval": blocks, "emits": emits}
+            out.append(Relation(
+                id=f"section_reconciliation:{section.node_id}", kind="section_reconciliation",
+                statement=st.type.value, target=subtotal, components=members, op="sum",
+                severity="blocking", tol_per_row=per_row, note=text, extra=extra,
+                # A section the template gives no subtotal node can never be reconciled; the
+                # rulebook says so itself ("flagged unreconciled"), so it is reported as that
+                # rather than as an extraction gap.
+                broken="" if subtotal else "no_reported_subtotal",
+            ))
+    return out
+
+
+# --- validation.cross_concept_guards -----------------------------------------------------------
+# Each guard is a sentence. The predicate is selected by the wording, checked in this order (the
+# first phrase that appears wins), and the operands are the canonical keys the sentence names —
+# so editing a key in the rulebook changes what is compared, and deleting the sentence removes
+# the check. A sentence matching no phrase is reported as ``guard_unrecognised``: the alternative
+# is a rulebook stating a guard that quietly does nothing.
+_GUARD_PHRASES: tuple[tuple[str, str, str], ...] = (
+    ("sign_convention", "sign_expectation", "always"),
+    ("resolved as consolidated", "consolidation_eliminated", "always"),
+    ("populated together with", "mutually_exclusive", "always"),
+    # "A equal to B while C is non-zero" — three operands, and C decides whether A == B is even
+    # a finding, so the guard has something to say only once C is extracted.
+    ("non-zero", "equal_while_third_non_zero", "all three concepts extracted"),
+    ("equal to", "equal_values", "both concepts extracted and non-zero"),
+)
+_GUARD_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{5,}")
+
+
+def cross_concept_guards(ontology) -> list[Guard]:
+    """The rulebook's ``validation.cross_concept_guards``, resolved into evaluable guards.
+
+    These catch what no arithmetic can. A balance sheet whose ``investments_in_subsidiaries`` is
+    populated on a consolidated column still ties perfectly — consolidation eliminates that line,
+    so its presence does not break a subtotal, it means the column was read from the company-only
+    statement. Same for an aggregate loaded alongside the components it contains: the total is
+    right, the equity is double-counted.
+    """
+    rules = getattr(ontology, "validation", None)
+    if rules is None:
+        return []
+    concept_keys = {m.canonical_key for m in getattr(ontology, "mappings", [])}
+    groups = {g.aggregate: tuple(g.components)
+              for g in getattr(getattr(ontology, "global_rules", None),
+                               "mutually_exclusive_groups", [])}
+
+    out: list[Guard] = []
+    for text in rules.cross_concept_guards:
+        lowered = text.lower()
+        predicate = precondition = ""
+        for phrase, name, pre in _GUARD_PHRASES:
+            if phrase in lowered:
+                predicate, precondition = name, pre
+                break
+        keys = tuple(dict.fromkeys(k for k in _GUARD_KEY_RE.findall(text) if k in concept_keys))
+        if not predicate:
+            out.append(Guard(id=f"guard:unrecognised:{len(out)}", predicate="", keys=keys,
+                             statement="cross_statement", precondition="always", text=text,
+                             broken="guard_unrecognised"))
+            continue
+        gid = f"guard:{predicate}" + (f":{keys[0]}" if keys else "")
+        # "…together with its listed components" names the aggregate and points at the list, which
+        # lives in ``global_rules.mutually_exclusive_groups``. Editing that list changes what the
+        # guard compares; an aggregate with no group is an authoring gap, reported as one.
+        if predicate == "mutually_exclusive":
+            components = groups.get(keys[0] if keys else "", ())
+            named = tuple(k for k in keys[1:] if k not in components)
+            keys = (keys[0], *components, *named) if keys else ()
+            if not keys or len(keys) < 2:
+                out.append(Guard(id=gid, predicate=predicate, keys=keys,
+                                 statement="cross_statement", precondition=precondition,
+                                 text=text, broken="guard_components_unknown",
+                                 broken_detail={"aggregate": keys[0] if keys else ""}))
+                continue
+        needed = {"equal_while_third_non_zero": 3, "equal_values": 2,
+                  "consolidation_eliminated": 1}.get(predicate, 0)
+        if len(keys) < needed:
+            out.append(Guard(id=gid, predicate=predicate, keys=keys, statement="cross_statement",
+                             precondition=precondition, text=text,
+                             broken="guard_components_unknown",
+                             broken_detail={"named": list(keys), "needs": needed}))
+            continue
+        prefixes = {k.split("_", 1)[0] for k in keys}
+        statement = {"bs": "balance_sheet", "pl": "profit_and_loss", "cf": "cash_flow"}.get(
+            next(iter(prefixes)), "cross_statement") if len(prefixes) == 1 else "cross_statement"
+        out.append(Guard(id=gid, predicate=predicate, keys=keys, statement=statement,
+                         precondition=precondition, text=text))
+    return out
+
+
+# ``weighted_sum`` is no longer expressible in the template schema (see ``schemas.template``), but
+# a definition stored before that change still validates loosely enough to reach here, and an op
+# this module cannot evaluate must never be treated as a plain sum — that would report a subtotal
+# as tying against arithmetic nobody declared.
+SUPPORTED_OPS = ("sum", "diff", "signed_sum")
+
+
+def _contributions(rel: Relation, parts: dict[str, Decimal]) -> dict[str, Decimal]:
+    """Each component's SIGNED contribution to the expected figure.
+
+    Kept separate from the raw values because the sign-suspect hypothesis needs it: flipping a
+    term that already enters negatively moves the total the other way, and diagnosing the wrong
+    line is worse than diagnosing none.
+    """
+    keys = list(parts)
+    if rel.signs:
+        return {k: Decimal(s) * parts[k] for k, s in zip(keys, rel.signs)}
+    if rel.op == "diff":
+        return {k: (parts[k] if i == 0 else -parts[k]) for i, k in enumerate(keys)}
+    return dict(parts)
 
 
 def _sign_suspect(target: str, actual: Decimal, expected: Decimal,
-                  parts: dict[str, Decimal], tol: Decimal) -> str | None:
+                  contributions: dict[str, Decimal], tol: Decimal) -> str | None:
     """The one participant whose sign, flipped, would satisfy the relation — or None.
 
     Only an unambiguous single candidate is named: with two equal-magnitude candidates the
@@ -179,8 +487,8 @@ def _sign_suspect(target: str, actual: Decimal, expected: Decimal,
     candidates = []
     if abs(-actual - expected) <= tol:
         candidates.append(target)
-    for key, val in parts.items():
-        if val and abs(actual - (expected - 2 * val)) <= tol:
+    for key, contribution in contributions.items():
+        if contribution and abs(actual - (expected - 2 * contribution)) <= tol:
             candidates.append(key)
     return candidates[0] if len(candidates) == 1 else None
 
@@ -190,15 +498,46 @@ def _scope(slot: Slot) -> str:
 
 
 def evaluate_structure(template: TemplateDefinition,
-                       items: Iterable[LineItem]) -> StructuralReport:
-    """Check every template relation whose participants were all extracted, per (basis, period)."""
+                       items: Iterable[LineItem],
+                       ontology=None) -> StructuralReport:
+    """Check every declared relation whose participants were all extracted, per (basis, period).
+
+    ``ontology`` is optional and additive: without it only the template's own relations are
+    evaluated, which is what a caller validating a spread against a template alone wants. With it,
+    the rulebook's identities, cross-concept guards and section reconciliation are evaluated too.
+    """
     vals = collect_values(items)
     report = StructuralReport()
+    stmt_of = _statement_index(template)
+    # A statement no key was extracted for is not thin coverage, it is a statement this filing
+    # does not contain (a standalone-only filing has no cash flow). Its relations are still
+    # reported — silence would be indistinguishable from a pass — but they must not sit in the
+    # denominator of a coverage rate, so they are marked apart from every other skip.
+    present = {stmt_of[k] for k in vals.values if k in stmt_of}
 
-    for rel in relations(template):
+    declared = relations(template)
+    if ontology is not None:
+        declared += ontology_identities(template, ontology)
+        declared += section_relations(template, ontology)
+
+    for rel in declared:
         keys = (rel.target, *rel.components)
+        if rel.broken:
+            report.results.append(_skip(rel, [], rel.broken, dict(rel.broken_detail)))
+            continue
+        if rel.statement and rel.statement not in present:
+            report.results.append(_skip(rel, [], "statement_absent", {}))
+            continue
         if rel.op not in SUPPORTED_OPS:
             report.results.append(_skip(rel, [], "unsupported_op", {"op": rel.op}))
+            continue
+        # A participant whose figure was derived to close this very gap makes the relation
+        # incapable of failing. That is a property of the rule, not of coverage, so it is decided
+        # before anything about what was extracted.
+        circular = sorted(k for k in keys if k in vals.derived)
+        if circular:
+            report.results.append(_skip(rel, [], "derived_input", {
+                "derived": circular, "methods": sorted({vals.derived[k] for k in circular})}))
             continue
         blocked = sorted(k for k in keys if k in vals.ambiguous)
         if blocked:
@@ -206,14 +545,19 @@ def evaluate_structure(template: TemplateDefinition,
             continue
         target_slots = sorted(vals.slots(rel.target), key=lambda s: (s[0], s[1] or ""))
         if not target_slots:
-            report.results.append(_skip(rel, [], "target_not_extracted", {}))
+            # For a section reconciliation the missing figure IS the subtotal, and the rulebook
+            # names that case separately: the section is unreconciled, not under-extracted.
+            reason = ("no_reported_subtotal" if rel.kind == "section_reconciliation"
+                      else "target_not_extracted")
+            report.results.append(_skip(rel, [], reason, {}))
             continue
 
         # A section that owns a residual bucket has a home for every printed line, so a child
         # still absent is one the filing does not print — nil, not unknown. See the module
         # docstring; this is what makes the section subtotals checkable at all.
-        zero_fill = rel.kind == "rollup" and rel.op == "sum" and any(
-            c.endswith("__others") for c in rel.components)
+        zero_fill = rel.kind == "section_reconciliation" or (
+            rel.kind == "rollup" and rel.op == "sum"
+            and any(c.endswith("__others") for c in rel.components))
 
         unmapped: dict[Slot, list[str]] = {}
         mixed: list[Slot] = []
@@ -229,8 +573,8 @@ def evaluate_structure(template: TemplateDefinition,
                 continue
             # Values are not unit-normalized, so a relation may only be evaluated where every
             # participant shares one scale — otherwise the sum compares thousands to millions.
-            present = [k for k in keys if vals.get(k, slot) is not None]
-            if len({vals.scale(k, slot) for k in present}) > 1:
+            present_keys = [k for k in keys if vals.get(k, slot) is not None]
+            if len({vals.scale(k, slot) for k in present_keys}) > 1:
                 mixed.append(slot)
                 continue
             report.results.append(_check(rel, slot, vals, assumed_zero=missing))
@@ -244,12 +588,28 @@ def evaluate_structure(template: TemplateDefinition,
         if mixed:
             report.results.append(_skip(rel, mixed, "mixed_scale", {}))
 
+    if ontology is not None:
+        report.results.extend(_evaluate_guards(cross_concept_guards(ontology), vals, ontology,
+                                               present))
+
     for res in report.failures():
-        report.failed_assertions.append(
-            f"{res.details['target']} does not equal {res.details['op']} of its "
-            f"{len(res.details['components'])} template component(s) "
-            f"({res.scope_key}): expected {res.expected}, got {res.actual}")
+        report.failed_assertions.append(_assertion(res))
     return report
+
+
+def _assertion(res: RuleResult) -> str:
+    d = res.details
+    if res.kind == "guard":
+        return (f"cross-concept guard {d.get('guard')} violated on "
+                f"{', '.join(d.get('violations_keys') or [d.get('target', '')])} "
+                f"({res.scope_key}): {d.get('rule_text', '')}")
+    if res.kind == "section_reconciliation":
+        return (f"section {d.get('section')} does not reconcile ({res.scope_key}): "
+                f"reported subtotal {res.actual} vs {res.expected} accounted for, "
+                f"unallocated gap {res.difference}")
+    return (f"{d['target']} does not equal {d['op']} of its "
+            f"{len(d['components'])} template component(s) "
+            f"({res.scope_key}): expected {res.expected}, got {res.actual}")
 
 
 def _check(rel: Relation, slot: Slot, vals: MappedValues,
@@ -262,10 +622,17 @@ def _check(rel: Relation, slot: Slot, vals: MappedValues,
     """
     zeroed = set(assumed_zero)
     parts = {c: (Decimal(0) if c in zeroed else vals.get(c, slot)) for c in rel.components}
+    contributions = _contributions(rel, parts)
     actual = vals.get(rel.target, slot)
-    expected = _expected(rel.op, list(parts.values()))
+    expected = sum(contributions.values(), Decimal(0))
     diff = actual - expected
-    tol = tolerance(expected, rel.tol_abs, rel.tol_rel)
+    tol_abs = rel.tol_abs
+    if rel.tol_per_row:
+        # "one rounding unit per contributing row": a section spread over 20 printed rows may be
+        # a rounding unit out on each of them without anything being wrong.
+        rows = sum(vals.sources(k, slot) for k in (rel.target, *rel.components))
+        tol_abs = Decimal(max(rows, 1))
+    tol = tolerance(expected, tol_abs, rel.tol_rel)
     ok = abs(diff) <= tol
     return RuleResult(
         rule_id=rel.id, kind=rel.kind, scope_key=_scope(slot),
@@ -274,11 +641,17 @@ def _check(rel: Relation, slot: Slot, vals: MappedValues,
         details={
             "target": rel.target, "components": list(rel.components), "op": rel.op,
             "statement": rel.statement, "basis": slot[0], "period_label": slot[1],
-            "tolerance": str(tol),
+            "tolerance": str(tol), "severity": rel.severity,
             "component_values": {k: str(v) for k, v in parts.items()},
             "assumed_zero": sorted(zeroed),
             "sign_suspect": (None if ok else _sign_suspect(rel.target, actual, expected,
-                                                           parts, tol)),
+                                                           contributions, tol)),
+            **({"note": rel.note} if rel.note and rel.kind != "section_reconciliation" else {}),
+            **rel.extra,
+            # The rulebook names the fact a break emits; it is attached only where there is a
+            # break, so a reader never sees a gap that isn't one.
+            **({rel.extra["emits"]: str(diff)}
+               if not ok and rel.extra.get("emits") else {}),
         },
     )
 
@@ -291,5 +664,114 @@ def _skip(rel: Relation, slots: list[Slot], reason: str, extra: dict) -> RuleRes
         scope_key=(";".join(_scope(s) for s in slots) if slots else "—"),
         status="skipped",
         details={"target": rel.target, "components": list(rel.components), "op": rel.op,
-                 "statement": rel.statement, "reason": reason, **extra},
+                 "statement": rel.statement, "reason": reason, "severity": rel.severity,
+                 **rel.extra, **extra},
+    )
+
+
+# --- guard evaluation --------------------------------------------------------------------------
+
+def _evaluate_guards(guards: Sequence[Guard], vals: MappedValues, ontology,
+                     present: set[str]) -> list[RuleResult]:
+    out: list[RuleResult] = []
+    expectations = {m.canonical_key: m.sign_convention
+                    for m in getattr(ontology, "mappings", [])
+                    if m.sign_convention in ("positive_expected", "negative_expected")}
+    for guard in guards:
+        if guard.broken:
+            out.append(_guard_skip(guard, guard.broken, dict(guard.broken_detail)))
+            continue
+        if guard.statement not in ("cross_statement", "") and guard.statement not in present:
+            out.append(_guard_skip(guard, "statement_absent", {}))
+            continue
+        results = [r for r in (_guard_slot(guard, slot, vals, expectations)
+                               for slot in vals.all_slots()) if r is not None]
+        if results:
+            out.extend(results)
+        else:
+            out.append(_guard_skip(guard, "precondition_absent",
+                                   {"precondition": guard.precondition}))
+    return out
+
+
+def _guard_slot(guard: Guard, slot: Slot, vals: MappedValues,
+                expectations: dict[str, str]) -> RuleResult | None:
+    """One guard for one column, or None when its precondition is not met there."""
+    keys = guard.keys
+    violations: list[dict] = []
+
+    if guard.predicate == "sign_expectation":
+        scanned = [k for k in expectations if vals.get(k, slot) is not None]
+        if not scanned:
+            return None
+        for key in sorted(scanned):
+            value = vals.get(key, slot)
+            want = expectations[key]
+            if (want == "positive_expected" and value < 0) or (
+                    want == "negative_expected" and value > 0):
+                violations.append({"key": key, "expected": want, "value": str(value)})
+        primary = violations[0]["key"] if violations else ""
+        others = [v["key"] for v in violations[1:]]
+    elif guard.predicate == "consolidation_eliminated":
+        if slot[0] != "consolidated":
+            return None
+        value = vals.get(keys[0], slot)
+        if value is not None and value != 0:
+            violations.append({"key": keys[0], "value": str(value), "basis": slot[0]})
+        primary, others = keys[0], []
+    elif guard.predicate == "mutually_exclusive":
+        aggregate, components = keys[0], list(keys[1:])
+        agg = vals.get(aggregate, slot)
+        loaded = [c for c in components
+                  if vals.get(c, slot) is not None and vals.get(c, slot) != 0]
+        if agg is not None and agg != 0 and loaded:
+            violations.append({"aggregate": aggregate, "components": loaded,
+                               "aggregate_value": str(agg)})
+        primary, others = aggregate, loaded
+    elif guard.predicate == "equal_while_third_non_zero":
+        first, second, third = (vals.get(k, slot) for k in keys[:3])
+        if first is None or second is None or third is None:
+            return None
+        if first == second and third != 0:
+            violations.append({"equal": [keys[0], keys[1]], "value": str(first),
+                               "non_zero": keys[2], "non_zero_value": str(third)})
+        primary, others = keys[0], [keys[1], keys[2]]
+    elif guard.predicate == "equal_values":
+        first, second = (vals.get(k, slot) for k in keys[:2])
+        if first is None or second is None or first == 0 or second == 0:
+            return None
+        if first == second:
+            violations.append({"equal": [keys[0], keys[1]], "value": str(first)})
+        primary, others = keys[0], [keys[1]]
+    else:                                          # pragma: no cover — _GUARD_PHRASES is closed
+        return None
+
+    return RuleResult(
+        rule_id=guard.id, kind="guard", scope_key=_scope(slot),
+        status="fail" if violations else "pass",
+        details={"target": primary, "components": others, "op": guard.predicate,
+                 "statement": guard.statement, "basis": slot[0], "period_label": slot[1],
+                 "guard": guard.predicate, "severity": guard.severity,
+                 "precondition": guard.precondition, "rule_text": guard.text,
+                 "violations": violations,
+                 "violations_keys": sorted({k for v in violations
+                                            for k in _violation_keys(v)}),
+                 "sign_suspect": None},
+    )
+
+
+def _violation_keys(violation: dict) -> list[str]:
+    out = [violation[f] for f in ("key", "aggregate", "non_zero") if violation.get(f)]
+    for field_name in ("components", "equal"):
+        out += list(violation.get(field_name) or [])
+    return out
+
+
+def _guard_skip(guard: Guard, reason: str, extra: dict) -> RuleResult:
+    return RuleResult(
+        rule_id=guard.id, kind="guard", scope_key="—", status="skipped",
+        details={"target": guard.keys[0] if guard.keys else "", "components": list(guard.keys[1:]),
+                 "op": guard.predicate, "statement": guard.statement, "reason": reason,
+                 "guard": guard.predicate, "severity": guard.severity,
+                 "precondition": guard.precondition, "rule_text": guard.text, **extra},
     )

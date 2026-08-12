@@ -95,7 +95,7 @@ def _matcher(ontology, provider=None, locale="zh") -> OntologyMatcher:
 
 def test_the_batch_offers_only_the_sections_the_chunk_was_printed_under(v2):
     """Measured: a current-liabilities chunk used to be offered all 72 mappable balance-sheet
-    concepts. It is now offered the 13 current-liability ones plus the 8 statement-level totals,
+    concepts. It is now offered 17 — the 12 scoped to that section plus the 5 statement-level totals,
     which belong to no section and must stay reachable for a subtotal printed anywhere."""
     spy = Spy(items=[])
     m = _matcher(v2, spy)
@@ -105,8 +105,8 @@ def test_the_batch_offers_only_the_sections_the_chunk_was_printed_under(v2):
                             "b": "CURRENT LIABILITIES 流動負債"})
 
     offered = spy.offered()
-    assert offered, "the chunk must still have candidates"
-    assert len(offered) < 72, len(offered)
+    whole_statement = [k for k in m._mappable_keys() if m._in_statement(k, "balance_sheet")]
+    assert len(whole_statement) == 72 and len(offered) == 17, (len(whole_statement), len(offered))
     for k in offered:
         scope = m._sections_of(k)
         assert not scope or "current_liabilities" in scope, k

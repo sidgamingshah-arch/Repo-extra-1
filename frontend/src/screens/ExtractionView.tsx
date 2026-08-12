@@ -1,6 +1,7 @@
 /** Extracted data for one uploaded document — real line items with click-to-source
  * provenance. Clicking a PDF value opens a Source panel that renders that page and
- * highlights the value's bounding box. Mapping is against the seeded reference ontology.
+ * highlights the value's bounding box. Mapping runs against the rulebook in force for the
+ * selected template, or whichever one the reader pins here instead (see RulebookPicker).
  * Distinct from the demo-driven workspace: this reads a live extraction run. */
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -8,7 +9,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Card } from "../components/ui";
 import { ExcelSourcePanel, PagedSource, toPicked, type Picked } from "../components/SourceViewer";
 import { useT } from "../i18n";
-import { useDocumentAnalysis, useExtraction, useOntologies, useTemplates } from "../lib/queries";
+import {
+  ontologyInForce, useDocumentAnalysis, useExtraction, useOntologies, useTemplates,
+} from "../lib/queries";
 import { useUI } from "../store";
 import { SCREENS } from "./config";
 import { color, font } from "../theme";
@@ -211,18 +214,65 @@ function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k:
   );
 }
 
-/** The rulebook IN FORCE among those matching `pred`.
+/** Which rulebook a run reads the filing against, and why.
  *
- *  Superseded ones drop out first, then the highest version of what is left. Version alone was not
- *  enough: it counts edits to ONE rulebook, so when a v1 and the v2 that replaces it both sat at
- *  version 1 the comparison was a tie and the run silently used whichever row arrived first. The
- *  supersession is declared by the rulebook's own author (`metadata.supersedes`) and computed
- *  server-side, so both sides of the wire cannot disagree about which one is live. */
-function latestOntology(rows: OntologyRef[] | undefined, pred: (o: OntologyRef) => boolean) {
-  const matches = (rows ?? []).filter(pred);
-  if (!matches.length) return undefined;
-  const live = matches.filter((o) => !o.superseded);
-  return (live.length ? live : matches).reduce((best, o) => (o.version > best.version ? o : best));
+ *  Until this existed the answer was a property of the configuration: whichever rulebook declared
+ *  itself the successor won, and nobody could pin an older one, or read one filing against two of
+ *  them to see what changed. The default is still the rulebook in force — computed by the ONE
+ *  shared rule (see `ontologyInForce`), not a local copy of it — and the note says which that is
+ *  and on what grounds, because "in force" is a claim the screen has to be able to back up.
+ *
+ *  Choosing is not cosmetic: `ontology_version_id` travels with the POST that starts the run, so
+ *  the pick decides the rules the mapper reasons with. Each choice is its own cached run, which is
+ *  what makes comparing two of them on one filing a matter of switching back and forth.
+ */
+function RulebookPicker({ rows, inForce, chosen, onChoose, templateKey, t }: {
+  rows: OntologyRef[]; inForce: OntologyRef | undefined; chosen: OntologyRef | undefined;
+  onChoose: (id: string) => void; templateKey: string | undefined; t: (k: string) => string;
+}) {
+  const pinned = !!chosen && !!inForce && chosen.id !== inForce.id;
+  // Newest-looking first, and stable: same key together, highest version on top.
+  const sorted = [...rows].sort((a, b) => (a.ontology_key === b.ontology_key
+    ? b.version - a.version
+    : a.ontology_key.localeCompare(b.ontology_key)));
+
+  const why = !chosen ? t("tp.rb.none")
+    : pinned ? t("tp.rb.whyPinned")
+        .replace("{key}", inForce?.ontology_key ?? "").replace("{v}", String(inForce?.version ?? ""))
+    : chosen.supersedes ? t("tp.rb.whySupersedes").replace("{old}", chosen.supersedes)
+    : t("tp.rb.whyVersion").replace("{tpl}", chosen.target_template_key);
+
+  return (
+    <div data-testid="ex-rulebook"
+         style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap",
+                  marginBottom: 12 }}>
+      <span style={{ fontSize: 11, color: color.muted }}>{t("tp.rb.label")}</span>
+      <select
+        data-testid="ex-rulebook-pick"
+        value={chosen?.id ?? ""}
+        onChange={(e) => onChoose(e.target.value)}
+        style={{ fontSize: 12, fontWeight: 600, padding: "5px 9px", borderRadius: 7,
+                 border: `1px solid ${color.controlBorder}`, background: "#fff", color: color.ink,
+                 maxWidth: 420 }}
+      >
+        {!chosen && <option value="">{t("tp.rb.none")}</option>}
+        {sorted.map((o) => (
+          <option key={o.id} value={o.id}>
+            {`${o.ontology_key} · v${o.version}`}
+            {o.id === inForce?.id ? ` — ${t("tp.rb.inForce")}` : ""}
+            {o.superseded ? ` — ${t("tp.rb.superseded")}` : ""}
+            {templateKey && o.target_template_key !== templateKey
+              ? ` — ${t("tp.rb.otherTemplate").replace("{tpl}", o.target_template_key)}` : ""}
+          </option>
+        ))}
+      </select>
+      <span data-testid="ex-rulebook-why"
+            style={{ fontSize: 11, color: pinned ? color.amberFg : color.muted2, maxWidth: 620,
+                     lineHeight: 1.5 }}>
+        {pinned ? `${t("tp.rb.pinned")} — ${why}` : why}
+      </span>
+    </div>
+  );
 }
 
 /** Known canonical-key prefixes → statement labels for the filter dropdown. */
@@ -242,14 +292,18 @@ export default function ExtractionView() {
   const tplQ = useTemplates();
   const selectedTemplateKey = useUI((s) => s.selectedTemplateKey);
   const ready = ontQ.isFetched && tplQ.isFetched;   // don't POST until the lists settle
-  // Prefer the ontology targeting the template the analyst selected on the Upload screen;
-  // fall back to the shipped HK reference ontology, then whatever is first. Inline ontology
-  // edits publish NEW versions, so always take the HIGHEST version among the candidates —
-  // picking the first match would silently keep extracting against a superseded rulebook.
-  const ont =
-    latestOntology(ontQ.data, (o) => o.target_template_key === selectedTemplateKey) ||
-    latestOntology(ontQ.data, (o) => o.ontology_key === "hkfrs_hk_china_v1") ||
-    latestOntology(ontQ.data, () => true);
+  // The rulebook a run DEFAULTS to: the one in force for the template the analyst selected on the
+  // Upload screen; failing that the shipped HK reference rulebook, then whatever exists. "In
+  // force" is one shared rule (see ontologyInForce) — the copy that used to live here compared
+  // versions, which cannot rank two different rulebooks that target the same template.
+  const inForce =
+    ontologyInForce(ontQ.data, (o) => o.target_template_key === selectedTemplateKey) ||
+    ontologyInForce(ontQ.data, (o) => o.ontology_key === "hkfrs_hk_china_v1") ||
+    ontologyInForce(ontQ.data);
+  // …and the one the reader PINNED, which outranks it. Empty means "follow whatever is in force",
+  // so publishing a new rulebook moves an unpinned reader forward rather than freezing them.
+  const [pinnedId, setPinnedId] = useState("");
+  const ont = (pinnedId ? ontQ.data?.find((o) => o.id === pinnedId) : undefined) ?? inForce;
   const tpl = ont ? tplQ.data?.find((tt) => tt.template_key === ont.target_template_key) : undefined;
   const { data, isPending, isError, error } = useExtraction(id, ont?.id, tpl?.id, ready);
 
@@ -259,6 +313,15 @@ export default function ExtractionView() {
               style={{ fontSize: 12, color: color.indigo, background: "none", border: "none", cursor: "pointer", padding: 0, marginBottom: 12 }}>
         {t("ex.back")}
       </button>
+
+      {/* Above the results, and present while one is still running: which rulebook governs this
+          run is a decision, so it belongs where the run is, not only in a file on the server. */}
+      {ontQ.data && ontQ.data.length > 0 && (
+        <RulebookPicker
+          rows={ontQ.data} inForce={inForce} chosen={ont} onChoose={setPinnedId}
+          templateKey={selectedTemplateKey ?? tpl?.template_key} t={t}
+        />
+      )}
 
       {(isPending || !ready) && (
         <div style={{ padding: 50, textAlign: "center", color: color.muted }}>{t("ex.running")}</div>

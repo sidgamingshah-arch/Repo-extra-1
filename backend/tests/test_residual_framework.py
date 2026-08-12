@@ -1,0 +1,517 @@
+"""``residual_framework``: one block governs all 13 residual concepts, and the engine obeys it.
+
+Every test here edits the rulebook (or leaves it alone) and watches the extraction change, because
+that is the only property worth having: a residual block that states a sweep policy the stage does
+not execute is worse than no block at all — it is the one place a reviewer can look up what happens
+to a row nobody claimed.
+
+The failures being guarded are all failures of ARITHMETIC that nothing downstream can see:
+
+* a plugged residual (reported subtotal − mapped children) makes every section tie by construction,
+  so a row extraction missed is absorbed into a plausible number instead of reported as a gap;
+* a subtotal caption the mapper failed to claim, swept into that section's Others, double-counts
+  the whole section and the section still ties;
+* a P&L attribution caption swept into a tax residual merges a flow into a different section's
+  arithmetic;
+* a narrative sentence or a per-share figure in Others moves the subtotal by whatever it contained.
+"""
+from __future__ import annotations
+
+import copy
+import json
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from app.core.models.document import DocumentModel, PageSource
+from app.core.models.enums import Basis, LineRole
+from app.core.models.geometry import Provenance
+from app.core.models.line_item import ExtractedValue, LineItem, NoteItem, NotesTable
+from app.core.stage import PipelineContext
+from app.schemas.loader import load_ontology
+from app.stages.residual import ResidualStage
+
+_SAMPLES = Path(__file__).resolve().parent.parent / "app" / "sample" / "templates"
+
+
+@pytest.fixture(scope="module")
+def raw_ontology() -> dict:
+    return json.loads((_SAMPLES / "hkfrs_hk_china_v2_ontology.json").read_text())
+
+
+def _ontology(raw: dict):
+    """Loaded the way the extraction worker loads it — RESOLVED, so every concept carries its
+    section, its ``face_only``/``note_use`` and its ``temporality``."""
+    return load_ontology(copy.deepcopy(raw), resolve=True)
+
+
+def _li(ordinal: int, label: str, key: str | None, value: int | None,
+        role: LineRole = LineRole.LINE, page: int = 0, note: str | None = None) -> LineItem:
+    item = LineItem(source_label=label, canonical_key=key, ordinal=ordinal, role=role,
+                    note_number=note)
+    if value is not None:
+        item.set_value(ExtractedValue(
+            value=Decimal(value), value_raw=Decimal(value), basis=Basis.CONSOLIDATED,
+            period_label="current", provenance=Provenance(page_index=page)))
+    return item
+
+
+def _doc(statement: str, items: list[LineItem]) -> DocumentModel:
+    doc = DocumentModel(filename="f.pdf", locale="en")
+    doc.pages = [PageSource(index=0, statement=statement)]
+    doc.line_items = items
+    return doc
+
+
+def _run(doc: DocumentModel, ontology) -> PipelineContext:
+    ctx = PipelineContext(raw_bytes=b"")
+    ctx.ontology = ontology
+    # The sweep refuses to run before the dedicated concepts have been resolved; in the pipeline
+    # this is set by the mapping stage.
+    ctx.mapping_strategy = "deterministic"
+    ResidualStage().run(doc, ctx)
+    return ctx
+
+
+def _report(ctx, key: str) -> dict:
+    return next(e for e in ctx.residual_itemisation if e["residual"] == key)
+
+
+def _current_liabilities(unclaimed_label: str, unclaimed: int = 25, subtotal: int | None = 125,
+                        role: LineRole = LineRole.LINE) -> DocumentModel:
+    """A minimal current-liabilities section: one dedicated row, one unclaimed row, the subtotal."""
+    items = [
+        _li(0, "Trade and bills payables", "bs_current_liabilities__current_trade_payables", 100),
+        _li(1, unclaimed_label, None, unclaimed, role),
+    ]
+    if subtotal is not None:
+        items.append(_li(2, "Total current liabilities",
+                         "bs_current_liabilities__total_current_liabilities", subtotal,
+                         LineRole.SUBTOTAL))
+    return _doc("balance_sheet", items)
+
+
+# --- the sweep, and what a component records ---------------------------------------------------
+
+def test_an_unclaimed_face_row_is_swept_and_itemised_with_the_declared_fields(raw_ontology):
+    """The row keeps its own label and sign and becomes a named component of the residual — the
+    difference between an itemised residual and an unexplained bucket."""
+    doc = _current_liabilities("Other taxes payable")
+    ctx = _run(doc, _ontology(raw_ontology))
+
+    swept = doc.line_items[1]
+    assert swept.canonical_key == "bs_current_liabilities__others"
+    assert swept.source_label == "Other taxes payable"      # never relabelled "Others"
+    assert "residual_combined" in swept.confidence.flags
+
+    entry = _report(ctx, "bs_current_liabilities__others")
+    fields = raw_ontology["residual_framework"]["itemisation"]["component_fields"]
+    component = entry["components"][0]
+    assert [f for f in fields if f in component] == fields
+    assert component["source_row_label"] == "Other taxes payable"
+    assert component["sign_as_reported"] == {"consolidated|current": "positive"}
+    # source_fact_id is composed in the order global_rules declares.
+    assert component["source_fact_id"]["consolidated|current"].count("|") == 7
+
+    recon = entry["reconciliation"][0]
+    assert (recon["reported"], recon["dedicated"], recon["residual"]) == (125.0, 100.0, 25.0)
+    assert recon["status"] == "tied"
+    # "one rounding unit per contributing row": the dedicated row, the component and the subtotal.
+    assert recon["tolerance"] == 3.0
+    # 25 is 20% of the section subtotal, so both size triggers fire on a section that ties.
+    assert "residual_review:component_share_of_subtotal>2%" in swept.confidence.flags
+    assert "residual_review:residual_share_of_subtotal>5%" in swept.confidence.flags
+
+
+def test_a_component_field_the_rulebook_stops_declaring_stops_being_recorded(raw_ontology):
+    raw = copy.deepcopy(raw_ontology)
+    fields = raw["residual_framework"]["itemisation"]["component_fields"]
+    fields.remove("source_fact_id")
+    doc = _current_liabilities("Other taxes payable")
+    ctx = _run(doc, _ontology(raw))
+
+    component = _report(ctx, "bs_current_liabilities__others")["components"][0]
+    assert "source_fact_id" not in component
+    assert "source_row_label" in component
+
+
+def test_the_residual_is_the_sum_of_its_components_not_a_plug(raw_ontology):
+    """The subtotal says 200 and the rows account for 125. A plug would make the residual 100 and
+    the section tie; the framework's sum leaves the residual at 25 and reports the 75 that is
+    missing, which is the only version a reviewer can act on."""
+    doc = _current_liabilities("Other taxes payable", unclaimed=25, subtotal=200)
+    ctx = _run(doc, _ontology(raw_ontology))
+
+    swept = doc.line_items[1]
+    assert swept.values[next(iter(swept.values))].value == Decimal(25)
+    recon = _report(ctx, "bs_current_liabilities__others")["reconciliation"][0]
+    assert recon["residual"] == 25.0 and recon["diff"] == 75.0
+    assert recon["status"] == "unallocated_gap"
+
+    gap = "unallocated_gap:bs_s5_current_liabilities:consolidated|current=75"
+    assert gap in swept.confidence.flags
+    subtotal_row = doc.line_items[2]
+    # …and the section is routed to review: the subtotal row is the section's own claim about
+    # itself and would otherwise still read as auto-approvable.
+    assert gap in subtotal_row.confidence.flags
+    assert "low_mapping_confidence" in subtotal_row.confidence.flags
+    assert "residual_review:unallocated_gap" in swept.confidence.flags
+
+
+def test_a_section_that_prints_no_subtotal_is_itemised_but_unreconciled(raw_ontology):
+    doc = _current_liabilities("Other taxes payable", subtotal=None)
+    ctx = _run(doc, _ontology(raw_ontology))
+
+    swept = doc.line_items[1]
+    assert swept.canonical_key == "bs_current_liabilities__others"
+    recon = _report(ctx, "bs_current_liabilities__others")["reconciliation"][0]
+    assert recon["status"] == "no_reported_subtotal"
+    assert "residual_unreconciled:bs_s5_current_liabilities" in swept.confidence.flags
+    assert swept.confidence.mapping == pytest.approx(0.4)
+
+
+# --- eligibility -------------------------------------------------------------------------------
+
+def test_a_subtotal_caption_the_mapper_missed_is_refused_by_never_sweep(raw_ontology):
+    """Printed as an ordinary line and claimed by nobody, "Total current liabilities" would be
+    swept into current liabilities' own Others — counting the entire section twice, with the
+    section still tying afterwards."""
+    doc = _current_liabilities("Total current liabilities", unclaimed=125)
+    ctx = _run(doc, _ontology(raw_ontology))
+
+    assert doc.line_items[1].canonical_key is None
+    assert any(f.startswith("residual_never_sweep:") for f in doc.line_items[1].confidence.flags)
+    assert not hasattr(ctx, "residual_itemisation")
+
+    # …and it is `never_sweep` doing it: with the entry removed the row sweeps in.
+    raw = copy.deepcopy(raw_ontology)
+    for m in raw["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            m["never_sweep"].remove("bs_current_liabilities__total_current_liabilities")
+    doc = _current_liabilities("Total current liabilities", unclaimed=125)
+    _run(doc, _ontology(raw))
+    assert doc.line_items[1].canonical_key == "bs_current_liabilities__others"
+
+
+def test_a_per_share_row_is_ineligible_until_the_eligibility_list_stops_saying_so(raw_ontology):
+    """Earnings per share is a ratio in cents. Added into a section subtotal it is nonsense, and
+    it is far too small for any rollup to notice."""
+    doc = _doc("profit_and_loss", [
+        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
+            LineRole.SUBTOTAL),
+        _li(1, "Basic earnings per share (HK cents)", None, 12),
+    ])
+    _run(doc, _ontology(raw_ontology))
+    assert doc.line_items[1].canonical_key is None
+    assert "residual_ineligible:per-share figure" in doc.line_items[1].confidence.flags
+
+    raw = copy.deepcopy(raw_ontology)
+    elig = raw["residual_framework"]["sweep"]["eligibility"]
+    elig[2] = elig[2].replace("per-share figure, ", "")
+    doc = _doc("profit_and_loss", [
+        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
+            LineRole.SUBTOTAL),
+        _li(1, "Basic earnings per share (HK cents)", None, 12),
+    ])
+    _run(doc, _ontology(raw))
+    assert doc.line_items[1].canonical_key == "pl_tax_expense__others"
+
+
+def test_an_attribution_caption_is_not_merged_into_the_section_above_it(raw_ontology):
+    """"Non-controlling interests" printed under the profit-attribution heading is a FLOW belonging
+    to its own concept. Left eligible it resolves to the nearest section with a residual — the tax
+    section — and a period flow lands inside another section's arithmetic."""
+    doc = _doc("profit_and_loss", [
+        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
+            LineRole.SUBTOTAL),
+        _li(1, "Attributable to non-controlling interests:", None, 40),
+    ])
+    _run(doc, _ontology(raw_ontology))
+    row = doc.line_items[1]
+    assert row.canonical_key is None
+    assert "residual_ineligible:attribution caption" in row.confidence.flags
+
+
+def test_a_row_whose_section_cannot_be_resolved_goes_to_review_not_to_a_bucket(raw_ontology):
+    """No banner, no subtotal below it, nothing mapped above it: there is no section, and
+    ``cross_section: false`` means there is no rescue either."""
+    doc = _doc("balance_sheet", [_li(0, "Deposits paid for acquisition of land", None, 60)])
+    _run(doc, _ontology(raw_ontology))
+    assert doc.line_items[0].canonical_key is None
+    assert "residual_section_unresolved" in doc.line_items[0].confidence.flags
+
+
+def test_the_next_statements_subtotal_never_places_a_row(raw_ontology):
+    """A row at the foot of the balance sheet, with no section subtotal of its own below it: the
+    income statement's first subtotal is not evidence about it, and neither is the balance sheet's
+    own grand total. The section above it is."""
+    doc = _doc("balance_sheet", [
+        _li(0, "Property, plant and equipment",
+            "bs_non_current_assets__property_plant_and_equipment", 700),
+        _li(1, "Deposits paid for acquisition of land", None, 60),
+        _li(2, "Total assets", "bs_total_assets", 760, LineRole.TOTAL),
+    ])
+    doc.pages.append(PageSource(index=1, statement="profit_and_loss"))
+    pl = _li(3, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
+             LineRole.SUBTOTAL, page=1)
+    doc.line_items.append(pl)
+    _run(doc, _ontology(raw_ontology))
+
+    assert doc.line_items[1].canonical_key == "bs_non_current_assets__others"
+
+
+def test_cross_section_true_on_one_residual_is_what_enables_the_rescue(raw_ontology):
+    raw = copy.deepcopy(raw_ontology)
+    for m in raw["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            m["residual_policy"]["cross_section"] = True
+    doc = _doc("balance_sheet", [_li(0, "Deposits paid for acquisition of land", None, 60)])
+    _run(doc, _ontology(raw))
+    assert doc.line_items[0].canonical_key == "bs_current_liabilities__others"
+
+
+# --- per-concept policy ------------------------------------------------------------------------
+
+def test_a_residual_populated_by_something_other_than_the_sweep_is_left_alone(raw_ontology):
+    raw = copy.deepcopy(raw_ontology)
+    for m in raw["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            m["residual_policy"]["population"] = "manual_only"
+    doc = _current_liabilities("Other taxes payable")
+    ctx = _run(doc, _ontology(raw))
+
+    assert doc.line_items[1].canonical_key is None
+    assert any("not_swept(bs_current_liabilities__others):population=manual_only" in line
+               for line in ctx.logs)
+
+
+def test_a_residual_asking_to_be_plugged_is_reported_as_a_rulebook_conflict(raw_ontology):
+    """``plug_behaviour: forbidden`` is the framework's word and it wins: the contradiction is
+    reported, and the residual is still the sum of its components."""
+    raw = copy.deepcopy(raw_ontology)
+    for m in raw["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            m["residual_policy"]["plug"] = True
+    doc = _current_liabilities("Other taxes payable", unclaimed=25, subtotal=200)
+    ctx = _run(doc, _ontology(raw))
+
+    assert any("rulebook_conflict(bs_current_liabilities__others):plug_forbidden_by_framework"
+               in line for line in ctx.logs)
+    recon = _report(ctx, "bs_current_liabilities__others")["reconciliation"][0]
+    assert recon["residual"] == 25.0 and recon["status"] == "unallocated_gap"
+
+
+def test_itemise_false_is_honoured_and_reported_against_the_framework(raw_ontology):
+    raw = copy.deepcopy(raw_ontology)
+    for m in raw["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            m["residual_policy"]["itemise"] = False
+    doc = _current_liabilities("Other taxes payable")
+    ctx = _run(doc, _ontology(raw))
+
+    assert doc.line_items[1].canonical_key == "bs_current_liabilities__others"
+    assert _report(ctx, "bs_current_liabilities__others")["components"] == []
+    assert any("itemisation_required_by_framework" in line for line in ctx.logs)
+
+
+def test_a_residual_declaring_a_derivation_is_reported_rather_than_derived(raw_ontology):
+    """``sweep.derivation: forbidden``. A residual with a derivation is a residual computed from
+    something other than the rows it swept — the plug under another name."""
+    raw = copy.deepcopy(raw_ontology)
+    for m in raw["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            m["derivation"] = "reported subtotal less mapped children"
+    doc = _current_liabilities("Other taxes payable", unclaimed=25, subtotal=200)
+    ctx = _run(doc, _ontology(raw))
+
+    assert any("derivation_forbidden_by_framework" in line for line in ctx.logs)
+    assert _report(ctx, "bs_current_liabilities__others")["reconciliation"][0]["residual"] == 25.0
+
+
+def test_a_row_captioned_others_is_one_ordinary_component(raw_ontology):
+    """``literal_others_caption``: no privileged treatment and no dedicated concept — but it is
+    marked, because a reviewer reading a residual made of a row that already said "Others" needs to
+    know that is what happened."""
+    doc = _current_liabilities("Others")
+    _run(doc, _ontology(raw_ontology))
+    row = doc.line_items[1]
+    assert row.canonical_key == "bs_current_liabilities__others"
+    assert row.source_label == "Others"
+    assert "residual_literal_others_caption" in row.confidence.flags
+
+    raw = copy.deepcopy(raw_ontology)
+    sweep = raw["residual_framework"]["sweep"]
+    sweep["literal_others_caption"] = sweep["literal_others_caption"].replace(
+        "'Others'", "'Sundry'")
+    doc = _current_liabilities("Others")
+    _run(doc, _ontology(raw))
+    assert "residual_literal_others_caption" not in doc.line_items[1].confidence.flags
+
+
+def test_an_aggregation_the_stage_cannot_perform_is_said_out_loud(raw_ontology):
+    """``sum_of_components`` is the only aggregation implemented. A rulebook asking for another one
+    must not be quietly served sums as though they were what it asked for."""
+    raw = copy.deepcopy(raw_ontology)
+    raw["residual_framework"]["itemisation"]["aggregation"] = "largest_component"
+    doc = _current_liabilities("Other taxes payable")
+    ctx = _run(doc, _ontology(raw))
+    assert any("unsupported_aggregation(largest_component)" in line for line in ctx.logs)
+
+
+# --- review triggers ---------------------------------------------------------------------------
+
+def test_the_component_count_trigger_fires_at_the_number_the_rulebook_quotes(raw_ontology):
+    items = [_li(0, "Trade and bills payables",
+                 "bs_current_liabilities__current_trade_payables", 100)]
+    items += [_li(i + 1, f"Sundry liability {i}", None, 5) for i in range(4)]
+    items.append(_li(9, "Total current liabilities",
+                     "bs_current_liabilities__total_current_liabilities", 120,
+                     LineRole.SUBTOTAL))
+    doc = _doc("balance_sheet", items)
+    _run(doc, _ontology(raw_ontology))
+    assert not any(f.startswith("residual_review:component_count")
+                   for f in doc.line_items[1].confidence.flags)
+
+    raw = copy.deepcopy(raw_ontology)
+    triggers = raw["residual_framework"]["review_triggers"]
+    triggers[2] = "component count exceeds 3"
+    items = [_li(0, "Trade and bills payables",
+                 "bs_current_liabilities__current_trade_payables", 100)]
+    items += [_li(i + 1, f"Sundry liability {i}", None, 5) for i in range(4)]
+    items.append(_li(9, "Total current liabilities",
+                     "bs_current_liabilities__total_current_liabilities", 120,
+                     LineRole.SUBTOTAL))
+    doc = _doc("balance_sheet", items)
+    _run(doc, _ontology(raw))
+    assert "residual_review:component_count>3" in doc.line_items[1].confidence.flags
+
+
+def test_the_residual_share_trigger_stops_firing_when_the_rulebook_drops_it(raw_ontology):
+    doc = _current_liabilities("Other taxes payable")
+    _run(doc, _ontology(raw_ontology))
+    assert "residual_review:residual_share_of_subtotal>5%" in doc.line_items[1].confidence.flags
+
+    raw = copy.deepcopy(raw_ontology)
+    raw["residual_framework"]["review_triggers"] = [
+        t for t in raw["residual_framework"]["review_triggers"]
+        if not t.startswith("|residual|")]
+    doc = _current_liabilities("Other taxes payable")
+    _run(doc, _ontology(raw))
+    assert not any(f.startswith("residual_review:residual_share")
+                   for f in doc.line_items[1].confidence.flags)
+
+
+def test_a_component_a_dedicated_concept_was_vetoed_from_claiming_is_a_review_trigger(
+        raw_ontology):
+    """"Income tax payable" scores against the tax total, whose ``exclude_hints`` veto "payable".
+    The veto is right — this is a balance, not a charge — but the reviewer has to be told that a
+    concept nearly claimed the row, or the residual looks like an ordinary unmatched caption."""
+    doc = _doc("profit_and_loss", [
+        _li(0, "Income tax payable", None, -20),
+        _li(1, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
+            LineRole.SUBTOTAL),
+    ])
+    ctx = _run(doc, _ontology(raw_ontology))
+    row = doc.line_items[0]
+    assert row.canonical_key == "pl_tax_expense__others"
+    assert "residual_review:vetoed_dedicated_match" in row.confidence.flags
+    rejected = _report(ctx, "pl_tax_expense__others")["components"][0]["rejected_candidates"]
+    assert rejected and rejected[0]["canonical_key"] == "pl_tax_expense__total_tax_expense"
+    assert rejected[0]["reason"].startswith("exclude_hints:")
+
+
+def test_a_residual_signed_against_its_section_is_a_review_trigger(raw_ontology):
+    """The section's ``sign_convention`` is the one that counts: a residual declares "either" on
+    itself because its own sign is indeterminate, so reading the concept would make this
+    unfireable."""
+    doc = _current_liabilities("Other taxes payable", unclaimed=-25, subtotal=75)
+    _run(doc, _ontology(raw_ontology))
+    assert ("residual_review:sign_opposite_to_section:positive_expected"
+            in doc.line_items[1].confidence.flags)
+
+
+# --- notes as a source -------------------------------------------------------------------------
+
+def _tax_doc_with_note() -> DocumentModel:
+    """The tax section as HKEX filings print it: one face charge citing the tax note, which splits
+    it into current and deferred plus a land-appreciation-tax line no concept covers."""
+    doc = _doc("profit_and_loss", [
+        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
+            LineRole.SUBTOTAL, note="9"),
+        _li(1, "Current tax", "pl_tax_expense__current_tax", -60, note="9"),
+        _li(2, "Deferred tax", "pl_tax_expense__deferred_tax", -10, note="9"),
+    ])
+    table = NotesTable(note_number="9", title="Income tax expense")
+    for label, value in (("Land appreciation tax", -30), ("Total", -100)):
+        item = NoteItem(raw_label=label, ordinal=0,
+                        role=LineRole.TOTAL if label == "Total" else LineRole.LINE)
+        item.set_value(ExtractedValue(
+            value=Decimal(value), value_raw=Decimal(value), basis=Basis.CONSOLIDATED,
+            period_label="current", provenance=Provenance(page_index=0)))
+        table.items.append(item)
+    doc.notes = [table]
+    return doc
+
+
+def test_only_a_section_whose_note_use_permits_it_may_source_from_a_note(raw_ontology):
+    doc = _tax_doc_with_note()
+    ctx = _run(doc, _ontology(raw_ontology))
+
+    sourced = [li for li in doc.line_items if li.canonical_key == "pl_tax_expense__others"]
+    assert [li.source_label for li in sourced] == ["Land appreciation tax"]
+    assert "residual_note_sourced:9" in sourced[0].confidence.flags
+    # The note's own total is not a component — that would count the whole charge twice.
+    entry = _report(ctx, "pl_tax_expense__others")
+    assert [c["source"] for c in entry["components"]] == ["note:9"]
+    assert entry["reconciliation"][0]["status"] == "tied"
+
+
+def test_note_use_evidence_only_closes_the_note_as_a_source(raw_ontology):
+    raw = copy.deepcopy(raw_ontology)
+    raw["section_defaults"]["pl_s5_tax_expense"]["note_use"] = "evidence_only"
+    doc = _tax_doc_with_note()
+    ctx = _run(doc, _ontology(raw))
+
+    assert not [li for li in doc.line_items if li.canonical_key == "pl_tax_expense__others"]
+    # A residual asking for the note while its section forbids it is a contradiction, reported.
+    assert any("notes_as_source_without_note_use" in line for line in ctx.logs)
+
+
+def test_a_residual_that_does_not_ask_for_the_note_never_gets_it(raw_ontology):
+    raw = copy.deepcopy(raw_ontology)
+    for m in raw["mappings"]:
+        if m["canonical_key"] == "pl_tax_expense__others":
+            m["residual_policy"]["notes_as_source"] = False
+    doc = _tax_doc_with_note()
+    _run(doc, _ontology(raw))
+    assert not [li for li in doc.line_items if li.canonical_key == "pl_tax_expense__others"]
+
+
+def test_face_only_false_also_opens_the_note(raw_ontology):
+    """``face_only`` and ``note_use`` are two statements of one policy — "notes are evidence for a
+    face amount, never an independent source of one" — and either one may lift it."""
+    raw = copy.deepcopy(raw_ontology)
+    raw["section_defaults"]["pl_s5_tax_expense"]["note_use"] = "evidence_only"
+    raw["section_defaults"]["pl_s5_tax_expense"]["face_only"] = False
+    doc = _tax_doc_with_note()
+    _run(doc, _ontology(raw))
+    assert [li.source_label for li in doc.line_items
+            if li.canonical_key == "pl_tax_expense__others"] == ["Land appreciation tax"]
+
+
+# --- when the sweep may run --------------------------------------------------------------------
+
+def test_the_sweep_does_not_run_before_the_dedicated_concepts_are_resolved(raw_ontology):
+    """``sweep.runs`` says after resolution, and prohibition 4 says why: a row no concept was ever
+    asked about is not an unclaimed row. Sweeping first would fill Others with the whole face and
+    every section would still tie."""
+    doc = _current_liabilities("Other taxes payable")
+    for li in doc.line_items:
+        li.confidence.method = None
+    ctx = PipelineContext(raw_bytes=b"")
+    ctx.ontology = _ontology(raw_ontology)
+    ResidualStage().run(doc, ctx)
+
+    assert doc.line_items[1].canonical_key is None
+    assert any("no mapping has run" in line for line in ctx.logs)

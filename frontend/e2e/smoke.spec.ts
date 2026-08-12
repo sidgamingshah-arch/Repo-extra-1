@@ -50,6 +50,22 @@ async function openTemplateDetail(page: Page) {
   await expect(page.getByTestId("template-detail")).toBeVisible({ timeout: 15_000 });
 }
 
+/** Can a row of the index take keyboard focus?
+ *
+ * While the detail overlay is up it must not: the list stays MOUNTED under it (that is what keeps
+ * the filter and the scroll), which left every row in the focus order behind a dirty editor.
+ * Asserting the `inert` attribute would only prove it was spelled, so this asks the browser
+ * instead — it tries to focus a row and reports whether the focus took. */
+async function indexRowFocusable(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const row = document.querySelector('[data-testid="tpl-row"]') as HTMLElement | null;
+    if (!row) return false;
+    (document.activeElement as HTMLElement | null)?.blur();
+    row.focus();
+    return document.activeElement === row;
+  });
+}
+
 test.describe.configure({ mode: "serial" });
 
 test("greenfield: the app is empty before any project is loaded", async ({ page }) => {
@@ -225,12 +241,24 @@ test("the template screen is an index first: a row opens the detail, which dismi
   await page.getByTestId("tpl-filter").fill("hkfrs");
   await expect(rows.first()).toBeVisible();
 
+  // Rows are focusable on the index itself — that is how the list is keyboard-operable.
+  expect(await indexRowFocusable(page)).toBe(true);
+
   // PAGE 2 opens on the row click, carrying the tree and the concept editor.
   await rows.first().click();
   await expect(page.getByTestId("template-detail")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("tpl-node").first()).toBeVisible({ timeout: 15_000 });
   await expect(page.getByPlaceholder("New alias")).toBeVisible();
   await expect(page).toHaveURL(/[?&]template=/);              // reloadable / linkable
+
+  // The tree says WHOSE structure it is. With several versions of several templates in the index,
+  // the detail is the only thing on screen that can answer that, and the sidebar is where a reader
+  // scrolling the tree is looking.
+  await expect(page.getByTestId("tpl-tree-template")).toContainText(/hkfrs/i);
+
+  // …and the list underneath is out of reach while it is covered: Tab must not walk out of the
+  // editor into a row that would swap the subject being edited.
+  expect(await indexRowFocusable(page)).toBe(false);
 
   // The starter ontology for THIS template is downloadable from its detail — it is derived from
   // one template, so it lives where a template is already chosen. Both halves of this feature
@@ -242,12 +270,13 @@ test("the template screen is an index first: a row opens the detail, which dismi
   ]);
   expect(starter.suggestedFilename()).toMatch(/_ontology_skeleton\.json$/);
 
-  // Dismissed → back on the index, still filtered.
+  // Dismissed → back on the index, still filtered, and reachable again.
   await page.getByTestId("tpl-detail-close").click();
   await expect(page.getByTestId("template-detail")).toHaveCount(0);
   await expect(page.getByTestId("tpl-filter")).toHaveValue("hkfrs");
   await expect(rows.first()).toBeVisible();
   await expect(page).not.toHaveURL(/[?&]template=/);
+  expect(await indexRowFocusable(page)).toBe(true);
 
   // And the SHAPE any ontology must have is downloadable from the index, because it constrains
   // every one of them rather than any single template.
@@ -612,4 +641,162 @@ test("an analyst gets no template authoring affordances", async ({ page }) => {
   // The screen itself is admin-only; whichever way it is refused, the controls must not exist.
   await expect(page.getByTestId("template-authoring")).toHaveCount(0);
   await expect(page.getByTestId("tpl-upload-xlsx")).toHaveCount(0);
+});
+
+test("the index names the rulebook IN FORCE, not the highest version number", async ({ page }) => {
+  // The rulebooks are fixed for this test so the answer cannot depend on how many times earlier
+  // tests published a new version. The three rows are shaped to break the two rules the column
+  // used to apply: hkfrs_hk_china_v1 has been REPLACED yet carries the highest edit version (a
+  // `version >` comparison picks it), the skeleton draft of empty stubs carries the next highest
+  // and declares nothing (dropping only the superseded row picks it), and the adopted
+  // hkfrs_hk_china_v2 sits at version 1 — which is exactly the tie the seeded pair is in.
+  await page.route("**/api/v1/ontologies", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({
+      json: [
+        { id: "o-v1", ontology_key: "hkfrs_hk_china_v1", target_template_key: "hkfrs_hk_china_v1",
+          version: 9, schema_version: 1, supersedes: null, superseded: true },
+        { id: "o-draft", ontology_key: "hkfrs_hk_china_skeleton",
+          target_template_key: "hkfrs_hk_china_v1", version: 4, schema_version: 2,
+          supersedes: null, superseded: false },
+        { id: "o-v2", ontology_key: "hkfrs_hk_china_v2", target_template_key: "hkfrs_hk_china_v1",
+          version: 1, schema_version: 2, supersedes: "hkfrs_hk_china_v1", superseded: false },
+      ],
+    });
+  });
+
+  await loginAs(page, "admin");
+  await page.goto("/template", DCL);
+  const row = page.getByTestId("tpl-row").filter({ hasText: "hkfrs_hk_china_v1" }).first();
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  // The column has to name what the extractor would actually use for this template.
+  await expect(row.getByTestId("tpl-row-ontology"))
+    .toHaveText("hkfrs_hk_china_v2 · v1", { timeout: 15_000 });
+  await page.unroute("**/api/v1/ontologies");
+});
+
+test("the index fetches its line counts in one wave, not one row behind another", async ({
+  page,
+}) => {
+  // Each detail is held open long enough that overlap is unmistakable, and the counter below reads
+  // the browser's own view of what is in flight: under the row-behind-row version of this hook the
+  // peak was always exactly one, however many versions were stored.
+  let inflight = 0;
+  let peak = 0;
+  const isDetail = (u: string) => /\/templates\/[^/]+\/detail/.test(u);
+  page.on("request", (r) => {
+    if (isDetail(r.url())) { inflight += 1; peak = Math.max(peak, inflight); }
+  });
+  page.on("requestfinished", (r) => { if (isDetail(r.url())) inflight -= 1; });
+  page.on("requestfailed", (r) => { if (isDetail(r.url())) inflight -= 1; });
+  await page.route("**/api/v1/templates/*/detail*", async (route) => {
+    await new Promise((r) => setTimeout(r, 400));
+    await route.continue();
+  });
+
+  await loginAs(page, "admin");
+  await page.goto("/template", DCL);
+  const rows = page.getByTestId("tpl-row");
+  await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+  // More than one version has to be stored for the question to mean anything — the workbook
+  // round-trip test above publishes one, and this suite is serial.
+  const rowCount = await rows.count();
+  expect(rowCount).toBeGreaterThan(1);
+
+  // Every row still prints its real count…
+  const cells = page.getByTestId("tpl-row-lines");
+  for (let i = 0; i < rowCount; i += 1) {
+    await expect(cells.nth(i)).toHaveText(/^\d+$/, { timeout: 30_000 });
+  }
+  // …and they were asked for together rather than in a queue.
+  expect(peak).toBeGreaterThan(1);
+  await page.unroute("**/api/v1/templates/*/detail*");
+});
+
+test("leaving a template with unsaved ontology edits asks before discarding them", async ({
+  page,
+}) => {
+  await loginAs(page, "admin");
+  await openTemplateDetail(page);
+  const nodes = page.getByTestId("tpl-node");
+  await expect(nodes.first()).toBeVisible({ timeout: 15_000 });
+  await nodes.first().click();
+
+  // An alias that exists only in this browser until Save publishes a new ontology version.
+  const alias = `E2E discard ${Date.now()}`;
+  const input = page.getByPlaceholder("New alias");
+  await input.fill(alias);
+  await input.press("Enter");
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
+
+  // "← All templates" must not throw it away without a word.
+  await page.getByTestId("tpl-detail-close").click();
+  await expect(page.getByTestId("tpl-leave-confirm")).toBeVisible();
+  await expect(page.getByTestId("template-detail")).toBeVisible();
+
+  // Keep editing → still here, edit intact.
+  await page.getByTestId("tpl-leave-stay").click();
+  await expect(page.getByTestId("tpl-leave-confirm")).toHaveCount(0);
+  await expect(page.getByText(alias)).toBeVisible();
+  await expect(page.getByText("Unsaved changes")).toBeVisible();
+
+  // Discard → the detail goes, and nothing was published: the alias is not in the reloaded rules.
+  await page.getByTestId("tpl-detail-close").click();
+  await page.getByTestId("tpl-leave-discard").click();
+  await expect(page.getByTestId("template-detail")).toHaveCount(0);
+  await openTemplateDetail(page);
+  await expect(nodes.first()).toBeVisible({ timeout: 15_000 });
+  await nodes.first().click();
+  await expect(page.getByText(alias)).toHaveCount(0);
+
+  // And with nothing pending the question is not asked — leaving stays one click.
+  await page.getByTestId("tpl-detail-close").click();
+  await expect(page.getByTestId("template-detail")).toHaveCount(0);
+});
+
+test("an analyst chooses which rulebook a run reads the filing against", async ({ page }) => {
+  test.setTimeout(180_000);
+  // What the run was actually started with. The picker is only real if the choice reaches the POST
+  // that starts the extraction — a select that changed a caption would be decoration.
+  const posted: (string | null)[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "POST" && /\/documents\/[^/]+\/extractions$/.test(r.url())) {
+      try {
+        posted.push((JSON.parse(r.postData() ?? "{}").ontology_version_id as string) ?? null);
+      } catch {
+        posted.push(null);
+      }
+    }
+  });
+
+  await loginAs(page, "analyst");
+  await page.goto("/upload", DCL);
+  await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.pdf");
+  await expect(page.getByTestId("doc-row").filter({ hasText: "sample.pdf" }))
+    .toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: /Extract directly/ }).click();
+  await expect(page.getByRole("heading", { name: "Extracted data" }))
+    .toBeVisible({ timeout: 60_000 });
+
+  // The default is the rulebook in force, and the screen says on what grounds — "in force" is a
+  // claim about adoption, so it has to be backed by the declaration that made it so.
+  const pick = page.getByTestId("ex-rulebook-pick");
+  await expect(pick).toBeVisible();
+  await expect(page.getByTestId("ex-rulebook-why")).toContainText(/In force because/);
+  const values = await pick.locator("option").evaluateAll(
+    (os) => os.map((o) => (o as HTMLOptionElement).value));
+  // The seeded pair (the adopted v2 and the v1 it replaces) is what makes pinning possible.
+  expect(values.length).toBeGreaterThan(1);
+  const inForceId = await pick.inputValue();
+  expect(posted).toContain(inForceId);
+
+  // Pin the other one: a fresh run is started against the rulebook chosen, not the adopted one.
+  const other = values.find((v) => v && v !== inForceId) as string;
+  await pick.selectOption(other);
+  await expect.poll(() => posted[posted.length - 1], { timeout: 60_000 }).toBe(other);
+  await expect(page.getByTestId("ex-rulebook-why")).toContainText(/not the one in force/);
+  // …and that run really read the filing: the rows come back for the pinned rulebook too.
+  await expect(page.getByRole("heading", { name: "Extracted data" }))
+    .toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText("Trade receivables").first()).toBeVisible({ timeout: 60_000 });
 });

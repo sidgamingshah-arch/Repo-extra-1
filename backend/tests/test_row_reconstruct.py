@@ -68,6 +68,48 @@ def test_section_header_is_not_merged_into_next_item():
     assert items[0].source_label == "Goodwill"                      # header not swallowed
 
 
+def test_a_second_figure_in_one_column_does_not_replace_the_first():
+    """Two figures inside the SAME value column (a footnote-marked repeat, an OCR double read)
+    land on one (basis, period) key. ``column_guard`` says facts differing on nothing declared are
+    duplicates, so the first printed figure is kept — overwriting means the row reports whichever
+    cell the geometry happened to visit last, with nothing in the output to show it happened."""
+    logs: list[str] = []
+    words = [
+        _w("Trade", 0.10, 0.20, 0.16, 0.212), _w("receivables", 0.17, 0.20, 0.28, 0.212),
+        _w("3,410", 0.72, 0.20, 0.78, 0.212), _w("3,411", 0.73, 0.20, 0.79, 0.212),
+        _w("2,900", 0.86, 0.20, 0.92, 0.212),
+        _w("Inventories", 0.10, 0.24, 0.20, 0.252),
+        _w("2,000", 0.72, 0.24, 0.78, 0.252), _w("1,800", 0.86, 0.24, 0.92, 0.252),
+        _w("Cash", 0.10, 0.28, 0.16, 0.292),
+        _w("1,204", 0.72, 0.28, 0.78, 0.292), _w("980", 0.86, 0.28, 0.92, 0.292),
+    ]
+    items, _ = build_line_items(words, page_index=0, document_id=None, source_kind="native",
+                               log=logs.append)
+    tr = next(i for i in items if "Trade" in i.source_label)
+    cur = tr.get_value(Basis.CONSOLIDATED, period_label="current")
+    assert cur is not None and int(cur.value) == 3410
+    assert len(tr.values) == 2                                  # not three, and not overwritten
+    assert any("duplicate_fact_dropped" in m for m in logs), logs
+
+
+def test_a_basis_caption_governs_a_contiguous_run_of_columns():
+    """A band caption may be printed left-aligned over its first column or centred over the pair,
+    so the columns cannot be handed to the NEAREST caption: on a four-column Group | Company page
+    the Group's comparative is a hair nearer the Company caption, and last year's Group figures
+    are then read as the Company's current year."""
+    from app.core.models.enums import Basis as B
+    from app.services.row_reconstruct import _basis_of_columns
+
+    # "Group" printed over the first column, "Company" over the third — the HKEX house style.
+    bands = [(B.CONSOLIDATED, 0.527), (B.STANDALONE, 0.782)]
+    cols = [0.533, 0.655, 0.781, 0.899]
+    assert _basis_of_columns(cols, bands) == {0: B.CONSOLIDATED, 1: B.CONSOLIDATED,
+                                             2: B.STANDALONE, 3: B.STANDALONE}
+    # …and the same holds when each caption is centred over its own pair.
+    assert _basis_of_columns(cols, [(B.CONSOLIDATED, 0.60), (B.STANDALONE, 0.84)]) == {
+        0: B.CONSOLIDATED, 1: B.CONSOLIDATED, 2: B.STANDALONE, 3: B.STANDALONE}
+
+
 def test_loosely_spaced_label_line_is_not_merged():
     """A label-only line far above the next valued line (paragraph gap) is a separate
     heading, not a wrapped continuation."""

@@ -1,8 +1,15 @@
-"""Computing the template's calculated lines.
+"""Computing the template's calculated lines, and the rulebook's section arithmetic.
 
 A template marks each line `extracted` (read off the document) or `calculated` — a subtotal,
 a total, a net figure — declared with a `rollup {op, children}` naming exactly which lines feed
 it. This module evaluates those declarations.
+
+A v2 ontology states the same kind of arithmetic from the other side: not "this node is the sum of
+those nodes" but "this SECTION must account for every row printed under it"
+(``residual_framework.reconciliation``). :func:`section_members` and :func:`reconcile_section`
+evaluate that identity, and they live here rather than in the residual stage so there is one module
+that knows how a total is built from its parts — the two must not disagree about what counts as a
+contributor.
 
 Why the computed figure is the one that gets shown: a subtotal read off the page is a fourth
 opinion, alongside the lines it is meant to be the sum of. When they disagree, showing the
@@ -59,6 +66,122 @@ class Calculated:
             else:
                 parts.append(f"{abs(c.value):,.0f}" if i or c.value >= 0 else f"({abs(c.value):,.0f})")
         return joiner.join(parts)
+
+
+@dataclass
+class SectionMembers:
+    """The concepts a v2 rulebook prints under one ``section_scope`` id, split by their role.
+
+    ``unit_of_account`` is what splits them, and it is why the split is not "the key looks like a
+    total": a section may print TWO subtotals (cash generated from operations, then net cash from
+    operating activities) and neither is a contributor to the other — adding an intermediate
+    subtotal into the section's own sum counts every line above it a second time.
+    """
+
+    section: str
+    statement: str | None = None
+    # Subtotals in ascending ``match_priority``, so the section's CLOSING subtotal is last: the
+    # rulebook ranks the long specific caption above the intermediate one it contains.
+    subtotals: list[str] = field(default_factory=list)
+    dedicated: list[str] = field(default_factory=list)
+    residuals: list[str] = field(default_factory=list)
+
+
+def section_members(ontology) -> dict[str, SectionMembers]:
+    """Per ``section_scope`` id, the concepts printed under it.
+
+    Reads the RESOLVED ontology: ``section_scope``, ``statement`` and ``unit_of_account`` are
+    authored on ``section_defaults`` and reach a concept through ``inherits``, so an unresolved
+    definition yields no sections at all rather than a partial answer.
+    """
+    out: dict[str, SectionMembers] = {}
+    for m in getattr(ontology, "mappings", []) or []:
+        if not m.section_scope:
+            continue
+        section = m.section_scope[0]
+        entry = out.get(section)
+        if entry is None:
+            statement = m.statement.value if getattr(m.statement, "value", None) else m.statement
+            entry = out[section] = SectionMembers(section=section, statement=statement)
+        if m.unit_of_account == "subtotal":
+            entry.subtotals.append(m.canonical_key)
+        elif m.value_scope == "exclusive_residual":
+            entry.residuals.append(m.canonical_key)
+        else:
+            entry.dedicated.append(m.canonical_key)
+    priority = {m.canonical_key: (m.match_priority or 0) for m in getattr(ontology, "mappings", [])}
+    for entry in out.values():
+        entry.subtotals.sort(key=lambda k: priority.get(k, 0))
+    return out
+
+
+@dataclass
+class SectionRecon:
+    """One section's reconciliation for one (basis, period).
+
+    ``status`` separates the three outcomes the framework distinguishes: ``tied``,
+    ``unallocated_gap`` (the section does not account for its own printed rows), and
+    ``no_reported_subtotal`` (nothing to reconcile against — itemised, but unverified).
+    """
+
+    section: str
+    subtotal_key: str = ""
+    reported: float | None = None
+    dedicated_total: float | None = None
+    residual_total: float | None = None
+    contributors: int = 0
+    components: int = 0
+    tolerance: float = 0.0
+    diff: float | None = None
+    status: str = "no_reported_subtotal"
+
+
+def reconcile_section(members: SectionMembers, value_of, components: list[float], *,
+                      rounding_unit: float = 1.0, per_row_tolerance: bool = True) -> SectionRecon:
+    """Evaluate ``reported_section_subtotal − Σ(dedicated) − Σ(residual components) = 0``.
+
+    ``value_of(key)`` gives the figure the document supplies for a concept in this column (None
+    where the concept is absent). ``components`` are the residual's swept component values —
+    passed in rather than looked up, because the identity is stated over the COMPONENTS: a residual
+    that carried a value with no components behind it is the plug the framework forbids, and it
+    would tie here while proving nothing.
+
+    The residual is never solved for. A break is reported as a difference, not absorbed.
+    """
+    reported = None
+    subtotal_key = ""
+    # The section's closing subtotal is the highest-priority one that the document actually
+    # printed; an intermediate subtotal is not the section's total.
+    for key in reversed(members.subtotals):
+        val = value_of(key)
+        if val is not None:
+            reported, subtotal_key = val, key
+            break
+
+    dedicated_total: float | None = None
+    contributors = 0
+    for key in members.dedicated:
+        val = value_of(key)
+        if val is None:
+            continue
+        contributors += 1
+        dedicated_total = val if dedicated_total is None else dedicated_total + val
+
+    residual_total = sum(components) if components else None
+    recon = SectionRecon(
+        section=members.section, subtotal_key=subtotal_key, reported=reported,
+        dedicated_total=dedicated_total, residual_total=residual_total,
+        contributors=contributors, components=len(components),
+    )
+    # "one rounding unit per contributing row": every row that feeds the identity may have been
+    # rounded independently, so the allowance grows with the number of rows, not with the figure.
+    rows = contributors + len(components) + (1 if subtotal_key else 0)
+    recon.tolerance = rounding_unit * (rows if per_row_tolerance else 1)
+    if reported is None:
+        return recon
+    recon.diff = reported - (dedicated_total or 0.0) - (residual_total or 0.0)
+    recon.status = "tied" if abs(recon.diff) <= recon.tolerance else "unallocated_gap"
+    return recon
 
 
 def calculated_nodes(template_def: dict | None) -> dict[str, dict]:

@@ -17,7 +17,16 @@ from app.core.models.enums import LineRole, SignConvention, StatementType
 
 
 class Rollup(BaseModel):
-    op: Literal["sum", "diff", "weighted_sum"] = "sum"
+    # ``weighted_sum`` used to be permitted here and is deliberately gone. Nothing declared
+    # the weights — there was no field to declare them in — so ``structural_checks`` could
+    # only report such a relation as skipped, and a template naming the op lost the arithmetic
+    # guard on exactly the node it was authored on: the subtotal validated as "not evaluable"
+    # forever, which reads like coverage rather than the authoring mistake it is. Adding a
+    # ``weights`` field instead would invent a shape no face statement needs (a weighted average
+    # is an EPS denominator, not a subtotal), so the op is refused at the upload gate where there
+    # is a request to fail and an author to tell. See ``SUPPORTED_OPS`` for the read-path guard
+    # that still refuses an op reaching evaluation from an older stored definition.
+    op: Literal["sum", "diff"] = "sum"
     children: list[str] = Field(default_factory=list)  # node_ids
 
 

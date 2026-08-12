@@ -69,7 +69,7 @@ def batch_groups(doc: DocumentModel,
         page = _page_of(li)
         statement = stmt_by_page.get(page) if page is not None else None
         if statement:
-            key = ("stmt", statement, page)
+            key = ("stmt", statement, frozenset(cols_by_page.get(page) or ()))
         else:
             key = ("page", page)
         groups.setdefault(key, []).append(li)
@@ -281,13 +281,13 @@ class MapOntologyStage:
                     f"alloc:{AllocationStatus.PARENT_GROSS_EVIDENCE_ONLY.value}")
                 li.confidence.flags.append(f"contains_mapped_children:{','.join(present)}")
                 unfiled += 1
+            child_flag = f"alloc:{AllocationStatus.CHILD_COMPONENT.value}"
             for li in doc.line_items:
-                if li.canonical_key in present:
-                    # Named on the children too: a reviewer opening the empty aggregate needs the
-                    # rows that replaced it, and a reviewer opening a child needs to know why the
-                    # parent is empty.
-                    li.confidence.flags.append(
-                        f"alloc:{AllocationStatus.CHILD_COMPONENT.value}")
+                # Named on the children too: a reviewer opening the empty aggregate needs the rows
+                # that replaced it, and a reviewer opening a child needs to know why the parent is
+                # empty. Once each — a concept can be a component of more than one declared group.
+                if li.canonical_key in present and child_flag not in li.confidence.flags:
+                    li.confidence.flags.append(child_flag)
             ctx.log(f"map_ontology:containment({why}):{aggregate}"
                     f" unfiled_rows={len(filed)} components={','.join(present)}")
         return unfiled

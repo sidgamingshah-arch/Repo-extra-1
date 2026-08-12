@@ -113,16 +113,18 @@ def test_a_group_company_header_bands_the_page_from_the_declared_signals():
 
 
 def test_emptying_the_declared_signals_stops_the_group_company_detection():
-    """Proof the DECLARED signals drive it: with ``entity_scope.signals`` emptied, Group/Company
-    is no longer a basis header (only the two words the engine read before any rulebook declared
-    one survive, and neither is printed here)."""
+    """Proof the DECLARED signals drive it: with ``entity_scope.signals`` emptied, "Group |
+    Company" is not a basis header any more (the only words left are the two the engine read
+    before any rulebook declared one, and neither is printed here), so the page reverts to one
+    basis and four columns become two periods — which is exactly the mis-load this closes."""
     pytest.importorskip("reportlab")
     from tests.fixtures.generate import make_group_company_pdf
 
     words = _pdf_words(make_group_company_pdf())
-    items, _ = _build(words, scope=_scope(**{"entity_scope.signals": []}))
+    items, logs = _build(words, scope=_scope(**{"entity_scope.signals": []}))
     tr = next(i for i in items if "Trade receivables" in i.source_label)
-    assert {b for b, _ in _slots(tr)} == {"consolidated"}
+    assert len({b for b, _ in _slots(tr)}) == 1        # one basis: the split is gone
+    assert not any("two_basis_header" in m for m in logs), logs
 
 
 def test_the_rulebook_file_is_what_the_default_reads(monkeypatch, tmp_path):
@@ -138,16 +140,18 @@ def test_the_rulebook_file_is_what_the_default_reads(monkeypatch, tmp_path):
     edited.write_text(json.dumps(raw), encoding="utf-8")
 
     words = _pdf_words(make_group_company_pdf())
-    items, _ = _build(words)
+    items, logs = _build(words)
     assert {b for b, _ in _slots(next(i for i in items if "Trade" in i.source_label))} == {
         "consolidated", "standalone"}
+    assert any("two_basis_header" in m for m in logs)
 
     monkeypatch.setattr(rr, "_RULEBOOK_IN_FORCE", edited)
     rr.in_force_rules.cache_clear()
     try:
-        items, _ = _build(words)
-        assert {b for b, _ in _slots(next(i for i in items if "Trade" in i.source_label))} == {
-            "consolidated"}
+        items, logs = _build(words)
+        tr = next(i for i in items if "Trade" in i.source_label)
+        assert len({b for b, _ in _slots(tr)}) == 1
+        assert not any("two_basis_header" in m for m in logs), logs
     finally:
         rr.in_force_rules.cache_clear()
 
@@ -182,8 +186,9 @@ def test_a_sentence_naming_both_entities_is_not_a_column_header():
 
 def test_the_filers_name_in_the_running_header_does_not_band_the_page():
     """"… Company Limited" is printed on every page of a filing, and the filer here is a "Group".
-    Both words are in the running header, one of them over the value columns — and the page still
-    has exactly one basis and two intact periods."""
+    Both words are in the running header, in separate runs, with no amount on the line — and the
+    page still has one basis and two intact periods, because "Group" stands over the caption
+    column and a caption bands only the figures it stands over."""
     pytest.importorskip("reportlab")
     from tests.fixtures.generate import make_company_limited_header_pdf
 
@@ -194,16 +199,22 @@ def test_the_filers_name_in_the_running_header_does_not_band_the_page():
     assert not any("entity_scope" in m for m in logs), logs
 
 
+def _two_column_body(y0: float = 0.13) -> list[Word]:
+    return [
+        _w("Inventories", 0.10, y0), _w("2,000", 0.74, y0), _w("1,800", 0.86, y0),
+        _w("Receivables", 0.10, y0 + 0.04), _w("3,410", 0.74, y0 + 0.04),
+        _w("2,900", 0.86, y0 + 0.04),
+        _w("Cash", 0.10, y0 + 0.08), _w("1,204", 0.74, y0 + 0.08), _w("980", 0.86, y0 + 0.08),
+    ]
+
+
 def test_a_row_that_reports_an_amount_is_never_a_basis_header():
-    """The adversarial shape the geometric guards alone would admit: both captions in the header
-    area, in separate runs, over the value columns — but the row reports a figure, so it is a
-    statement line (or prose citing one), not a header band."""
+    """Each of the next three tests strips the shape down to ONE guard: everything else about the
+    row would pass. Here both captions are in the header area, in separate runs, over the value
+    columns — and the row reports a figure, so it is a statement line (or prose citing one)."""
     words = [
-        _w("Group", 0.58, 0.05), _w("Company", 0.80, 0.05), _w("1,200", 0.90, 0.05),
-        _w("2024", 0.74, 0.09), _w("2023", 0.86, 0.09),
-        _w("Inventories", 0.10, 0.13), _w("2,000", 0.74, 0.13), _w("1,800", 0.86, 0.13),
-        _w("Receivables", 0.10, 0.17), _w("3,410", 0.74, 0.17), _w("2,900", 0.86, 0.17),
-        _w("Cash", 0.10, 0.21), _w("1,204", 0.74, 0.21), _w("980", 0.86, 0.21),
+        _w("Group", 0.72, 0.05), _w("Company", 0.84, 0.05), _w("1,200", 0.94, 0.05),
+        _w("2024", 0.74, 0.09), _w("2023", 0.86, 0.09), *_two_column_body(),
     ]
     items, _ = _build(words)
     inv = next(i for i in items if "Inventories" in i.source_label)
@@ -211,29 +222,76 @@ def test_a_row_that_reports_an_amount_is_never_a_basis_header():
                            ("consolidated", "prior"): "1800"}
 
 
-def test_the_bands_are_read_from_the_unmerged_rows():
-    """``_merge_wrapped_labels`` glues a label-only caption onto the next valued line. Computed
-    after the merge, the basis captions arrive on the period row — at the period columns' own
-    positions — and the geometry the guards test is no longer the geometry that was printed."""
+def test_two_captions_inside_one_phrase_are_not_two_column_captions():
+    """Only the clear-air test refuses this one: the words sit over the value columns — one over
+    each — in the header area, with no amount on the line. But they are one contiguous phrase,
+    which is how a sentence is set and not how two column captions are."""
     words = [
-        # The caption line sits paragraph-tight above the dated line, which is what makes the
-        # merge fire on it.
-        _w("Group", 0.58, 0.050), _w("Company", 0.80, 0.050),
-        _w("2024", 0.55, 0.063), _w("2023", 0.67, 0.063),
-        _w("2024", 0.79, 0.063), _w("2023", 0.91, 0.063),
-        _w("Inventories", 0.10, 0.11), _w("2,000", 0.55, 0.11), _w("1,800", 0.67, 0.11),
-        _w("200", 0.79, 0.11), _w("180", 0.91, 0.11),
+        _w("Group", 0.72, 0.05, 0.06), _w("and", 0.79, 0.05, 0.03),
+        _w("the", 0.825, 0.05, 0.025), _w("Company", 0.855, 0.05, 0.06),
+        _w("2024", 0.74, 0.09), _w("2023", 0.86, 0.09), *_two_column_body(),
+    ]
+    items, _ = _build(words)
+    inv = next(i for i in items if "Inventories" in i.source_label)
+    assert _slots(inv) == {("consolidated", "current"): "2000",
+                           ("consolidated", "prior"): "1800"}
+
+
+def test_two_captions_over_one_column_cannot_band_it():
+    """Only the one-column-each test refuses this one: two captions, clear air between them, no
+    amounts, both over the value area — but both over the SAME column, so there is nothing for
+    them to divide. Splitting on it would put both periods of one column in two bases."""
+    words = [
+        _w("Group", 0.70, 0.05, 0.05), _w("Company", 0.79, 0.05, 0.06),
+        _w("2024", 0.74, 0.09), _w("2023", 0.86, 0.09), *_two_column_body(),
+    ]
+    items, _ = _build(words)
+    inv = next(i for i in items if "Inventories" in i.source_label)
+    assert _slots(inv) == {("consolidated", "current"): "2000",
+                           ("consolidated", "prior"): "1800"}
+
+
+def test_a_band_row_printed_tight_against_the_statement_is_still_read():
+    """The page geometry is read from the rows as PRINTED, before ``_merge_wrapped_labels`` folds
+    label-only lines into the valued line below them: a caption on a merged row no longer sits
+    where it was printed, and every guard in ``_basis_bands`` is geometric. Here the band row is
+    paragraph-tight against both the dated line above it and the first statement line below it —
+    the spacing that makes the merge fire at all."""
+    words = [
+        _w("2024", 0.55, 0.03), _w("2023", 0.67, 0.03),
+        _w("2024", 0.79, 0.03), _w("2023", 0.91, 0.03),
+        _w("Group", 0.58, 0.055), _w("Company", 0.80, 0.055),
+        # tight below the caption line — this is the row the merge would swallow it into
+        _w("Inventories", 0.10, 0.067), _w("2,000", 0.55, 0.067), _w("1,800", 0.67, 0.067),
+        _w("200", 0.79, 0.067), _w("180", 0.91, 0.067),
         _w("Receivables", 0.10, 0.15), _w("3,410", 0.55, 0.15), _w("2,900", 0.67, 0.15),
         _w("341", 0.79, 0.15), _w("290", 0.91, 0.15),
         _w("Cash", 0.10, 0.19), _w("1,204", 0.55, 0.19), _w("980", 0.67, 0.19),
         _w("120", 0.79, 0.19), _w("98", 0.91, 0.19),
     ]
     items, _ = _build(words)
-    inv = next(i for i in items if "Inventories" in i.source_label)
+    inv = next(i for i in items if i.source_label == "Inventories")
     assert _slots(inv) == {("consolidated", "current"): "2000",
                            ("consolidated", "prior"): "1800",
                            ("standalone", "current"): "200",
                            ("standalone", "prior"): "180"}
+
+
+def test_a_basis_caption_outside_the_header_area_is_ignored():
+    """The detector used to scan EVERY row, so a page footer or a footnote could define the bands
+    for the whole page. Bounded to the header area the way ``_period_bands`` is — this row would
+    pass every other guard (two captions, separate runs, over the value columns, no amounts) and
+    is refused on position alone."""
+    header = [_w("2024", 0.74, 0.05), _w("2023", 0.86, 0.05)]
+    body = [w for i in range(9)
+            for w in (_w(f"Item{i}", 0.10, 0.09 + i * 0.04),
+                      _w("1,000", 0.74, 0.09 + i * 0.04),
+                      _w("900", 0.86, 0.09 + i * 0.04))]
+    footer = [_w("Group", 0.72, 0.60), _w("Company", 0.88, 0.60)]
+    words = header + body + footer
+    items, logs = _build(words)
+    assert {b for i in items for b, _ in _slots(i)} == {"consolidated"}
+    assert not any("two_basis_header" in m for m in logs), logs
 
 
 def _company_only_page() -> list[Word]:
@@ -303,14 +361,14 @@ def test_a_cjk_dated_header_is_read_as_a_date():
     """The comparative columns of a Chinese filing are headed 二零二四年 / 二零二三年."""
     words = [
         _w("二零二三年", 0.74, 0.05), _w("二零二四年", 0.86, 0.05),
-        _w("收益", 0.10, 0.09), _w("100", 0.74, 0.09), _w("120", 0.86, 0.09),
-        _w("成本", 0.10, 0.13), _w("40", 0.74, 0.13), _w("50", 0.86, 0.13),
-        _w("溢利", 0.10, 0.17), _w("60", 0.74, 0.17), _w("70", 0.86, 0.17),
+        _w("收益", 0.10, 0.09), _w("1,000", 0.74, 0.09), _w("1,200", 0.86, 0.09),
+        _w("成本", 0.10, 0.13), _w("400", 0.74, 0.13), _w("500", 0.86, 0.13),
+        _w("溢利", 0.10, 0.17), _w("600", 0.74, 0.17), _w("700", 0.86, 0.17),
     ]
     items, _ = _build(words)
     rev = next(i for i in items if "收益" in i.source_label)
-    assert _slots(rev) == {("consolidated", "prior"): "100",
-                           ("consolidated", "current"): "120"}
+    assert _slots(rev) == {("consolidated", "prior"): "1000",
+                           ("consolidated", "current"): "1200"}
 
 
 def _restated_page(marker: str = "(restated)") -> list[Word]:
@@ -384,6 +442,28 @@ def test_a_unit_the_rulebook_does_not_declare_is_not_read_off_the_page():
     units = {(v.unit_ctx.currency, str(v.unit_ctx.scale_factor))
              for i in items for v in i.values.values()}
     assert units == {("", "1")}
+
+
+def test_the_matrix_path_also_persists_the_statements_unit():
+    """"Persist unit on every fact" is not qualified by layout: a statement of changes in equity
+    declares its scale in its own header like any other face, and its facts are the ones an equity
+    reconciliation reads."""
+    right = [0.50, 0.60, 0.70, 0.80, 0.90]
+    names = ["Capital", "Premium", "Reserves", "Profits", "Total"]
+    words = [_w(n, x - 0.05, 0.10, 0.05) for n, x in zip(names, right)]
+    words += [_w("RMB'000", x - 0.05, 0.13, 0.05) for x in right]
+    rows = [("At 1 January 2024", ["365,138", "1,200", "17,619", "21,494", "21,879"]),
+            ("Loss for the year", ["–", "–", "–", "(7,991)", "(7,991)"]),
+            ("Dividends paid", ["–", "–", "–", "(1,220)", "(1,220)"])]
+    for i, (label, cells) in enumerate(rows):
+        y = 0.20 + i * 0.04
+        words += [_w(tok, 0.05 + j * 0.05, y, 0.045) for j, tok in enumerate(label.split())]
+        words += [_w(v, x - 0.008 * len(v), y, 0.008 * len(v)) for v, x in zip(cells, right)]
+    items, _ = _build(words, statement="changes_in_equity")
+    assert [i.source_label for i in items] == [label for label, _ in rows]
+    units = {(v.unit_ctx.currency, str(v.unit_ctx.scale_factor))
+             for i in items for v in i.values.values()}
+    assert units == {("CNY", "1000")}
 
 
 def test_a_thousandfold_subtotal_conflict_routes_the_statement_to_review():
@@ -488,19 +568,24 @@ def test_the_declared_strip_rules_are_implemented(printed, expected):
     assert rr.apply_pipeline(printed, steps) == expected
 
 
-def test_the_pipeline_runs_in_the_declared_order():
-    """The list is ordered, and the order is load-bearing: the width fold maps 、 to a comma
-    BEFORE the numbering step, which is what lets "一、" be recognised as numbering at all."""
+def test_the_pipeline_runs_in_the_order_the_rulebook_declares():
+    """The declared list is ORDERED, and the engine applies it in that order — so reordering the
+    rulebook reorders the folds, and a step it does not list does not run."""
     _, block = _raw_blocks()
-    reversed_pipeline = list(reversed(block["pipeline"]))
-    steps = rr._pipeline_steps(_normalisation(reversed_pipeline), _scope())
-    assert rr.apply_pipeline("一、非經營開支", steps) != "非经营开支"
+    ids = [sid for sid, _ in rr._pipeline_steps(_normalisation(), _scope())]
+    assert ids == ["nfkc", "t2s", "case_fold", "width", "footnote", "numbering",
+                   "trailing_colon", "annotation", "whitespace", "wrapped_caption"]
+    reversed_ids = [sid for sid, _ in
+                    rr._pipeline_steps(_normalisation(list(reversed(block["pipeline"]))), _scope())]
+    assert reversed_ids == list(reversed(ids))
+    # A rulebook that declares no pipeline gets no folding, rather than a hardcoded one.
+    assert rr._pipeline_steps(_normalisation([]), _scope()) == ()
 
 
 def _units_caption_row() -> list[Word]:
     """A column-header row whose caption is nothing but an inline unit annotation."""
     return [
-        _w("RMB'000", 0.66, 0.05, 0.08), _w("2024", 0.74, 0.05), _w("2023", 0.86, 0.05),
+        _w("人民幣千元", 0.66, 0.05, 0.08), _w("2024", 0.74, 0.05), _w("2023", 0.86, 0.05),
         _w("Inventories", 0.10, 0.09), _w("2,000", 0.74, 0.09), _w("1,800", 0.86, 0.09),
         _w("Receivables", 0.10, 0.13), _w("3,000", 0.74, 0.13), _w("2,900", 0.86, 0.13),
         _w("Cash", 0.10, 0.17), _w("1,000", 0.74, 0.17), _w("980", 0.86, 0.17),
@@ -508,7 +593,7 @@ def _units_caption_row() -> list[Word]:
 
 
 def test_a_units_caption_row_is_not_a_line_item():
-    """"RMB'000  2024  2023" is a header. Its caption survived the noise test, so the row was
+    """"人民幣千元  2024  2023" is a header. Its caption survived the noise test, so the row was
     emitted as a line item whose two "amounts" were the years."""
     items, _ = _build(_units_caption_row())
     assert [i.source_label for i in items] == ["Inventories", "Receivables", "Cash"]
@@ -520,7 +605,7 @@ def test_removing_the_annotation_step_lets_the_header_row_through():
     _, block = _raw_blocks()
     without = [s for s in block["pipeline"] if "unit and currency annotation" not in s]
     items, _ = _build(_units_caption_row(), normalisation=_normalisation(without))
-    assert any("RMB" in i.source_label for i in items)
+    assert any("千元" in i.source_label for i in items)
 
 
 def test_a_units_caption_row_never_becomes_the_section():
@@ -547,19 +632,20 @@ def test_a_title_case_banner_sets_the_section():
     assert [i.section_hint for i in items] == ["Non-operating expenses"] * 3
 
 
-def test_a_fullwidth_colon_subheading_does_not_displace_the_section():
-    """A sub-heading introduces a group WITHIN the section. Written with the CJK fullwidth colon
-    the plain ``endswith(":")`` test never saw it, so "其他全面收益：" replaced the section for
-    every row beneath it."""
+def test_a_fullwidth_colon_subheading_is_a_heading_not_a_wrapped_caption():
+    """A CJK sub-heading ends in the FULLWIDTH colon, which ``endswith(":")`` never saw — so the
+    heading was taken for the first line of a wrapped caption and glued onto the row below it
+    ("調整： 折舊" instead of "折舊"). The rulebook's fullwidth→halfwidth step is what makes the
+    colon count, and the heading then correctly leaves the section it introduces alone."""
     words = [
         _w("EXPENSES", 0.10, 0.05),
-        _w("其他全面收益：", 0.10, 0.10, 0.10),
-        _w("Interest", 0.10, 0.15), _w("expense", 0.17, 0.15),
-        _w("1,234", 0.74, 0.15), _w("1,000", 0.86, 0.15),
-        _w("Bank", 0.10, 0.19), _w("charges", 0.17, 0.19),
-        _w("12", 0.74, 0.19), _w("10", 0.86, 0.19),
-        _w("Sundry", 0.10, 0.23), _w("losses", 0.17, 0.23),
-        _w("5", 0.74, 0.23), _w("6", 0.86, 0.23),
+        _w("調整：", 0.10, 0.150, 0.05),
+        _w("折舊", 0.10, 0.163), _w("1,234", 0.74, 0.163), _w("1,000", 0.86, 0.163),
+        _w("Bank", 0.10, 0.20), _w("charges", 0.17, 0.20),
+        _w("12", 0.74, 0.20), _w("10", 0.86, 0.20),
+        _w("Sundry", 0.10, 0.24), _w("losses", 0.17, 0.24),
+        _w("5", 0.74, 0.24), _w("6", 0.86, 0.24),
     ]
     items, _ = _build(words)
+    assert [i.source_label for i in items] == ["折舊", "Bank charges", "Sundry losses"]
     assert {i.section_hint for i in items} == {"EXPENSES"}

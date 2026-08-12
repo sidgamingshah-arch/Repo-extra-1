@@ -7,7 +7,7 @@
  * and scroll intact, and `?template=` keeps a reloaded tab on the version it was open on.
  */
 import type { CSSProperties } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -99,6 +99,12 @@ function NettingExpr({ expr }: { expr: string }) {
 interface Concept { key: string; label: string }
 
 type Msg = { ok: boolean; text: string };
+
+/** How an editor tells the detail page it is holding an unsaved change, under a name of its own
+ *  (`concept`, `netting:<id>`) so several editors can be dirty at once and each can go clean on
+ *  its own. The detail needs the answer because the way OUT of the page — "← All templates" —
+ *  lives in its header, and used to discard whatever was in an editor without a word. */
+type ReportDirty = (source: string, dirty: boolean) => void;
 
 /** The server's own `detail` when it sent one — a rejected key or an invalid regex has to say
  *  WHY, verbatim, or the admin is left guessing at what to change. */
@@ -374,10 +380,10 @@ function CriteriaEditor({
 /** One netting policy. Admins edit its key sets, condition and explanation in place; everyone
  *  else sees exactly the read-only expression. Each save publishes a new ontology version via
  *  `apply`, which the card above owns so the confirmation survives the refetch. */
-function NettingRuleRow({ rule, concepts, editable, isNew, apply, onDone, t }: {
+function NettingRuleRow({ rule, concepts, editable, isNew, apply, onDone, onDirty, t }: {
   rule: NettingRuleView; concepts: Concept[]; editable: boolean; isNew?: boolean;
   apply: (edit: NettingRuleEdit) => Promise<boolean>; onDone?: () => void;
-  t: (k: string) => string;
+  onDirty: ReportDirty; t: (k: string) => string;
 }) {
   const stored = {
     target: rule.target_key,
@@ -414,6 +420,12 @@ function NettingRuleRow({ rule, concepts, editable, isNew, apply, onDone, t }: {
   }
 
   const dirty = JSON.stringify(form) !== sig;
+  // Tell the page. On unmount the answer is "nothing pending": a draft row that was cancelled, or
+  // a rule the refetch removed, must not leave the detail believing there is an edit to lose.
+  useEffect(() => {
+    onDirty(`netting:${rule.id}`, dirty);
+    return () => onDirty(`netting:${rule.id}`, false);
+  }, [dirty, rule.id, onDirty]);
   const patch = (p: Partial<typeof stored>) => setForm((f) => ({ ...f, ...p }));
   // A line cannot be netted against itself, nor subtracted and added at once.
   const others = concepts.filter((c) => c.key !== form.target);
@@ -561,9 +573,9 @@ function NettingRuleRow({ rule, concepts, editable, isNew, apply, onDone, t }: {
  *  include, applied per-document only when the model confirms the containment. Editable by
  *  admins because netting RESTATES a reported figure — so it goes through the same versioned
  *  publish as a concept edit, never an in-place change. */
-function NettingRules({ rules, concepts, ontologyId, canEdit, t }: {
+function NettingRules({ rules, concepts, ontologyId, canEdit, onDirty, t }: {
   rules: NettingRuleView[]; concepts: Concept[]; ontologyId: string | undefined;
-  canEdit: boolean; t: (k: string) => string;
+  canEdit: boolean; onDirty: ReportDirty; t: (k: string) => string;
 }) {
   const qc = useQueryClient();
   const editable = canEdit && !!ontologyId;
@@ -606,14 +618,15 @@ function NettingRules({ rules, concepts, ontologyId, canEdit, t }: {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {rules.map((r) => (
             <NettingRuleRow key={r.id} rule={r} concepts={concepts} editable={editable}
-                            apply={apply} t={t} />
+                            apply={apply} onDirty={onDirty} t={t} />
           ))}
           {adding && (
             <NettingRuleRow
               key={adding} isNew editable
               rule={{ id: adding, target_key: "", target_label: "", subtract: [], add: [],
                       condition: "", label: "" }}
-              concepts={concepts} apply={apply} onDone={() => setAdding(null)} t={t}
+              concepts={concepts} apply={apply} onDone={() => setAdding(null)}
+              onDirty={onDirty} t={t}
             />
           )}
         </div>
@@ -644,9 +657,10 @@ function NettingRules({ rules, concepts, ontologyId, canEdit, t }: {
  *  confusable-with / scope / lexical hints). Saving publishes a NEW ontology version
  *  server-side (history preserved), then re-reads the screen so what you see is the stored
  *  result, not local optimism. */
-function NodeRules({ cfg, canonicalKey, ontologyId, concepts, locale, canEdit, t }: {
+function NodeRules({ cfg, canonicalKey, ontologyId, concepts, locale, canEdit, onDirty, t }: {
   cfg: NodeConfig; canonicalKey: string | undefined; ontologyId: string | undefined;
-  concepts: Concept[]; locale: Locale; canEdit: boolean; t: (k: string) => string;
+  concepts: Concept[]; locale: Locale; canEdit: boolean; onDirty: ReportDirty;
+  t: (k: string) => string;
 }) {
   const qc = useQueryClient();
   // Edit the RAW per-locale list (falls back to the merged set when the backend predates it).
@@ -699,6 +713,12 @@ function NodeRules({ cfg, canonicalKey, ontologyId, concepts, locale, canEdit, t
   const effCriteria = withDrafts(criteria, drafts);
   const dirty = effective.join(" ") !== stored.join(" ") || sign !== cfg.sign
     || criteriaSig(effCriteria) !== criteriaSig(storedCriteria);
+  // The same answer the "Unsaved changes" bar below is drawn from, handed to the page: leaving
+  // the detail has to ask before throwing this away.
+  useEffect(() => {
+    onDirty("concept", dirty);
+    return () => onDirty("concept", false);
+  }, [dirty, onDirty]);
   // The merged display set minus what we edit here = aliases inherited from the fallback
   // locale. Shown read-only so it's clear why the extractor also matches them.
   const inherited = cfg.aliases.filter((a) => !stored.includes(a));
@@ -899,6 +919,18 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
   // exactly like a download the browser declined to show.
   const skeleton = useDownloadOntologySkeleton();
   const [skelErr, setSkelErr] = useState<string | null>(null);
+  // Which editors are holding an unsaved change, by name. Several can be at once — a concept's
+  // aliases and a netting rule are separate saves — and the page only needs to know whether ANY
+  // of them is, to decide whether leaving costs the reader work.
+  const [dirtyBy, setDirtyBy] = useState<Record<string, boolean>>({});
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  // Identity-stable: the editors report from an effect, so a callback rebuilt on every render
+  // would re-run it on every render. Returning the SAME object when nothing changed keeps React
+  // from re-rendering us for a report that said what we already knew.
+  const reportDirty = useCallback<ReportDirty>((source, dirty) => {
+    setDirtyBy((m) => (!!m[source] === dirty ? m : { ...m, [source]: dirty }));
+  }, []);
+  const dirty = Object.values(dirtyBy).some(Boolean);
 
   const cfg: NodeConfig | undefined = data
     ? (data.node_config[tplSel] ?? data.node_config["trade_recv"]
@@ -957,8 +989,18 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
         >
           <div style={{ padding: 16, flex: "0 0 auto", borderBottom: `1px solid ${color.hairline3}` }}>
             <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 3 }}>{t("tp.structure")}</h2>
+            {/* WHOSE structure. The split into index + detail left the tree unlabelled: with
+                several versions of several templates in the index, a reader who scrolled the tree
+                had nothing on screen saying which one they were editing the rules of. */}
+            <div data-testid="tpl-tree-template"
+                 style={{ fontSize: 12, fontWeight: 600, color: color.ink, marginBottom: 2 }}>
+              {name}
+            </div>
             <div style={{ fontSize: 11.5, color: color.muted }}>
-              {data.template.line_items} {t("tp.lineItems")}
+              <span style={{ fontFamily: font.mono }}>
+                {[data.template.key, tpl && `v${tpl.version}`].filter(Boolean).join(" · ")}
+              </span>
+              {`  ·  ${data.template.line_items} ${t("tp.lineItems")}`}
             </div>
           </div>
 
@@ -1041,6 +1083,7 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
               concepts={concepts}
               locale={locale}
               canEdit={canEdit}
+              onDirty={reportDirty}
               t={t}
             />
 
@@ -1078,7 +1121,8 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
             {/* Template-wide containment-netting policies (LLM-gated), admin-editable. */}
             {data.netting_rules && (
               <NettingRules rules={data.netting_rules} concepts={concepts}
-                            ontologyId={data.ontology?.id} canEdit={canEdit} t={t} />
+                            ontologyId={data.ontology?.id} canEdit={canEdit}
+                            onDirty={reportDirty} t={t} />
             )}
           </div>
         </div>
@@ -1095,53 +1139,87 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
         display: "flex", flexDirection: "column", minHeight: 0,
       }}
     >
-      <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 12,
-                    padding: "11px 18px", background: color.surface,
+      <div style={{ flex: "0 0 auto", background: color.surface,
                     borderBottom: `1px solid ${color.cardBorder}` }}>
-        <button
-          data-testid="tpl-detail-close"
-          onClick={onDismiss}
-          style={{ fontSize: 12, fontWeight: 600, color: color.indigo, background: "#fff",
-                   border: `1px solid ${color.indigoBorder2}`, borderRadius: radius.control,
-                   padding: "7px 12px", cursor: "pointer", whiteSpace: "nowrap" }}
-        >
-          {t("tp.detail.back")}
-        </button>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: color.ink }}>{name}</div>
-          <div style={{ fontSize: 11, color: color.muted, fontFamily: font.mono }}>
-            {[tpl?.template_key ?? data?.template.key, tpl && `v${tpl.version}`]
-              .filter(Boolean).join(" · ")}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 18px" }}>
+          <button
+            data-testid="tpl-detail-close"
+            // An unsaved alias, criterion or netting edit is work that only exists here: it is not
+            // stored until Save publishes a new ontology version. Leaving used to discard it with no
+            // word, so the ask comes first and the reader chooses.
+            onClick={() => { if (dirty) setConfirmLeave(true); else onDismiss(); }}
+            style={{ fontSize: 12, fontWeight: 600, color: color.indigo, background: "#fff",
+                     border: `1px solid ${color.indigoBorder2}`, borderRadius: radius.control,
+                     padding: "7px 12px", cursor: "pointer", whiteSpace: "nowrap" }}
+          >
+            {t("tp.detail.back")}
+          </button>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: color.ink }}>{name}</div>
+            <div style={{ fontSize: 11, color: color.muted, fontFamily: font.mono }}>
+              {[tpl?.template_key ?? data?.template.key, tpl && `v${tpl.version}`]
+                .filter(Boolean).join(" · ")}
+            </div>
           </div>
+          {/* A ready-to-edit ontology for THIS template — every canonical_key it declares already a
+              stub inside its section, so an author fills in aliases and criteria instead of
+              reverse-engineering the shape from 422s. It lives here rather than on the index because
+              the file is derived from one template, and asking which one on a page listing seven of
+              them would be a worse question than clicking the one you mean. */}
+          {canEdit && (
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+              {skelErr && (
+                <span data-testid="tpl-skeleton-error"
+                      style={{ fontSize: 11, color: color.redFg }}>{skelErr}</span>
+              )}
+              <button
+                data-testid="tpl-skeleton-download"
+                disabled={skeleton.isPending}
+                title={t("tp.detail.skeletonHelp")}
+                onClick={() => {
+                  setSkelErr(null);
+                  skeleton.mutate(
+                    { templateId: id, fallbackName: tpl?.template_key ?? "ontology" },
+                    { onError: (e) => setSkelErr(e instanceof ApiError ? e.message : String(e)) },
+                  );
+                }}
+                style={{ fontSize: 12, fontWeight: 600, color: color.indigo, background: "#fff",
+                         border: `1px solid ${color.indigoBorder2}`, borderRadius: radius.control,
+                         padding: "7px 12px", whiteSpace: "nowrap",
+                         cursor: skeleton.isPending ? "default" : "pointer" }}
+              >
+                {skeleton.isPending ? t("tp.detail.skeletonBusy") : t("tp.detail.skeleton")}
+              </button>
+            </div>
+          )}
         </div>
-        {/* A ready-to-edit ontology for THIS template — every canonical_key it declares already a
-            stub inside its section, so an author fills in aliases and criteria instead of
-            reverse-engineering the shape from 422s. It lives here rather than on the index because
-            the file is derived from one template, and asking which one on a page listing seven of
-            them would be a worse question than clicking the one you mean. */}
-        {canEdit && (
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-            {skelErr && (
-              <span data-testid="tpl-skeleton-error"
-                    style={{ fontSize: 11, color: color.redFg }}>{skelErr}</span>
-            )}
+        {/* Gated on `dirty` as well as on the ask: saving while the question is on screen answers
+            it — there is nothing left to discard, so the warning must not keep claiming there is. */}
+        {confirmLeave && dirty && (
+          <div data-testid="tpl-leave-confirm"
+               style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                        padding: "9px 18px", background: color.amberBg,
+                        borderTop: `1px solid ${color.amberFg}33` }}>
+            <span style={{ fontSize: 11.5, color: color.amberFg, fontWeight: 600 }}>
+              {t("tp.detail.leaveWarn")}
+            </span>
             <button
-              data-testid="tpl-skeleton-download"
-              disabled={skeleton.isPending}
-              title={t("tp.detail.skeletonHelp")}
-              onClick={() => {
-                setSkelErr(null);
-                skeleton.mutate(
-                  { templateId: id, fallbackName: tpl?.template_key ?? "ontology" },
-                  { onError: (e) => setSkelErr(e instanceof ApiError ? e.message : String(e)) },
-                );
-              }}
-              style={{ fontSize: 12, fontWeight: 600, color: color.indigo, background: "#fff",
-                       border: `1px solid ${color.indigoBorder2}`, borderRadius: radius.control,
-                       padding: "7px 12px", whiteSpace: "nowrap",
-                       cursor: skeleton.isPending ? "default" : "pointer" }}
+              data-testid="tpl-leave-stay"
+              onClick={() => setConfirmLeave(false)}
+              style={{ fontSize: 12, fontWeight: 600, color: "#fff", background: color.indigo,
+                       border: "none", borderRadius: radius.control, padding: "6px 12px",
+                       cursor: "pointer" }}
             >
-              {skeleton.isPending ? t("tp.detail.skeletonBusy") : t("tp.detail.skeleton")}
+              {t("tp.detail.leaveStay")}
+            </button>
+            <button
+              data-testid="tpl-leave-discard"
+              onClick={onDismiss}
+              style={{ fontSize: 12, color: color.redFg, background: "#fff",
+                       border: `1px solid ${color.redFg}`, borderRadius: radius.control,
+                       padding: "6px 12px", cursor: "pointer" }}
+            >
+              {t("tp.detail.leaveDiscard")}
             </button>
           </div>
         )}
@@ -1198,6 +1276,9 @@ export default function TemplateScreen() {
         templates={templates}
         activeId={activeId}
         canEdit={canEdit}
+        // …but mounted is not the same as reachable: while the detail is up the list is inert, so
+        // Tab cannot walk out of a dirty editor into the rows behind it.
+        covered={!!openId}
         locale={locale}
         onPick={setPicked}
         onOpen={(id) => { setPicked(id); setOpen(id); }}

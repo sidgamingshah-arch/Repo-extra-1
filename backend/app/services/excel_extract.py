@@ -85,6 +85,7 @@ def extract_workbook(data: bytes, *, document_id: str | None = None, log=None) -
     from app.services.row_reconstruct import (
         _entity_signals,
         _restated_markers,
+        _unit_signals,
         guard_dimensions,
         in_force_rules,
         store_fact,
@@ -110,9 +111,10 @@ def extract_workbook(data: bytes, *, document_id: str | None = None, log=None) -
             if note_col is not None and note_col in value_cols:
                 value_cols = [c for c in value_cols if c != note_col]
             basis_map = _detect_basis_bands(rows, value_cols, label_col, signals)
-            headers = _period_headers(rows, value_cols, basis_map,
-                                      signals=signals, restated=restated)
-            unit_ctx = _sheet_unit(rows, scope, sheet_index)
+            unit_signals = _unit_signals(scope)
+            headers = _period_headers(rows, value_cols, basis_map, signals=signals,
+                                      unit_signals=unit_signals, restated=restated)
+            unit_ctx = _sheet_unit(rows, unit_signals, sheet_index)
             if log and unit_ctx.units_label:
                 log(f"extract:sheet={name}:units="
                     f"{unit_ctx.currency or 'unknown_ccy'}/{unit_ctx.units_label}")
@@ -133,16 +135,15 @@ def extract_workbook(data: bytes, *, document_id: str | None = None, log=None) -
     return items
 
 
-def _sheet_unit(rows: list[list], scope, sheet_index: int) -> UnitContext:
+def _sheet_unit(rows: list[list], signals, sheet_index: int) -> UnitContext:
     """The unit declared in this SHEET's header, persisted on every fact it produces.
 
     ``units_and_currency`` says to re-resolve per statement and never to normalise scale
     silently: a workbook whose sheets are in different scales gets one unit per sheet, and a
     sheet that declares none gets an empty context rather than an assumed factor of one.
     """
-    from app.services.row_reconstruct import _unit_context, _unit_signals, _fold_for_match
+    from app.services.row_reconstruct import _fold_for_match, _unit_context
 
-    signals = _unit_signals(scope)
     for row in rows[:8]:
         blob = _fold_for_match(" ".join(str(v) for v in row if isinstance(v, str)))
         for folded, ccy, scale, word in signals:
@@ -235,6 +236,7 @@ def _positional(i: int, c: int) -> str:
 
 def _period_headers(rows: list[list], value_cols: list[int], basis_map=None, *,
                     signals: tuple[tuple[Basis, str], ...] = (),
+                    unit_signals: tuple[tuple[str, str, object, str], ...] = (),
                     restated: tuple[str, ...] = ()) -> dict[int, tuple[str, str | None]]:
     """(period_label, period_display) per value column, from the first text header row.
 
@@ -260,24 +262,43 @@ def _period_headers(rows: list[list], value_cols: list[int], basis_map=None, *,
     column headed as restated keeps the comparative slot without displacing an original printed
     beside it (``restatement_rule``).
     """
+    from app.services.row_reconstruct import _is_date_ish, _signal_side
+
     for row in rows:
         if any(c < len(row) and isinstance(row[c], str) and row[c].strip() for c in value_cols):
-            has_numbers = any(_to_decimal(row[c]) is not None for c in value_cols)
-            # A basis band names entities, not periods. Recognised from the SAME declared signals
-            # the band detector uses — with "group"/"company" missing from the old token list, a
-            # Group | Company band row was read as the period header and every column took the
-            # entity's name as its period.
-            from app.services.row_reconstruct import _signal_side
-
+            # A YEAR is not an amount. A sheet whose columns are headed 2024 / 2023 parses those
+            # cells as numbers, so the header row looked like data and the columns lost their
+            # headings altogether — no date to order the periods by, and no display text.
+            has_numbers = any(d is not None and not _is_date_ish(d)
+                              for d in (_to_decimal(row[c]) for c in value_cols
+                                        if c < len(row)))
+            # A basis band names entities, not periods, and a units row names the scale. Both are
+            # recognised from the declared signals: with "group"/"company" missing from the old
+            # token list a Group | Company band row was read as the period header and every column
+            # took an entity's name as its period, and a "RMB'000" row did the same with the scale.
             is_basis_band = any(c < len(row) and isinstance(row[c], str)
                                 and _signal_side(row[c], signals) is not None
                                 for c in value_cols)
-            if not has_numbers and not is_basis_band:
-                texts = {c: (str(row[c]).strip() if c < len(row) and row[c] else "")
-                         for c in value_cols}
-                return _column_labels(texts, value_cols, basis_map, restated)
+            if has_numbers or is_basis_band or _is_units_row(row, value_cols, unit_signals):
+                continue
+            texts = {c: (str(row[c]).strip() if c < len(row) and row[c] else "")
+                     for c in value_cols}
+            return _column_labels(texts, value_cols, basis_map, restated)
     # No text header row at all: positional, first value column of each basis = current period.
     return _column_labels({c: "" for c in value_cols}, value_cols, basis_map, restated)
+
+
+def _is_units_row(row: list, value_cols: list[int],
+                  unit_signals: tuple[tuple[str, str, object, str], ...]) -> bool:
+    """Whether every captioned value cell of this row is a declared unit annotation."""
+    from app.services.row_reconstruct import _fold_for_match
+
+    captions = [str(row[c]).strip() for c in value_cols
+                if c < len(row) and isinstance(row[c], str) and row[c].strip()]
+    if not captions or not unit_signals:
+        return False
+    return all(any(folded and folded in _fold_for_match(t) for folded, *_ in unit_signals)
+               for t in captions)
 
 
 def _column_labels(texts: dict[int, str], value_cols: list[int], basis_map,

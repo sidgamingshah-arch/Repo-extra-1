@@ -11,9 +11,11 @@
  */
 import type { CSSProperties } from "react";
 import { useRef, useState } from "react";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useQueries } from "@tanstack/react-query";
 
-import { useOntologies, useTemplateXlsxColumns, useUploadOntology, useUploadTemplateXlsx } from "../lib/queries";
+import {
+  ontologyInForce, useOntologies, useTemplateXlsxColumns, useUploadOntology, useUploadTemplateXlsx,
+} from "../lib/queries";
 import { ApiError, api, downloadTemplateXlsx } from "../lib/api";
 import { color, font, layout, radius } from "../theme";
 import type { Locale, OntologyRef, TemplateRef } from "../types";
@@ -267,30 +269,25 @@ export function sortTemplates(templates: TemplateRef[]): TemplateRef[] {
 
 /** Line-item counts for the index, keyed by template id.
  *
- * GET /templates does not carry the count: it is only on the per-template detail, which is a
- * ~200 KB document (the whole tree plus every concept's criteria). Two consequences are designed
- * around here. Rows fill in one request at a time, so the index is readable immediately instead of
- * pulling megabytes before it paints. And the counts are cached under their OWN key rather than
- * the detail's: a stored template version is immutable, so its line count can never change, while
- * every ontology save invalidates `template-detail` — sharing that key would drag one 200 KB
+ * GET /templates does not carry the count: it is only on the per-template detail, a ~230 KB
+ * document (the whole tree plus every concept's criteria). Two consequences are designed around
+ * here. The rows fetch CONCURRENTLY: they used to be gated one behind another, so an index of
+ * seven versions spent seven serial round trips to print seven integers, the last cell filling
+ * only after the six above it had each transferred a quarter of a megabyte — and a single slow or
+ * failing row stalled every row below it. And the counts are cached under their OWN key rather
+ * than the detail's: a stored template version is immutable, so its line count can never change,
+ * while every ontology save invalidates `template-detail` — sharing that key would drag one 230 KB
  * document per row down the wire again on each save.
+ *
+ * Concurrency fixes the latency, not the bytes. Only the server can fix those: GET /templates
+ * would have to carry `line_items`, which the publish endpoint already computes for its own
+ * response (see notes_for_integrator) — then this hook, and the request per row, both disappear.
  */
 function useLineItemCounts(templates: TemplateRef[], locale: Locale): Record<string, number> {
-  const qc = useQueryClient();
-  // How far down the list the counts have settled. Read from the cache rather than from the
-  // results below, which cannot describe their own `enabled`.
-  let head = 0;
-  while (head < templates.length) {
-    const st = qc.getQueryState(["template-line-count", templates[head].id, locale]);
-    // An error advances the head too: one template that cannot be read must not stall the rest.
-    if (st?.status !== "success" && st?.status !== "error") break;
-    head++;
-  }
   const results = useQueries({
-    queries: templates.map((tpl, i) => ({
+    queries: templates.map((tpl) => ({
       queryKey: ["template-line-count", tpl.id, locale],
       queryFn: () => api.templateDetail(tpl.id, locale),
-      enabled: i <= head,
       staleTime: Infinity,
     })),
   });
@@ -417,13 +414,21 @@ function TemplateRow({ tpl, count, ontology, active, onOpen, t }: {
           {t(tpl.is_published ? "tp.list.published" : "tp.list.draft")}
         </span>
       </div>
-      <div style={{ fontSize: 11.5, minWidth: 0 }}>
+      <div data-testid="tpl-row-ontology" style={{ fontSize: 11.5, minWidth: 0 }}>
         {ontology ? (
           <>
             <span style={{ fontFamily: font.mono, color: color.sec, overflowWrap: "anywhere" }}>
               {ontology.ontology_key}
             </span>
             <span style={{ color: color.muted }}>{` · v${ontology.version}`}</span>
+            {/* Only reachable when EVERY rulebook for this template has been replaced and none of
+                the replacements is present. Naming it without saying so would describe the run as
+                governed by a rulebook its own author retired. */}
+            {ontology.superseded && (
+              <span style={{ color: color.amberFg, marginInlineStart: 6 }}>
+                {t("tp.list.ontSuperseded")}
+              </span>
+            )}
           </>
         ) : (
           <span style={{ color: color.muted }}>{t("tp.list.noOntology")}</span>
@@ -435,21 +440,35 @@ function TemplateRow({ tpl, count, ontology, active, onOpen, t }: {
 
 /** Page 1: the index. `activeId` is the version the authoring buttons act on; `onOpen` hands a
  *  row to the screen, which raises the detail over this page — this component stays mounted, so
- *  the filter and the scroll position are exactly where they were when the detail is dismissed. */
+ *  the filter and the scroll position are exactly where they were when the detail is dismissed.
+ *
+ *  `covered` says the detail is up over this page. Staying mounted is what preserves the filter
+ *  and the scroll, but it also left every row Tab-reachable UNDER the overlay: keyboard focus
+ *  walked out of a dirty editor into the list behind it and a row press swapped the subject the
+ *  editor was editing. `inert` takes the whole page out of the focus order and off the hit-testing
+ *  path while it is covered, without unmounting anything. */
 export function TemplateList({
-  templates, activeId, canEdit, locale, onPick, onOpen, t,
+  templates, activeId, canEdit, covered, locale, onPick, onOpen, t,
 }: {
-  templates: TemplateRef[]; activeId: string | undefined; canEdit: boolean; locale: Locale;
-  onPick: (id: string) => void; onOpen: (id: string) => void; t: (k: string) => string;
+  templates: TemplateRef[]; activeId: string | undefined; canEdit: boolean; covered: boolean;
+  locale: Locale; onPick: (id: string) => void; onOpen: (id: string) => void;
+  t: (k: string) => string;
 }) {
   const [filter, setFilter] = useState("");
   const counts = useLineItemCounts(templates, locale);
   const ontologies = useOntologies();
 
+  // `inert` is not in React 18's attribute types, so it is spread rather than written as a prop.
+  // aria-hidden rides along: a screen reader must not read out a list the pointer and the keyboard
+  // cannot reach either.
+  const inert: Record<string, string> = covered ? { inert: "" } : {};
+  const coveredProps = { ...inert, "aria-hidden": covered || undefined };
+
   // Nothing configured yet → guidance, plus the authoring desk that is the way out of it.
   if (templates.length === 0) {
     return (
-      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 24px" }}>
+      <div {...coveredProps}
+           style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 24px" }}>
         <div style={{ maxWidth: 560, margin: "60px auto", textAlign: "center", color: color.muted }}>
           <div style={{ fontSize: 28, marginBottom: 10 }}>◆</div>
           <h1 style={{ fontSize: 18, fontWeight: 600, color: color.ink, marginBottom: 8 }}>
@@ -466,21 +485,21 @@ export function TemplateList({
     );
   }
 
-  // Latest ontology per template key: the extractor reads the highest version targeting a
-  // template, so that is the rulebook a row is honestly described by.
-  const latestOntology: Record<string, OntologyRef> = {};
-  (ontologies.data ?? []).forEach((o) => {
-    const seen = latestOntology[o.target_template_key];
-    if (!seen || o.version > seen.version) latestOntology[o.target_template_key] = o;
-  });
+  // Which rulebook a row is honestly described by: the one IN FORCE for its template key, decided
+  // by the shared rule (see ontologyInForce) rather than by a third local copy of it. The copy
+  // that stood here compared `version` alone, which named the superseded v1 whenever it had been
+  // edited more times than the v2 that replaced it — and would have named a generated skeleton of
+  // empty stubs on the same grounds.
+  const ontologyFor = (key: string) =>
+    ontologyInForce(ontologies.data, (o) => o.target_template_key === key);
 
   const q = filter.trim().toLowerCase();
   const rows = sortTemplates(
     templates.filter((x) => !q || `${x.name} ${x.template_key}`.toLowerCase().includes(q)));
 
   return (
-    <div data-testid="template-list" style={{ flex: 1, overflowY: "auto", minHeight: 0,
-                                              padding: "26px 30px 60px" }}>
+    <div data-testid="template-list" {...coveredProps}
+         style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "26px 30px 60px" }}>
       <div style={{ maxWidth: layout.screenMax, margin: "0 auto" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between",
                       gap: 18, marginBottom: 18, flexWrap: "wrap" }}>
@@ -537,7 +556,7 @@ export function TemplateList({
           ) : rows.map((tpl) => (
             <TemplateRow
               key={tpl.id} tpl={tpl} count={counts[tpl.id]}
-              ontology={latestOntology[tpl.template_key]} active={tpl.id === activeId}
+              ontology={ontologyFor(tpl.template_key)} active={tpl.id === activeId}
               onOpen={() => onOpen(tpl.id)} t={t}
             />
           ))}

@@ -1,7 +1,7 @@
 /** React Query hooks — the data layer each screen consumes. */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { Basis, FxRateInput, Locale, SettingsPatch, StatementKey } from "../types";
+import type { Basis, FxRateInput, Locale, OntologyRef, SettingsPatch, StatementKey } from "../types";
 import { useUI } from "../store";
 import { api, downloadOntologySkeleton } from "./api";
 
@@ -146,6 +146,43 @@ export const useDocuments = () => useQuery({ queryKey: ["documents"], queryFn: a
 
 export const useOntologies = () => useQuery({ queryKey: ["ontologies"], queryFn: api.ontologies });
 export const useTemplates = () => useQuery({ queryKey: ["templates"], queryFn: api.templates });
+
+/** The rulebook IN FORCE among the rows matching `pred` — the ONE copy of that rule on the client.
+ *
+ * It lives in the data layer because two screens ask the question (the index, to name the rulebook
+ * a template row is described by; the extraction view, to decide which one a run defaults to) and
+ * they were answering it differently: each had its own `version >` comparison, which is a third
+ * and fourth spelling of a rule the server already owns.
+ *
+ * `version` counts edits to ONE ontology_key, so it cannot rank two DIFFERENT rulebooks targeting
+ * the same template. With v1 and the v2 that replaces it both seeded at version 1 the comparison
+ * was a tie and the index named whichever row arrived first — the superseded v1, while the
+ * extractor was using v2. Order, therefore: drop what has been replaced; then prefer a rulebook
+ * that DECLARES it replaces something, so a generated skeleton of empty stubs cannot outrank the
+ * adopted rulebook by having been saved a few more times; then the highest version; then the key,
+ * so the answer is stable rather than a property of row order. This mirrors
+ * `app/services/ontology_select.pick` — the extractor's own choice — deliberately, and the
+ * server-computed `superseded` flag is read rather than re-derived so the two cannot disagree.
+ */
+export function ontologyInForce(
+  rows: OntologyRef[] | undefined,
+  pred: (o: OntologyRef) => boolean = () => true,
+): OntologyRef | undefined {
+  const matches = (rows ?? []).filter(pred);
+  if (!matches.length) return undefined;
+  // Every candidate superseded is still an answer: what a row is described by is the best of what
+  // EXISTS. Reporting nothing would read as "no rulebook", which is a different fact.
+  const live = matches.filter((o) => !o.superseded);
+  const rank = (o: OntologyRef): [number, number, string] =>
+    [o.supersedes ? 1 : 0, o.version, o.ontology_key];
+  return (live.length ? live : matches).reduce((best, o) => {
+    const [ad, av, ak] = rank(o);
+    const [bd, bv, bk] = rank(best);
+    if (ad !== bd) return ad > bd ? o : best;
+    if (av !== bv) return av > bv ? o : best;
+    return ak > bk ? o : best;
+  });
+}
 
 /** Run (and fetch) the extraction for one uploaded document — its real line items with
  * provenance, mapped against the given ontology/template. Extraction is a background job:

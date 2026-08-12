@@ -1,4 +1,4 @@
-"""Sign & unit normalization stage.
+"""Sign & unit normalization stage — and what the rulebook expects the fact to be.
 
 Produces the sign-normalized ``ExtractedValue.value`` from the printed ``value_raw`` using
 signals the printed magnitude alone doesn't carry:
@@ -11,6 +11,27 @@ signals the printed magnitude alone doesn't carry:
 The printed-sign tier (parentheses / trailing minus) is already decoded into ``value_raw``
 by ``services.numbers`` at extraction; this stage layers the label-driven corrections on top.
 Values with no applicable cue keep ``value == value_raw``.
+
+Once a value is normalised, two v2 declarations say what the resulting FACT is supposed to look
+like, and both are checked here because this is the stage that finishes the number:
+
+* ``sign_convention`` (``positive_expected`` / ``negative_expected`` / ``either``) is an
+  EXPECTATION, not a transformation — the rulebook says so in as many words: "a concept whose
+  sign_convention is positive_expected or negative_expected but whose loaded value carries the
+  opposite sign is a review trigger, not an auto-correction". So a figure arriving with the wrong
+  sign is flagged and its sign confidence drops; the value is left exactly as reported.
+  ``sign_rule`` keeps doing the normalising — the two are different jobs on purpose, since a
+  concept can legitimately want a targeted flip AND an expected sign.
+
+* ``temporality`` (instant / duration) and ``unit_of_account`` (balance / flow / subtotal) say
+  whether the concept is a position at a date or a movement over a period. The balance-sheet
+  non-controlling-interests BALANCE and the profit-attribution FLOW share their caption exactly,
+  and the filing prints them in different statements; a caption match alone will happily file the
+  P&L figure on the balance sheet, where it is individually plausible and every subtotal still
+  ties. The two are different facts, so the figure is NOT merged into the concept: the row keeps
+  its value and provenance and loses the concept, which puts it in the review queue instead of on
+  the balance sheet. The statement each temporality belongs to is read from the rulebook too — an
+  ontology that declares its balance-sheet sections ``duration`` gets no such finding.
 """
 from __future__ import annotations
 
@@ -113,6 +134,36 @@ def _detect_units(ctx: PipelineContext, fmt: str, doc: DocumentModel | None = No
     return UnitContext(currency=currency, scale_factor=Decimal(1), units_label=None)
 
 
+_SIGN_EXPECTED = ("positive_expected", "negative_expected")
+
+
+def _statement_shape(ontology) -> dict[str, tuple[str | None, frozenset[str]]]:
+    """Per statement, the ``temporality`` and the units of account its concepts declare.
+
+    Derived from the rulebook rather than stated here, because "the balance sheet is instant" is a
+    fact about the rulebook's sections, not about this module: a v1 definition declares neither and
+    gets no expectation at all, and one that changed its mind would change the finding.
+
+    Only a UNANIMOUS temporality is used. A statement whose concepts disagree cannot say anything
+    about a row printed on it, and guessing from a majority would flag the minority as wrong.
+    ``subtotal`` is left out of the unit set — a subtotal is neither a balance nor a flow, so it
+    would otherwise look foreign on every statement it appears on.
+    """
+    temporal: dict[str, set[str]] = {}
+    units: dict[str, set[str]] = {}
+    for m in getattr(ontology, "mappings", []) or []:
+        statement = getattr(m.statement, "value", None) or m.statement
+        if not statement:
+            continue
+        if m.temporality:
+            temporal.setdefault(statement, set()).add(m.temporality)
+        if m.unit_of_account and m.unit_of_account != "subtotal":
+            units.setdefault(statement, set()).add(m.unit_of_account)
+    return {st: (next(iter(temporal[st])) if len(temporal.get(st, ())) == 1 else None,
+                 frozenset(units.get(st, ())))
+            for st in set(temporal) | set(units)}
+
+
 class NormalizeStage:
     name = "normalize"
 
@@ -127,11 +178,20 @@ class NormalizeStage:
 
         ontology = getattr(ctx, "ontology", None)
         sign_by_key: dict[str, list] = {}
+        expected_sign: dict[str, str] = {}
+        temporality: dict[str, str] = {}
+        unit_of_account: dict[str, str] = {}
         if ontology is not None:
             for m in getattr(ontology, "mappings", []) or []:
                 pats = getattr(getattr(m, "sign_rule", None), "flip_if_label_matches", None) or []
                 if pats:
                     sign_by_key[m.canonical_key] = [re.compile(p, re.IGNORECASE) for p in pats]
+                if m.sign_convention in _SIGN_EXPECTED:
+                    expected_sign[m.canonical_key] = m.sign_convention
+                if m.temporality:
+                    temporality[m.canonical_key] = m.temporality
+                if m.unit_of_account:
+                    unit_of_account[m.canonical_key] = m.unit_of_account
 
         changed = 0
         for li in doc.line_items:
@@ -158,4 +218,70 @@ class NormalizeStage:
                     changed += 1
 
         ctx.log(f"normalize:sign_adjusted={changed}")
+        self._check_expectations(doc, ctx, ontology, expected_sign, temporality, unit_of_account)
         return doc
+
+    @staticmethod
+    def _check_expectations(doc: DocumentModel, ctx: PipelineContext, ontology,
+                            expected_sign: dict[str, str], temporality: dict[str, str],
+                            unit_of_account: dict[str, str]) -> None:
+        """Compare each finished figure with what its concept says it should be.
+
+        Nothing here changes a number. The sign check records a finding; the balance-versus-flow
+        check unfiles the row, which removes a WRONG figure rather than producing one — the value,
+        the label and the provenance all stay on the row for the reviewer who has to place it.
+        """
+        if ontology is None:
+            return
+        shape = _statement_shape(ontology)
+        stmt_by_page = {p.index: p.statement for p in doc.pages if p.statement}
+        wrong_sign = confused = 0
+        for li in doc.line_items:
+            key = li.canonical_key
+            if not key:
+                continue
+
+            want = expected_sign.get(key)
+            if want:
+                for ev in li.values.values():
+                    val = ev.value if ev.value is not None else ev.value_raw
+                    if val is None or val == 0:
+                        continue
+                    if (want == "positive_expected" and val > 0) or (
+                            want == "negative_expected" and val < 0):
+                        continue
+                    # Flagged, never flipped: the opposite sign usually means the row is on the
+                    # wrong concept, and flipping it would hide that behind a plausible figure
+                    # while the template's subtotal identities quietly stopped meaning anything.
+                    ev.confidence.sign = min(ev.confidence.sign, 0.35)
+                    ev.confidence.flags.append(f"sign_opposite_to_expected:{want}")
+                    flag = f"sign_opposite_to_expected:{key}"
+                    if flag not in li.confidence.flags:
+                        li.confidence.flags.append(flag)
+                    wrong_sign += 1
+
+            statement = next((stmt_by_page.get(ev.provenance.page_index)
+                              for ev in li.values.values() if ev.provenance is not None), None)
+            expect = shape.get(statement or "")
+            if expect is None:
+                continue
+            want_temporality, want_units = expect
+            got_temporality = temporality.get(key)
+            got_unit = unit_of_account.get(key)
+            reasons = []
+            if want_temporality and got_temporality and got_temporality != want_temporality:
+                reasons.append(f"temporality:{got_temporality}!={want_temporality}")
+            # A subtotal is neither a balance nor a flow, so it is not compared on units.
+            if want_units and got_unit and got_unit != "subtotal" and got_unit not in want_units:
+                reasons.append(f"unit_of_account:{got_unit}!={'/'.join(sorted(want_units))}")
+            if not reasons:
+                continue
+            li.canonical_key = None
+            li.confidence.mapping = min(li.confidence.mapping or 0.3, 0.3)
+            li.confidence.flags.append(f"balance_flow_confusion:{key}:{','.join(reasons)}")
+            li.confidence.flags.append("low_mapping_confidence")
+            confused += 1
+            ctx.log(f"normalize:balance_flow_confusion {key} on {statement}"
+                    f" ({';'.join(reasons)}) row={li.source_label!r}")
+        if wrong_sign or confused:
+            ctx.log(f"normalize:sign_unexpected={wrong_sign} balance_flow_confusion={confused}")

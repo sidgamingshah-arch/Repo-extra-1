@@ -5,9 +5,13 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
+from pydantic import ValidationError
+
 from app.core.models.enums import Basis
 from app.core.models.line_item import ExtractedValue, LineItem
 from app.schemas.loader import load_template
+from app.schemas.template import Rollup
 from app.services.structural_checks import evaluate_structure
 
 
@@ -199,8 +203,25 @@ def test_two_rows_that_do_belong_together_tie():
     assert _one(evaluate_structure(tpl, items), "rollup:gross_profit").status == "pass"
 
 
-def test_unweighted_op_is_refused_rather_than_guessed():
-    tpl = load_template(_pl_template(op="weighted_sum"))
+def test_a_weighted_rollup_is_refused_at_the_upload_gate():
+    """``weighted_sum`` was permitted by the schema and declared no weights anywhere, so the only
+    thing it could produce was a relation reported "not evaluable" forever — the subtotal it was
+    authored on lost its arithmetic guard, and the report read like coverage rather than the
+    authoring mistake it was. The op is gone from the schema, so it now fails at the door, where
+    there is a request to fail and an author to tell."""
+    with pytest.raises(ValidationError) as raised:
+        load_template(_pl_template(op="weighted_sum"))
+    assert "rollup.op" in str(raised.value)
+
+
+def test_an_op_this_module_cannot_evaluate_is_never_treated_as_a_plain_sum():
+    """A definition stored before the schema tightened can still reach evaluation (nothing
+    re-validates the rows already in the database). Guessing "sum" would report the subtotal as
+    tying against arithmetic nobody declared."""
+    tpl = load_template(_pl_template())
+    node = next(n for n in tpl.all_nodes() if n.canonical_key == "gross_profit")
+    node.rollup = Rollup.model_construct(op="weighted_sum", children=["revenue", "cost_of_sales"])
+
     report = evaluate_structure(tpl, _items(revenue=1000, cost_of_sales=-600, gross_profit=400))
     res = _one(report, "rollup:gross_profit")
     assert res.status == "skipped" and res.details["reason"] == "unsupported_op"
@@ -246,6 +267,30 @@ def test_shipped_template_relations_hold_on_a_consistent_spread():
     # Everything the extraction didn't reach is accounted for as not-evaluable, never as a pass.
     assert report.skipped()
     assert len(report.results) == len(report.evaluated()) + len(report.skipped())
+
+
+def test_a_statement_the_filing_does_not_contain_is_marked_apart_from_a_thin_one():
+    """A standalone-only filing has no cash flow statement, and a filing spread onto the cash flow
+    alone has no balance sheet. Those relations are still reported — silence is indistinguishable
+    from a pass — but with their own reason, because they must not sit in the denominator of a
+    coverage rate the way an unextracted row does."""
+    import json
+    from pathlib import Path
+
+    path = (Path(__file__).resolve().parent.parent / "app" / "sample" / "templates"
+            / "hkfrs_hk_china_template.json")
+    tpl = load_template(json.loads(path.read_text()))
+    report = evaluate_structure(tpl, _items(**{
+        "cf_opening_cash_and_cash_equivalents": 8_156_453,
+        "cf_closing_cash_and_cash_equivalents": 3_932_025,
+    }))
+
+    reasons = {r.details["statement"]: {x.details["reason"] for x in report.results
+                                       if x.details["statement"] == r.details["statement"]}
+               for r in report.results}
+    assert reasons["balance_sheet"] == {"statement_absent"}
+    assert reasons["profit_and_loss"] == {"statement_absent"}
+    assert "statement_absent" not in reasons["cash_flow"]
 
 
 def test_stage_flags_the_involved_items_and_records_the_report():
