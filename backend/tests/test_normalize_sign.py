@@ -118,6 +118,37 @@ def test_sign_rule_still_normalises_and_the_expectation_only_judges_the_result(r
     assert not any(f.startswith("sign_opposite_to_expected") for f in li.confidence.flags)
 
 
+# --- paren_means_negative: a duplicate switch, reported rather than obeyed ----------------------
+
+def test_a_paren_switch_the_parser_never_sees_is_reported_not_read_as_honoured(raw_ontology):
+    """``global_rules.paren_means_negative`` is a second copy of a live switch, at the wrong
+    altitude, and it cannot be honoured here.
+
+    The parser reads the LOCALE's ``number_format.negative`` and keeps only the signed magnitude, so
+    by the time any stage runs there is nothing left that says whether −600 was printed "(600)" or
+    "-600" — turning the global flag off cannot un-negate one without also flipping the other. What
+    must not happen is the rulebook offering a switch that silently does nothing: the contradiction
+    is reported against the field that governs, and the negatives that arrived under the ignored
+    switch stop counting as verified.
+    """
+    raw = copy.deepcopy(raw_ontology)
+    raw["global_rules"]["paren_means_negative"] = False
+    doc, li = _row("Cost of sales", "pl_expenses__cost_of_goods_sold", -500, "profit_and_loss")
+    ctx = _run(doc, _ontology(raw))
+
+    conflict = next(line for line in ctx.logs if "paren_means_negative=false" in line)
+    assert "number_format[en].negative=['paren', 'minus']" in conflict
+    assert "paren_negative_unverified" in _value(li).confidence.flags
+    assert _value(li).confidence.sign == pytest.approx(0.35)
+    assert _value(li).value == Decimal(-500)      # and no figure is rewritten either way
+
+    # Left alone while the two declarations agree, which is every shipped rulebook.
+    doc, li = _row("Cost of sales", "pl_expenses__cost_of_goods_sold", -500, "profit_and_loss")
+    ctx = _run(doc, _ontology(raw_ontology))
+    assert not any("paren_means_negative" in line for line in ctx.logs)
+    assert li.confidence.flags == [] and _value(li).confidence.flags == []
+
+
 # --- temporality / unit_of_account: the NCI guard ----------------------------------------------
 
 def test_the_pl_attribution_flow_is_never_filed_as_the_equity_balance(raw_ontology):

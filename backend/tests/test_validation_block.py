@@ -25,8 +25,9 @@ from app.core.models.enums import Basis
 from app.core.models.line_item import ExtractedValue, LineItem
 from app.schemas.loader import load_ontology, load_template
 from app.services import coverage as cov_mod
-from app.services.coverage import coverage
+from app.services.coverage import blocking_failures, coverage
 from app.services.structural_checks import (
+    STATUS_AUTHORING_ERROR,
     cross_concept_guards,
     evaluate_structure,
     ontology_identities,
@@ -76,13 +77,15 @@ def _rows(report) -> list[dict]:
 # --- validation.identities ---------------------------------------------------------------------
 
 def test_every_declared_identity_is_read_and_evaluated(template, raw_ontology):
-    """All 14 are built from their authored ``expr``; the one whose expression names terms the
-    template has never heard of is reported as that, not dropped."""
+    """All 14 are built from their authored ``expr``, and all 14 name keys the template actually
+    declares — audited here rather than left to the first filing that needs one of them."""
     built = ontology_identities(template, _ontology(raw_ontology))
     assert len(built) == len(raw_ontology["validation"]["identities"]) == 14
 
-    broken = {r.id: r.broken for r in built if r.broken}
-    assert broken == {"ontology_identity:cf_movement": "unresolved_terms"}
+    assert {r.id: r.broken for r in built if r.broken} == {}
+    # Each one is anchored on the statement its left-hand side is printed on, so a relation for a
+    # statement this filing does not contain can be told from one the filing failed to support.
+    assert {r.statement for r in built} == {"balance_sheet", "profit_and_loss", "cash_flow"}
     # The severities are the rulebook's own, not a default.
     by_id = {r.id: r for r in built}
     assert by_id["ontology_identity:bs_balance"].severity == "blocking"
@@ -112,30 +115,58 @@ def test_an_identity_holds_or_breaks_on_the_extracted_figures(template, raw_onto
     assert broken.failed_assertions
 
 
-def test_editing_an_expression_changes_what_is_checked(template, raw_ontology):
-    """The identity that cannot be evaluated today is the proof: its ``expr`` names three
-    shorthand terms (``net_operating``…) that exist in no template. Spell the real keys and the
-    same identity starts checking the cash-flow movement."""
+def test_the_blocking_movement_identity_runs_and_a_dead_one_is_never_an_ordinary_skip(
+        template, raw_ontology):
+    """``cf_movement`` is declared BLOCKING and used to name three shorthand terms
+    (``net_operating``, ``net_investing``, ``net_financing``) that exist in no template: it
+    resolved to nothing and stayed skipped on every filing, occupying the slot where a reviewer
+    expects cash-flow assurance while proving nothing. It now names the closing subtotal of each
+    activity section, so the movement is genuinely checked.
+
+    Editing it back proves the second half: an identity that resolves to nothing is reported with
+    its own ``error`` status and its own alarm, never as one more skip beside the rows a better
+    extraction would recover — and its ``blocking`` severity buys nothing, because a rule that
+    cannot run produces no failure to block on.
+    """
     figures = {
         "cf_cash_flow_from_operating_activities__net_cash_from_operating_activities": 5_094_092,
         "cf_cash_flow_from_investing_activities__net_cash_used_in_investing_activities": 4_044_304,
         "cf_cash_flow_from_financing_activities__net_cash_from_financing_activities": -13_389_527,
         "cf_net_increase_decrease_in_cash_and_cash_equivalents": -4_251_131,
     }
-    as_shipped = evaluate_structure(template, _facts(figures),
-                                    ontology=_ontology(raw_ontology))
-    skipped = _one(as_shipped, "ontology_identity:cf_movement")
-    assert skipped.status == "skipped"
-    assert skipped.details["reason"] == "unresolved_terms"
-    assert skipped.details["terms"] == ["net_financing", "net_investing", "net_operating"]
+    ont = _ontology(raw_ontology)
+    ran = _one(evaluate_structure(template, _facts(figures), ontology=ont),
+               "ontology_identity:cf_movement")
+    assert ran.status == "pass" and ran.details["severity"] == "blocking"
+    assert ran.details["components"] == [k for k in figures
+                                         if k != "cf_net_increase_decrease_in_cash_"
+                                                 "and_cash_equivalents"]
 
-    edited = copy.deepcopy(raw_ontology)
-    ident = next(i for i in edited["validation"]["identities"] if i["id"] == "cf_movement")
+    # A real check, not one arranged to hold: a movement that does not equal the three nets fails.
+    off = {**figures, "cf_net_increase_decrease_in_cash_and_cash_equivalents": -4_000_000}
+    assert _one(evaluate_structure(template, _facts(off), ontology=ont),
+                "ontology_identity:cf_movement").status == "fail"
+
+    dead = copy.deepcopy(raw_ontology)
+    ident = next(i for i in dead["validation"]["identities"] if i["id"] == "cf_movement")
     ident["expr"] = ("cf_net_increase_decrease_in_cash_and_cash_equivalents = "
-                     + " + ".join(k for k in figures
-                                  if k != "cf_net_increase_decrease_in_cash_and_cash_equivalents"))
-    after = evaluate_structure(template, _facts(figures), ontology=_ontology(edited))
-    assert _one(after, "ontology_identity:cf_movement").status == "pass"
+                     "net_operating + net_investing + net_financing")
+    report = evaluate_structure(template, _facts(figures), ontology=_ontology(dead))
+    res = _one(report, "ontology_identity:cf_movement")
+    assert res.status == STATUS_AUTHORING_ERROR and res.status != "skipped"
+    assert res.details["reason"] == "unresolved_terms"
+    assert res.details["terms"] == ["net_financing", "net_investing", "net_operating"]
+    assert res.details["authoring_defect"] is True
+
+    cov = coverage(_rows(report))
+    cash = cov.statements["cash_flow"]
+    assert cash.skips["UNEVALUABLE_RULE"] == 1        # counted, and not in the recoverable pile
+    alarm = next(a for a in cov.alarms if a["code"] == cov_mod.ALARM_UNENFORCEABLE)
+    assert alarm["rule_id"] == "ontology_identity:cf_movement"
+    assert (alarm["statement"], alarm["severity"]) == ("cash_flow", "blocking")
+    assert "unenforceable_blocking=1" in cov.headline()
+    # The severity is inert on a rule that cannot run — which is the whole reason it needs saying.
+    assert not blocking_failures(_rows(report))
 
 
 def test_the_gross_profit_tie_is_evaluated_under_the_stated_sign_convention(template,
@@ -200,6 +231,64 @@ def test_severity_decides_whether_a_break_caps_confidence(template, raw_ontology
 
 def _one_status(item) -> str:
     return next(f for f in item.confidence.flags if f.startswith("structural_"))
+
+
+# --- the two authoring routes agree on what arithmetic is legal --------------------------------
+
+def test_the_workbook_route_refuses_the_op_the_json_gate_refuses():
+    """A template is authorable two ways — uploaded JSON, or the editable workbook — and a relation
+    one route accepts has to be one the other accepts too.
+
+    ``weighted_sum`` was dropped from the JSON schema because nothing could declare the weights, so
+    ``structural_checks`` could only ever report the relation as ``unsupported_op`` — the calculated
+    line it was authored on silently lost its arithmetic guard. The workbook reader still admitted
+    it, so that same unevaluable template could be published through the other door.
+    """
+    pytest.importorskip("openpyxl")
+    import io
+
+    import openpyxl
+    from pydantic import ValidationError
+
+    from app.services.template_xlsx import (
+        COLUMNS,
+        KIND_CALCULATED,
+        KIND_HEADING,
+        TemplateSheetError,
+        parse_template_xlsx,
+    )
+
+    def book(op: str) -> bytes:
+        rows = [
+            ["Balance sheet", "", "sec", "sec", "Current assets", "", "", "", "header",
+             KIND_HEADING, "", "", "natural", "", ""],
+            ["Balance sheet", "sec", "cash", "cash", "Cash", "", "", "", "line", "extracted",
+             "", "", "natural", "", ""],
+            ["Balance sheet", "sec", "tot", "tot", "Total", "", "", "", "subtotal",
+             KIND_CALCULATED, op, "cash", "natural", "", ""],
+        ]
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Template"
+        ws.append([h for _k, h in COLUMNS])
+        for r in rows:
+            ws.append(r)
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    with pytest.raises(TemplateSheetError, match="Calculation must be one of diff, sum"):
+        parse_template_xlsx(book("weighted_sum"), template_key="t", name="T")
+
+    # The legal op still round-trips, and the definition the workbook produces is one the JSON gate
+    # accepts — while the same definition carrying the refused op is refused there too.
+    definition = parse_template_xlsx(book("sum"), template_key="t", name="T")
+    total = definition["statements"][0]["sections"][0]["children"][-1]
+    assert total["rollup"] == {"op": "sum", "children": ["cash"]}
+    assert load_template(definition)
+    total["rollup"]["op"] = "weighted_sum"
+    with pytest.raises(ValidationError, match="rollup.op"):
+        load_template(definition)
 
 
 # --- validation.cross_concept_guards -----------------------------------------------------------
@@ -362,7 +451,10 @@ def test_a_guard_whose_wording_matches_no_predicate_is_reported_as_a_defect(temp
     report = evaluate_structure(template, _facts({"bs_total_assets": 100}),
                                 ontology=_ontology(edited))
     stray = next(r for r in report.results if r.rule_id.startswith("guard:unrecognised"))
-    assert stray.status == "skipped" and stray.details["reason"] == "guard_unrecognised"
+    # An authoring defect carries the ``error`` status, not the ``skipped`` one an under-extracted
+    # relation gets: no filing will ever make this sentence evaluable.
+    assert stray.status == STATUS_AUTHORING_ERROR
+    assert stray.details["reason"] == "guard_unrecognised"
     alarms = coverage(_rows(report)).alarms
     assert any(a["code"] == cov_mod.ALARM_PIPELINE_DEFECT
                and a["reason"] == "guard_unrecognised" for a in alarms)

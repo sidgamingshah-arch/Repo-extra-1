@@ -84,8 +84,16 @@ def _native_words(page, w: float, h: float, rotation: int | None = None) -> list
     return out
 
 
-def extract_pdf(data: bytes, doc, ctx: PipelineContext) -> int:
-    """Extract line items from a PDF into ``doc.line_items``. Returns the count added."""
+def extract_pdf(data: bytes, doc, ctx: PipelineContext, *, scope=None,
+                normalisation=None) -> int:
+    """Extract line items from a PDF into ``doc.line_items``. Returns the count added.
+
+    ``scope``/``normalisation`` are the reading rules of the rulebook the RUN was pinned to
+    (``stages.extract.reconstruction_rules``). Omitting them falls back to the rulebook shipped as
+    the one in force, which is what a run started without an ontology is read with — a run that
+    does name a rulebook must be read by that one, or its pin only decided how its figures were
+    mapped and not which column they came from.
+    """
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -153,7 +161,8 @@ def extract_pdf(data: bytes, doc, ctx: PipelineContext) -> int:
             from app.services.notes_extract import extract_note_tables
 
             tables = extract_note_tables(words, page_index=ps.index,
-                                         document_id=doc.content_hash, source_kind=source_kind)
+                                         document_id=doc.content_hash, source_kind=source_kind,
+                                         scope=scope, normalisation=normalisation)
             doc.notes.extend(tables)
             continue
         # ``ps.statement`` (from the classifier) is what tells the reconstructor that a page is a
@@ -162,14 +171,15 @@ def extract_pdf(data: bytes, doc, ctx: PipelineContext) -> int:
         items, ordinal = build_line_items(
             words, page_index=ps.index, document_id=doc.content_hash,
             source_kind=source_kind, ordinal_start=ordinal, number_format=number_format,
-            statement=ps.statement, log=ctx.log)
+            statement=ps.statement, log=ctx.log, scope=scope, normalisation=normalisation)
         doc.line_items.extend(items)
         added += len(items)
     ctx.log(f"extract:pdf_line_items={added} note_tables={len(doc.notes)}")
     return added
 
 
-def extract_image(data: bytes, doc, ctx: PipelineContext) -> int:
+def extract_image(data: bytes, doc, ctx: PipelineContext, *, scope=None,
+                  normalisation=None) -> int:
     """Extract line items from a standalone image (PNG/JPG/TIFF) by sending the bytes straight
     to the configured OCR provider, then reconstructing rows exactly like a scanned PDF page.
     With no OCR engine configured (the default ``stub``), logs a clear 'OCR not configured'
@@ -192,7 +202,7 @@ def extract_image(data: bytes, doc, ctx: PipelineContext) -> int:
         ctx.log("extract:image_ocr_no_words")
         return 0
     items, _ = build_line_items(words, page_index=0, document_id=doc.content_hash,
-                                source_kind="ocr")
+                                source_kind="ocr", scope=scope, normalisation=normalisation)
     doc.line_items.extend(items)
     ctx.log(f"extract:image_line_items={len(items)}")
     return len(items)

@@ -12,6 +12,17 @@ The printed-sign tier (parentheses / trailing minus) is already decoded into ``v
 by ``services.numbers`` at extraction; this stage layers the label-driven corrections on top.
 Values with no applicable cue keep ``value == value_raw``.
 
+WHERE PARENTHESES ARE DECIDED, and why the global switch is reported rather than honoured.
+``parse_number`` reads the LOCALE's ``number_format.negative`` (``["paren", "minus"]``), which is
+the live switch and the right altitude for it: parentheses-as-negative is a convention of how a
+filing is printed. ``global_rules.paren_means_negative`` is a second copy of the same switch that
+the parser never sees, and it cannot be honoured after the fact — only the signed magnitude
+survives extraction, so nothing downstream can tell "(600)" from "-600" in order to undo one and
+not the other. A rulebook that sets it false therefore turns nothing off. Rather than let a dead
+switch read as an honoured one, the disagreement is reported here against the field a reviewer has
+to edit instead, and the negatives that arrived under the ignored switch stop counting as verified
+(:meth:`NormalizeStage._check_paren_rule`). The field itself should go — see that method.
+
 Once a value is normalised, two v2 declarations say what the resulting FACT is supposed to look
 like, and both are checked here because this is the stage that finishes the number:
 
@@ -218,8 +229,52 @@ class NormalizeStage:
                     changed += 1
 
         ctx.log(f"normalize:sign_adjusted={changed}")
+        self._check_paren_rule(doc, ctx, ontology)
         self._check_expectations(doc, ctx, ontology, expected_sign, temporality, unit_of_account)
         return doc
+
+    @staticmethod
+    def _check_paren_rule(doc: DocumentModel, ctx: PipelineContext, ontology) -> None:
+        """``global_rules.paren_means_negative`` against the field that actually governs parsing.
+
+        Two declarations state one rule, and only one of them is wired: the locale's
+        ``number_format.negative`` is what ``services.numbers.parse_number`` reads at extraction.
+        When the global one is turned off and the locale one is not, every parenthesised figure in
+        the document has ALREADY been negated, and the printed text is not retained anywhere — so
+        this stage cannot undo the conversion for the values it came from without also flipping the
+        ones that were printed with a minus. What it can do is refuse to let the switch look
+        honoured: the contradiction is logged naming the field that governs, and every negative
+        figure is marked unverified, because which of them the ignored switch would have changed is
+        no longer knowable.
+
+        The field is a duplicate at the wrong altitude and belongs deleted from
+        ``schemas.ontology.GlobalRules`` and the shipped rulebooks, leaving
+        ``number_format_by_locale`` as the one place parentheses are decided. Until then this is
+        what stops it reading as a working knob.
+        """
+        rules = getattr(ontology, "global_rules", None)
+        if rules is None or getattr(rules, "paren_means_negative", True):
+            return
+        locale = doc.locale or getattr(ontology, "locale", "") or "en"
+        fmt = ontology.number_format(locale)
+        markers = [str(m).lower() for m in (fmt.negative or [])]
+        if not any("paren" in m for m in markers):
+            return          # the two agree — the parser was never told to read parentheses as sign
+        ctx.log("normalize:rulebook_conflict(global_rules.paren_means_negative=false but "
+                f"number_format[{locale}].negative={markers} — parentheses were decoded as "
+                "negative at extraction and the printed text is not retained, so the conversion "
+                "cannot be undone here; edit number_format_by_locale to change it)")
+        unverified = 0
+        for li in doc.line_items:
+            for ev in li.values.values():
+                val = ev.value_raw if ev.value_raw is not None else ev.value
+                if val is None or val >= 0:
+                    continue
+                ev.confidence.sign = min(ev.confidence.sign, 0.35)
+                ev.confidence.flags.append("paren_negative_unverified")
+                unverified += 1
+        if unverified:
+            ctx.log(f"normalize:paren_negative_unverified={unverified}")
 
     @staticmethod
     def _check_expectations(doc: DocumentModel, ctx: PipelineContext, ontology,

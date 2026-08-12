@@ -71,19 +71,27 @@ _NOTE_HEADER = re.compile(r"^\s*note", re.IGNORECASE)
 _NOTE_NUM = re.compile(r"(\d{1,3})")
 
 
-def extract_workbook(data: bytes, *, document_id: str | None = None, log=None) -> list[LineItem]:
+def extract_workbook(data: bytes, *, document_id: str | None = None, log=None,
+                     scope=None, normalisation=None) -> list[LineItem]:
     """Read every sheet; emit a LineItem per labelled, numeric row with cell provenance.
 
     Reaches parity with the PDF path, and reads the same rulebook it does
     (``scope_selection``): a dedicated "Note"/"Note No." column becomes the row's note reference
     rather than a value; a two-basis header band (Group | Company as well as Consolidated |
     Standalone) maps each value column to its basis; the current period is the column whose
-    heading is the latest DATE; the sheet's declared unit is persisted on every fact; and two
-    facts differing on a declared dimension are kept as two facts (``column_guard``)."""
+    heading is the latest DATE; the declared unit is persisted on every fact — per COLUMN where the
+    sheet annotates its columns separately; and two facts differing on a declared dimension are kept
+    as two facts (``column_guard``).
+
+    ``normalisation`` is threaded beside ``scope`` for the same reason and honoured the same way:
+    the declared pipeline is what strips a printed column caption ("2024 RMB'000") back to the
+    period it names, and passing one has to beat the module-level default on this path exactly as it
+    does on the PDF path (``row_reconstruct.build_line_items``)."""
     import openpyxl
 
     from app.services.row_reconstruct import (
         _entity_signals,
+        _pipeline_steps,
         _restated_markers,
         _unit_signals,
         guard_dimensions,
@@ -91,9 +99,15 @@ def extract_workbook(data: bytes, *, document_id: str | None = None, log=None) -
         store_fact,
     )
 
-    scope, _norm = in_force_rules()
+    # ``scope`` is the run's own rulebook block when it was pinned to one; a workbook's columns are
+    # banded by the rulebook the run is labelled with, not by whichever one is currently shipped.
+    if scope is None or normalisation is None:
+        in_force_scope, in_force_norm = in_force_rules()
+        scope = scope if scope is not None else in_force_scope
+        normalisation = normalisation if normalisation is not None else in_force_norm
     signals, restated = _entity_signals(scope), _restated_markers(scope)
     dims = guard_dimensions(scope)
+    steps = _pipeline_steps(normalisation, scope)
 
     wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
     items: list[LineItem] = []
@@ -113,11 +127,20 @@ def extract_workbook(data: bytes, *, document_id: str | None = None, log=None) -
             basis_map = _detect_basis_bands(rows, value_cols, label_col, signals)
             unit_signals = _unit_signals(scope)
             headers = _period_headers(rows, value_cols, basis_map, signals=signals,
-                                      unit_signals=unit_signals, restated=restated)
+                                      unit_signals=unit_signals, restated=restated, steps=steps)
             unit_ctx = _sheet_unit(rows, unit_signals, sheet_index)
+            col_units = _column_units(rows, value_cols, unit_signals, sheet_index)
             if log and unit_ctx.units_label:
                 log(f"extract:sheet={name}:units="
                     f"{unit_ctx.currency or 'unknown_ccy'}/{unit_ctx.units_label}")
+            if log:
+                # Only a column that disagrees with the sheet is worth a line: it is the case a
+                # reviewer has to be able to see, and the one that used to be silently overwritten.
+                for c, cu in sorted(col_units.items()):
+                    if (cu.currency, cu.scale_factor) != (unit_ctx.currency,
+                                                          unit_ctx.scale_factor):
+                        log(f"extract:sheet={name}:{_col_letter(c + 1)}:units="
+                            f"{cu.currency or 'unknown_ccy'}/{cu.units_label}")
             for r_idx, row in enumerate(rows):
                 if label_col >= len(row):
                     continue
@@ -126,7 +149,8 @@ def extract_workbook(data: bytes, *, document_id: str | None = None, log=None) -
                     continue
                 li = _row_item(name, sheet_index, r_idx, label.strip(), row, label_col,
                                value_cols, headers, document_id, ordinal, note_col, basis_map,
-                               unit_ctx=unit_ctx, dims=dims, log=log, store=store_fact)
+                               unit_ctx=unit_ctx, col_units=col_units, dims=dims, log=log,
+                               store=store_fact)
                 if li is not None:
                     items.append(li)
                     ordinal += 1
@@ -150,6 +174,38 @@ def _sheet_unit(rows: list[list], signals, sheet_index: int) -> UnitContext:
             if folded and folded in blob:
                 return _unit_context((ccy, scale, word or folded), sheet_index)
     return UnitContext()
+
+
+def _column_units(rows: list[list], value_cols: list[int], signals,
+                  sheet_index: int) -> dict[int, UnitContext]:
+    """The unit each value column annotates FOR ITSELF, where it annotates one.
+
+    ``units_and_currency`` says to re-resolve per statement and to persist the unit on every fact,
+    and a Hong Kong workbook routinely prints two currencies side by side — a CNY column beside an
+    HKD one, or thousands beside millions. ``_sheet_unit`` joins the whole header row into one blob
+    and matches the first declared signal in it, so the sheet's answer was stamped on every fact and
+    one of the two columns reported the wrong currency: figures that are individually right, in a
+    column labelled with the other column's money. Nothing downstream can catch it — the currency is
+    metadata, so no total disagrees — and an FX translation then applies the wrong rate.
+
+    Read from each column's OWN header cells, topmost annotation first, so the annotation may sit in
+    a dedicated units band ("RMB'000" / "HK$'000") or inside the period caption ("2024 RMB'000").
+    A column that annotates nothing is left out and keeps the sheet's unit, which is what a single
+    caption over the first column means.
+    """
+    from app.services.row_reconstruct import _fold_for_match, _unit_context
+
+    out: dict[int, UnitContext] = {}
+    for row in rows[:8]:
+        for c in value_cols:
+            if c in out or c >= len(row) or not isinstance(row[c], str) or not row[c].strip():
+                continue
+            blob = _fold_for_match(row[c])
+            for folded, ccy, scale, word in signals:
+                if folded and folded in blob:
+                    out[c] = _unit_context((ccy, scale, word or folded), sheet_index)
+                    break
+    return out
 
 
 def _detect_note_col(rows: list[list], label_col: int, value_cols: list[int]) -> int | None:
@@ -237,7 +293,8 @@ def _positional(i: int, c: int) -> str:
 def _period_headers(rows: list[list], value_cols: list[int], basis_map=None, *,
                     signals: tuple[tuple[Basis, str], ...] = (),
                     unit_signals: tuple[tuple[str, str, object, str], ...] = (),
-                    restated: tuple[str, ...] = ()) -> dict[int, tuple[str, str | None]]:
+                    restated: tuple[str, ...] = (),
+                    steps: tuple[tuple[str, object], ...] = ()) -> dict[int, tuple[str, str | None]]:
     """(period_label, period_display) per value column, from the first text header row.
 
     A header that NAMES A PERIOD ("31 December 2024", "FY2025", "2023") is labelled positionally —
@@ -283,9 +340,9 @@ def _period_headers(rows: list[list], value_cols: list[int], basis_map=None, *,
                 continue
             texts = {c: (str(row[c]).strip() if c < len(row) and row[c] else "")
                      for c in value_cols}
-            return _column_labels(texts, value_cols, basis_map, restated)
+            return _column_labels(texts, value_cols, basis_map, restated, steps)
     # No text header row at all: positional, first value column of each basis = current period.
-    return _column_labels({c: "" for c in value_cols}, value_cols, basis_map, restated)
+    return _column_labels({c: "" for c in value_cols}, value_cols, basis_map, restated, steps)
 
 
 def _is_units_row(row: list, value_cols: list[int],
@@ -302,19 +359,28 @@ def _is_units_row(row: list, value_cols: list[int],
 
 
 def _column_labels(texts: dict[int, str], value_cols: list[int], basis_map,
-                   restated: tuple[str, ...]) -> dict[int, tuple[str, str | None]]:
-    """(period_label, period_display) per value column, ordered by heading date within each basis."""
+                   restated: tuple[str, ...],
+                   steps: tuple[tuple[str, object], ...] = ()) -> dict[int, tuple[str, str | None]]:
+    """(period_label, period_display) per value column, ordered by heading date within each basis.
+
+    The caption is read through the rulebook's declared pipeline, which is what makes a DECORATED
+    period caption still a period: a column headed "2024 RMB'000" or "2023 (unaudited)" names a
+    year, but the inline annotation left it looking like an equity component's name, so the column
+    took the printed text as its period label and current/prior resolution lost it. The display keeps
+    the text exactly as printed.
+    """
     from app.services.periods import looks_like_period
-    from app.services.row_reconstruct import _is_restated, _period_date
+    from app.services.row_reconstruct import _is_restated, _period_date, apply_pipeline
 
     out: dict[int, tuple[str, str | None]] = {}
+    plain = {c: (apply_pipeline(t, steps) or t) for c, t in texts.items()}
     bands = {(basis_map or {}).get(c, Basis.CONSOLIDATED) for c in value_cols}
     for band in bands:
         cols = [c for c in value_cols if (basis_map or {}).get(c, Basis.CONSOLIDATED) == band]
         # A header that names something other than a period ("Retained profits") is an equity
         # component, and its identity IS its name.
-        periods = [c for c in cols if not texts[c] or looks_like_period(texts[c])]
-        dates = {c: _period_date(texts[c]) for c in periods}
+        periods = [c for c in cols if not texts[c] or looks_like_period(plain[c])]
+        dates = {c: _period_date(plain[c]) for c in periods}
         flags = {c: _is_restated(texts[c], restated) for c in periods}
         groups = sorted({d for d in dates.values() if d}, reverse=True)
         if len(groups) > 1 and all(dates[c] for c in periods):
@@ -348,7 +414,8 @@ def _note_from_cell(v) -> str | None:
 
 def _row_item(sheet, sheet_index, r_idx, label, row, label_col, value_cols, headers,
               document_id, ordinal, note_col=None, basis_map=None, *,
-              unit_ctx: UnitContext | None = None, dims: tuple[str, ...] = (),
+              unit_ctx: UnitContext | None = None,
+              col_units: dict[int, UnitContext] | None = None, dims: tuple[str, ...] = (),
               log=None, store=None) -> LineItem | None:
     from app.core.models.line_item import NoteRef
 
@@ -374,9 +441,12 @@ def _row_item(sheet, sheet_index, r_idx, label, row, label_col, value_cols, head
             text_snippet=label, source_kind="spreadsheet", producer=_PRODUCER,
         )
         label_, display_ = headers.get(c, (f"col{c}", None))
+        # This column's own annotation where it carries one, the sheet's otherwise — a column
+        # headed HK$'000 does not report the sheet's RMB.
+        unit = (col_units or {}).get(c) or unit_ctx or UnitContext()
         ev = ExtractedValue(value_raw=dec, value=dec, basis=basis,
                             period_label=label_, period_display=display_,
-                            unit_ctx=unit_ctx or UnitContext(), provenance=prov)
+                            unit_ctx=unit, provenance=prov)
         if store is not None:
             # Two columns can carry the same header text ("Total" twice, a period repeated under
             # two units): column_guard says those are distinct facts, and set_value alone would

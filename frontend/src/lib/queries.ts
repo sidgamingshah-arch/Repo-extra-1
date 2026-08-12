@@ -221,6 +221,13 @@ export function useExtraction(
     isPending: (start.isPending && enabled) || (!!runId && !succeeded && !failed),
     isError: failed,
     error: (start.error as Error) ?? (poll.error as Error) ?? undefined,
+    // WHICH rulebook this run read the filing against, as the run itself recorded it. Returned
+    // separately from `data` because it is true of the run from the moment it exists — it must be
+    // nameable while the run is still going and when it fails, not only once rows come back. The
+    // finished result's copy is preferred because only it carries `applied`. It is never filled in
+    // from a client-side guess: a screen that decides for itself which rulebook was in force is
+    // how a superseded run came to be labelled as the current one.
+    rulebook: run?.result?.rulebook ?? run?.rulebook ?? start.data?.rulebook ?? undefined,
   };
 }
 

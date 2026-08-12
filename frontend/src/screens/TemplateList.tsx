@@ -1,17 +1,25 @@
 /** Screen 7, page 1 — the template index.
  *
  * The whole job of this page is picking a template, so it carries only the facts you choose
- * between: what a version is called, which key it is a version of, how many lines it spreads,
- * whether it is published, and which ontology supplies its rules. The structure tree and the
- * ontology editors are a different task and live on the detail page (see Template.tsx), reached
- * by clicking a row.
+ * between: what a version is called, which key it is a version of, which version it is, whether
+ * it is published, and which ontology supplies its rules. Every one of those arrives in the single
+ * GET /templates the list already makes. The structure tree and the ontology editors are a
+ * different task and live on the detail page (see Template.tsx), reached by clicking a row.
+ *
+ * There is deliberately NO line-item count column. The count is not in GET /templates; it is only
+ * on the per-template detail, a ~230 KB document (the whole tree plus every concept's criteria),
+ * so printing it cost one such document per row — 922 KB of transfer on a four-row index to fill
+ * four integers, 99% of everything the page fetched. What a reader loses is comparing the size of
+ * two versions' spreads at a glance from the list; the number itself is not lost, because the
+ * detail page prints it in its header (see Template.tsx) and the publish confirmation states it
+ * for the version it just created. It belongs back here the day GET /templates carries
+ * `line_items`, which the publish endpoint already computes for its own response.
  *
  * Authoring stays HERE: publishing a template version, or a rulebook for it, is something you
  * do to the collection rather than to one concept inside one version of it.
  */
 import type { CSSProperties } from "react";
 import { useRef, useState } from "react";
-import { useQueries } from "@tanstack/react-query";
 
 import {
   ontologyInForce, useOntologies, useTemplateXlsxColumns, useUploadOntology, useUploadTemplateXlsx,
@@ -267,38 +275,6 @@ export function sortTemplates(templates: TemplateRef[]): TemplateRef[] {
     : (a.name || a.template_key).localeCompare(b.name || b.template_key)));
 }
 
-/** Line-item counts for the index, keyed by template id.
- *
- * GET /templates does not carry the count: it is only on the per-template detail, a ~230 KB
- * document (the whole tree plus every concept's criteria). Two consequences are designed around
- * here. The rows fetch CONCURRENTLY: they used to be gated one behind another, so an index of
- * seven versions spent seven serial round trips to print seven integers, the last cell filling
- * only after the six above it had each transferred a quarter of a megabyte — and a single slow or
- * failing row stalled every row below it. And the counts are cached under their OWN key rather
- * than the detail's: a stored template version is immutable, so its line count can never change,
- * while every ontology save invalidates `template-detail` — sharing that key would drag one 230 KB
- * document per row down the wire again on each save.
- *
- * Concurrency fixes the latency, not the bytes. Only the server can fix those: GET /templates
- * would have to carry `line_items`, which the publish endpoint already computes for its own
- * response (see notes_for_integrator) — then this hook, and the request per row, both disappear.
- */
-function useLineItemCounts(templates: TemplateRef[], locale: Locale): Record<string, number> {
-  const results = useQueries({
-    queries: templates.map((tpl) => ({
-      queryKey: ["template-line-count", tpl.id, locale],
-      queryFn: () => api.templateDetail(tpl.id, locale),
-      staleTime: Infinity,
-    })),
-  });
-  const counts: Record<string, number> = {};
-  results.forEach((r, i) => {
-    const n = r.data?.template.line_items;
-    if (typeof n === "number") counts[templates[i].id] = n;
-  });
-  return counts;
-}
-
 /** The JSON Schema an uploaded ontology is validated against, saved as a file.
  *
  * Fetched rather than bundled: it is generated from the pydantic model the upload gate uses, so a
@@ -351,12 +327,11 @@ function SchemaDownload({ t }: { t: (k: string) => string }) {
   );
 }
 
-const GRID = "minmax(200px,2.4fr) minmax(130px,1.1fr) 74px 90px 96px minmax(130px,1.2fr)";
+const GRID = "minmax(200px,2.4fr) minmax(130px,1.1fr) 74px 96px minmax(130px,1.2fr)";
 
-function HeadCell({ label, right }: { label: string; right?: boolean }) {
+function HeadCell({ label }: { label: string }) {
   return (
-    <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: 0.4, color: color.muted,
-                  textAlign: right ? "end" : "start" }}>
+    <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: 0.4, color: color.muted }}>
       {label}
     </div>
   );
@@ -364,8 +339,8 @@ function HeadCell({ label, right }: { label: string; right?: boolean }) {
 
 /** One template version. The whole row is the affordance — an index exists to be clicked into,
  *  so there is no separate "open" button to hunt for. */
-function TemplateRow({ tpl, count, ontology, active, onOpen, t }: {
-  tpl: TemplateRef; count: number | undefined; ontology: OntologyRef | undefined;
+function TemplateRow({ tpl, ontology, active, onOpen, t }: {
+  tpl: TemplateRef; ontology: OntologyRef | undefined;
   active: boolean; onOpen: () => void; t: (k: string) => string;
 }) {
   const [hover, setHover] = useState(false);
@@ -401,11 +376,6 @@ function TemplateRow({ tpl, count, ontology, active, onOpen, t }: {
       </div>
       <div style={{ fontFamily: font.mono, fontSize: 11.5, fontWeight: 600, color: color.ink2 }}>
         {`v${tpl.version}`}
-      </div>
-      {/* Until this row's count arrives the cell says nothing rather than guessing at zero. */}
-      <div data-testid="tpl-row-lines"
-           style={{ fontSize: 12, textAlign: "end", color: count == null ? color.faint : color.ink2 }}>
-        {count == null ? "…" : count}
       </div>
       <div>
         <span style={{ fontSize: 10, fontWeight: 600, padding: "3px 9px", borderRadius: radius.pill,
@@ -448,14 +418,16 @@ function TemplateRow({ tpl, count, ontology, active, onOpen, t }: {
  *  editor was editing. `inert` takes the whole page out of the focus order and off the hit-testing
  *  path while it is covered, without unmounting anything. */
 export function TemplateList({
-  templates, activeId, canEdit, covered, locale, onPick, onOpen, t,
+  templates, activeId, canEdit, covered, onPick, onOpen, t,
 }: {
   templates: TemplateRef[]; activeId: string | undefined; canEdit: boolean; covered: boolean;
+  // Nothing on the index is localized per row any more — the one thing that was, the line-item
+  // count, came from a localized per-template document this page no longer fetches. The prop stays
+  // because the screen passes it (see Template.tsx) and removing it there is a separate change.
   locale: Locale; onPick: (id: string) => void; onOpen: (id: string) => void;
   t: (k: string) => string;
 }) {
   const [filter, setFilter] = useState("");
-  const counts = useLineItemCounts(templates, locale);
   const ontologies = useOntologies();
 
   // `inert` is not in React 18's attribute types, so it is spread rather than written as a prop.
@@ -544,7 +516,6 @@ export function TemplateList({
             <HeadCell label={t("tp.list.colName")} />
             <HeadCell label={t("tp.list.colKey")} />
             <HeadCell label={t("tp.list.colVersion")} />
-            <HeadCell label={t("tp.list.colLines")} right />
             <HeadCell label={t("tp.list.colState")} />
             <HeadCell label={t("tp.list.colOntology")} />
           </div>
@@ -555,7 +526,7 @@ export function TemplateList({
             </div>
           ) : rows.map((tpl) => (
             <TemplateRow
-              key={tpl.id} tpl={tpl} count={counts[tpl.id]}
+              key={tpl.id} tpl={tpl}
               ontology={ontologyFor(tpl.template_key)} active={tpl.id === activeId}
               onOpen={() => onOpen(tpl.id)} t={t}
             />

@@ -45,7 +45,13 @@ KIND_EXTRACTED = "extracted"
 KIND_CALCULATED = "calculated"
 KIND_HEADING = "heading"
 _KINDS = {KIND_EXTRACTED, KIND_CALCULATED, KIND_HEADING}
-_OPS = {"sum", "diff", "weighted_sum"}
+# Exactly the ops ``schemas.template.Rollup`` accepts. ``weighted_sum`` was still admitted here
+# after the JSON gate dropped it, so the two authoring routes disagreed about what is legal: a
+# workbook naming it was accepted and published a template whose op the JSON upload refuses and
+# whose relation ``structural_checks`` can only report as ``unsupported_op`` — the calculated line
+# it was authored on silently lost its arithmetic guard. A workbook that names it is now refused on
+# the row that names it, which is the same answer the JSON route gives.
+_OPS = {"sum", "diff"}
 _ROLES = {"header", "line", "subtotal", "total"}
 _LOCALES = ("zh", "ar", "fr")
 

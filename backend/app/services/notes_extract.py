@@ -38,8 +38,14 @@ def _is_heading(row: list[Word]) -> tuple[str, str] | None:
 
 
 def extract_note_tables(words: list[Word], *, page_index: int, document_id: str | None,
-                        source_kind: str) -> list[NotesTable]:
-    """Split a notes page into note sections and reconstruct each note's detail rows."""
+                        source_kind: str, scope=None,
+                        normalisation=None) -> list[NotesTable]:
+    """Split a notes page into note sections and reconstruct each note's detail rows.
+
+    ``scope``/``normalisation`` are the run's own rulebook blocks; a note's columns are read by
+    the same rules as the face it supports, or the note→face tie compares figures taken from
+    different columns.
+    """
     rows = _group_rows(words)
     sections: list[dict] = []
     current: dict | None = None
@@ -61,7 +67,7 @@ def extract_note_tables(words: list[Word], *, page_index: int, document_id: str 
         # the note→face tie, which matches on (basis, period).
         items, _ = build_line_items(sec["words"], page_index=page_index,
                                     document_id=document_id, source_kind=source_kind,
-                                    on_face=False)
+                                    on_face=False, scope=scope, normalisation=normalisation)
         if not items and not sec["title"]:
             continue
         table = NotesTable(note_number=sec["no"], title=sec["title"], source_pages=[page_index])

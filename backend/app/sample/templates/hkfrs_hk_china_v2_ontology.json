@@ -679,7 +679,8 @@
       },
       {
         "id": "cf_movement",
-        "expr": "cf_net_increase_decrease_in_cash_and_cash_equivalents = net_operating + net_investing + net_financing",
+        "expr": "cf_net_increase_decrease_in_cash_and_cash_equivalents = cf_cash_flow_from_operating_activities__net_cash_from_operating_activities + cf_cash_flow_from_investing_activities__net_cash_used_in_investing_activities + cf_cash_flow_from_financing_activities__net_cash_from_financing_activities",
+        "note": "The three terms are the CLOSING subtotal of each activity section, spelled as the template declares them. Earlier revisions wrote them as the shorthand net_operating/net_investing/net_financing, which the template has never declared, so this blocking identity resolved to nothing and stayed skipped on every filing.",
         "severity": "blocking"
       },
       {

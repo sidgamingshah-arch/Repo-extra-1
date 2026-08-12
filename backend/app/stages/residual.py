@@ -36,6 +36,30 @@ loss visible as an ``unallocated_gap`` the reconciliation reports. So a residual
 asks to be plugged is a contradiction in the rulebook, and it is reported as one instead of being
 honoured.
 
+THE FIVE PROHIBITIONS are read the same way (:func:`_read_prohibitions`), and each one switches on
+the guard named beside it in ``_PROHIBITIONS``: delete the sentence from the rulebook and the guard
+goes with it. They are not restatements of the sweep's per-row terms — every one of them catches a
+residual holding a figure the sweep never took, which is the failure a section subtotal cannot show.
+
+WHAT IS PROSE HERE, and deliberately left as prose. ``sweep.candidate_set``, ``itemisation.rule``
+and ``reconciliation.identity`` each state in one sentence what several read terms already do, so
+driving the engine from the sentence would only add a second, weaker copy of a live switch:
+
+* ``candidate_set`` ("every printed value row on the FACE … whose resolved section equals the
+  residual's single section_scope value") is the population built from ``population``,
+  ``eligibility`` 1-4 and ``notes_as_source``, all read below. Its one independent clause — a
+  SINGLE section_scope — is enforced, under prohibition 5, because a residual scoped to two
+  sections has no candidate set at all.
+* ``itemisation.rule`` is ``aggregation: sum_of_components`` (read) plus the promise that a swept
+  row keeps its own label and sign, which :func:`_component` does by construction.
+* ``reconciliation.identity`` is the equation :func:`_reconcile` evaluates through
+  ``rollups.reconcile_section``; the terms that can vary — ``tolerance``, ``on_failure``,
+  ``sections_without_reported_subtotal`` — are all read.
+
+Those three sentences are held by ``tests/test_residual_framework.py``:
+``test_the_reconciliation_identity_and_the_candidate_set_are_performed_as_written`` is the reference
+they point at, alongside the itemisation and aggregation tests beside it.
+
 Rows deliberately NOT routed: anything that is itself a subtotal or total (it would be counted
 twice), a section header, an attribution caption, a per-share figure, a narrative sentence, a
 note-reference-only row, and rows with no value at all — the eligibility list the framework prints,
@@ -60,7 +84,12 @@ from app.core.models import DocumentModel
 from app.core.models.enums import LineRole
 from app.core.models.line_item import ExtractedValue, LineItem
 from app.core.stage import PipelineContext
-from app.services.mapping import normalize_label, section_of_banner, section_of_key
+from app.services.mapping import (
+    normalize_label,
+    section_of_banner,
+    section_of_key,
+    section_token_of_scope,
+)
 from app.services.rollups import reconcile_section, section_members
 
 # How a residual assignment is recorded on the line, so the review queue and the statement
@@ -158,6 +187,38 @@ _EXCLUSIONS: tuple[tuple[str, object], ...] = (
 )
 
 
+# Phrase in the framework's ``prohibitions`` list -> the guard it switches on. Read the same way
+# the review triggers are, and for the same reason: a prohibition the block stops stating stops
+# being enforced, so the list is what a reviewer edits rather than a paragraph beside the code.
+# Each needle is unique to its sentence, so no prohibition can switch on another one's guard.
+_PROHIBITIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # "Never a balancing plug." — audited on the finished residual (`_audit_prohibitions`).
+    ("never_plug", ("plug",)),
+    # "Never populated by alias, regex or embedding match."
+    ("never_matched", ("alias",)),
+    # "Never carries a value with no itemised components."
+    ("never_unitemised", ("itemised component",)),
+    # "Never absorbs a row a dedicated concept could have claimed but was not tested for."
+    ("never_untested", ("dedicated concept",)),
+    # "Never spans sections, statements, periods, entity scopes or units."
+    ("never_spans", ("spans",)),
+)
+
+# The matchers prohibition 2 names. ``llm`` is deliberately not one of them: a model routing a
+# leftover row into a section's Others is a judgement about the SECTION, not an alias match, and it
+# is the plug audit that holds it to account for the figure it put there.
+_MATCHED_METHODS = frozenset({"exact", "rule", "fuzzy", "embedding"})
+
+
+def _read_prohibitions(lines) -> frozenset[str]:
+    """The prohibitions the block states, as the ids of the guards they switch on."""
+    out: set[str] = set()
+    for raw in lines or []:
+        text = str(raw).lower()
+        out.update(name for name, needles in _PROHIBITIONS if all(n in text for n in needles))
+    return frozenset(out)
+
+
 @dataclass
 class _Terms:
     """``residual_framework`` reduced to the switches the sweep runs on.
@@ -172,6 +233,7 @@ class _Terms:
     after_dedicated: bool = True
     require_value: bool = True
     require_unclaimed: bool = True
+    inside_section_only: bool = True
     exclusions: tuple[str, ...] = ()
     cross_section: bool = False
     notes_as_source: bool = False
@@ -187,6 +249,7 @@ class _Terms:
     gap_to_review: bool = False
     no_subtotal_unreconciled: bool = False
     triggers: dict[str, float] = field(default_factory=dict)
+    prohibitions: frozenset[str] = frozenset()
 
 
 def _number_in(text: str) -> float | None:
@@ -230,6 +293,10 @@ def _read_terms(fw) -> _Terms:
         after_dedicated="after all dedicated" in (sweep.runs or "").lower(),
         require_value="printed a value" in elig,
         require_unclaimed="no dedicated concept" in elig,
+        # Eligibility 4, which is about the row's SECTION rather than its role: a row printed
+        # inside another section is ineligible however similar its wording. Read separately from
+        # ``cross_section`` because the two forbid different things — see `_sweep`.
+        inside_section_only="printed inside this section" in elig,
         exclusions=tuple(phrase for phrase, _ in _EXCLUSIONS if phrase in elig),
         cross_section=bool(sweep.cross_section),
         notes_as_source=bool(sweep.notes_as_source),
@@ -245,6 +312,7 @@ def _read_terms(fw) -> _Terms:
         gap_to_review="review" in on_failure,
         no_subtotal_unreconciled="unreconciled" in no_subtotal,
         triggers=_read_triggers(fw.review_triggers),
+        prohibitions=_read_prohibitions(fw.prohibitions),
     )
 
 
@@ -261,6 +329,9 @@ class _Residual:
     itemise: bool = True
     may_source_from_note: bool = False
     section_sign: str | None = None
+    # False where the rulebook's own terms leave this residual with no candidate set to sweep —
+    # today, a concept scoped to more than one section (prohibition 5).
+    sweepable: bool = True
     # ``never_sweep`` entries that name a concept, expanded to that concept's own captions, and the
     # prose entries kept as text (see `_vetoed_by_never_sweep`).
     never_keys: dict[str, str] = field(default_factory=dict)   # normalised caption -> key
@@ -269,6 +340,17 @@ class _Residual:
     rows: list[LineItem] = field(default_factory=list)
     components: list[dict] = field(default_factory=list)
     triggers: list[str] = field(default_factory=list)
+
+
+def _declared(policy, name: str) -> bool:
+    """Whether the concept's own policy DECLARES this term, rather than inheriting the framework's.
+
+    "Has a policy" cannot stand in for "overrides this term": every residual here declares a
+    ``residual_policy``, so reading the attribute off the model hands back the SCHEMA default for
+    anything the author left out, and the framework value would never govern a single concept —
+    the opposite of one definition governing all 13.
+    """
+    return policy is not None and name in policy.model_fields_set
 
 
 def _residuals(ontology, terms: _Terms) -> list[_Residual]:
@@ -296,13 +378,28 @@ def _residuals(ontology, terms: _Terms) -> list[_Residual]:
         res = _Residual(
             key=m.canonical_key, section=section,
             token=_token_of(section, m.canonical_key), statement=statement,
-            population=(policy.population if policy and policy.population
+            # The framework's value is the DEFAULT each of these inherits; the concept's own policy
+            # overrides it only where the author wrote the term down (`_declared`).
+            population=(policy.population if _declared(policy, "population") and policy.population
                         else terms.population) or "sweep_only",
-            cross_section=bool(policy.cross_section) if policy else terms.cross_section,
-            itemise=bool(policy.itemise) if policy else True,
+            cross_section=(bool(policy.cross_section) if _declared(policy, "cross_section")
+                           else terms.cross_section),
+            itemise=(bool(policy.itemise) if _declared(policy, "itemise")
+                     else terms.itemise_required),
             section_sign=section_sign.get(section),
         )
-        notes = bool(policy.notes_as_source) if policy else terms.notes_as_source
+        # Prohibition 5, "never spans sections", and the clause ``candidate_set`` states as "the
+        # residual's SINGLE section_scope value": a concept whose policy points at one section while
+        # it inherits another has no candidate set, and taking the first of the two would sweep one
+        # section's rows into the other section's bucket with both sections still tying.
+        scopes = {s for s in (m.section_scope or []) if s}
+        if policy and policy.section_scope:
+            scopes.add(policy.section_scope)
+        if len(scopes) > 1 and "never_spans" in terms.prohibitions:
+            res.sweepable = False
+            res.conflicts.append(f"spans_sections:{'/'.join(sorted(scopes))}")
+        notes = (bool(policy.notes_as_source) if _declared(policy, "notes_as_source")
+                 else terms.notes_as_source)
         # ``face_only`` and ``note_use`` are what decide whether a note may be a SOURCE at all:
         # the global rule is "notes are evidence for a face amount, never an independent source of
         # one, unless note_use is decomposition_allowed". A residual asking for the note without
@@ -337,8 +434,6 @@ def _token_of(section: str, canonical_key: str) -> str | None:
     ("cf_cash_flow_from_operating_activities__others") must resolve to the same banner token, and
     when a rulebook renames a section the key is the one that still says what the section is.
     """
-    from app.services.mapping import section_token_of_scope
-
     return section_token_of_scope(section) or section_of_key(canonical_key)
 
 
@@ -363,6 +458,49 @@ def _vetoed_by_never_sweep(res: _Residual, label: str) -> str | None:
             if norm in prose:
                 return prose
     return None
+
+
+_Captions = dict[str, dict[str, tuple[str, tuple[str, ...]]]]
+
+
+def _dedicated_captions(ontology, members: dict) -> _Captions:
+    """Per section, the exact captions its DEDICATED concepts answer to — prohibition 4's index.
+
+    Exact normalised captions only, and only the section's ``dedicated`` concepts (not its
+    subtotals, which the eligibility list and ``never_sweep`` already refuse). A caption that IS a
+    dedicated concept's label or alias is a row that concept would have claimed had it been asked,
+    so absorbing it means the sweep ran on a row nobody tested. Anything looser would refuse rows on
+    a resemblance, which is the mapper's job and not a prohibition's.
+    """
+    by_key = {m.canonical_key: m for m in ontology.mappings}
+    out: _Captions = {}
+    for section, mem in members.items():
+        idx: dict[str, tuple[str, tuple[str, ...]]] = {}
+        for key in mem.dedicated:
+            concept = by_key.get(key)
+            if concept is None:
+                continue
+            entry = (key, tuple(concept.exclude_hints or []))
+            for caption in [concept.label or "", *concept.aliases_for(None)]:
+                norm = normalize_label(caption)
+                if norm:
+                    idx.setdefault(norm, entry)
+        out[section] = idx
+    return out
+
+
+def _untested_dedicated(captions: _Captions, section: str, label: str) -> str | None:
+    """The dedicated concept whose own caption this row is printed with, if any."""
+    norm = normalize_label(label)
+    found = captions.get(section, {}).get(norm) if norm else None
+    if found is None:
+        return None
+    key, hints = found
+    # A concept whose ``exclude_hints`` veto this caption WAS evaluated and refused it. That is
+    # review trigger 4's business — recorded on the component — not a row nobody tested.
+    if any(re.search(hint, label.lower()) for hint in hints):
+        return None
+    return key
 
 
 def _col(ev: ExtractedValue) -> str:
@@ -480,6 +618,21 @@ def _component(terms: _Terms, ontology, doc: DocumentModel, li, res: _Residual, 
     return out
 
 
+def _by_canonical_key(doc: DocumentModel) -> tuple[dict[str, dict[str, float]],
+                                                   dict[str, list]]:
+    """Per concept, the figure the DOCUMENT publishes for it per column, and the rows behind it."""
+    totals: dict[str, dict[str, float]] = {}
+    rows: dict[str, list] = {}
+    for li in doc.line_items:
+        if not li.canonical_key:
+            continue
+        rows.setdefault(li.canonical_key, []).append(li)
+        slot = totals.setdefault(li.canonical_key, {})
+        for col, val in _row_values(li).items():
+            slot[col] = slot.get(col, 0.0) + float(val)
+    return totals, rows
+
+
 def _note_refs(li) -> list[str]:
     """The note numbers a face row cites (same reading as ``stages.link_notes``, which has not
     run yet at this point in the pipeline — the links it builds are not available here)."""
@@ -506,13 +659,15 @@ class ResidualStage:
         residuals = _residuals(ontology, terms)
         # ``population: sweep_only`` is what makes this stage the only way in. A residual declaring
         # anything else is not swept — it is populated by whatever that declaration names.
-        usable = [r for r in residuals if r.population == "sweep_only"]
+        usable = [r for r in residuals if r.population == "sweep_only" and r.sweepable]
         by_section = {r.section: r for r in usable}
         for r in residuals:
             if r.conflicts:
                 ctx.log(f"residual:rulebook_conflict({r.key}):{','.join(r.conflicts)}")
             if r.population != "sweep_only":
                 ctx.log(f"residual:not_swept({r.key}):population={r.population}")
+            elif not r.sweepable:
+                ctx.log(f"residual:not_swept({r.key}):no single section to sweep")
         if not by_section:
             ctx.log("residual:skipped(no sweepable residual concepts)")
             return doc
@@ -536,7 +691,42 @@ class ResidualStage:
                           if m.section_scope}
         subtotal_of = {k: sec for sec, mem in members.items() for k in mem.subtotals}
         threshold = ctx.settings.extraction.fuzzy_accept
+        captions = _dedicated_captions(ontology, members)
         _, statement_of = _statement_map(doc)
+
+        # Every section a row can be printed INSIDE, with the banner token and statement that place
+        # it. Sections with no residual of their own are in here too: eligibility 4 needs to know
+        # that a row was printed inside one, which is not the same answer as "no section resolved".
+        # The ``*_top_level`` scopes are not sections at all — they hold the statement's own totals,
+        # which no row is printed "inside".
+        placeable: dict[str, tuple[str | None, str | None]] = {}
+        for section, mem in members.items():
+            if section.endswith("top_level"):
+                continue
+            res = by_section.get(section)
+            placeable[section] = ((res.token if res else section_token_of_scope(section)),
+                                  (res.statement if res else mem.statement))
+        # …and with eligibility 4 deleted from the list, the signals walk PAST a section that has no
+        # bucket to the nearest one that has — which is what this stage did before it read entry 4.
+        if not terms.inside_section_only:
+            placeable = {s: v for s, v in placeable.items() if s in by_section}
+
+        # Prohibition 2, "never populated by alias, regex or embedding match": a residual is locked
+        # out of the mapper's index by ``alias_matching: disabled``, and a concept that omits that
+        # field unlocks the most attractive caption in the rulebook — "Others" fuzzes against almost
+        # anything short. A row that arrives already claimed for a residual by one of those matchers
+        # is released here, so the only way into a bucket is still the sweep, and the row is offered
+        # to the section's dedicated concepts' terms rather than sitting in Others un-itemised.
+        if "never_matched" in terms.prohibitions:
+            residual_keys = {r.key for r in residuals}
+            for li in doc.line_items:
+                method = li.confidence.method or ""
+                if li.canonical_key in residual_keys and method in _MATCHED_METHODS:
+                    ctx.log(f"residual:released({li.canonical_key}):"
+                            f"{method} match on {li.source_label!r}")
+                    li.canonical_key = None
+                    li.confidence.method = None
+                    li.confidence.flags.append(f"residual_alias_populated:{method}")
 
         # A statement ends at its closing total ("Cash and cash equivalents at end of year",
         # "Total equity and liabilities"). Whatever is printed below that is narrative — the note on
@@ -571,11 +761,21 @@ class ResidualStage:
                 li.confidence.flags.append(f"residual_ineligible:{reason}")
                 continue
 
-            section = self._section_of_row(idx, ordered, li, by_section, section_by_key,
-                                          subtotal_of, stmt, statement_of)
+            section = self._section_of_row(idx, ordered, li, placeable, section_by_key,
+                                           subtotal_of, stmt, statement_of)
             target = by_section.get(section or "")
             if target is not None and target.statement and stmt and target.statement != stmt:
                 target = None
+            if (target is None and section and section not in by_section
+                    and terms.inside_section_only):
+                # Eligibility 4: the row WAS printed inside a section — one that has no residual of
+                # its own. Walking on to the nearest section that does have one is the cross-section
+                # rescue the list forbids under another name, and it is how a row printed under
+                # "Profit attributable to owners of the parent" ends up inside the tax charge.
+                ineligible += 1
+                li.confidence.flags.append(
+                    f"residual_ineligible:printed in another section({section})")
+                continue
             if target is None:
                 # ``cross_section: false`` — no rescue, however similar the wording. A residual
                 # whose own policy sets it true may claim a row from elsewhere in its statement.
@@ -593,6 +793,18 @@ class ResidualStage:
                 li.confidence.flags.append(f"residual_never_sweep:{veto}")
                 continue
 
+            # Prohibition 4: this caption IS a dedicated concept of the section, so the concept
+            # would have claimed the row had it been asked. Absorbing it instead leaves the section
+            # tying while a named figure is filed as unexplained remainder.
+            untested = (_untested_dedicated(captions, target.section, li.source_label or "")
+                        if "never_untested" in terms.prohibitions else None)
+            if untested is not None:
+                ineligible += 1
+                li.confidence.flags.append(f"residual_dedicated_not_tested:{untested}")
+                ctx.log(f"residual:not_absorbed({target.key}):{li.source_label!r} is "
+                        f"{untested}'s own caption")
+                continue
+
             self._claim(li, target)
             if target.itemise:
                 target.components.append(
@@ -605,7 +817,9 @@ class ResidualStage:
                 li.confidence.flags.append("residual_literal_others_caption")
             swept += 1
 
-        swept += self._sweep_notes(doc, ctx, ontology, terms, usable, section_by_key, threshold)
+        swept += self._sweep_notes(doc, ctx, ontology, terms, usable, section_by_key, threshold,
+                                   captions)
+        self._audit_prohibitions(ctx, terms, usable, doc)
         self._reconcile(doc, ctx, ontology, terms, usable, members)
 
         ctx.log(f"residual:swept={swept} ineligible={ineligible} section_unresolved={unresolved} "
@@ -624,9 +838,14 @@ class ResidualStage:
         res.rows.append(li)
 
     @staticmethod
-    def _section_of_row(idx: int, ordered: list, li, by_section: dict, section_by_key: dict,
+    def _section_of_row(idx: int, ordered: list, li, placeable: dict, section_by_key: dict,
                         subtotal_of: dict, statement: str | None, statement_of) -> str | None:
         """The rulebook section a row was printed inside, by the three signals in the docstring.
+
+        ``placeable`` is every section a row can be printed inside — including the ones with no
+        residual — because the question here is where the row WAS printed, not which bucket would
+        accept it. Answering with the nearest section that happens to have a bucket is what
+        eligibility 4 forbids, and the caller is the one that applies it.
 
         Every signal stops at the statement boundary. A row at the foot of the balance sheet must
         not be placed by the income statement's first subtotal: the structure of a different
@@ -635,8 +854,8 @@ class ResidualStage:
         if li.section_hint:
             token = section_of_banner(li.section_hint)
             if token:
-                for section, res in by_section.items():
-                    if res.token == token and (not statement or res.statement == statement):
+                for section, (sec_token, sec_stmt) in placeable.items():
+                    if sec_token == token and (not statement or sec_stmt == statement):
                         return section
         for nxt in ordered[idx + 1:]:
             if statement and statement_of(nxt) not in (None, statement):
@@ -644,7 +863,7 @@ class ResidualStage:
             section = subtotal_of.get(nxt.canonical_key or "")
             if section is None:
                 continue
-            if section in by_section:
+            if section in placeable:
                 return section
             # A STATEMENT total ("Total assets") reached before any section subtotal: this row's own
             # section printed none, so the answer is the section above it, not the one below.
@@ -653,12 +872,13 @@ class ResidualStage:
             if statement and statement_of(prev) not in (None, statement):
                 break
             section = section_by_key.get(prev.canonical_key or "")
-            if section and section in by_section:
+            if section and section in placeable:
                 return section
         return None
 
     def _sweep_notes(self, doc: DocumentModel, ctx: PipelineContext, ontology, terms: _Terms,
-                     usable: list[_Residual], section_by_key: dict, threshold: float) -> int:
+                     usable: list[_Residual], section_by_key: dict, threshold: float,
+                     captions: _Captions) -> int:
         """Sweep a cited note's unclaimed rows into the one residual whose section permits it.
 
         The framework's ``notes_as_source`` is false, and ``face_only``/``note_use`` say why: a note
@@ -691,6 +911,16 @@ class ResidualStage:
                     if veto is not None:
                         ctx.log(f"residual:note_row_vetoed({res.key}):{veto}")
                         continue
+                    # Prohibition 4 again, and it bites harder in a note: the note's own breakdown
+                    # lines are exactly the section's dedicated concepts ("Current tax", "Deferred
+                    # tax"), and absorbing one of those into Others would double the charge — the
+                    # face row for it is already loaded.
+                    if "never_untested" in terms.prohibitions:
+                        untested = _untested_dedicated(captions, res.section, label)
+                        if untested is not None:
+                            ctx.log(f"residual:not_absorbed({res.key}):note row {label!r} is "
+                                    f"{untested}'s own caption")
+                            continue
                     row = LineItem(source_label=label, canonical_key=res.key,
                                    ordinal=next_ordinal, note_number=str(table.note_number))
                     next_ordinal += 1
@@ -710,6 +940,48 @@ class ResidualStage:
             ctx.log(f"residual:note_sourced_components={added}")
         return added
 
+    @staticmethod
+    def _audit_prohibitions(ctx: PipelineContext, terms: _Terms, usable: list[_Residual],
+                            doc: DocumentModel) -> None:
+        """The two prohibitions that are about the FINISHED residual rather than one row.
+
+        Prohibitions 1 and 3 are the ones the sweep cannot check while it runs. A residual only
+        holds a figure it did not sweep because something else wrote its key onto a row — the LLM
+        gap-closer, a stored correction, a rerun — and the sweep skips claimed rows by design, so it
+        never sees it. Neither failure shows anywhere else: the section's printed subtotal has no
+        opinion about whether the bucket under it is itemised, so a residual publishing a figure
+        with nothing behind it reads exactly like one that swept it.
+        """
+        if not {"never_plug", "never_unitemised"} & terms.prohibitions:
+            return
+        published, rows_by_key = _by_canonical_key(doc)
+        for res in usable:
+            swept: dict[str, float] = {}
+            for li in res.rows:
+                for col, val in _row_values(li).items():
+                    swept[col] = swept.get(col, 0.0) + float(val)
+
+            if "never_unitemised" in terms.prohibitions and res.rows and not res.components:
+                for li in res.rows:
+                    li.confidence.flags.append(f"residual_value_without_components:{res.section}")
+                    li.confidence.mapping = min(li.confidence.mapping or 0.4, 0.4)
+                ctx.log(f"residual:value_without_components({res.key}) rows={len(res.rows)}")
+            if "never_plug" not in terms.prohibitions:
+                continue
+            # The rows carrying this key that the sweep did not take are where the unaccounted
+            # figure is, so they are what a reviewer has to be sent to.
+            taken = {li.id for li in res.rows}
+            unsourced = [li for li in rows_by_key.get(res.key, []) if li.id not in taken]
+            for col, total in sorted(published.get(res.key, {}).items()):
+                diff = total - swept.get(col, 0.0)
+                if abs(diff) <= terms.rounding_unit:
+                    continue
+                flag = f"residual_plug_suspected:{res.section}:{col}={diff:.0f}"
+                for li in unsourced or res.rows:
+                    li.confidence.flags.append(flag)
+                    li.confidence.flags.append("low_mapping_confidence")
+                ctx.log(f"residual:{flag} published={total} itemised={swept.get(col, 0.0)}")
+
     def _reconcile(self, doc: DocumentModel, ctx: PipelineContext, ontology, terms: _Terms,
                    usable: list[_Residual], members: dict) -> None:
         """``reported_section_subtotal − Σ(dedicated) − Σ(residual components) = 0``, per column.
@@ -719,16 +991,7 @@ class ResidualStage:
         figure nobody printed. The difference is emitted as an ``unallocated_gap`` and the section
         goes to review.
         """
-        values: dict[str, dict[str, float]] = {}
-        rows_by_key: dict[str, list] = {}
-        for li in doc.line_items:
-            if not li.canonical_key:
-                continue
-            rows_by_key.setdefault(li.canonical_key, []).append(li)
-            slot = values.setdefault(li.canonical_key, {})
-            for col, val in _row_values(li).items():
-                slot[col] = slot.get(col, 0.0) + float(val)
-
+        values, rows_by_key = _by_canonical_key(doc)
         report: list[dict] = []
         for res in usable:
             mem = members.get(res.section)

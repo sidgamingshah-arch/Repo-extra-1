@@ -173,6 +173,64 @@ class ExtractionOptions(BaseModel):
     entity: str | None = None
 
 
+def _in_force_for_template(session: Session, template_key: str):
+    """The rulebook in force for a template — the extractor's own choice, never a second copy
+    of that rule (see ``services.ontology_select``)."""
+    from app.services.ontology_select import select_for_template
+
+    return select_for_template(session, template_key) if template_key else None
+
+
+def rulebook_record(session: Session, ontology_version_id: str | None) -> dict:
+    """WHICH rulebook this run reads the filing against, decided once, when the run starts.
+
+    Recorded on the run because the alternative — a reader re-deriving it later — is what made
+    reloading the extraction view an audit failure: the client asked for the rulebook IT thought
+    was in force, ran the filing against a superseded one, and labelled the result as the rulebook
+    in force. Which rulebook produced a figure is part of the figure. A run states it, and every
+    view reports the stated value instead of guessing again.
+
+    ``status`` is the whole claim in one word: ``in_force`` (this WAS the rulebook in force for its
+    template when the run started), ``superseded`` (a stored rulebook declares it replaced — a
+    legitimate thing to pin, never a thing to call current), ``pinned`` (live, but not the one in
+    force), ``engine_default`` (the run named no rulebook, so it maps against none and its pages
+    are read by the shipped default) or ``missing`` (the id named no stored rulebook).
+    """
+    from app.db.models import OntologyVersion
+    from app.services.ontology_select import rulebooks_for_template, superseded_keys
+
+    record = {
+        "ontology_version_id": ontology_version_id or "",
+        "ontology_key": "", "version": 0, "target_template_key": "",
+        "status": "engine_default" if not ontology_version_id else "missing",
+        "in_force": False,
+        "in_force_ontology_key": "", "in_force_version": 0,
+    }
+    if not ontology_version_id:
+        return record
+    row = session.get(OntologyVersion, ontology_version_id)
+    if row is None:
+        return record
+
+    siblings = rulebooks_for_template(session, row.target_template_key)
+    superseded = row.ontology_key in superseded_keys(siblings)
+    chosen = _in_force_for_template(session, row.target_template_key)
+    # A superseded rulebook is never "in force", even when it is the best answer the selector can
+    # give: with every stored rulebook for a template superseded, ``select_for_template`` falls
+    # back to the whole list and returns one of them, and calling that in force would tell a
+    # reviewer a figure came from the current rulebook when it came from a replaced one.
+    in_force = chosen is not None and chosen.id == row.id and not superseded
+    record.update({
+        "ontology_key": row.ontology_key, "version": row.version,
+        "target_template_key": row.target_template_key,
+        "status": "superseded" if superseded else ("in_force" if in_force else "pinned"),
+        "in_force": in_force,
+        "in_force_ontology_key": chosen.ontology_key if chosen is not None else "",
+        "in_force_version": chosen.version if chosen is not None else 0,
+    })
+    return record
+
+
 def _run_extraction_task(run_id: str, object_key: str, filename: str, options: dict,
                          entity: str, provider: str, model_fallback: str,
                          included_pages: list[int] | None = None) -> None:
@@ -231,8 +289,21 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
 
         recon = doc_model.reconciliation
         structural = doc_model.structural
+        # The rulebook decision recorded when the run was created, carried onto the result with
+        # whether that rulebook actually LOADED. A pinned rulebook whose stored definition will not
+        # load governs nothing, and a result that claimed it did would be the same lie in a
+        # different place.
+        rulebook = dict((run.options or {}).get("rulebook") or {})
+        if not rulebook:
+            # A run created outside the route (a re-run script, a seed) still has to say which
+            # rulebook produced its figures, so the record is made here rather than left blank.
+            rulebook = rulebook_record(session, oid)
+        rulebook["applied"] = ontology is not None
         run.result = {
             "locale": doc_model.locale,
+            # Which rulebook produced these figures — stated by the run, never re-derived by a
+            # reader (see :func:`rulebook_record`).
+            "rulebook": rulebook,
             "format": doc_model.fmt.value,
             "filename": filename,
             "entity": entity_name,
@@ -327,11 +398,15 @@ def start_extraction(
 
     entity = body.entity or Path(doc.filename or "").stem or "document"
     run_id = audit_svc.make_run_id(entity)
+    # Settle which rulebook this run reads the filing against BEFORE it starts, and keep it on the
+    # run. The caller may legitimately pin a superseded rulebook (reproducing an earlier spread),
+    # and the run says so rather than letting the screen decide afterwards what it must have used.
+    rulebook = rulebook_record(session, body.ontology_version_id)
     run = ExtractionRun(
         id=run_id, document_id=doc.id,
         template_version_id=body.template_version_id,
         ontology_version_id=body.ontology_version_id,
-        status="running", options=body.model_dump(),
+        status="running", options={**body.model_dump(), "rulebook": rulebook},
         progress={"phase": "queued", "pct": 0.0}, result=None,
     )
     session.add(run)
@@ -340,7 +415,7 @@ def start_extraction(
     background.add_task(_run_extraction_task, run_id, doc.object_key, doc.filename or "",
                         body.model_dump(), entity, settings.llm.provider, settings.llm.model,
                         doc.page_scope)
-    return {"run_id": run_id, "status": "running",
+    return {"run_id": run_id, "status": "running", "rulebook": rulebook,
             "stream_url": f"/api/v1/extractions/{run_id}/stream"}
 
 
@@ -351,5 +426,9 @@ def get_run(run_id: str, session: Session = Depends(db)) -> dict:
     run = session.get(ExtractionRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    # The recorded rulebook rides alongside the result so the view can name it from the FIRST poll
+    # — while the run is still running, and even if it fails — instead of computing a candidate of
+    # its own and labelling the run with that.
     return {"run_id": run.id, "status": run.status, "progress": run.progress,
+            "rulebook": (run.options or {}).get("rulebook"),
             "result": run.result}

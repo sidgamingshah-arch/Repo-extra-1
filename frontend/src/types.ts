@@ -399,8 +399,37 @@ export interface SourceUnits {
   scale_factor: number;
   units_label: string | null;
 }
+/** WHICH rulebook a run read the filing against — as the RUN recorded it when it started, not as
+ *  a reader works out afterwards which one "must" have been in force.
+ *
+ *  The distinction is the whole point. The client asks for a rulebook by id; between that request
+ *  and someone reading the result, a new rulebook can be published, so a screen that re-derives
+ *  "in force" from the ontology list labels a run with a rulebook it never used — which is how a
+ *  reload came to describe a superseded run as the current one. `status` is the server's own claim
+ *  about the rulebook the run used: `in_force` (it WAS the one in force for its template when the
+ *  run started), `superseded` (a stored rulebook declares it replaced — legitimate to pin, never
+ *  current), `pinned` (live, but not the one in force), `engine_default` (the run named no
+ *  rulebook) or `missing` (the id named nothing stored). See
+ *  backend/app/api/routes/extractions.py::rulebook_record. */
+export interface RulebookRecord {
+  ontology_version_id: string;
+  ontology_key: string;
+  version: number;
+  target_template_key: string;
+  status: "in_force" | "superseded" | "pinned" | "engine_default" | "missing";
+  in_force: boolean;
+  /** The rulebook that WAS in force for the template when the run started, so a run that used
+   *  another one can name what it departed from. */
+  in_force_ontology_key: string;
+  in_force_version: number;
+  /** False when the recorded rulebook's stored definition would not load: it governed nothing,
+   *  however firmly the run names it. Present on the finished result, not on the start response. */
+  applied?: boolean;
+}
 export interface ExtractionResult {
   locale: string;
+  /** The rulebook this run read the filing against (see RulebookRecord). */
+  rulebook?: RulebookRecord | null;
   format: string;
   filename: string;
   entity?: string | null;
@@ -416,6 +445,9 @@ export interface ExtractionResult {
 export interface ExtractionRunResponse {
   run_id: string;
   status: string;
+  /** Alongside the result rather than inside it, so the rulebook can be named from the first poll
+   *  — while the run is still running, and even when it fails without producing a result. */
+  rulebook?: RulebookRecord | null;
   result: ExtractionResult;
 }
 /** Derived analysis from a real extraction: ratios, disclosure scan, free-form notes. */

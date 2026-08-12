@@ -393,13 +393,67 @@ def test_a_scope_id_names_its_section_and_the_compound_wins():
         assert section_token_of_scope(top) is None, top
 
 
+def test_editing_the_declared_statement_moves_the_concept_the_gate_will_accept():
+    """The same A/B one level up, and the hole the section work left behind. The STATEMENT gate read
+    ``canonical_key.split("_", 1)[0]`` — the key prefix — so redeclaring a whole section onto another
+    statement changed nothing: `bs_current_liabilities__current_trade_payables` was still gated as a
+    balance-sheet concept while the rulebook said profit_and_loss. The declaration is now the source
+    and the key namespace only the fallback, exactly as for `section_scope`."""
+    PAYABLES = "bs_current_liabilities__current_trade_payables"
+
+    def move_current_liabilities_to_the_pl(d):
+        d["section_defaults"]["bs_s5_current_liabilities"]["statement"] = "profit_and_loss"
+
+    shipped = _matcher_with(lambda _d: None)
+    assert shipped._statement_of(PAYABLES) == "balance_sheet"
+    assert shipped._in_statement(PAYABLES, "balance_sheet")
+    assert not shipped._in_statement(PAYABLES, "profit_and_loss")
+
+    edited = _matcher_with(move_current_liabilities_to_the_pl)
+    assert edited._statement_of(PAYABLES) == "profit_and_loss"
+    assert not edited._in_statement(PAYABLES, "balance_sheet")
+    assert edited._in_statement(PAYABLES, "profit_and_loss")
+    # …and through `match`, where the gate is what the caption is actually judged by.
+    caption = "Trade and bills payables 貿易應付款項及票據"
+    assert edited.match(caption, statement="balance_sheet").canonical_key != PAYABLES
+    assert edited.match(caption, statement="profit_and_loss").canonical_key == PAYABLES
+
+
+def test_the_two_spellings_of_the_equity_statement_are_one_statement():
+    """`StatementType` spells it "equity_changes"; the page classifier and every caller say
+    "changes_in_equity". Compared raw, a concept declaring the enum's spelling is refused on every
+    equity page — the declaration would scope nothing at all rather than scope it wrongly."""
+    from app.services.mapping import normalize_statement
+
+    assert normalize_statement("equity_changes") == "changes_in_equity"
+    assert normalize_statement("changes_in_equity") == "changes_in_equity"
+    assert normalize_statement(None) == ""
+
+    def declare_cash_on_the_equity_statement(d):
+        for c in d["mappings"]:
+            if c["canonical_key"] == CASH:
+                c["statement"] = "equity_changes"
+
+    m = _matcher_with(declare_cash_on_the_equity_statement)
+    assert m._statement_of(CASH) == "changes_in_equity"
+    assert m._in_statement(CASH, "changes_in_equity")
+    assert not m._in_statement(CASH, "balance_sheet")
+
+
 def test_a_v1_concept_declares_no_scope_and_falls_back_to_its_key(matcher):
-    """The fallback is the whole reason v1 keeps working: no `section_scope` is authored anywhere in
-    it, so the key namespace is all there is."""
+    """The fallback is the whole reason v1 keeps working: no `section_scope` and no `statement` is
+    authored anywhere in it, so the key namespace is all there is."""
     assert not any(c.section_scope for c in matcher.ontology.mappings)
+    assert not any(c.statement for c in matcher.ontology.mappings)
     assert matcher._sections_of("bs_current_liabilities__current_borrowings") == frozenset(
         {"current_liabilities"})
     assert matcher._sections_of("bs_total_assets") == frozenset()
+    assert matcher._statement_of("bs_current_liabilities__current_borrowings") == "balance_sheet"
+    assert matcher._statement_of("cf_net_increase_decrease_in_cash_and_cash_equivalents") == (
+        "cash_flow")
+    # A key from no statement namespace at all is placed by neither, and is therefore unconstrained.
+    assert matcher._statement_of("something_else") is None
+    assert matcher._in_statement("something_else", "balance_sheet")
 
 
 def test_the_legitimate_variants_still_reroute():

@@ -96,6 +96,7 @@ import type {
   PagesResponse,
   ProjectResponse,
   ReviewResponse,
+  RulebookRecord,
   TemplateRef,
   SettingsPatch,
   SourceDoc,
@@ -145,14 +146,18 @@ export const api = {
   documents: () => req<{ documents: SourceDoc[] }>(`/documents`),
   ontologies: () => req<OntologyRef[]>(`/ontologies`),
   templates: () => req<TemplateRef[]>(`/templates`),
+  /** Start a run. The 202 carries the rulebook the run was CREATED with, so the screen can name
+   *  what governs the figures from the moment the run exists rather than waiting for a result — or
+   *  deciding for itself which rulebook that must have been. */
   runExtraction: (
     documentId: string,
     body: { ontology_version_id?: string; template_version_id?: string } = {},
   ) =>
-    req<{ run_id: string; status: string }>(`/documents/${documentId}/extractions`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    req<{ run_id: string; status: string; rulebook?: RulebookRecord | null }>(
+      `/documents/${documentId}/extractions`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
   /** Poll a background extraction run's status/result. */
   getRun: (runId: string) => req<ExtractionRunResponse>(`/extractions/${runId}`),
   /** Real per-document pre-flight integrity (drives the Integrity screen for an upload). */

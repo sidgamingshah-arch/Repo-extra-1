@@ -204,6 +204,24 @@ def test_a_restated_comparative_keeps_the_original_beside_it():
     assert got == {"current": 3410, "prior": 2900, "prior_restated": 2950}
 
 
+def test_a_per_column_currency_annotation_beats_the_sheet_unit():
+    """A Hong Kong workbook routinely prints two currencies side by side — a CNY column beside an HKD
+    one. The sheet-level scan joins the whole header row into one blob and matches the first declared
+    signal in it, so ONE currency was stamped on every fact and the other column's figures were
+    reported in money that is not theirs. Nothing downstream can catch it: the currency is metadata,
+    so no total disagrees, and an FX translation then applies the wrong rate to a right figure."""
+    data = _sheet([
+        ["", "RMB'000", "HK$'000"],
+        ["", "2024", "2023"],
+        ["Trade receivables", 3410, 3760],
+    ])
+    items = extract_workbook(data, document_id="x")
+    tr = next(li for li in items if li.source_label == "Trade receivables")
+    got = {v.period_label: (v.unit_ctx.currency, int(v.unit_ctx.scale_factor), int(v.value))
+           for v in tr.values.values()}
+    assert got == {"current": ("CNY", 1000, 3410), "prior": ("HKD", 1000, 3760)}
+
+
 def test_the_sheet_unit_is_persisted_on_every_fact():
     """``units_and_currency``: resolved from this statement's header (a sheet cannot see a cover
     page), recorded on every fact, and never applied to the figures."""

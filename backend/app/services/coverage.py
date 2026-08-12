@@ -37,14 +37,24 @@ between its first two buckets is the whole point:
 * ``STATEMENT_ABSENT`` — the only bucket that does NOT count. A standalone-only filing has no cash
   flow statement; holding it against the run's coverage would make every filing look incomplete.
 
-Three alarm states are reported explicitly, because each of them is invisible in the counts:
+Four alarm states are reported explicitly, because each of them is invisible in the counts:
 
 * a statement whose every declarable relation was skipped is ``UNVALIDATED`` — it has no failures
   and it has proved nothing, and it must never render as "passed";
 * more ``TAUTOLOGICAL`` skips than evaluated relations means the validation layer is mostly
   checking its own arithmetic;
 * a guard whose precondition is ``"always"`` coming back skipped cannot be a fact about the
-  filing — it is a defect in this pipeline, and it is labelled one.
+  filing — it is a defect in this pipeline, and it is labelled one;
+* a rule the rulebook declared ``blocking`` that cannot run AS AUTHORED is ``UNENFORCEABLE``. It
+  fires on no filing ever, so "no blocking failures" is not evidence of anything: the slot a
+  reviewer reads as assurance is empty. It shipped that way once — a blocking cash-flow identity
+  naming three terms no template declares — which is why it gets an alarm of its own rather than
+  sharing the generic defect code.
+
+The rows themselves say which is which: a rule the RULEBOOK authored so that it can never run
+carries the distinct ``error`` status rather than ``skipped`` (see
+``structural_checks.AUTHORING_REASONS``). It is still one of the three buckets here — an unrunnable
+rule is not a pass and not a fail, so it counts as unchecked — and the buckets always total.
 """
 from __future__ import annotations
 
@@ -81,6 +91,10 @@ NOT_DECLARABLE = ("STATEMENT_ABSENT",)
 ALARM_UNVALIDATED = "UNVALIDATED"
 ALARM_TAUTOLOGY = "TAUTOLOGICAL_EXCEEDS_EVALUATED"
 ALARM_PIPELINE_DEFECT = "PIPELINE_DEFECT"
+# A rule declared ``blocking`` that the engine cannot run as authored. Named apart from
+# PIPELINE_DEFECT because the two ask for different things: that one is a rule to repair, this one
+# is an assurance to stop trusting until it is.
+ALARM_UNENFORCEABLE = "BLOCKING_RULE_UNENFORCEABLE"
 
 # Statuses a statement may carry. "PASSED" is deliberately unreachable while anything declarable
 # was skipped: a partial verification is PARTIAL, never a pass.
@@ -186,6 +200,12 @@ class CoverageReport:
     def unvalidated(self) -> list[str]:
         return sorted(s for s, cov in self.statements.items() if cov.status == UNVALIDATED)
 
+    def unenforceable(self) -> list[dict]:
+        """The blocking rules that cannot run as authored — the assurance this run does NOT have
+        despite declaring it. Surfaced on its own because it is invisible in every count: such a
+        rule produces no failure, so it is indistinguishable from a rule that held."""
+        return [a for a in self.alarms if a.get("code") == ALARM_UNENFORCEABLE]
+
     def as_dict(self) -> dict:
         return {
             "aggregate": self.aggregate.as_dict(),
@@ -203,6 +223,8 @@ class CoverageReport:
                 f"({agg.buckets.passed}/{agg.evaluated}) "
                 f"coverage_rate={pct(agg.coverage_rate)}({agg.evaluated}/{agg.declarable}) "
                 f"unvalidated={','.join(self.unvalidated()) or 'none'} "
+                # A blocking rule that cannot fire is not visible in any of the numbers above.
+                f"unenforceable_blocking={len(self.unenforceable())} "
                 f"alarms={len(self.alarms)}")
 
 
@@ -222,6 +244,9 @@ def coverage(results: Iterable[RuleResult | dict]) -> CoverageReport:
             elif status == "fail":
                 target.buckets.failed += 1
             else:
+                # ``skipped`` and the authoring-defect ``error`` both land here: neither is a pass
+                # and neither is a fail, so both are unchecked, and the three buckets total the
+                # rows. The taxonomy below is where the two part company.
                 target.buckets.skipped += 1
                 bucket = TAXONOMY.get(details.get("reason") or "", UNCLASSIFIED)
                 target.skips[bucket] = target.skips.get(bucket, 0) + 1
@@ -244,19 +269,32 @@ def coverage(results: Iterable[RuleResult | dict]) -> CoverageReport:
     for row in rows:
         details = row.get("details") or {}
         reason = details.get("reason") or ""
-        if row.get("status") != "skipped":
+        # ``skipped`` and the authoring-defect ``error`` status alike: anything that did not run.
+        if row.get("status") in ("pass", "fail"):
             continue
+        bucket = TAXONOMY.get(reason, UNCLASSIFIED)
         # A guard that needs nothing from the filing cannot legitimately be unevaluable, and a
         # rule the engine cannot parse or resolve is an authoring/plumbing defect, not coverage.
         if row.get("kind") == "guard" and details.get("precondition") == "always" \
                 and reason != "statement_absent":
             report.alarms.append({"code": ALARM_PIPELINE_DEFECT, "rule_id": row.get("rule_id"),
                                   "reason": reason, "precondition": "always"})
-        elif TAXONOMY.get(reason, UNCLASSIFIED) in ("UNEVALUABLE_RULE", UNCLASSIFIED):
+        elif bucket in ("UNEVALUABLE_RULE", UNCLASSIFIED):
             report.alarms.append({"code": ALARM_PIPELINE_DEFECT, "rule_id": row.get("rule_id"),
                                   "reason": reason or "unknown",
                                   "detail": details.get("terms") or details.get("expr")
                                   or details.get("op") or ""})
+        # …and when the rulebook declared that unrunnable rule BLOCKING, the run is also missing an
+        # assurance it claims to have. That never shows up in the buckets — an unrunnable rule
+        # produces no failure — so it is stated outright, per rule, with its statement named.
+        if bucket == "UNEVALUABLE_RULE" and details.get("severity") == "blocking":
+            report.alarms.append({
+                "code": ALARM_UNENFORCEABLE, "rule_id": row.get("rule_id"),
+                "statement": details.get("statement") or "unknown", "reason": reason,
+                "severity": "blocking",
+                "detail": details.get("terms") or details.get("expr") or details.get("op") or "",
+                "note": "declared blocking and cannot run as authored, so it fires on no filing",
+            })
     return report
 
 

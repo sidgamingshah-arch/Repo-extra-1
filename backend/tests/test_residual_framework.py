@@ -14,6 +14,13 @@ The failures being guarded are all failures of ARITHMETIC that nothing downstrea
 * a P&L attribution caption swept into a tax residual merges a flow into a different section's
   arithmetic;
 * a narrative sentence or a per-share figure in Others moves the subtotal by whatever it contained.
+
+Three sentences in the block are PROSE and stay prose, because each states in one line what several
+read terms already do — ``sweep.candidate_set``, ``itemisation.rule`` and
+``reconciliation.identity``. The reference they point at is
+``test_the_reconciliation_identity_and_the_candidate_set_are_performed_as_written``: it holds the
+arithmetic and the population they describe, so the sentences document tested behaviour rather than
+switch it.
 """
 from __future__ import annotations
 
@@ -171,6 +178,138 @@ def test_a_section_that_prints_no_subtotal_is_itemised_but_unreconciled(raw_onto
     assert swept.confidence.mapping == pytest.approx(0.4)
 
 
+def test_the_reconciliation_identity_and_the_candidate_set_are_performed_as_written(raw_ontology):
+    """``reconciliation.identity`` and ``sweep.candidate_set`` are PROSE, and this is the test they
+    point at.
+
+    Neither sentence is a switch: the identity is the equation ``rollups.reconcile_section``
+    evaluates (its variable terms — tolerance, on_failure, sections_without_reported_subtotal — are
+    read from the block and tested above), and the candidate set is the population built from
+    ``population``, the four eligibility entries and ``notes_as_source``. What can be tested is that
+    the code performs the arithmetic and takes the population the sentences describe, so a reader
+    who edits the sentence and sees nothing change has this to read instead.
+    """
+    doc = _current_liabilities("Other taxes payable", unclaimed=25, subtotal=200)
+    # The section cites a note. "on the FACE of the statement" is what keeps the note's own rows out
+    # of the candidate set — a note is evidence for a face amount, not a candidate row.
+    doc.line_items[0].note_number = "18"
+    table = NotesTable(note_number="18", title="Trade and bills payables")
+    item = NoteItem(raw_label="Bills payable to a related party", ordinal=0)
+    item.set_value(ExtractedValue(
+        value=Decimal(15), value_raw=Decimal(15), basis=Basis.CONSOLIDATED,
+        period_label="current", provenance=Provenance(page_index=0)))
+    table.items.append(item)
+    doc.notes = [table]
+    ctx = _run(doc, _ontology(raw_ontology))
+
+    entry = _report(ctx, "bs_current_liabilities__others")
+    assert [c["source_row_label"] for c in entry["components"]] == ["Other taxes payable"]
+    recon = entry["reconciliation"][0]
+    # "The residual's value is the arithmetic sum of its components" (itemisation.rule).
+    assert recon["residual"] == sum(
+        float(c["value"]["consolidated|current"]) for c in entry["components"])
+    # "reported_section_subtotal − Σ(dedicated) − Σ(residual components) = 0", and the difference
+    # from zero is what gets reported.
+    assert recon["diff"] == recon["reported"] - recon["dedicated"] - recon["residual"]
+    assert (recon["reported"], recon["dedicated"], recon["residual"]) == (200.0, 100.0, 25.0)
+    assert recon["diff"] == 75.0 > recon["tolerance"] and recon["status"] == "unallocated_gap"
+
+
+# --- the prohibitions --------------------------------------------------------------------------
+
+def _without_prohibition(raw: dict, needle: str) -> dict:
+    out = copy.deepcopy(raw)
+    kept = [p for p in out["residual_framework"]["prohibitions"] if needle not in p.lower()]
+    assert len(kept) == len(out["residual_framework"]["prohibitions"]) - 1, needle
+    out["residual_framework"]["prohibitions"] = kept
+    return out
+
+
+def _plug_case(raw: dict):
+    """A figure routed into the bucket by something other than the sweep — here the LLM
+    gap-closer — is a residual carrying a value no component accounts for: the plug, arrived at
+    from the other direction."""
+    doc = _current_liabilities("Other taxes payable", subtotal=200)
+    routed = _li(3, "Accruals and other payables", "bs_current_liabilities__others", 40)
+    routed.confidence.method = "llm"
+    doc.line_items.append(routed)
+    return raw, doc, lambda d, ctx: any(
+        f.startswith("residual_plug_suspected:") for f in d.line_items[3].confidence.flags)
+
+
+def _matched_case(raw: dict):
+    """A residual claimed by the mapper's fuzzy tier — what happens when a concept omits
+    ``alias_matching: disabled``, since "Others" fuzzes against almost any short caption."""
+    doc = _current_liabilities("Other taxes payable")
+    doc.line_items[1].canonical_key = "bs_current_liabilities__others"
+    doc.line_items[1].confidence.method = "fuzzy"
+    return raw, doc, lambda d, ctx: ("residual_alias_populated:fuzzy"
+                                     in d.line_items[1].confidence.flags)
+
+
+def _unitemised_case(raw: dict):
+    """``itemise: false`` leaves the bucket holding a figure with nothing behind it."""
+    out = copy.deepcopy(raw)
+    for m in out["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            m["residual_policy"]["itemise"] = False
+    return out, _current_liabilities("Other taxes payable"), lambda d, ctx: any(
+        f.startswith("residual_value_without_components") for f in d.line_items[1].confidence.flags)
+
+
+def _untested_case(raw: dict):
+    """The caption IS a dedicated concept of the section. Swept, the section still ties and a named
+    figure is filed as unexplained remainder."""
+    doc = _doc("balance_sheet", [
+        _li(0, "Trade and bills payables", None, 100),
+        _li(1, "Total current liabilities", "bs_current_liabilities__total_current_liabilities",
+            100, LineRole.SUBTOTAL),
+    ])
+    return raw, doc, lambda d, ctx: any(f.startswith("residual_dedicated_not_tested:")
+                                        for f in d.line_items[0].confidence.flags)
+
+
+def _spans_case(raw: dict):
+    """A policy pointing at one section while the concept inherits another: the current-liabilities
+    bucket sweeping the non-current section, with both sections still tying afterwards."""
+    out = copy.deepcopy(raw)
+    for m in out["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            m["residual_policy"]["section_scope"] = "bs_s4_non_current_liabilities"
+    doc = _doc("balance_sheet", [
+        _li(0, "Interest-bearing bank borrowings",
+            "bs_non_current_liabilities__non_current_borrowings", 100),
+        _li(1, "Other long-term obligations", None, 25),
+        _li(2, "Total non-current liabilities",
+            "bs_non_current_liabilities__total_non_current_liabilities", 125, LineRole.SUBTOTAL),
+    ])
+    return out, doc, lambda d, ctx: (d.line_items[1].canonical_key
+                                     == "bs_non_current_liabilities__others")
+
+
+@pytest.mark.parametrize("needle,case", [
+    ("plug", _plug_case),
+    ("alias", _matched_case),
+    ("itemised component", _unitemised_case),
+    ("dedicated concept", _untested_case),
+    ("spans", _spans_case),
+])
+def test_every_prohibition_is_a_guard_the_rulebook_can_also_remove(raw_ontology, needle, case):
+    """Each of the five ``prohibitions`` switches on the guard that enforces it.
+
+    They are not restatements of the sweep's per-row terms: every one of them is a way a residual
+    ends up holding a figure the sweep never took, which is the failure the section's own subtotal
+    cannot show — it ties either way.
+    """
+    raw, doc, holds = case(raw_ontology)
+    ctx = _run(doc, _ontology(raw))
+    assert holds(doc, ctx), f"the guard {needle!r} names did not fire"
+
+    raw, doc, holds = case(_without_prohibition(raw_ontology, needle))
+    ctx = _run(doc, _ontology(raw))
+    assert not holds(doc, ctx), f"deleting the {needle!r} prohibition left the guard in place"
+
+
 # --- eligibility -------------------------------------------------------------------------------
 
 def test_a_subtotal_caption_the_mapper_missed_is_refused_by_never_sweep(raw_ontology):
@@ -261,6 +400,37 @@ def test_the_next_statements_subtotal_never_places_a_row(raw_ontology):
     assert doc.line_items[1].canonical_key == "bs_non_current_assets__others"
 
 
+def test_a_row_printed_inside_another_section_is_ineligible_while_the_list_says_so(raw_ontology):
+    """Eligibility 4: "The row was printed INSIDE this section … there is no cross-section rescue".
+
+    The profit-attribution section prints no subtotal and has no residual of its own, so a row
+    printed under it used to be handed to the nearest section that HAS one — the tax charge. That is
+    the cross-section rescue under another name: a share of profit inside the tax section, which
+    still ties afterwards because the tax subtotal never mentioned it.
+    """
+    def statement() -> DocumentModel:
+        return _doc("profit_and_loss", [
+            _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
+                LineRole.SUBTOTAL),
+            _li(1, "Profit attributable to owners of the parent",
+                "pl_profit_attributable_to__owners_of_the_parent", 300),
+            _li(2, "Minority share of results", None, 40),
+        ])
+
+    doc = statement()
+    _run(doc, _ontology(raw_ontology))
+    assert doc.line_items[2].canonical_key is None
+    assert ("residual_ineligible:printed in another section(pl_s6_profit_attributable_to)"
+            in doc.line_items[2].confidence.flags)
+
+    raw = copy.deepcopy(raw_ontology)
+    elig = raw["residual_framework"]["sweep"]["eligibility"]
+    elig[3] = elig[3].replace("The row was printed INSIDE this section. ", "")
+    doc = statement()
+    _run(doc, _ontology(raw))
+    assert doc.line_items[2].canonical_key == "pl_tax_expense__others"
+
+
 def test_cross_section_true_on_one_residual_is_what_enables_the_rescue(raw_ontology):
     raw = copy.deepcopy(raw_ontology)
     for m in raw["mappings"]:
@@ -284,6 +454,39 @@ def test_a_residual_populated_by_something_other_than_the_sweep_is_left_alone(ra
     assert doc.line_items[1].canonical_key is None
     assert any("not_swept(bs_current_liabilities__others):population=manual_only" in line
                for line in ctx.logs)
+
+
+def test_a_concept_that_declares_no_population_or_cross_section_inherits_the_framework(
+        raw_ontology):
+    """"One definition governing all 13" is what the framework's own values have to mean: where a
+    concept's policy is silent, the framework's value is the one that governs.
+
+    Every residual in this rulebook happens to spell all five terms out, so reading them off the
+    policy object hands back the SCHEMA default for anything an author leaves out and no framework
+    value ever reaches a concept — the block would describe the sweep without governing it.
+    """
+    raw = copy.deepcopy(raw_ontology)
+    raw["residual_framework"]["population"] = "manual_only"
+    for m in raw["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            del m["residual_policy"]["population"]
+    doc = _current_liabilities("Other taxes payable")
+    ctx = _run(doc, _ontology(raw))
+
+    assert doc.line_items[1].canonical_key is None
+    assert any("not_swept(bs_current_liabilities__others):population=manual_only" in line
+               for line in ctx.logs)
+
+    # …and the same for the framework's own cross_section: with the concept silent, the framework
+    # value is what enables the rescue this rulebook otherwise forbids everywhere.
+    raw = copy.deepcopy(raw_ontology)
+    raw["residual_framework"]["sweep"]["cross_section"] = True
+    for m in raw["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            del m["residual_policy"]["cross_section"]
+    doc = _doc("balance_sheet", [_li(0, "Deposits paid for acquisition of land", None, 60)])
+    _run(doc, _ontology(raw))
+    assert doc.line_items[0].canonical_key == "bs_current_liabilities__others"
 
 
 def test_a_residual_asking_to_be_plugged_is_reported_as_a_rulebook_conflict(raw_ontology):
@@ -465,6 +668,28 @@ def test_only_a_section_whose_note_use_permits_it_may_source_from_a_note(raw_ont
     entry = _report(ctx, "pl_tax_expense__others")
     assert [c["source"] for c in entry["components"]] == ["note:9"]
     assert entry["reconciliation"][0]["status"] == "tied"
+
+
+def test_the_frameworks_notes_as_source_is_what_a_silent_concept_inherits(raw_ontology):
+    """``sweep.notes_as_source`` was never shown inert — only unproven, because the one section
+    whose ``note_use`` permits a note declares the term on itself. With that concept silent, the
+    framework value is what decides, and it decides both ways."""
+    def silent(value: bool) -> dict:
+        raw = copy.deepcopy(raw_ontology)
+        raw["residual_framework"]["sweep"]["notes_as_source"] = value
+        for m in raw["mappings"]:
+            if m["canonical_key"] == "pl_tax_expense__others":
+                del m["residual_policy"]["notes_as_source"]
+        return raw
+
+    doc = _tax_doc_with_note()
+    _run(doc, _ontology(silent(False)))
+    assert not [li for li in doc.line_items if li.canonical_key == "pl_tax_expense__others"]
+
+    doc = _tax_doc_with_note()
+    _run(doc, _ontology(silent(True)))
+    assert [li.source_label for li in doc.line_items
+            if li.canonical_key == "pl_tax_expense__others"] == ["Land appreciation tax"]
 
 
 def test_note_use_evidence_only_closes_the_note_as_a_source(raw_ontology):

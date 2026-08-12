@@ -233,8 +233,6 @@ test("the template screen is an index first: a row opens the detail, which dismi
   await expect(rows.filter({ hasText: "Published" }).first()).toBeVisible();
   await expect(page.getByTestId("tpl-node")).toHaveCount(0);
   await expect(page.getByTestId("template-detail")).toHaveCount(0);
-  // The line-item count is real: it is not in GET /templates, so the row has to go and get it.
-  await expect(page.getByTestId("tpl-row-lines").first()).toHaveText(/^\d+$/, { timeout: 15_000 });
 
   // Filter the list. This is the list's own state — dismissing the detail must come back to the
   // list as it was, not to a freshly mounted one.
@@ -675,42 +673,42 @@ test("the index names the rulebook IN FORCE, not the highest version number", as
   await page.unroute("**/api/v1/ontologies");
 });
 
-test("the index fetches its line counts in one wave, not one row behind another", async ({
-  page,
-}) => {
-  // Each detail is held open long enough that overlap is unmistakable, and the counter below reads
-  // the browser's own view of what is in flight: under the row-behind-row version of this hook the
-  // peak was always exactly one, however many versions were stored.
-  let inflight = 0;
-  let peak = 0;
-  const isDetail = (u: string) => /\/templates\/[^/]+\/detail/.test(u);
+test("the index renders its rows without fetching a per-template document for any of them",
+     async ({ page }) => {
+  // The index used to carry a LINE ITEMS column, and that count is not in GET /templates: it is
+  // only on the per-template detail, ~230 KB of tree and criteria. Printing it cost one such
+  // document per row — measured at 922 KB across four rows, 99% of everything the page fetched, to
+  // render four integers — and fetching them concurrently moved none of those bytes. The column is
+  // gone, so the index must now ask for nothing per row at all.
+  const perTemplate: string[] = [];
   page.on("request", (r) => {
-    if (isDetail(r.url())) { inflight += 1; peak = Math.max(peak, inflight); }
-  });
-  page.on("requestfinished", (r) => { if (isDetail(r.url())) inflight -= 1; });
-  page.on("requestfailed", (r) => { if (isDetail(r.url())) inflight -= 1; });
-  await page.route("**/api/v1/templates/*/detail*", async (route) => {
-    await new Promise((r) => setTimeout(r, 400));
-    await route.continue();
+    if (/\/api\/v1\/templates\/[^/]+(\/detail)?(\?|$)/.test(r.url())) perTemplate.push(r.url());
   });
 
   await loginAs(page, "admin");
   await page.goto("/template", DCL);
   const rows = page.getByTestId("tpl-row");
   await expect(rows.first()).toBeVisible({ timeout: 15_000 });
-  // More than one version has to be stored for the question to mean anything — the workbook
-  // round-trip test above publishes one, and this suite is serial.
-  const rowCount = await rows.count();
-  expect(rowCount).toBeGreaterThan(1);
+  // More than one version has to be stored for the question to mean anything — the cost was per
+  // ROW. The workbook round-trip test above publishes one, and this suite is serial.
+  expect(await rows.count()).toBeGreaterThan(1);
 
-  // Every row still prints its real count…
-  const cells = page.getByTestId("tpl-row-lines");
-  for (let i = 0; i < rowCount; i += 1) {
-    await expect(cells.nth(i)).toHaveText(/^\d+$/, { timeout: 30_000 });
-  }
-  // …and they were asked for together rather than in a queue.
-  expect(peak).toBeGreaterThan(1);
-  await page.unroute("**/api/v1/templates/*/detail*");
+  // Everything the index prints came out of the ONE list call: name, key, version, state, rulebook.
+  await expect(rows.first()).toContainText(/hkfrs/i);
+  await expect(rows.first().getByTestId("tpl-row-ontology")).not.toBeEmpty();
+  await expect(page.getByTestId("tpl-row-lines")).toHaveCount(0);
+  // Wait before declaring victory: a fetch fired on mount can still be in flight, and asserting
+  // "none yet" would pass on timing rather than on there being none.
+  await page.waitForTimeout(2_000);
+  expect(perTemplate).toEqual([]);
+
+  // What a reader loses is comparing spread sizes ACROSS rows at a glance. The number itself is not
+  // lost: it is one click away, on the page that has to fetch that document anyway.
+  await rows.first().click();
+  await expect(page.getByTestId("template-detail")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("template-detail")).toContainText(/\d+ line items/,
+                                                                 { timeout: 15_000 });
+  expect(perTemplate.length).toBe(1);
 });
 
 test("leaving a template with unsaved ontology edits asks before discarding them", async ({
@@ -778,25 +776,93 @@ test("an analyst chooses which rulebook a run reads the filing against", async (
   await expect(page.getByRole("heading", { name: "Extracted data" }))
     .toBeVisible({ timeout: 60_000 });
 
-  // The default is the rulebook in force, and the screen says on what grounds — "in force" is a
-  // claim about adoption, so it has to be backed by the declaration that made it so.
+  // The default is the rulebook in force, and the RUN says so — the sentence under the picker is
+  // read from the run's own record, so it is evidence about the run rather than a caption.
   const pick = page.getByTestId("ex-rulebook-pick");
   await expect(pick).toBeVisible();
-  await expect(page.getByTestId("ex-rulebook-why")).toContainText(/In force because/);
+  const used = page.getByTestId("ex-rulebook-used");
   const values = await pick.locator("option").evaluateAll(
     (os) => os.map((o) => (o as HTMLOptionElement).value));
   // The seeded pair (the adopted v2 and the v1 it replaces) is what makes pinning possible.
   expect(values.length).toBeGreaterThan(1);
   const inForceId = await pick.inputValue();
   expect(posted).toContain(inForceId);
+  await expect(used).toHaveAttribute("data-rulebook-id", inForceId, { timeout: 60_000 });
+  await expect(used).toContainText(/the rulebook in force for/);
 
-  // Pin the other one: a fresh run is started against the rulebook chosen, not the adopted one.
+  // Pin the other one. Two things have to be true, and only one of them was checkable before: the
+  // choice has to reach the POST that starts the run, and the RUN has to come back saying it read
+  // the filing against that rulebook. A picker that changed only the caption would pass the first.
   const other = values.find((v) => v && v !== inForceId) as string;
+  const label = await pick.locator(`option[value="${other}"]`).textContent() ?? "";
+  const [, otherKey, otherVersion] = /^\s*(\S+) · v(\d+)/.exec(label) ?? [];
+  expect(otherKey).toBeTruthy();
   await pick.selectOption(other);
   await expect.poll(() => posted[posted.length - 1], { timeout: 60_000 }).toBe(other);
-  await expect(page.getByTestId("ex-rulebook-why")).toContainText(/not the one in force/);
+  // What the run RECORDED, straight off the element that prints it: the pinned rulebook, named.
+  await expect(used).toHaveAttribute("data-rulebook-id", other, { timeout: 60_000 });
+  await expect(used).toContainText(`${otherKey} v${otherVersion}`);
+  await expect(used).toContainText(/not the rulebook in force/);
   // …and that run really read the filing: the rows come back for the pinned rulebook too.
   await expect(page.getByRole("heading", { name: "Extracted data" }))
     .toBeVisible({ timeout: 60_000 });
   await expect(page.getByText("Trade receivables").first()).toBeVisible({ timeout: 60_000 });
+});
+
+test("a run that used a superseded rulebook says so, however the client sees the list",
+     async ({ page }) => {
+  test.setTimeout(180_000);
+  // The blocker this closes: the sentence naming the rulebook was written by the SCREEN, from the
+  // ontology list and its own idea of which one was in force. So a reload after the adopted
+  // rulebook changed hands described a run that had read the filing against a REPLACED rulebook as
+  // governed by the current one — an audit statement, wrong, with nothing on screen to contradict
+  // it.
+  //
+  // Reproduce it by making the client's view disagree with the truth: the ids stay real, only the
+  // superseded flags are flipped, so the client picks (and pins) the rulebook the server knows has
+  // been replaced, while its own list insists that one is in force. Re-derivation on this page
+  // therefore says "in force"; the run's record says "replaced". The screen must print the record.
+  await page.route("**/api/v1/ontologies", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const res = await route.fetch();
+    const rows = await res.json();
+    await route.fulfill({
+      response: res,
+      json: rows.map((o: { ontology_key: string }) => ({
+        ...o, superseded: o.ontology_key !== "hkfrs_hk_china_v1",
+      })),
+    });
+  });
+
+  await loginAs(page, "analyst");
+  await page.goto("/upload", DCL);
+  await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.pdf");
+  await expect(page.getByTestId("doc-row").filter({ hasText: "sample.pdf" }))
+    .toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: /Extract directly/ }).click();
+  await expect(page.getByRole("heading", { name: "Extracted data" }))
+    .toBeVisible({ timeout: 60_000 });
+
+  // The client's list is what selected the rulebook, and it believes that one is current…
+  const pick = page.getByTestId("ex-rulebook-pick");
+  await expect(pick).toBeVisible();
+  const chosen = await pick.locator("option:checked").textContent() ?? "";
+  expect(chosen).toContain("hkfrs_hk_china_v1");
+  expect(chosen).toContain("in force");
+
+  // …and the run, which is the only thing that knows, says it was read against a rulebook that has
+  // been replaced, and names what is actually in force instead.
+  const used = page.getByTestId("ex-rulebook-used");
+  await expect(used).toHaveAttribute("data-rulebook-status", "superseded", { timeout: 60_000 });
+  await expect(used).toContainText("hkfrs_hk_china_v1 v1");
+  await expect(used).toContainText(/has since been replaced/);
+  await expect(used).toContainText(/The rulebook in force is hkfrs_hk_china_v2/);
+
+  // It survives a reload — the reload IS the failure this closes, and nothing about it is derived
+  // from the list the browser holds.
+  await page.reload(DCL);
+  await expect(page.getByTestId("ex-rulebook-used"))
+    .toHaveAttribute("data-rulebook-status", "superseded", { timeout: 120_000 });
+  await expect(page.getByTestId("ex-rulebook-used")).toContainText(/has since been replaced/);
+  await page.unroute("**/api/v1/ontologies");
 });

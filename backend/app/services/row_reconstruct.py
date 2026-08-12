@@ -81,9 +81,18 @@ def _is_date_ish(d) -> bool:
     return 1 <= a <= 31 or 1990 <= a <= 2099
 
 
+# The MIXED date form — Arabic numerals under the CJK date suffix: "2023年", "2024年12月31日". A
+# bilingual HK/PRC filing heads its comparative columns this way as often as it does in CJK
+# numerals, and the suffix is exactly what hid it: "2023年" is not a bare year (the digits are not
+# word-final, so `\b(19|20)\d{2}\b` does not match — 年 is a word character) and it is not a CJK
+# date either. Read as neither, the column had no heading a date could be parsed from, so which of
+# the two columns was the current period fell back to position — a year out on every filing that
+# prints the comparative first, which is the mis-load `period_selection` is declared against.
+_MIXED_DATE = r"(?:\d{1,4}\s*[年月日])+"
 # A period caption written in CJK numerals — "二零二三年" (2023), "二零二二年" (2022) — is how
-# HK/PRC filings head their comparative columns. Also the plain Arabic-numeral year.
-_PERIOD_TOKEN = re.compile(r"[〇零一二三四五六七八九十]{2,6}年|\b(19|20)\d{2}\b|"
+# HK/PRC filings head their comparative columns. Also the plain Arabic-numeral year, and the mixed
+# form above.
+_PERIOD_TOKEN = re.compile(rf"[〇零一二三四五六七八九十]{{2,6}}年|{_MIXED_DATE}|\b(19|20)\d{{2}}\b|"
                            r"[〇零一二三四五六七八九十]{1,2}月|[〇零一二三四五六七八九十]{1,3}日")
 
 
@@ -117,7 +126,8 @@ def _is_heading_with_note_only(label: str, vals: list) -> bool:
 
 
 def _is_noise_row(label: str, vals: list,
-                  steps: tuple[tuple[str, object], ...] = ()) -> bool:
+                  steps: tuple[tuple[str, object], ...] = (),
+                  signals: tuple[tuple[Basis, str], ...] = ()) -> bool:
     """A title / running-header / period-caption line that leaked in as a row. Dropped only when
     the label is header-like AND every extracted value is a date fragment — so a genuine line that
     merely mentions a statement name (its value being a real amount) is never removed.
@@ -138,6 +148,8 @@ def _is_noise_row(label: str, vals: list,
     if not norm and bool(vals) and all(_is_date_ish(v) for v in vals):
         return True
     if _is_heading_with_note_only(label, vals):
+        return True
+    if _is_basis_caption_row(label, vals, signals):
         return True
     return bool(vals) and bool(_HDR_LABEL.search(label)) and all(_is_date_ish(v) for v in vals)
 
@@ -731,6 +743,31 @@ def _signal_side(token: str, signals: tuple[tuple[Basis, str], ...]) -> Basis | 
     return next((b for b, s in signals if s == word), None)
 
 
+def _is_basis_caption_row(label: str, vals: list,
+                          signals: tuple[tuple[Basis, str], ...]) -> bool:
+    """The two-basis BAND ROW itself — a caption made of nothing but basis signals, over "amounts"
+    that are all date fragments.
+
+    "Group" / "Company" is printed paragraph-tight above the year captions, so
+    ``_merge_wrapped_labels`` folds the two lines together and the column header reaches the main
+    loop as a row labelled "Group Company" carrying 2024, 2023, 2024, 2023. The row that DECLARES
+    the banding is furniture; emitted as data it files the column YEARS as figures, and a year read
+    as a figure is the worst kind of wrong number — 2,024 is a plausible amount, it sits in a real
+    value column under a real basis, and no downstream total contradicts it.
+
+    Recognised from the same declared ``entity_scope.signals`` that define the banding: EVERY token
+    of the caption has to be one of them. That is what keeps a sentence naming both entities ("The
+    Group and the Company had no material contingent liabilities") and a genuine line whose figures
+    merely happen to be small ("Number of employees  28  25") reporting their values.
+    """
+    if not vals or not all(_is_date_ish(v) for v in vals):
+        return False
+    tokens = [t for t in re.split(r"[\s/|·、,，()（）:：]+", label) if t]
+    if not tokens:
+        return False
+    return all(_signal_side(t, signals) is not None for t in tokens)
+
+
 def _company_only_stems(scope: ScopeSelection | None) -> tuple[tuple[str, ...], ...]:
     """Caption stems for each declared ``company_only_markers`` entry.
 
@@ -760,9 +797,9 @@ def _names_company_only(label: str, stems: tuple[tuple[str, ...], ...]) -> bool:
 
 _CONSOL = re.compile(r"consolidat", re.IGNORECASE)
 _STANDALONE = re.compile(r"standalone|separate", re.IGNORECASE)
-# The header area. A basis caption belongs to the column header, exactly as a period caption does
-# (`_period_bands` has always been bounded this way).
-_HDR_ROWS = 8
+# No column header is printed in the lower half of a page. This bounds the region below when the
+# page reports no figure at all (a page of prose), which is the only case the value block cannot.
+_HDR_PAGE_FRACTION = 0.5
 # Clear air between two column captions. Word spacing inside one phrase is an order of magnitude
 # tighter, which is what separates a two-caption band row from a sentence naming both entities.
 _CAPTION_GAP = 0.03
@@ -776,6 +813,28 @@ def _carries_amounts(row: list[Word], fmt=None) -> bool:
         if d is not None and _is_money_like(tok, fmt) and not _is_date_ish(d):
             return True
     return False
+
+
+def _header_region(rows: list[list[Word]], fmt=None) -> list[list[Word]]:
+    """The rows that make up the statement's column-header band, bounded by GEOMETRY.
+
+    A basis caption, a period caption, a units caption and a restatement marker are all parts of one
+    printed thing — the header band over the value columns — so they share one bound. That bound
+    used to be a count of eight printed rows, which is a bound on the wrong quantity: a bilingual
+    filing stacks a running header in two languages, a statement title in two languages, a
+    "for the year ended …" caption in two languages and a units line before it reaches the basis
+    captions, which then land on row 9 and the Group|Company banding was lost — on exactly the
+    filings this corpus is made of.
+
+    The geometry that DOES bound the band is the value block: every column caption is printed ABOVE
+    the first figure of the statement (the first row is included, because a units caption is
+    sometimes set on it). The page fraction is the fallback bound for a page that reports no figure
+    at all, where "above the figures" says nothing. Widening the region cannot loosen detection:
+    every guard in :func:`_basis_bands` is geometric and each one is a veto.
+    """
+    first = next((i for i, r in enumerate(rows) if _carries_amounts(r, fmt)), None)
+    upto = rows if first is None else rows[:first + 1]
+    return [r for r in upto if _row_box(r).y0 <= _HDR_PAGE_FRACTION]
 
 
 def _value_area(value_bands: list[float],
@@ -817,8 +876,9 @@ def _basis_bands(rows: list[list[Word]], value_bands: list[float] | None = None,
 
     * It scanned EVERY row, so any prose row mentioning one of the words could define the bands —
       on a notes page "The Group and the Company had no material contingent liabilities" is such
-      a row. Bounded now to the header area, which narrows the existing Consolidated/Standalone
-      detection too: that is the intent, a basis caption is part of the column header.
+      a row. Bounded now to the header REGION (see :func:`_header_region`), which narrows the
+      existing Consolidated/Standalone detection too: that is the intent, a basis caption is part
+      of the column header.
     * It ran on the MERGED rows, where a wrapped basis caption has been glued onto the period
       line — the geometry the tests below rely on then describes the merged block, not the print.
       The caller passes the unmerged rows.
@@ -829,7 +889,7 @@ def _basis_bands(rows: list[list[Word]], value_bands: list[float] | None = None,
       than leaving the Group/Company gap open, so every test is a veto.
     """
     signals = signals or _entity_signals(None)
-    for row in rows[:_HDR_ROWS]:
+    for row in _header_region(rows, fmt):
         # A band row captions columns; a row that also reports an amount is a statement line, or
         # prose citing one.
         if _carries_amounts(row, fmt):
@@ -910,6 +970,17 @@ def _basis_of_columns(value_bands: list[float],
 # Value columns are printed on a tight vertical alignment — every figure in the current-period
 # column shares an x-centre to within a fraction of the column gap. This is the width within
 # which two figures are taken to be in the same column.
+#
+# It is measured on x-CENTRES, and a centre drifts with the width of the number printed in a
+# right-aligned column: "1,204,500" and "980" in one column are ~0.025 of the page apart. So the
+# tolerance has to be wider than that drift and narrower than the gap between two comparative
+# columns (~0.12 of the page). The matrix path clusters right EDGES instead, which do not drift, and
+# its columns are pitched several times closer together — so it needs its own, much tighter value
+# (`_MATRIX_COL_TOL`). Both used to be spelled `_COL_TOL`: the matrix definition came second and
+# silently governed this path too, at 0.012, where a right-aligned column of mixed-width figures
+# fragments into clusters too small to survive `_COL_MIN_ROWS` — the page then had no columns at
+# all and every row fell back to positional order, which is the mis-load `_value_column_bands`
+# exists to prevent.
 _COL_TOL = 0.035
 # A column has to be used by several rows to be a column at all, so a stray figure in a footnote
 # or a page number never becomes one.
@@ -1014,7 +1085,8 @@ _MONTHS = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(
 _CJK_DATE = r"(?:[〇零一二三四五六七八九十]{1,4}[年月日])+"
 # A single word that can belong to a date-column header phrase.
 _DATEISH_WORD = re.compile(
-    rf"^(?:{_MONTHS}|{_CJK_DATE}|\d{{1,4}}(?:st|nd|rd|th)?|\d{{1,2}}[./-]\d{{1,2}}[./-]\d{{2,4}}|"
+    rf"^(?:{_MONTHS}|{_CJK_DATE}|{_MIXED_DATE}|\d{{1,4}}(?:st|nd|rd|th)?|"
+    r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|"
     r"as|at|year|years?|period|ended|ending|for|the|fy|q[1-4]|h[12]|,)$", re.IGNORECASE)
 # A phrase only counts as a period header if it actually carries a year or month name. The CJK
 # year belongs here too: without it the comparative columns of a Chinese filing carried no
@@ -1024,13 +1096,18 @@ _DATE_PHRASE = re.compile(rf"(?:19|20)\d{{2}}|{_MONTHS}|[〇零一二三四五�
                           re.IGNORECASE)
 
 
-def _period_bands(rows: list[list[Word]]) -> list[tuple[str, float]]:
-    """Detect date-like column headers (e.g. '31 March 2025' / '2024' / 'FY2025') near the top
-    of a statement block and return each period phrase's (label, x-centre). Used to give value
-    columns a real period-end DATE for display; empty when no dated header is found (native
-    PDFs without a parsable header fall back to positional Current/Prior)."""
+def _period_bands(rows: list[list[Word]], fmt=None) -> list[tuple[str, float]]:
+    """Detect date-like column headers (e.g. '31 March 2025' / '2024' / 'FY2025') in the statement's
+    header band and return each period phrase's (label, x-centre). Used to give value columns a real
+    period-end DATE for display; empty when no dated header is found (native PDFs without a parsable
+    header fall back to positional Current/Prior).
+
+    Bounded by the same header region the basis captions are, because they are parts of one printed
+    band: a tall bilingual header pushed the year captions past a fixed eight-row bound, and the
+    periods then fell back to column position on the filings that most need the date read.
+    """
     best: list[tuple[str, float]] = []
-    for row in rows[:8]:                          # period headers sit at the top of the block
+    for row in _header_region(rows, fmt):
         phrases: list[list[Word]] = []
         run: list[Word] = []
         for w in row:
@@ -1123,9 +1200,19 @@ def _period_date(text: str) -> tuple[int, int, int] | None:
             if name in low:
                 month = i
                 break
+    # The mixed form: a bilingual filing writes "2024年12月31日" with Arabic digits under the CJK
+    # suffixes, so the month and day are there to be read even though neither the CJK numeral nor
+    # the English month name is.
+    if not month:
+        am = re.search(r"(\d{1,2})\s*月", t)
+        if am:
+            month = int(am.group(1))
     dn = re.search(r"([〇零一二三四五六七八九十]{1,3})日", t)
+    ad = re.search(r"(\d{1,2})\s*日", t)
     if dn:
         day = _cjk_number(dn.group(1)) or 0
+    elif ad:
+        day = int(ad.group(1))
     else:
         dm = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(?=[a-z])", t, re.IGNORECASE)
         if dm:
@@ -1162,17 +1249,17 @@ def _is_restated(head: str, markers: tuple[str, ...]) -> bool:
 
 
 def _restated_columns(rows: list[list[Word]], value_bands: list[float],
-                      markers: tuple[str, ...]) -> set[int]:
+                      markers: tuple[str, ...], fmt=None) -> set[int]:
     """Value columns whose header carries a restatement marker.
 
-    Read from the header area directly rather than from ``_period_bands``, because the marker is
+    Read from the header region directly rather than from ``_period_bands``, because the marker is
     not a date: "(restated)" / "經重列" is printed on its own line under the year, so the period
     phrase never contains it and the column looked like an ordinary comparative.
     """
     out: set[int] = set()
     if not markers or not value_bands:
         return out
-    for row in rows[:_HDR_ROWS]:
+    for row in _header_region(rows, fmt):
         for w in row:
             if not _is_restated(_norm_signal(w.text), markers):
                 continue
@@ -1275,20 +1362,6 @@ def _unit_signals(scope: ScopeSelection | None) -> tuple[tuple[str, str, Decimal
     return tuple(sorted(out, key=lambda t: -len(t[0])))
 
 
-def _header_rows(rows: list[list[Word]], fmt=None) -> list[list[Word]]:
-    """The statement header: the rows above the first one that reports a figure, bounded.
-
-    This is what "from the statement header, not the cover page" means for a page: the units
-    caption is printed with the column heads, never among the figures.
-    """
-    out: list[list[Word]] = []
-    for row in rows[:_HDR_ROWS]:
-        out.append(row)
-        if _carries_amounts(row, fmt):
-            break
-    return out
-
-
 def _unit_context(unit: tuple[str, Decimal, str] | None, page_index: int) -> UnitContext:
     """The resolved unit as it is persisted on a fact. An unresolved unit stays EMPTY — the scale
     is never guessed, because "never normalise scale silently" cuts both ways."""
@@ -1300,8 +1373,13 @@ def _unit_context(unit: tuple[str, Decimal, str] | None, page_index: int) -> Uni
 
 def _statement_unit(rows: list[list[Word]], signals: tuple[tuple[str, str, Decimal, str], ...],
                     fmt=None) -> tuple[str, Decimal, str] | None:
-    """``(currency, scale, printed label)`` declared in this statement's header, or None."""
-    for row in _header_rows(rows, fmt):
+    """``(currency, scale, printed label)`` declared in this statement's header, or None.
+
+    "From the statement header, not the cover page" is a statement about GEOMETRY, so the region is
+    the one the column captions come from: the units caption is printed with the column heads, never
+    among the figures.
+    """
+    for row in _header_region(rows, fmt):
         blob = _fold_for_match(" ".join(w.text for w in row))
         for folded, ccy, scale, word in signals:
             if folded in blob:
@@ -1327,7 +1405,8 @@ def _conflict_factor(scope: ScopeSelection | None) -> Decimal | None:
 
 
 def _scale_conflict(rows: list[list[Word]], factor: Decimal, fmt=None,
-                    steps: tuple[tuple[str, object], ...] = ()) -> str | None:
+                    steps: tuple[tuple[str, object], ...] = (),
+                    signals: tuple[tuple[Basis, str], ...] = ()) -> str | None:
     """A printed subtotal inconsistent with the lines it totals by exactly ``factor``.
 
     That is the shape of the conflict the rulebook describes: the header declares one scale and a
@@ -1343,8 +1422,9 @@ def _scale_conflict(rows: list[list[Word]], factor: Decimal, fmt=None,
                             sorted(value_words, key=lambda w: w.bbox.x0)) if d is not None]
         # A header or running-header row that leaked in would corrupt the sum, and a year is
         # indistinguishable from an amount once it is in it — so the same noise test the main loop
-        # applies decides what counts as a line here.
-        if not label or not vals or _is_noise_row(label, vals, steps):
+        # applies decides what counts as a line here, with the same declared basis signals (a
+        # "Group Company 2024 2023" band row would otherwise add a year to the running total).
+        if not label or not vals or _is_noise_row(label, vals, steps, signals):
             continue
         first = vals[0]
         if _TOTAL_LABEL.search(label):
@@ -1435,8 +1515,10 @@ def store_fact(li: LineItem, ev: ExtractedValue, dims: tuple[str, ...] = (), *,
 _MATRIX_MIN_COLS = 5
 _MATRIX_MIN_ROWS = 3
 # Value cells are RIGHT-aligned in a printed statement, so a column's right edge is its stable
-# anchor (a cell's centre drifts with the width of the number in it).
-_COL_TOL = 0.012
+# anchor (a cell's centre drifts with the width of the number in it). Distinct from `_COL_TOL`,
+# which is the comparative path's CENTRE tolerance: one name per meaning, or the file's last
+# definition governs both paths and the other constant is dead.
+_MATRIX_COL_TOL = 0.012
 # Footnote markers hang off reserve columns ("(3,596,236)*", "–*"). Left in place the token
 # simply fails to parse and the column silently loses its value.
 _FOOTMARK = re.compile(r"[*†#‡]+$")
@@ -1522,7 +1604,7 @@ def _detect_matrix(rows: list[list[Word]], fmt=None) -> _Matrix | None:
 
     groups: list[list[float]] = []
     for e in sorted(w.bbox.x1 for i in data_idx for w in cells_by_row[i]):
-        if groups and e - groups[-1][-1] <= _COL_TOL:
+        if groups and e - groups[-1][-1] <= _MATRIX_COL_TOL:
             groups[-1].append(e)
         else:
             groups.append([e])
@@ -1839,7 +1921,9 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
     # column is added to the Group's. (Value words are untouched by the merge, so the note column
     # and the value columns come out the same either way.)
     raw_rows = _group_rows(words)
-    period_bands = _period_bands(raw_rows)      # real period-end dates for column headers, if any
+    entity_signals = _entity_signals(scope)
+    # real period-end dates for column headers, if any
+    period_bands = _period_bands(raw_rows, number_format)
     note_x = _detect_note_column(raw_rows)      # x of the note-ref column, so it isn't read as a value
     # Where the value columns actually are. A first pass over the page's figures (after the note
     # column is removed, so note references never look like a column) so a row reporting only one
@@ -1854,7 +1938,7 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
             col_xs.append(xs)
     value_bands = _value_column_bands(col_xs)
     bands = _basis_bands(raw_rows, value_bands, _value_area(value_bands, col_xs),
-                         signals=_entity_signals(scope), fmt=number_format,
+                         signals=entity_signals, fmt=number_format,
                          log=log, page_index=page_index)
     rows = _merge_wrapped_labels(raw_rows, number_format, steps)
     if not bands and on_face:
@@ -1877,7 +1961,7 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
     unit = _statement_unit(raw_rows, unit_signals, number_format)
     factor = _conflict_factor(scope)
     if unit is not None and factor:
-        clash = _scale_conflict(rows, factor, number_format, steps)
+        clash = _scale_conflict(rows, factor, number_format, steps, entity_signals)
         if clash:
             # "Trust neither: route the statement to review." Dropping the unit is what makes that
             # visible downstream — a fact with no unit is not converted by anything.
@@ -1895,9 +1979,10 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
     for i in range(len(value_bands)):
         basis_cols.setdefault(col_basis[i], []).append(i)
     restated = _restated_markers(scope)
-    col_periods = _column_periods(basis_cols, value_bands, period_bands, restated=restated,
-                                  restated_cols=_restated_columns(raw_rows, value_bands, restated),
-                                  log=log, page_index=page_index)
+    col_periods = _column_periods(
+        basis_cols, value_bands, period_bands, restated=restated,
+        restated_cols=_restated_columns(raw_rows, value_bands, restated, number_format),
+        log=log, page_index=page_index)
     section: str | None = None
     for row in rows:
         label_words, note_ref, value_words = _scan_row(row, number_format)
@@ -1938,7 +2023,7 @@ def build_line_items(words: list[Word], *, page_index: int, document_id: str | N
         # Drop running-header / statement-title / period-caption lines that leaked in as rows
         # (their only "value" is a date fragment) — never a genuine financial line.
         row_vals = [d for d in (_num(w.text, number_format) for w in value_words) if d is not None]
-        if _is_noise_row(label, row_vals, steps):
+        if _is_noise_row(label, row_vals, steps, entity_signals):
             continue
 
         # A heading is often printed on the SAME line as its first figure, so it never appears as

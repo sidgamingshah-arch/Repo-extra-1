@@ -154,6 +154,18 @@ class MapOntologyStage:
                 if result.needs_review:
                     li.confidence.flags.append("low_mapping_confidence")
                 return True
+            if result and result.computed_claim:
+                # The caption names a concept the framework COMPUTES (`extraction_mode: derive`), so
+                # the matcher refused to bind the row to anything (services.mapping._computed_claim).
+                # The row must not fall to the residual sweep either: an unclaimed face row with a
+                # value is swept into its section's "Others", which would add a subtotal OF the
+                # section back INTO the section under a different name — the same failure the
+                # containment pass below marks a subtotal to avoid. A row that is a computed subtotal
+                # is marked as one, which the sweep's own eligibility rules already exclude.
+                if li.role is LineRole.LINE:
+                    li.role = LineRole.SUBTOTAL
+                li.confidence.flags.append(f"computed_concept_printed:{result.computed_claim}")
+                li.confidence.flags.append("low_mapping_confidence")
             return False
 
         # Page -> statement, from the classifier. Mapping uses it to refuse concepts from a
@@ -237,12 +249,42 @@ class MapOntologyStage:
         if matcher.usage["family_resolved"]:
             ctx.log(f"map_ontology:section_reroutes={matcher.usage['family_resolved']}"
                     f" routes={','.join(matcher.usage['family_routes'])}")
+        if matcher.usage["computed_refused"]:
+            # Rows whose caption named a concept the framework computes. Logged because the
+            # alternative the mapper used to take — filing the figure on the nearest neighbouring
+            # subtotal — showed up nowhere at all, and the statement still tied.
+            ctx.log(f"map_ontology:computed_concept_rows={matcher.usage['computed_refused']}")
         if matcher.usage["confusable_ties"]:
             # `binding.order` step 6: answered with both candidates and a review flag rather than a
             # pick. Counted here because "the mapper declined N rows on purpose" reads very
             # differently from "the mapper failed on N rows".
             ctx.log(f"map_ontology:confusable_ties={matcher.usage['confusable_ties']}")
         return doc
+
+    @staticmethod
+    def _unexplained_columns(parent, children: list, tol: Decimal) -> list[str]:
+        """The columns where the printed components do not account for the aggregate.
+
+        ``global_rules.parent_child_allocation`` says to subtract "only on explicit inclusion
+        wording, hierarchy, reconciliation or arithmetic support", and the ARITHMETIC is the one of
+        those four this stage can actually test: does the aggregate equal the sum of the components
+        printed around it? Compared per (basis, period) column and only beyond
+        ``recon_abs_tolerance``, because the same figure rounded in two places is not a disagreement.
+
+        A column no component carries a figure in is skipped rather than reported: there is nothing
+        to compare, not a disagreement of the whole aggregate.
+        """
+        out: list[str] = []
+        for col, pv in parent.values.items():
+            if pv.value is None:
+                continue
+            got = [li.values[col].value for li in children
+                   if col in li.values and li.values[col].value is not None]
+            if not got:
+                continue
+            if abs(pv.value - sum(got)) > tol:
+                out.append(col)
+        return out
 
     @staticmethod
     def _enforce_containment(doc: DocumentModel, ontology, ctx: PipelineContext) -> int:
@@ -260,10 +302,21 @@ class MapOntologyStage:
         the section under a different name — strictly worse than the double count this pass exists to
         prevent. A row equal to the sum of the children printed around it IS a subtotal, and the
         sweep's own eligibility rules already exclude those.
+
+        Three sentences of ``global_rules`` are enforced here, and they are otherwise live only
+        inside the LLM system prompt — so on a run with no provider configured they did nothing at
+        all. ``parent_child_allocation``: "Never load a gross parent and its separately mapped
+        children additively" is the pass itself; "Subtract only on … arithmetic support" and "If
+        containment is uncertain, retain the parent as evidence and route to review" are the
+        ``_unexplained_columns`` arm below. ``no_fabricated_split`` is the arm that keeps the
+        aggregate when the face printed no component. The rest of those blocks is prose about a
+        judgement (which wording evidences containment, how a note decomposition is reconciled) and
+        stays prompt-only, because there is nothing deterministic to test it with.
         """
         pairs = _pairs_to_keep_apart(ontology)
         if not pairs:
             return 0
+        tol = Decimal(str(ctx.settings.extraction.recon_abs_tolerance))
         unfiled = 0
         for aggregate, components, why in pairs:
             filed = [li for li in doc.line_items if li.canonical_key == aggregate]
@@ -272,7 +325,12 @@ class MapOntologyStage:
             present = [c for c in components
                        if any(li.canonical_key == c for li in doc.line_items)]
             if not present:
-                continue                       # the face printed only the aggregate — keep it
+                # The face printed only the aggregate — keep it. This arm is also
+                # ``global_rules.no_fabricated_split`` ("Where only a combined figure is reported,
+                # load the combined concept and leave the children empty") as the deterministic path
+                # honours it: nothing here invents a decomposition the page does not print.
+                continue
+            child_rows = [li for li in doc.line_items if li.canonical_key in present]
             for li in filed:
                 li.canonical_key = None
                 if li.role is LineRole.LINE:
@@ -280,6 +338,22 @@ class MapOntologyStage:
                 li.confidence.flags.append(
                     f"alloc:{AllocationStatus.PARENT_GROSS_EVIDENCE_ONLY.value}")
                 li.confidence.flags.append(f"contains_mapped_children:{','.join(present)}")
+                # ``parent_child_allocation``: "If containment is uncertain, retain the parent as
+                # evidence and route to review." Unfiling above is done on the strength of the
+                # DECLARATION alone; the arithmetic is the support the same block asks for, and where
+                # the printed components do not account for the aggregate the containment is not
+                # confirmed on the page — either a component was not printed (or not extracted), or
+                # the aggregate is not their sum. The row is still retained as evidence, and now it
+                # is routed to review as well: without that, unfiling silently removes the
+                # unexplained part of the figure from the statement and every remaining check ties.
+                gaps = MapOntologyStage._unexplained_columns(li, child_rows, tol)
+                if gaps:
+                    li.confidence.flags.append(
+                        f"containment_unexplained:{aggregate}:{len(gaps)}")
+                    if "low_mapping_confidence" not in li.confidence.flags:
+                        li.confidence.flags.append("low_mapping_confidence")
+                    ctx.log(f"map_ontology:containment_unexplained({why}):{aggregate}"
+                            f" columns={len(gaps)} components={','.join(present)}")
                 unfiled += 1
             child_flag = f"alloc:{AllocationStatus.CHILD_COMPONENT.value}"
             for li in doc.line_items:

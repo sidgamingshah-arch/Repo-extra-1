@@ -487,6 +487,154 @@ def test_the_response_budget_is_measured_from_the_response_envelope(v2):
             - OntologyMatcher._batch_max_tokens(1)) == 80
 
 
+# --- a computed concept is out of every tier, and its caption is refused not re-homed -----------
+
+DERIVED = "pl_profit_before_exceptional_items_and_tax"
+DERIVED_CAPTION = "Profit before exceptional items and tax"
+
+
+def test_a_caption_naming_a_computed_concept_is_refused_not_filed_on_a_neighbour(v2):
+    """`extraction_mode: derive` means the framework COMPUTES the concept, so it is out of every
+    matching tier and out of every payload. Hiding it is not the same as refusing the row, and that
+    was the defect: with its own concept unreachable, this caption's next-best evidence was
+    `pl_profit_before_tax`, and the fuzzy tier filed it there at 0.61, accepted and unflagged. The two
+    subtotals differ by exactly the exceptional items, so the figure landed on the wrong line of the
+    P&L and the statement still tied.
+
+    Reasoning for the neighbouring value: `extract_or_derive` means the subtotal is SOMETIMES printed
+    and sometimes left to arithmetic, so a row printed with its caption IS the concept and must be
+    matched. Only `derive` says the face does not print it, so only `derive` refuses a row."""
+    m = _matcher(v2)
+    assert DERIVED in m._computed_only
+    for index in (m._alias_index, m._alias_by_key):
+        assert DERIVED not in index
+    assert DERIVED not in m._mappable_keys()
+
+    got = m.match(DERIVED_CAPTION, statement="profit_and_loss")
+    assert got.canonical_key is None and got.needs_review
+    assert got.computed_claim == DERIVED
+    assert m.usage["computed_refused"] == 1
+
+    # The neighbour is still reachable by its own caption — the refusal is of one caption, not of a
+    # concept, and `extract_or_derive` concepts are untouched.
+    assert m.match("Profit before tax 除税前溢利",
+                   statement="profit_and_loss").canonical_key == "pl_profit_before_tax"
+    assert [c.canonical_key for c in v2.mappings
+            if c.extraction_mode == "extract_or_derive" and c.canonical_key not in m._mappable_keys()
+            ] == []
+
+
+def test_the_refusal_does_not_take_a_row_another_concept_matches_better():
+    """The claim only stands when the computed concept explains the caption at least as well as the
+    best matchable one. A `derive` concept whose wording overlaps a real one would otherwise start
+    refusing rows that are somebody else's, which is a worse trade than the one being fixed: the two
+    concepts below share three words, so almost every expense caption gives the computed one some
+    evidence."""
+    D = "pl_expenses__total_operating_expenses_before_depreciation"
+    X = "pl_expenses__total_operating_expenses"
+    ont = OntologyDefinition(
+        ontology_key="k", target_template_key="t",
+        mappings=[
+            OntologyMapping(canonical_key=D, label="Total opex before depreciation",
+                            extraction_mode="derive",
+                            aliases=["Total operating expenses before depreciation"]),
+            OntologyMapping(canonical_key=X, label="Total operating expenses",
+                            aliases=["Total operating expenses"]),
+        ],
+    )
+    m = _matcher(ont, locale="en")
+
+    # The computed concept has a real claim on this caption (0.73) and still loses: the matchable
+    # concept explains it better (0.87), so the row is that concept's.
+    kept = m.match("Total operating expenses before", statement="profit_and_loss")
+    assert kept.canonical_key == X and kept.computed_claim is None
+    assert m.usage["computed_refused"] == 0
+
+    # The other side of the same comparison, so the threshold is shown to be a threshold.
+    refused = m.match("Total operating expenses before depreciations", statement="profit_and_loss")
+    assert refused.canonical_key is None and refused.computed_claim == D
+    assert m.usage["computed_refused"] == 1
+
+
+def test_a_computed_row_is_marked_a_subtotal_so_the_sweep_cannot_re_add_it(v2):
+    """A refusal alone is not enough. An unclaimed face row with a value is swept into its section's
+    "Others" (stages.residual), which would put a subtotal OF the section back INTO the section under
+    a different name — strictly worse than the mis-mapping. A row that IS a computed subtotal is
+    marked as one, which the sweep's own eligibility rules already exclude."""
+    from app.core.stage import PipelineContext
+    from app.core.models.enums import LineRole
+    from app.stages.map_ontology import MapOntologyStage
+
+    doc = _doc([(0, "profit_and_loss")], [(0, DERIVED_CAPTION, CURRENT)])
+    ctx = PipelineContext(raw_bytes=b"")
+    ctx.ontology = v2                                      # type: ignore[attr-defined]
+    ctx.settings.llm.provider = "stub"                     # deterministic, no provider call
+    MapOntologyStage().run(doc, ctx)
+
+    row = doc.line_items[0]
+    assert row.canonical_key is None
+    assert row.role is LineRole.SUBTOTAL
+    assert f"computed_concept_printed:{DERIVED}" in row.confidence.flags
+    assert "low_mapping_confidence" in row.confidence.flags
+
+
+def test_the_model_may_not_name_a_concept_the_payload_withheld(v2):
+    """The batch path validated the model's answer against `_by_key`, which contains every concept —
+    including the ones deliberately kept out of the candidate list. A model naming a locked residual
+    put the figure in the bucket that is supposed to be the section's UNEXPLAINED remainder, and the
+    reconciliation that would have reported the gap then tied."""
+    spy = Spy(items=[LlmBatchItem(item_id="a", canonical_key="bs_current_liabilities__others",
+                                 confidence=0.99)])
+    m = _matcher(v2, spy)
+    got = m.match_batch([("a", "Some caption with no concept")], statement="balance_sheet",
+                        sections={"a": "CURRENT LIABILITIES 流動負債"})
+
+    assert "bs_current_liabilities__others" in m._locked
+    assert got["a"].canonical_key != "bs_current_liabilities__others"
+
+
+# --- global_rules on the deterministic path ------------------------------------------------------
+# Four `global_rules` blocks (`parent_child_allocation`, `duplicate_fact_rule`, `totals_policy`,
+# `no_fabricated_split`) and `worked_examples` are read ONLY by `OntologyMatcher._build_system`, so on
+# a run with no provider configured they did nothing at all. Two sentences of `parent_child_allocation`
+# state a rule the deterministic path can test, and now do.
+
+def test_a_containment_the_arithmetic_does_not_support_is_routed_to_review(v2):
+    """"Subtract only on explicit inclusion wording, hierarchy, reconciliation or arithmetic support"
+    and "If containment is uncertain, retain the parent as evidence and route to review." Unfiling the
+    aggregate is done on the strength of the DECLARATION alone, and the arithmetic is the one of those
+    four supports this stage can test. Reserves 900 with only Share premium 100 printed means three
+    declared components were not printed (or not extracted): retaining the parent as evidence and
+    saying nothing removes 800 from the statement, and every remaining check still ties."""
+    from app.core.stage import PipelineContext
+    from app.stages.map_ontology import MapOntologyStage
+
+    def _equity(reserves: int, premium: int):
+        doc = _doc([(0, "balance_sheet")],
+                   [(0, "Reserves 儲備", CURRENT), (0, "Share premium 股份溢價", CURRENT)])
+        for li, amount in zip(doc.line_items, (reserves, premium)):
+            li.section_hint = "EQUITY 權益"
+            for ev in li.values.values():
+                ev.value = ev.value_raw = Decimal(amount)
+        ctx = PipelineContext(raw_bytes=b"")
+        ctx.ontology = v2                                  # type: ignore[attr-defined]
+        ctx.settings.llm.provider = "stub"
+        MapOntologyStage().run(doc, ctx)
+        return doc.line_items[0]
+
+    unexplained = _equity(900, 100)
+    assert unexplained.canonical_key is None               # the containment still fires
+    assert "containment_unexplained:bs_equity__reserves:2" in unexplained.confidence.flags
+    assert "low_mapping_confidence" in unexplained.confidence.flags
+
+    # …and where the components DO account for the aggregate the containment is confirmed on the page,
+    # so the row is unfiled silently as before. A review flag on every containment is no review flag.
+    confirmed = _equity(100, 100)
+    assert confirmed.canonical_key is None
+    assert not [f for f in confirmed.confidence.flags if f.startswith("containment_unexplained")]
+    assert "low_mapping_confidence" not in confirmed.confidence.flags
+
+
 def test_the_shipped_rulebook_agrees_with_its_own_key_names(v2):
     """Every one of the 173 concepts declares the section its canonical key is namespaced under, so
     reading `section_scope` instead of the key name changes no answer TODAY. That is the point: the

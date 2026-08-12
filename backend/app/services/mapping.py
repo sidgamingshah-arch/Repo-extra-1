@@ -176,6 +176,11 @@ class MappingResult:
     allocation_status: str | None = None                    # how the value was derived
     agreement: list[str] = field(default_factory=list)      # methods that corroborated the pick
     rerouted_from: str | None = None                        # see Candidate.rerouted_from
+    # Set when the row was left unmapped because its caption names a concept the framework COMPUTES
+    # (`OntologyMatcher._computed_claim`). Carried, not merely counted, because the caller has to act
+    # on it: such a row is a subtotal, and an unclaimed face row with a value is otherwise swept into
+    # its section's "Others" — which would add the section's own subtotal back into the section.
+    computed_claim: str | None = None
 
 
 # Canonical keys are namespaced by statement SECTION as well as by statement
@@ -278,6 +283,43 @@ def section_of_key(canonical_key: str) -> str | None:
     return next((tok for tok, _ in SECTION_WORDS if f"_{tok}__" in canonical_key), None)
 
 
+def sections_of_key(canonical_key: str) -> frozenset[str]:
+    """:func:`section_of_key` as a set, empty for a key carrying no section namespace.
+
+    The set is the shape everything downstream compares against, because ``section_scope`` is a
+    LIST and a concept may legitimately be declared in two sections. A key name can only ever
+    express one, which is one of the reasons it is the fallback and not the source.
+    """
+    tok = section_of_key(canonical_key)
+    return frozenset([tok]) if tok else frozenset()
+
+
+# The statement each canonical-key namespace stands for — the FALLBACK reading of a concept's
+# statement, for a v1 concept that declares none (see :meth:`OntologyMatcher._statement_of`).
+_STATEMENT_OF_PREFIX: dict[str, str] = {"bs": "balance_sheet", "pl": "profit_and_loss",
+                                        "cf": "cash_flow", "eq": "changes_in_equity"}
+
+# One statement, two spellings. The page classifier and every caller say "changes_in_equity", while
+# ``StatementType`` — the enum a rulebook's ``statement`` field validates against — spells the same
+# statement "equity_changes". Both sides are folded through here before they are compared, because a
+# declaration the gate cannot compare to the classifier's verdict does not scope anything: it
+# refuses every concept in that statement, on every page.
+_STATEMENT_SPELLINGS: dict[str, str] = {"equity_changes": "changes_in_equity"}
+
+
+def statement_of_key(canonical_key: str) -> str | None:
+    """The statement a canonical key's namespace names, or None for a key outside the four."""
+    return _STATEMENT_OF_PREFIX.get(canonical_key.split("_", 1)[0])
+
+
+def normalize_statement(statement) -> str:
+    """One spelling for one statement, whichever vocabulary it arrived in (see the map above)."""
+    if statement is None:
+        return ""
+    raw = statement.value if hasattr(statement, "value") else str(statement)
+    return _STATEMENT_SPELLINGS.get(raw, raw)
+
+
 def section_token_of_scope(scope_id: str) -> str | None:
     """The banner token a v2 ``section_scope`` id names, or None when it names no section.
 
@@ -320,16 +362,25 @@ _WORD = {w: re.compile(rf"\b{w}\b", re.IGNORECASE)
          for vocab in EXCLUSIVE_VOCABULARIES for w in vocab}
 
 
-def _names_a_different_class(canonical_key: str, caption: str) -> bool:
+def _names_a_different_class(canonical_key: str, caption: str,
+                             sections: frozenset[str] | None = None) -> bool:
     """Whether the caption names a member of an exclusive vocabulary that the concept is not in.
 
-    Read off the canonical key, so it needs no ontology authoring and holds for any template that
-    names its sections after the thing they contain
-    (``cf_cash_flow_from_investing_activities__…``).
+    Which member the CONCEPT is in is read from its resolved sections when the caller has them
+    (``cash_flow_from_investing_activities`` names the activity, as the section vocabulary does),
+    and off the canonical key otherwise — so it still needs no ontology authoring and still holds
+    for any template that names its sections after the thing they contain
+    (``cf_cash_flow_from_investing_activities__…``). Declaration first for the same reason the
+    section gate reads ``section_scope``: a key name is a convention an editor can break, and a
+    concept redeclared into another activity must be judged by where the rulebook now puts it.
     """
     key = (canonical_key or "").lower()
+    declared = " ".join(sorted(sections)).lower() if sections else ""
     for vocab in EXCLUSIVE_VOCABULARIES:
-        in_key = [w for w in vocab if w in key]
+        in_scope = [w for w in vocab if w in declared]
+        # The key namespace only when the declaration names no member of this vocabulary at all —
+        # a concept scoped to no section (a statement-level cash-flow total) keeps the key reading.
+        in_key = in_scope or [w for w in vocab if w in key]
         if len(in_key) != 1:
             continue                      # the concept is not in this vocabulary, or is ambiguous
         in_caption = [w for w in vocab if _WORD[w].search(caption)]
@@ -454,7 +505,8 @@ def _is_variant_of(a: str, b: str) -> bool:
     return ta is not None and ta == tb
 
 
-def family_leaf_named_by(canonical_key: str, banner: str | None) -> str | None:
+def family_leaf_named_by(canonical_key: str, banner: str | None,
+                         sections_of=None) -> str | None:
     """The sibling of ``canonical_key`` that ``banner`` identifies, or None.
 
     None whenever the banner settles nothing — the key is in no family, the banner names no section
@@ -462,7 +514,15 @@ def family_leaf_named_by(canonical_key: str, banner: str | None) -> str | None:
     the leaf it identifies is the key itself, because then there is nothing to correct. Every one of
     those is a refusal to guess: this function is the only thing that may overrule a decision, so it
     answers only where the answer is forced.
+
+    ``sections_of`` is how a caller supplies the RULEBOOK's reading of which section each sibling is
+    in (:meth:`OntologyMatcher._sections_of`); it defaults to the key namespace, which is all a
+    caller holding no ontology has. Which sibling the banner names must follow the declaration for
+    the same reason the gate does — otherwise a concept redeclared into another section is still
+    re-routed by its key name, and the row is corrected onto a concept the rulebook no longer puts
+    there.
     """
+    sections = sections_of or sections_of_key
     members = _FAMILY_MEMBERS.get(canonical_key)
     if not members:
         return None
@@ -477,7 +537,7 @@ def family_leaf_named_by(canonical_key: str, banner: str | None) -> str | None:
     want = section_of_banner(banner)
     if not want:
         return None
-    named = [k for k in members if section_of_key(k) == want]
+    named = [k for k in members if want in sections(k)]
     if len(named) != 1 or named[0] == canonical_key:
         return None
     # Last gate, and the one that does not depend on the declaration being right: re-route only
@@ -527,7 +587,12 @@ class OntologyMatcher:
                       # the evidence rates equally and nothing resolved. Counted because the answer
                       # is "both, for review", and a review item nobody can measure is a review
                       # item nobody prioritises.
-                      "confusable_ties": 0}
+                      "confusable_ties": 0,
+                      # Rows refused because the caption names a concept the framework COMPUTES
+                      # (`extraction_mode: derive`). Counted because the alternative the engine used
+                      # to take — filing the figure on the nearest neighbouring subtotal — left no
+                      # trace at all: see `_computed_claim`.
+                      "computed_refused": 0}
         # System prompt = the base instruction + the ontology's own extraction policies and
         # worked examples, so the LLM follows one consistent, auditable rulebook.
         self._system = self._build_system()
@@ -545,6 +610,10 @@ class OntologyMatcher:
         # ended up unmapped even though its concept existed.
         self._alias_index: dict[str, list[str]] = {}
         self._alias_by_key: dict[str, list[str]] = {}
+        # The aliases of the COMPUTED concepts, indexed apart from the matchable ones and never
+        # reachable through any tier. They are kept because a caption that names one is evidence
+        # about the row — see `_computed_claim` for what is done with it.
+        self._computed_alias_by_key: dict[str, list[str]] = {}
         self._by_key: dict[str, OntologyMapping] = {}
         # Alias embeddings, indexed by canonical key — computed lazily on first embedding use.
         self._alias_vecs: list[tuple[str, list[float]]] | None = None
@@ -564,9 +633,11 @@ class OntologyMatcher:
         # print. It stays extractable (that is what `derive` means, and `_extractable_keys` still
         # reports it), but it is not something a printed caption may be bound to: offering it as a
         # mapping candidate asserts that a row on the page IS the derived subtotal, which then
-        # overwrites the computation with whatever caption happened to fuzz against it. The
-        # neighbouring value `extract_or_derive` is the one that means "sometimes printed, sometimes
-        # arithmetic", and those 20 concepts stay fully matchable.
+        # overwrites the computation with whatever caption happened to fuzz against it. Keeping it
+        # out is only half of it: a row whose caption names one is REFUSED rather than handed to the
+        # nearest neighbour — see `_computed_claim`. The neighbouring value `extract_or_derive` is the
+        # one that means "sometimes printed, sometimes arithmetic", and those concepts stay fully
+        # matchable, since a filing that does print the subtotal must have the printed row read.
         self._computed_only: set[str] = {m.canonical_key for m in ontology.mappings
                                          if m.extraction_mode == "derive"}
         # One set for every index and payload below: a concept no printed caption may reach,
@@ -584,8 +655,8 @@ class OntologyMatcher:
         for m in ontology.mappings:
             self._by_key[m.canonical_key] = m
             self._section_scope[m.canonical_key] = self._scope_tokens(m)
-            if m.canonical_key in self._unmatchable:
-                continue
+            if m.canonical_key in self._locked:
+                continue         # a swept residual: its caption is never matched, nor weighed below
             # Index EVERY locale's aliases, not just the document's. A bilingual filing prints
             # both scripts on the same line, so restricting the index to the detected locale
             # makes a Chinese-only caption unmatchable in a document detected as English.
@@ -595,6 +666,10 @@ class OntologyMatcher:
                 m.aliases_for(self.locale)
                 + [a for locale_aliases in m.aliases_i18n.values() for a in locale_aliases]
             ))
+            if m.canonical_key in self._computed_only:
+                self._computed_alias_by_key[m.canonical_key] = [
+                    normalize_label(a) for a in aliases]
+                continue
             self._alias_by_key[m.canonical_key] = [normalize_label(a) for a in aliases]
             for a in aliases:
                 keys = self._alias_index.setdefault(normalize_label(a), [])
@@ -613,8 +688,7 @@ class OntologyMatcher:
         — also empty for a statement-level key. Both are "no banner refuses this concept".
         """
         if not m.section_scope:
-            tok = section_of_key(m.canonical_key)
-            return frozenset([tok]) if tok else frozenset()
+            return sections_of_key(m.canonical_key)
         return frozenset(t for s in m.section_scope if (t := section_token_of_scope(s)))
 
     def _priority_of(self, canonical_key: str) -> int:
@@ -825,6 +899,74 @@ class OntologyMatcher:
                        default=0.0)
         return best_cov >= s.fuzzy_min_alias_coverage
 
+    def _alias_evidence(self, canonical_key: str, norm_segments: list[str]) -> float:
+        """How well the caption explains any ONE alias of a concept — 1.0 for exact identity.
+
+        The same scale `_fuzzy` reports on, so two concepts' claims on one caption are comparable.
+        """
+        best = 0.0
+        for alias in self._alias_by_key.get(canonical_key) or []:
+            for norm in norm_segments:
+                if not alias or not norm:
+                    continue
+                score = 1.0 if alias == norm else self._fuzzy_score(norm, alias)
+                best = max(best, score)
+        return best
+
+    def _computed_claim(self, norm_segments: list[str]) -> tuple[str, float] | None:
+        """The COMPUTED concept this caption is evidence for, and how strong — or None.
+
+        ``extraction_mode: derive`` means the framework computes the concept and no printed caption
+        may be bound to it, which is why it is out of every tier and out of every payload. Hiding a
+        concept is not the same as refusing a row, though, and that gap was the defect: with its own
+        concept unreachable the caption's next-best evidence is a DIFFERENT concept, and the tiers
+        below file the figure there. Measured on the shipped rulebook, "Profit before exceptional
+        items and tax" — the verbatim alias of its one `derive` concept — was filed as
+        ``pl_profit_before_tax`` by the fuzzy tier at 0.61, accepted, unflagged. Those two subtotals
+        differ by exactly the exceptional items, so the figure lands on the wrong line of the P&L and
+        the statement still ties: the class of error nothing downstream can see.
+
+        Evidence is only reported at the strength a MATCH would have been accepted at — exact alias
+        identity, or a fuzzy score clearing both ``fuzzy_accept`` and the alias-coverage floor
+        (`_fuzzy_accepts`'s own bar). Anything weaker is a coincidence of wording, and it must not
+        refuse a row that some other concept has real evidence for.
+
+        ``extract_or_derive`` is deliberately NOT here. That value means the subtotal is sometimes
+        printed and sometimes left to arithmetic, so a row printed with its caption IS the concept
+        and must be matched — those concepts stay fully matchable and claim nothing through here.
+        `derive` is the one value that says the face does not print it at all.
+        """
+        s = self.settings.extraction
+        best: tuple[str, float] | None = None
+        for key, aliases in self._computed_alias_by_key.items():
+            for alias in aliases:
+                for norm in norm_segments:
+                    if not alias or not norm:
+                        continue
+                    if alias == norm:
+                        score = 1.0
+                    else:
+                        score = self._fuzzy_score(norm, alias)
+                        if (score < s.fuzzy_accept
+                                or self._alias_coverage(norm, alias) < s.fuzzy_min_alias_coverage):
+                            continue
+                    if best is None or score > best[1]:
+                        best = (key, score)
+        return best
+
+    def _refused_as_computed(self, norm_segments: list[str], rival: float) -> str | None:
+        """The computed concept to refuse this caption to, when nothing matchable claims it better.
+
+        ``rival`` is the strength of the best claim a MATCHABLE concept has on the caption. A
+        computed concept only takes the row off the table when it explains the caption at least as
+        well: a caption another concept genuinely matches better is still that concept's row.
+        """
+        claim = self._computed_claim(norm_segments)
+        if claim is None or claim[1] < rival:
+            return None
+        self.usage["computed_refused"] += 1
+        return claim[0]
+
     def _ensure_alias_embeddings(self) -> None:
         """Embed every alias once (lazily) and index it by canonical key. Cached for the life
         of the matcher so a batch of captions reuses the same alias vectors."""
@@ -1031,32 +1173,49 @@ class OntologyMatcher:
         self.usage["output_tokens"] += int(meta.get("output_tokens") or 0)
         self.usage["model"] = meta.get("model", self.usage["model"])
         key = (decision.canonical_key or "").strip()
-        if not key or key not in self._by_key:
+        # `_unmatchable` as well as unknown: a concept was kept out of the payload precisely because
+        # no printed caption may be bound to it, and a model naming one anyway is not a licence to
+        # file the row there. A locked residual named by the model would put the figure in the
+        # bucket that is supposed to be the section's UNEXPLAINED remainder.
+        if not key or key not in self._by_key or key in self._unmatchable:
             return None
         return Candidate(key, MappingMethod.LLM, max(0.0, min(1.0, decision.confidence)),
                          allocation_status=(decision.allocation_status or "").strip() or None)
 
     # -- orchestration ----------------------------------------------------
 
-    # Canonical keys are namespaced by statement (bs_/pl_/cf_/eq_...), so the statement a
-    # caption was printed on constrains which concepts may win.
-    _STMT_PREFIX = {"balance_sheet": "bs", "profit_and_loss": "pl", "cash_flow": "cf",
-                    "changes_in_equity": "eq"}
+    # The statements this gate knows. Canonical keys are ALSO namespaced by statement
+    # (bs_/pl_/cf_/eq_...), which is the fallback reading — see `_statement_of`.
+    _STATEMENTS = frozenset(_STATEMENT_OF_PREFIX.values())
+
+    def _statement_of(self, canonical_key: str) -> str | None:
+        """The statement the RULEBOOK says the concept is on, or None when nothing says.
+
+        ``statement`` is the declaration and is what this reads; the key namespace
+        (:func:`statement_of_key`) is only the fallback, for a v1 concept that declares none and for
+        a key from outside this rulebook. Exactly the argument `_sections_of` makes about sections,
+        and it had the same hole: the statement gate read ``canonical_key.split("_", 1)[0]``, so
+        setting ``section_defaults.bs_s5_current_liabilities.statement`` to ``profit_and_loss`` left
+        every current-liability concept still gated as a balance-sheet concept. The rulebook — the
+        only place a reviewer can look up what the pipeline does — said one thing and the engine did
+        another, and nothing in the output showed the disagreement.
+        """
+        m = self._by_key.get(canonical_key)
+        declared = normalize_statement(m.statement) if m is not None else ""
+        return declared or statement_of_key(canonical_key)
 
     def _in_statement(self, canonical_key: str, statement: str | None) -> bool:
-        """False only when the key clearly belongs to a DIFFERENT statement than the caption.
+        """False only when the concept clearly belongs to a DIFFERENT statement than the caption.
 
-        Unknown statements, and keys whose prefix isn't one of the known statement
-        namespaces, are always allowed — the constraint suppresses confident cross-statement
-        errors without silently dropping concepts it cannot place.
+        Unknown statements, and concepts that neither the rulebook nor their key namespace places on
+        one, are always allowed — the constraint suppresses confident cross-statement errors without
+        silently dropping concepts it cannot place.
         """
-        want = self._STMT_PREFIX.get(statement or "")
-        if not want:
+        want = normalize_statement(statement)
+        if want not in self._STATEMENTS:
             return True
-        prefix = canonical_key.split("_", 1)[0]
-        if prefix not in set(self._STMT_PREFIX.values()):
-            return True
-        return prefix == want
+        have = self._statement_of(canonical_key)
+        return have is None or have == want
 
     def _section_of(self, text: str | None) -> str | None:
         return section_of_banner(text)
@@ -1078,8 +1237,7 @@ class OntologyMatcher:
         if declared is not None:
             return declared
         # A key from outside this rulebook (a caller checking the gate against a template key).
-        tok = section_of_key(canonical_key)
-        return frozenset([tok]) if tok else frozenset()
+        return sections_of_key(canonical_key)
 
     def _in_section(self, canonical_key: str, section: str | None) -> bool:
         """False only when the concept's ``section_scope`` excludes the section the banner names.
@@ -1100,7 +1258,8 @@ class OntologyMatcher:
             # `pl_profit_for_the_year` — the largest figure on the statement filed as the wrong fact
             # at confidence 1.0, with the comprehensive-income line left empty. Only ever narrows:
             # the banner must identify exactly one leaf, and a different one.
-            return family_leaf_named_by(canonical_key, section) is None
+            return family_leaf_named_by(canonical_key, section,
+                                        sections_of=self._sections_of) is None
         return want in have
 
     def _family_route(self, canonical_key: str, statement: str | None,
@@ -1110,10 +1269,11 @@ class OntologyMatcher:
         Called only where the gate has already said no, so an answer the gate accepts is never
         rewritten. The destination goes through the same gate: re-routing may correct which variant
         of a fact was chosen, never smuggle a concept past the statement, exclusion or
-        exclusive-vocabulary arms — and never into a locked residual, which no match may reach.
+        exclusive-vocabulary arms — and never into a concept no match may reach at all: a locked
+        residual, or a computed (`derive`) concept.
         """
-        target = family_leaf_named_by(canonical_key, section)
-        if target is None or target not in self._by_key or target in self._locked:
+        target = family_leaf_named_by(canonical_key, section, sections_of=self._sections_of)
+        if target is None or target not in self._by_key or target in self._unmatchable:
             return None
         if not self._allowed(target, statement, section, caption):
             return None
@@ -1143,7 +1303,8 @@ class OntologyMatcher:
         return (self._in_statement(canonical_key, statement)
                 and self._in_section(canonical_key, section)
                 and not (caption and self._vetoed(canonical_key, caption))
-                and not (caption and _names_a_different_class(canonical_key, caption)))
+                and not (caption and _names_a_different_class(
+                    canonical_key, caption, self._sections_of(canonical_key))))
 
     def _answer_confusable_tie(self, raw_label: str, context: str | None,
                                tied: list[str]) -> MappingResult:
@@ -1206,6 +1367,7 @@ class OntologyMatcher:
         """
         segments = label_segments(raw_label)
         norm = normalize_label(raw_label)
+        norm_segments = [n for n in (normalize_label(seg) for seg in segments) if n]
         s = self.settings
         scores: dict[str, float] = {}
 
@@ -1282,6 +1444,19 @@ class OntologyMatcher:
         ranked = sorted(best_by_key.values(),
                         key=lambda c: (c.score, self._priority_of(c.canonical_key)), reverse=True)
         det_top = ranked[0] if ranked else None
+
+        # 3b. A caption that names a concept the framework COMPUTES may not be re-homed onto whatever
+        #     happens to score next best. `derive` keeps the concept out of every tier and out of the
+        #     payload, which makes its own row unmappable — and then the tiers below file the figure
+        #     on a neighbouring subtotal instead. Refused here, above the semantic tier as well as
+        #     the deterministic one, because the model is not shown the concept either and answers
+        #     the same way. Only when the computed claim is at least as strong as the best claim a
+        #     matchable concept has (see `_refused_as_computed`).
+        computed = self._refused_as_computed(norm_segments,
+                                             det_top.score if det_top is not None else 0.0)
+        if computed is not None:
+            return MappingResult(None, MappingMethod.UNMATCHED, 0.0, ranked[:5], True, scores,
+                                 allocation_status="unmapped_review", computed_claim=computed)
 
         # 4. LLM semantic decision (`binding.order` step 5) — the key driver, shown the
         #    deterministic shortlist, or the whole RESTRICTED set for a small ontology, plus each
@@ -1366,8 +1541,6 @@ class OntologyMatcher:
 
         # Last resort: fuzzy only, and only when it is essentially certain — a high combined
         # score AND most of the alias explained (see `_fuzzy_accepts`).
-        norm_segments = [normalize_label(seg) for seg in segments]
-        norm_segments = [n for n in norm_segments if n]
         fuzzy_top = fuzzy[0] if fuzzy else None
         if fuzzy_top and self._fuzzy_accepts(norm_segments, fuzzy_top):
             return MappingResult(
@@ -1545,7 +1718,10 @@ class OntologyMatcher:
                 self.usage["batch_unknown_ids"] += 1
                 continue
             key = (d.canonical_key or "").strip()
-            if not key or key not in self._by_key:
+            # Unknown, or a concept the payload deliberately withheld — a locked residual or a
+            # computed one. See `_llm` for why naming it is not a licence to file the row there;
+            # the per-line fallback at the bottom decides these rows instead.
+            if not key or key not in self._by_key or key in self._unmatchable:
                 continue
             # A concept from a different section than the row's banner is refused here for the
             # same reason it is refused in `match`. The model is now TOLD the section, so this is
@@ -1554,6 +1730,19 @@ class OntologyMatcher:
             # caption naming a mutually exclusive class.
             caption = caption_by_id[d.item_id]
             banner = sec.get(d.item_id)
+            # The same refusal `match` makes, for the same reason: a caption that names a concept the
+            # framework COMPUTES is not the model's to re-home, and the model was never offered that
+            # concept to name. The model reports no score on the deterministic scale, so what the
+            # claim is weighed against is the caption's own alias evidence for the concept it chose.
+            norm_segments = [n for n in (normalize_label(seg)
+                                         for seg in label_segments(caption)) if n]
+            computed = self._refused_as_computed(
+                norm_segments, self._alias_evidence(key, norm_segments))
+            if computed is not None:
+                out[d.item_id] = MappingResult(
+                    None, MappingMethod.UNMATCHED, 0.0, [], True, {"llm": 0.0},
+                    allocation_status="unmapped_review", computed_claim=computed)
+                continue
             rerouted_from: str | None = None
             if not self._allowed(key, statement, banner, caption):
                 # Before discarding it: when the answer is right about WHAT KIND of thing the row is

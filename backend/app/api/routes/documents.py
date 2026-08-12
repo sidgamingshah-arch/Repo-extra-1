@@ -763,7 +763,12 @@ def get_document_run(document_id: str, session: Session = Depends(db)) -> dict:
     run = _latest_run(session, document_id)
     if run is None or not run.result:
         raise HTTPException(status_code=404, detail="No extraction run yet for this document")
-    return {"run_id": run.id, "status": run.status, "result": run.result}
+    # Which rulebook this run read the filing against, as the run recorded it (see
+    # ``routes.extractions.rulebook_record``). Reported, never re-derived: a reader deciding after
+    # the fact which rulebook "must" have been in force is how a superseded one got labelled as
+    # the current one.
+    return {"run_id": run.id, "status": run.status,
+            "rulebook": (run.options or {}).get("rulebook"), "result": run.result}
 
 
 @router.get("/{document_id}/analysis", dependencies=[Depends(authorized_document)])

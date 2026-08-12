@@ -16,6 +16,10 @@ def _build(words: list[Word]):
     return items
 
 
+def _slots(item) -> dict[tuple[str, str | None], str]:
+    return {(v.basis.value, v.period_label): str(v.value) for v in item.values.values()}
+
+
 def test_single_line_row_splits_label_note_and_values():
     items = _build([
         _w("Trade", 0.10, 0.20, 0.16, 0.22),
@@ -108,6 +112,54 @@ def test_a_basis_caption_governs_a_contiguous_run_of_columns():
     # …and the same holds when each caption is centred over its own pair.
     assert _basis_of_columns(cols, [(B.CONSOLIDATED, 0.60), (B.STANDALONE, 0.84)]) == {
         0: B.CONSOLIDATED, 1: B.CONSOLIDATED, 2: B.STANDALONE, 3: B.STANDALONE}
+
+
+def _right_aligned(text: str, right: float, y: float) -> Word:
+    """A figure as a statement prints it: right-aligned, so its width — and therefore its
+    x-CENTRE — depends on how many digits it has."""
+    w = 0.008 * len(text)
+    return _w(text, right - w, y, right, y + 0.012)
+
+
+def test_a_column_of_mixed_width_figures_is_still_one_column():
+    """Two constants called ``_COL_TOL`` were defined at module scope. The later one — the matrix
+    path's 0.012, measured on right EDGES, which do not drift — silently governed the comparative
+    path too, where the tolerance is measured on x-centres that drift with the width of the number
+    printed in the column: "1,204,500" and "980" right-aligned in one column are ~0.024 of the page
+    apart at their centres.
+
+    So a column of mixed-width figures fragmented into clusters too small to clear
+    ``_COL_MIN_ROWS``, the page came out with NO columns at all, and every row fell back to
+    positional order — which is precisely the mis-load ``_value_column_bands`` exists to prevent:
+    "Pledged deposits" is printed for the prior year only, and read positionally its single figure
+    claims the current year, over-stating one period and under-stating the other."""
+    from app.services import row_reconstruct as rr
+
+    # One name per meaning: centres drift, right edges do not, so the two paths cannot share a value.
+    assert rr._COL_TOL > rr._MATRIX_COL_TOL
+
+    rows = [("Property, plant and equipment", "1,204,500", "1,100,400"),
+            ("Inventories", "1,204,500", "1,100,400"),
+            ("Trade receivables", "980", "890"),
+            ("Cash", "112", "105"),
+            ("Pledged deposits", "", "2,031")]                     # prior year only
+    words: list[Word] = []
+    for i, (label, cur, prior) in enumerate(rows):
+        y = 0.20 + i * 0.04
+        words.append(_w(label, 0.10, y, 0.10 + 0.01 * len(label), y + 0.012))
+        if cur:
+            words.append(_right_aligned(cur, 0.80, y))
+        if prior:
+            words.append(_right_aligned(prior, 0.94, y))
+
+    items = _build(words)
+    pledged = next(i for i in items if "Pledged" in i.source_label)
+    assert list(_slots(pledged)) == [("consolidated", "prior")], _slots(pledged)
+    assert _slots(pledged)[("consolidated", "prior")] == "2031"
+    # …and the rows that report both periods are unaffected.
+    inv = next(i for i in items if i.source_label == "Inventories")
+    assert _slots(inv) == {("consolidated", "current"): "1204500",
+                           ("consolidated", "prior"): "1100400"}
 
 
 def test_loosely_spaced_label_line_is_not_merged():

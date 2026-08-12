@@ -1,7 +1,8 @@
 /** Extracted data for one uploaded document — real line items with click-to-source
  * provenance. Clicking a PDF value opens a Source panel that renders that page and
  * highlights the value's bounding box. Mapping runs against the rulebook in force for the
- * selected template, or whichever one the reader pins here instead (see RulebookPicker).
+ * selected template, or whichever one the reader pins here instead — and the rulebook the run
+ * RECORDED is named above the rows, from the run's own record (see RulebookPicker).
  * Distinct from the demo-driven workspace: this reads a live extraction run. */
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -15,7 +16,7 @@ import {
 import { useUI } from "../store";
 import { SCREENS } from "./config";
 import { color, font } from "../theme";
-import type { ExtractionRow, Locale, OntologyRef } from "../types";
+import type { ExtractionRow, Locale, OntologyRef, RulebookRecord } from "../types";
 
 const GRID = "1.8fr 56px 1.3fr 1.1fr";
 
@@ -214,63 +215,113 @@ function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k:
   );
 }
 
-/** Which rulebook a run reads the filing against, and why.
+/** What the RUN says about the rulebook it read the filing against.
+ *
+ *  Every word here comes out of the run's own record (see `RulebookRecord`). The screen used to
+ *  write this sentence itself, from the ontology list and its own idea of which rulebook was in
+ *  force — and a reload after a newer rulebook was published then described a run that had used a
+ *  replaced rulebook as governed by the current one. Which rulebook produced a figure is part of
+ *  the figure, so it is reported, never recomputed: a run that used a superseded rulebook says
+ *  "replaced" even when every list on the client insists otherwise.
+ */
+function describeRun(r: RulebookRecord, t: (k: string) => string): { text: string; warn: boolean } {
+  const named = (s: string) =>
+    s.replace("{key}", r.ontology_key).replace("{v}", String(r.version));
+  if (r.status === "engine_default") return { text: t("tp.rb.usedEngineDefault"), warn: true };
+  if (r.status === "missing") {
+    return { text: t("tp.rb.usedMissing").replace("{id}", r.ontology_version_id), warn: true };
+  }
+  // A rulebook whose stored definition would not load governed nothing, however firmly the run
+  // names it — so the sentence that names it also says that.
+  const dead = r.applied === false ? ` ${t("tp.rb.notApplied")}` : "";
+  if (r.status === "in_force") {
+    return {
+      text: named(t("tp.rb.usedInForce")).replace("{tpl}", r.target_template_key) + dead,
+      warn: r.applied === false,
+    };
+  }
+  // Departing from what is in force is worth naming what was departed from — except when the
+  // record's successor IS this rulebook, which happens when every stored rulebook for the template
+  // has been replaced and there is nothing current to point at.
+  const successor = r.in_force_ontology_key && r.in_force_ontology_key !== r.ontology_key
+    ? ` ${t("tp.rb.inForceIs").replace("{key}", r.in_force_ontology_key)
+          .replace("{v}", String(r.in_force_version))}`
+    : "";
+  const text = named(t(r.status === "superseded" ? "tp.rb.usedSuperseded" : "tp.rb.usedPinned"));
+  return { text: text + successor + dead, warn: true };
+}
+
+/** Which rulebook a run reads the filing against, and what the run then recorded.
  *
  *  Until this existed the answer was a property of the configuration: whichever rulebook declared
  *  itself the successor won, and nobody could pin an older one, or read one filing against two of
  *  them to see what changed. The default is still the rulebook in force — computed by the ONE
- *  shared rule (see `ontologyInForce`), not a local copy of it — and the note says which that is
- *  and on what grounds, because "in force" is a claim the screen has to be able to back up.
+ *  shared rule (see `ontologyInForce`), not a local copy of it.
  *
  *  Choosing is not cosmetic: `ontology_version_id` travels with the POST that starts the run, so
  *  the pick decides the rules the mapper reasons with. Each choice is its own cached run, which is
  *  what makes comparing two of them on one filing a matter of switching back and forth.
+ *
+ *  The select is the CHOICE — a statement about the configuration, so its annotations come from the
+ *  ontology list. The sentence under it is the RUN, so it comes from `record` and from nothing
+ *  else. Until the run reports one there is no run to describe, and the line says what is being
+ *  started instead of making a claim about figures that are not on screen yet.
  */
-function RulebookPicker({ rows, inForce, chosen, onChoose, templateKey, t }: {
+function RulebookPicker({ rows, inForce, chosen, record, onChoose, templateKey, t }: {
   rows: OntologyRef[]; inForce: OntologyRef | undefined; chosen: OntologyRef | undefined;
-  onChoose: (id: string) => void; templateKey: string | undefined; t: (k: string) => string;
+  record: RulebookRecord | undefined; onChoose: (id: string) => void;
+  templateKey: string | undefined; t: (k: string) => string;
 }) {
-  const pinned = !!chosen && !!inForce && chosen.id !== inForce.id;
   // Newest-looking first, and stable: same key together, highest version on top.
   const sorted = [...rows].sort((a, b) => (a.ontology_key === b.ontology_key
     ? b.version - a.version
     : a.ontology_key.localeCompare(b.ontology_key)));
-
-  const why = !chosen ? t("tp.rb.none")
-    : pinned ? t("tp.rb.whyPinned")
-        .replace("{key}", inForce?.ontology_key ?? "").replace("{v}", String(inForce?.version ?? ""))
-    : chosen.supersedes ? t("tp.rb.whySupersedes").replace("{old}", chosen.supersedes)
-    : t("tp.rb.whyVersion").replace("{tpl}", chosen.target_template_key);
+  const used = record ? describeRun(record, t) : undefined;
 
   return (
     <div data-testid="ex-rulebook"
-         style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap",
-                  marginBottom: 12 }}>
-      <span style={{ fontSize: 11, color: color.muted }}>{t("tp.rb.label")}</span>
-      <select
-        data-testid="ex-rulebook-pick"
-        value={chosen?.id ?? ""}
-        onChange={(e) => onChoose(e.target.value)}
-        style={{ fontSize: 12, fontWeight: 600, padding: "5px 9px", borderRadius: 7,
-                 border: `1px solid ${color.controlBorder}`, background: "#fff", color: color.ink,
-                 maxWidth: 420 }}
-      >
-        {!chosen && <option value="">{t("tp.rb.none")}</option>}
-        {sorted.map((o) => (
-          <option key={o.id} value={o.id}>
-            {`${o.ontology_key} · v${o.version}`}
-            {o.id === inForce?.id ? ` — ${t("tp.rb.inForce")}` : ""}
-            {o.superseded ? ` — ${t("tp.rb.superseded")}` : ""}
-            {templateKey && o.target_template_key !== templateKey
-              ? ` — ${t("tp.rb.otherTemplate").replace("{tpl}", o.target_template_key)}` : ""}
-          </option>
-        ))}
-      </select>
-      <span data-testid="ex-rulebook-why"
-            style={{ fontSize: 11, color: pinned ? color.amberFg : color.muted2, maxWidth: 620,
-                     lineHeight: 1.5 }}>
-        {pinned ? `${t("tp.rb.pinned")} — ${why}` : why}
-      </span>
+         style={{ display: "grid", gap: 5, marginBottom: 12, maxWidth: 760 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: color.muted }}>{t("tp.rb.label")}</span>
+        <select
+          data-testid="ex-rulebook-pick"
+          value={chosen?.id ?? ""}
+          onChange={(e) => onChoose(e.target.value)}
+          style={{ fontSize: 12, fontWeight: 600, padding: "5px 9px", borderRadius: 7,
+                   border: `1px solid ${color.controlBorder}`, background: "#fff", color: color.ink,
+                   maxWidth: 420 }}
+        >
+          {!chosen && <option value="">{t("tp.rb.none")}</option>}
+          {sorted.map((o) => (
+            <option key={o.id} value={o.id}>
+              {`${o.ontology_key} · v${o.version}`}
+              {o.id === inForce?.id ? ` — ${t("tp.rb.inForce")}` : ""}
+              {o.superseded ? ` — ${t("tp.rb.superseded")}` : ""}
+              {templateKey && o.target_template_key !== templateKey
+                ? ` — ${t("tp.rb.otherTemplate").replace("{tpl}", o.target_template_key)}` : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+      {used ? (
+        // The id and the status are on the element that prints them so that what the run recorded
+        // can be checked against what was chosen, rather than inferred from the wording.
+        <span data-testid="ex-rulebook-used"
+              data-rulebook-id={record?.ontology_version_id}
+              data-rulebook-status={record?.status}
+              style={{ fontSize: 11, color: used.warn ? color.amberFg : color.muted2,
+                       lineHeight: 1.5 }}>
+          {used.text}
+        </span>
+      ) : (
+        <span data-testid="ex-rulebook-pending"
+              style={{ fontSize: 11, color: color.muted2, lineHeight: 1.5 }}>
+          {chosen
+            ? t("tp.rb.starting").replace("{key}", chosen.ontology_key)
+                .replace("{v}", String(chosen.version))
+            : t("tp.rb.none")}
+        </span>
+      )}
     </div>
   );
 }
@@ -293,19 +344,26 @@ export default function ExtractionView() {
   const selectedTemplateKey = useUI((s) => s.selectedTemplateKey);
   const ready = ontQ.isFetched && tplQ.isFetched;   // don't POST until the lists settle
   // The rulebook a run DEFAULTS to: the one in force for the template the analyst selected on the
-  // Upload screen; failing that the shipped HK reference rulebook, then whatever exists. "In
-  // force" is one shared rule (see ontologyInForce) — the copy that used to live here compared
-  // versions, which cannot rank two different rulebooks that target the same template.
+  // Upload screen, and failing that the one in force among everything stored. "In force" is one
+  // shared rule (see ontologyInForce) — the copy that used to live here compared versions, which
+  // cannot rank two different rulebooks that target the same template.
+  //
+  // There used to be a middle fallback naming `hkfrs_hk_china_v1` by hand, and a reader who had not
+  // picked a template on the Upload screen — a fresh browser, so the common case — fell into it and
+  // had the filing read against exactly that: a rulebook the adopted v2 declares it replaces. The
+  // run's own record is what exposed it, reporting `superseded` while this screen was still calling
+  // it in force. A named key cannot follow an adoption; the shared rule can, so it decides.
   const inForce =
     ontologyInForce(ontQ.data, (o) => o.target_template_key === selectedTemplateKey) ||
-    ontologyInForce(ontQ.data, (o) => o.ontology_key === "hkfrs_hk_china_v1") ||
     ontologyInForce(ontQ.data);
   // …and the one the reader PINNED, which outranks it. Empty means "follow whatever is in force",
   // so publishing a new rulebook moves an unpinned reader forward rather than freezing them.
   const [pinnedId, setPinnedId] = useState("");
   const ont = (pinnedId ? ontQ.data?.find((o) => o.id === pinnedId) : undefined) ?? inForce;
   const tpl = ont ? tplQ.data?.find((tt) => tt.template_key === ont.target_template_key) : undefined;
-  const { data, isPending, isError, error } = useExtraction(id, ont?.id, tpl?.id, ready);
+  // `rulebook` is what THIS run recorded — keyed on this document and this choice, so switching the
+  // pick cannot leave the previous run's rulebook labelling the new one.
+  const { data, rulebook, isPending, isError, error } = useExtraction(id, ont?.id, tpl?.id, ready);
 
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto", padding: "22px 30px 60px" }}>
@@ -315,11 +373,12 @@ export default function ExtractionView() {
       </button>
 
       {/* Above the results, and present while one is still running: which rulebook governs this
-          run is a decision, so it belongs where the run is, not only in a file on the server. */}
+          run is a decision, so it belongs where the run is, not only in a file on the server —
+          and what the run RECORDED belongs next to the figures it produced. */}
       {ontQ.data && ontQ.data.length > 0 && (
         <RulebookPicker
-          rows={ontQ.data} inForce={inForce} chosen={ont} onChoose={setPinnedId}
-          templateKey={selectedTemplateKey ?? tpl?.template_key} t={t}
+          rows={ontQ.data} inForce={inForce} chosen={ont} record={rulebook}
+          onChoose={setPinnedId} templateKey={selectedTemplateKey ?? tpl?.template_key} t={t}
         />
       )}
 

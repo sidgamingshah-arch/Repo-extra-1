@@ -208,6 +208,25 @@ def _two_column_body(y0: float = 0.13) -> list[Word]:
     ]
 
 
+def _group_company_page() -> list[Word]:
+    """The HKEX house style in words rather than through a renderer: "Group" over one dated pair,
+    "Company" over the other, and the scale declared in the statement's own header."""
+    words = [
+        _w("RMB'000", 0.55, 0.03, 0.06),
+        _w("Group", 0.58, 0.055), _w("Company", 0.80, 0.055),
+        _w("2024", 0.55, 0.08), _w("2023", 0.67, 0.08),
+        _w("2024", 0.79, 0.08), _w("2023", 0.91, 0.08),
+    ]
+    body = [("Inventories", ("2,000", "1,800", "200", "180")),
+            ("Receivables", ("3,410", "2,900", "341", "290")),
+            ("Cash", ("1,204", "980", "120", "98"))]
+    for i, (label, cells) in enumerate(body):
+        y = 0.12 + i * 0.04
+        words.append(_w(label, 0.10, y, 0.10))
+        words += [_w(v, x, y) for v, x in zip(cells, (0.55, 0.67, 0.79, 0.91))]
+    return words
+
+
 def test_a_row_that_reports_an_amount_is_never_a_basis_header():
     """Each of the next three tests strips the shape down to ONE guard: everything else about the
     row would pass. Here both captions are in the header area, in separate runs, over the value
@@ -275,6 +294,79 @@ def test_a_band_row_printed_tight_against_the_statement_is_still_read():
                            ("consolidated", "prior"): "1800",
                            ("standalone", "current"): "200",
                            ("standalone", "prior"): "180"}
+
+
+def test_the_band_row_itself_is_never_emitted_as_a_line_item():
+    """The row that DECLARES the banding is furniture. It is printed paragraph-tight above the year
+    captions, so the wrapped-label merge folds the two together and the column header arrived at the
+    main loop as a row labelled "Group Company" carrying 2024, 2023, 2024, 2023 — four column YEARS
+    filed as amounts, split neatly across the two bases the same row had just defined. A year read
+    as a figure is the worst kind of wrong number: 2,024 is a plausible amount, it sits in a real
+    value column under a real basis, and no total on the page contradicts it."""
+    pytest.importorskip("reportlab")
+    from tests.fixtures.generate import make_group_company_pdf
+
+    items, _ = _build(_pdf_words(make_group_company_pdf()))
+    assert [i.source_label for i in items] == [
+        "Investments in subsidiaries", "Trade receivables", "Cash and cash equivalents",
+        "Total assets"]
+    # …and no fact anywhere on the page is a year.
+    assert not [str(v.value) for i in items for v in i.values.values()
+                if str(v.value) in {"2024", "2023"}]
+
+
+def _tall_bilingual_header_page() -> list[Word]:
+    """A bilingual face whose header block is NINE printed lines deep before the basis captions.
+
+    Nothing here is unusual: a running header in both languages, the statement title in both, the
+    period caption in both, the currency note, the scale — and only then "Group | Company" over the
+    dated columns. It is the header of the filings this corpus is made of.
+    """
+    words = [
+        _w("Acme", 0.10, 0.020, 0.05), _w("Holdings", 0.16, 0.020, 0.07),
+        _w("艾克美控股有限公司", 0.10, 0.038, 0.14),
+        _w("Consolidated", 0.10, 0.056, 0.09), _w("Statement", 0.20, 0.056, 0.07),
+        _w("of", 0.28, 0.056, 0.02), _w("Financial", 0.31, 0.056, 0.06),
+        _w("Position", 0.38, 0.056, 0.05),
+        _w("綜合財務狀況表", 0.10, 0.074, 0.11),
+        _w("As", 0.10, 0.092, 0.02), _w("at", 0.13, 0.092, 0.02),
+        _w("31", 0.16, 0.092, 0.02), _w("December", 0.19, 0.092, 0.07),
+        _w("2024", 0.27, 0.092, 0.03),
+        _w("於二零二四年十二月三十一日", 0.10, 0.110, 0.18),
+        _w("(Expressed", 0.10, 0.128, 0.07), _w("in", 0.18, 0.128, 0.02),
+        _w("Renminbi)", 0.21, 0.128, 0.07),
+        _w("RMB'000", 0.55, 0.146, 0.06),
+        # the basis captions — printed row nine, which a fixed eight-row bound never reached
+        _w("Group", 0.58, 0.164), _w("Company", 0.80, 0.164),
+        _w("2024", 0.55, 0.182), _w("2023", 0.67, 0.182),
+        _w("2024", 0.79, 0.182), _w("2023", 0.91, 0.182),
+    ]
+    body = [("Inventories", ("2,000", "1,800", "200", "180")),
+            ("Receivables", ("3,410", "2,900", "341", "290")),
+            ("Cash", ("1,204", "980", "120", "98"))]
+    for i, (label, cells) in enumerate(body):
+        y = 0.22 + i * 0.04
+        words.append(_w(label, 0.10, y, 0.10))
+        words += [_w(v, x, y) for v, x in zip(cells, (0.55, 0.67, 0.79, 0.91))]
+    return words
+
+
+def test_a_tall_bilingual_header_still_bands_the_page():
+    """The header-area bound was a fixed count of eight printed rows, which is a bound on the wrong
+    quantity: a bilingual filing stacks two running-header lines, two title lines, two period
+    captions and a units line before it prints the basis captions, so they land on row nine and the
+    Group|Company banding was lost — silently adding the Company's column to the Group's. Bounded by
+    the geometry instead (the value-column header band; the page fraction), with every false-positive
+    veto untouched, because a false positive SPLITS a comparative."""
+    items, logs = _build(_tall_bilingual_header_page())
+    inv = next(i for i in items if i.source_label == "Inventories")
+    assert _slots(inv) == {("consolidated", "current"): "2000",
+                          ("consolidated", "prior"): "1800",
+                          ("standalone", "current"): "200",
+                          ("standalone", "prior"): "180"}
+    assert any("entity_scope=two_basis_header" in m for m in logs), logs
+    # The same region is what the units caption is resolved from — one header band, one bound.
+    assert any("units=CNY/thousand" in m for m in logs), logs
 
 
 def test_a_basis_caption_outside_the_header_area_is_ignored():
@@ -371,6 +463,33 @@ def test_a_cjk_dated_header_is_read_as_a_date():
                            ("consolidated", "current"): "1200"}
 
 
+def test_an_arabic_year_under_a_cjk_suffix_is_read_as_a_date():
+    """A bilingual filing heads its comparative columns "2024年" / "2023年" as readily as it does in
+    CJK numerals, and the suffix hid the year from both patterns that could have read it: the digits
+    are not word-final for ``\\b(19|20)\\d{2}\\b`` (年 is a word character) and the token is not a CJK
+    date. With no readable heading the current period fell back to column POSITION — a year out on
+    every filing that prints the comparative first, which is exactly what ``period_selection``
+    declares against."""
+    words = [
+        _w("2023年", 0.74, 0.05, 0.05), _w("2024年", 0.86, 0.05, 0.05),
+        _w("收益", 0.10, 0.09), _w("1,000", 0.74, 0.09), _w("1,200", 0.86, 0.09),
+        _w("成本", 0.10, 0.13), _w("400", 0.74, 0.13), _w("500", 0.86, 0.13),
+        _w("溢利", 0.10, 0.17), _w("600", 0.74, 0.17), _w("700", 0.86, 0.17),
+    ]
+    items, logs = _build(words)
+    rev = next(i for i in items if "收益" in i.source_label)
+    assert _slots(rev) == {("consolidated", "prior"): "1000",
+                           ("consolidated", "current"): "1200"}
+    assert any("period_selection=by_heading_date" in m for m in logs), logs
+    # The printed heading is kept as the column's display date, as it is for every other form.
+    assert {v.period_label: v.period_display for v in rev.values.values()} == {
+        "prior": "2023年", "current": "2024年"}
+    # The same form carries the month and the day, and an interim filing prints two periods of one
+    # year — so the year alone cannot order them.
+    assert rr._period_date("2024年12月31日") == (2024, 12, 31)
+    assert rr._period_date("2024年6月30日") == (2024, 6, 30)
+
+
 def _restated_page(marker: str = "(restated)") -> list[Word]:
     return [
         _w("2024", 0.62, 0.05), _w("2023", 0.74, 0.05), _w("2023", 0.86, 0.05),
@@ -444,23 +563,30 @@ def test_a_unit_the_rulebook_does_not_declare_is_not_read_off_the_page():
     assert units == {("", "1")}
 
 
-def test_the_matrix_path_also_persists_the_statements_unit():
-    """"Persist unit on every fact" is not qualified by layout: a statement of changes in equity
-    declares its scale in its own header like any other face, and its facts are the ones an equity
-    reconciliation reads."""
+_MATRIX_ROWS = [("At 1 January 2024", ["365,138", "1,200", "17,619", "21,494", "21,879"]),
+                ("Loss for the year", ["–", "–", "–", "(7,991)", "(7,991)"]),
+                ("Dividends paid", ["–", "–", "–", "(1,220)", "(1,220)"])]
+
+
+def _matrix_page() -> list[Word]:
+    """A statement of changes in equity: five component columns, its scale in its own header."""
     right = [0.50, 0.60, 0.70, 0.80, 0.90]
     names = ["Capital", "Premium", "Reserves", "Profits", "Total"]
     words = [_w(n, x - 0.05, 0.10, 0.05) for n, x in zip(names, right)]
     words += [_w("RMB'000", x - 0.05, 0.13, 0.05) for x in right]
-    rows = [("At 1 January 2024", ["365,138", "1,200", "17,619", "21,494", "21,879"]),
-            ("Loss for the year", ["–", "–", "–", "(7,991)", "(7,991)"]),
-            ("Dividends paid", ["–", "–", "–", "(1,220)", "(1,220)"])]
-    for i, (label, cells) in enumerate(rows):
+    for i, (label, cells) in enumerate(_MATRIX_ROWS):
         y = 0.20 + i * 0.04
         words += [_w(tok, 0.05 + j * 0.05, y, 0.045) for j, tok in enumerate(label.split())]
         words += [_w(v, x - 0.008 * len(v), y, 0.008 * len(v)) for v, x in zip(cells, right)]
-    items, _ = _build(words, statement="changes_in_equity")
-    assert [i.source_label for i in items] == [label for label, _ in rows]
+    return words
+
+
+def test_the_matrix_path_also_persists_the_statements_unit():
+    """"Persist unit on every fact" is not qualified by layout: a statement of changes in equity
+    declares its scale in its own header like any other face, and its facts are the ones an equity
+    reconciliation reads."""
+    items, _ = _build(_matrix_page(), statement="changes_in_equity")
+    assert [i.source_label for i in items] == [label for label, _ in _MATRIX_ROWS]
     units = {(v.unit_ctx.currency, str(v.unit_ctx.scale_factor))
              for i in items for v in i.values.values()}
     assert units == {("CNY", "1000")}
@@ -490,6 +616,80 @@ def test_removing_the_declared_factor_removes_the_conflict_check():
     units = {str(v.unit_ctx.scale_factor) for i in items for v in i.values.values()}
     assert units == {"1000"}
     assert not any("units_conflict" in m for m in logs), logs
+
+
+# --- a threaded rulebook beats the module-level default, on every path -------------------------
+
+def _group_company_sheet() -> bytes:
+    openpyxl = pytest.importorskip("openpyxl")
+    import io
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "BS"
+    for row in (["", "RMB'000", None, "RMB'000", None],
+                ["", "Group", None, "Company", None],
+                ["", "2024", "2023", "2024", "2023"],
+                ["Inventories", 2000, 1800, 200, 180],
+                ["Trade receivables", 3410, 2900, 310, 270],
+                ["Cash and cash equivalents", 1204, 980, 105, 90]):
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_a_passed_rulebook_beats_the_module_default_on_every_path(monkeypatch, tmp_path):
+    """``build_line_items(scope=…, normalisation=…)`` is how a run pinned to its own rulebook has its
+    pages read by that rulebook. It is only worth anything if EVERY path honours it, so this pins the
+    rulebook in force to one that declares nothing — no entity signals, no units signals — and then
+    passes the real blocks explicitly to each path in turn. Both halves are asserted: the sabotaged
+    default really is blind, and the passed blocks really do restore the reading.
+
+    The workbook path is the one this closes. It read ``in_force_rules()`` with no parameter to pass
+    anything in, so a run pinned to rulebook A had its spreadsheets read under rulebook B — the same
+    figures governed by different rules depending on the file format, which is the one thing a
+    pinned rulebook exists to prevent.
+    """
+    from app.services.excel_extract import extract_workbook
+
+    raw = json.loads(RULEBOOK.read_text(encoding="utf-8"))
+    raw["scope_selection"]["entity_scope"]["signals"] = []
+    raw["scope_selection"]["units_and_currency"]["signals"] = []
+    blind = tmp_path / "blind.json"
+    blind.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr(rr, "_RULEBOOK_IN_FORCE", blind)
+    rr.in_force_rules.cache_clear()
+
+    def units(items) -> set[tuple[str, str]]:
+        return {(v.unit_ctx.currency, str(v.unit_ctx.scale_factor))
+                for i in items for v in i.values.values()}
+
+    def bases(items) -> set[str]:
+        return {v.basis.value for i in items for v in i.values.values()}
+
+    try:
+        pinned = {"scope": _scope(), "normalisation": _normalisation()}
+        # The default in force is genuinely blind: no unit resolved, and no Group|Company band.
+        assert units(_build(_unit_page())[0]) == {("", "1")}
+        assert bases(_build(_group_company_page())[0]) == {"consolidated"}
+        assert units(_build(_matrix_page(), statement="changes_in_equity")[0]) == {("", "1")}
+        assert units(extract_workbook(_group_company_sheet(), document_id="x")) == {("", "1")}
+        assert {v.basis.value for i in extract_workbook(_group_company_sheet(), document_id="x")
+                for v in i.values.values()} == {"consolidated"}
+
+        # Passed in, the rulebook governs — two-column, matrix, notes (on_face=False) and workbook.
+        assert units(_build(_unit_page(), **pinned)[0]) == {("CNY", "1000")}
+        assert bases(_build(_group_company_page(), **pinned)[0]) == {"consolidated", "standalone"}
+        assert units(_build(_matrix_page(), statement="changes_in_equity",
+                            **pinned)[0]) == {("CNY", "1000")}
+        assert units(_build(_unit_page(), on_face=False, **pinned)[0]) == {("CNY", "1000")}
+        wb_items = extract_workbook(_group_company_sheet(), document_id="x", **pinned)
+        assert units(wb_items) == {("CNY", "1000")}
+        assert {v.basis.value for i in wb_items for v in i.values.values()} == {
+            "consolidated", "standalone"}
+    finally:
+        rr.in_force_rules.cache_clear()
 
 
 # --- column_guard -----------------------------------------------------------------------------

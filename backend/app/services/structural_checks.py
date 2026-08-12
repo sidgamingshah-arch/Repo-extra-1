@@ -38,7 +38,9 @@ one. It is a hypothesis attached to the finding, never an adjustment.
 
 EVERY relation produces a row, including the ones that could not be run, and each skip carries a
 ``reason`` a caller can classify (:mod:`app.services.coverage`). That is what stops "3 relations
-passed" from reading as "the statement is validated".
+passed" from reading as "the statement is validated". A relation the RULEBOOK authored so that it
+can never run is not a skip at all — it is reported with the distinct ``error`` status, see
+``AUTHORING_REASONS``.
 """
 from __future__ import annotations
 
@@ -68,6 +70,26 @@ Slot = tuple[str, str | None]          # (basis, period_label)
 # classified TAUTOLOGICAL — not recoverable by better extraction, and never a pass.
 DERIVED_METHODS = ("llm_gap_routing",)
 
+# The ways a RULEBOOK relation or guard can be authored so that it never runs on any filing: an
+# expression that does not parse, a term naming nothing the template declares, a term repeated, a
+# guard sentence matching no predicate. These are reported with their own status, not as
+# ``skipped``, because a skip is a coverage fact better extraction can recover and these never are.
+#
+# The one that shipped proves why the distinction has to be visible in the row: ``cf_movement`` is
+# declared BLOCKING and named three terms (``net_operating``, ``net_investing``, ``net_financing``)
+# the template has never declared, so it sat in the skip pile beside the input-absent rows on every
+# filing — occupying the slot where a reviewer expects cash-flow assurance while proving nothing,
+# and looking for all the world like thin extraction. ``coverage`` alarms on it (see
+# ``ALARM_UNENFORCEABLE``); this is what stops it reading as an ordinary skip on the way there.
+#
+# ``unsupported_op`` is deliberately NOT here. It is not a rulebook defect: the template schema
+# refuses the op at the upload gate (``schemas.template.Rollup``), so an op reaching evaluation is a
+# definition stored before that gate existed. It already gets the authoring error the loud way — as
+# a rejected upload — and the row here is the read-path backstop.
+AUTHORING_REASONS = ("unparsable_expr", "unresolved_terms", "repeated_term",
+                     "guard_unrecognised", "guard_components_unknown")
+STATUS_AUTHORING_ERROR = "error"
+
 
 @dataclass(frozen=True)
 class Relation:
@@ -77,9 +99,10 @@ class Relation:
     (``a = b + c - d``); empty means the multiplier follows ``op``. ``severity`` is the rulebook's
     own consequence-of-a-break, defaulted to blocking for the template's relations so their
     existing treatment is unchanged. ``broken`` is set when the relation could not be BUILT at all
-    (an unparsable expression, a term naming nothing in the template) — it is reported as a skip
-    with that reason rather than dropped, because a declared relation the engine silently discards
-    is indistinguishable from one that passed.
+    (an unparsable expression, a term naming nothing in the template) — it is reported with that
+    reason rather than dropped, because a declared relation the engine silently discards is
+    indistinguishable from one that passed. Those reasons carry the ``error`` status, not
+    ``skipped``: see ``AUTHORING_REASONS``.
     """
 
     id: str
@@ -382,9 +405,16 @@ def section_relations(template: TemplateDefinition, ontology) -> list[Relation]:
 # so editing a key in the rulebook changes what is compared, and deleting the sentence removes
 # the check. A sentence matching no phrase is reported as ``guard_unrecognised``: the alternative
 # is a rulebook stating a guard that quietly does nothing.
+#
+# The third column is the precondition, and ``"always"`` is a promise ``_guard_slot`` has to keep:
+# :mod:`app.services.coverage` calls a skip from an unconditional guard a defect in this module, so
+# a guard listed "always" that CAN legitimately have nothing to say would make that alarm cry wolf
+# on ordinary filings — and an alarm that fires on healthy runs is one nobody reads. Only
+# ``mutually_exclusive`` answers on every column; the other two each need something of the filing
+# and say so, which is why their skips land in the recoverable bucket instead.
 _GUARD_PHRASES: tuple[tuple[str, str, str], ...] = (
-    ("sign_convention", "sign_expectation", "always"),
-    ("resolved as consolidated", "consolidation_eliminated", "always"),
+    ("sign_convention", "sign_expectation", "a concept with a declared sign convention extracted"),
+    ("resolved as consolidated", "consolidation_eliminated", "a consolidated column"),
     ("populated together with", "mutually_exclusive", "always"),
     # "A equal to B while C is non-zero" — three operands, and C decides whether A == B is even
     # a finding, so the guard has something to say only once C is extracted.
@@ -656,15 +686,26 @@ def _check(rel: Relation, slot: Slot, vals: MappedValues,
     )
 
 
+def _not_evaluable_status(reason: str) -> str:
+    """``skipped`` for a fact about the filing, ``error`` for a defect in the rule as authored.
+
+    Both are "no answer", but only one of them is recoverable, and a reader who cannot tell them
+    apart has no way to notice that a rule declared BLOCKING is unenforceable. See
+    ``AUTHORING_REASONS``.
+    """
+    return STATUS_AUTHORING_ERROR if reason in AUTHORING_REASONS else "skipped"
+
+
 def _skip(rel: Relation, slots: list[Slot], reason: str, extra: dict) -> RuleResult:
     """One 'not evaluable' row per relation+reason (not per period), so a partial extraction
     reports its coverage compactly instead of flooding the report."""
     return RuleResult(
         rule_id=rel.id, kind=rel.kind,
         scope_key=(";".join(_scope(s) for s in slots) if slots else "—"),
-        status="skipped",
+        status=_not_evaluable_status(reason),
         details={"target": rel.target, "components": list(rel.components), "op": rel.op,
                  "statement": rel.statement, "reason": reason, "severity": rel.severity,
+                 **({"authoring_defect": True} if reason in AUTHORING_REASONS else {}),
                  **rel.extra, **extra},
     )
 
@@ -769,9 +810,10 @@ def _violation_keys(violation: dict) -> list[str]:
 
 def _guard_skip(guard: Guard, reason: str, extra: dict) -> RuleResult:
     return RuleResult(
-        rule_id=guard.id, kind="guard", scope_key="—", status="skipped",
+        rule_id=guard.id, kind="guard", scope_key="—", status=_not_evaluable_status(reason),
         details={"target": guard.keys[0] if guard.keys else "", "components": list(guard.keys[1:]),
                  "op": guard.predicate, "statement": guard.statement, "reason": reason,
                  "guard": guard.predicate, "severity": guard.severity,
+                 **({"authoring_defect": True} if reason in AUTHORING_REASONS else {}),
                  "precondition": guard.precondition, "rule_text": guard.text, **extra},
     )
