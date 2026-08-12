@@ -71,14 +71,28 @@ _NOTE_HEADER = re.compile(r"^\s*note", re.IGNORECASE)
 _NOTE_NUM = re.compile(r"(\d{1,3})")
 
 
-def extract_workbook(data: bytes, *, document_id: str | None = None) -> list[LineItem]:
+def extract_workbook(data: bytes, *, document_id: str | None = None, log=None) -> list[LineItem]:
     """Read every sheet; emit a LineItem per labelled, numeric row with cell provenance.
 
-    Reaches parity with the PDF path: a dedicated "Note"/"Note No." column is detected and
-    its number attributed as the row's note reference (not consumed as a value), and a
-    Consolidated / Standalone header band maps each value column to its basis so both are
-    extracted from one sheet."""
+    Reaches parity with the PDF path, and reads the same rulebook it does
+    (``scope_selection``): a dedicated "Note"/"Note No." column becomes the row's note reference
+    rather than a value; a two-basis header band (Group | Company as well as Consolidated |
+    Standalone) maps each value column to its basis; the current period is the column whose
+    heading is the latest DATE; the sheet's declared unit is persisted on every fact; and two
+    facts differing on a declared dimension are kept as two facts (``column_guard``)."""
     import openpyxl
+
+    from app.services.row_reconstruct import (
+        _entity_signals,
+        _restated_markers,
+        guard_dimensions,
+        in_force_rules,
+        store_fact,
+    )
+
+    scope, _norm = in_force_rules()
+    signals, restated = _entity_signals(scope), _restated_markers(scope)
+    dims = guard_dimensions(scope)
 
     wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
     items: list[LineItem] = []
@@ -95,8 +109,13 @@ def extract_workbook(data: bytes, *, document_id: str | None = None) -> list[Lin
             note_col = _detect_note_col(rows, label_col, value_cols)
             if note_col is not None and note_col in value_cols:
                 value_cols = [c for c in value_cols if c != note_col]
-            basis_map = _detect_basis_bands(rows, value_cols)
-            headers = _period_headers(rows, value_cols, basis_map)
+            basis_map = _detect_basis_bands(rows, value_cols, label_col, signals)
+            headers = _period_headers(rows, value_cols, basis_map,
+                                      signals=signals, restated=restated)
+            unit_ctx = _sheet_unit(rows, scope, sheet_index)
+            if log and unit_ctx.units_label:
+                log(f"extract:sheet={name}:units="
+                    f"{unit_ctx.currency or 'unknown_ccy'}/{unit_ctx.units_label}")
             for r_idx, row in enumerate(rows):
                 if label_col >= len(row):
                     continue
@@ -104,13 +123,32 @@ def extract_workbook(data: bytes, *, document_id: str | None = None) -> list[Lin
                 if not isinstance(label, str) or not label.strip():
                     continue
                 li = _row_item(name, sheet_index, r_idx, label.strip(), row, label_col,
-                               value_cols, headers, document_id, ordinal, note_col, basis_map)
+                               value_cols, headers, document_id, ordinal, note_col, basis_map,
+                               unit_ctx=unit_ctx, dims=dims, log=log, store=store_fact)
                 if li is not None:
                     items.append(li)
                     ordinal += 1
     finally:
         wb.close()
     return items
+
+
+def _sheet_unit(rows: list[list], scope, sheet_index: int) -> UnitContext:
+    """The unit declared in this SHEET's header, persisted on every fact it produces.
+
+    ``units_and_currency`` says to re-resolve per statement and never to normalise scale
+    silently: a workbook whose sheets are in different scales gets one unit per sheet, and a
+    sheet that declares none gets an empty context rather than an assumed factor of one.
+    """
+    from app.services.row_reconstruct import _unit_context, _unit_signals, _fold_for_match
+
+    signals = _unit_signals(scope)
+    for row in rows[:8]:
+        blob = _fold_for_match(" ".join(str(v) for v in row if isinstance(v, str)))
+        for folded, ccy, scale, word in signals:
+            if folded and folded in blob:
+                return _unit_context((ccy, scale, word or folded), sheet_index)
+    return UnitContext()
 
 
 def _detect_note_col(rows: list[list], label_col: int, value_cols: list[int]) -> int | None:
@@ -126,29 +164,44 @@ def _detect_note_col(rows: list[list], label_col: int, value_cols: list[int]) ->
     return None
 
 
-def _detect_basis_bands(rows: list[list], value_cols: list[int]) -> dict[int, Basis]:
-    """Map each value column to Consolidated/Standalone from a header band that names them
-    (a token applies to value columns at/after its own column, until the next token)."""
-    markers: list[tuple[int, Basis]] = []
+def _detect_basis_bands(rows: list[list], value_cols: list[int],
+                        label_col: int | None = None,
+                        signals: tuple[tuple[Basis, str], ...] = ()) -> dict[int, Basis]:
+    """Map each value column to a basis from a header band that names them (a caption applies to
+    value columns at/after its own column, until the next caption).
+
+    Driven by ``scope_selection.entity_scope.signals``, so a sheet headed "Group | Company" —
+    which the previous token list did not know — bands as one, and three defects it had are
+    closed with it:
+
+    * it scanned the LABEL column, where "Consolidated statement of financial position" and a
+      company name both live, so the label cell defined the band for the whole sheet;
+    * it stopped at the FIRST row carrying any caption, so a two-line header whose basis captions
+      sit on the second line was never reached;
+    * it accepted ONE caption, and one caption relabels every column — the same both-or-nothing
+      rule the PDF path applies (see ``row_reconstruct._basis_bands``).
+    """
+    from app.services.row_reconstruct import _signal_side
+
+    best: list[tuple[int, Basis]] = []
     for row in rows[:8]:
-        for c in range(len(row)):
-            v = row[c]
-            if not isinstance(v, str):
+        markers: list[tuple[int, Basis]] = []
+        for c in value_cols:                     # value columns only: never the label column
+            if c == label_col or c >= len(row):
                 continue
-            low = v.strip().lower()
-            if "consolidated" in low:
-                markers.append((c, Basis.CONSOLIDATED))
-            elif "standalone" in low or "separate" in low or "company" == low:
-                markers.append((c, Basis.STANDALONE))
-        if markers:
+            side = _signal_side(row[c], signals) if isinstance(row[c], str) else None
+            if side is not None:
+                markers.append((c, side))
+        if len({b for _, b in markers}) >= 2:    # both-or-nothing
+            best = markers
             break
-    if not markers:
+    if not best:
         return {}
-    markers.sort()
+    best.sort()
     out: dict[int, Basis] = {}
     for c in value_cols:
-        basis = markers[0][1]
-        for mc, mb in markers:
+        basis = best[0][1]
+        for mc, mb in best:
             if mc <= c:
                 basis = mb
             else:
@@ -176,15 +229,13 @@ def _detect_columns(rows: list[list]) -> tuple[int | None, list[int]]:
     return label_col, value_cols
 
 
-_BASIS_TOKENS = ("consolidated", "standalone", "separate")
-
-
 def _positional(i: int, c: int) -> str:
     return "current" if i == 0 else "prior" if i == 1 else f"col{c}"
 
 
-def _period_headers(rows: list[list], value_cols: list[int],
-                    basis_map=None) -> dict[int, tuple[str, str | None]]:
+def _period_headers(rows: list[list], value_cols: list[int], basis_map=None, *,
+                    signals: tuple[tuple[Basis, str], ...] = (),
+                    restated: tuple[str, ...] = ()) -> dict[int, tuple[str, str | None]]:
     """(period_label, period_display) per value column, from the first text header row.
 
     A header that NAMES A PERIOD ("31 December 2024", "FY2025", "2023") is labelled positionally —
@@ -203,33 +254,63 @@ def _period_headers(rows: list[list], value_cols: list[int],
     and two of each period, so "current" is the first column of its own band. Counting across the
     whole row would label the standalone pair col2/col3 and leave the standalone statement with no
     current or prior column at all.
+
+    Which of the period columns is the CURRENT one comes from the heading date when every column
+    of a band carries one (``scope_selection.period_selection``: "not from column position"), and a
+    column headed as restated keeps the comparative slot without displacing an original printed
+    beside it (``restatement_rule``).
     """
-    from app.services.periods import looks_like_period
-
-    def positional(c: int) -> str:
-        band = (basis_map or {}).get(c, Basis.CONSOLIDATED)
-        within = [x for x in value_cols if (basis_map or {}).get(x, Basis.CONSOLIDATED) == band]
-        return _positional(within.index(c) if c in within else 0, c)
-
     for row in rows:
         if any(c < len(row) and isinstance(row[c], str) and row[c].strip() for c in value_cols):
             has_numbers = any(_to_decimal(row[c]) is not None for c in value_cols)
+            # A basis band names entities, not periods. Recognised from the SAME declared signals
+            # the band detector uses — with "group"/"company" missing from the old token list, a
+            # Group | Company band row was read as the period header and every column took the
+            # entity's name as its period.
+            from app.services.row_reconstruct import _signal_side
+
             is_basis_band = any(c < len(row) and isinstance(row[c], str)
-                                and any(tok in row[c].lower() for tok in _BASIS_TOKENS)
+                                and _signal_side(row[c], signals) is not None
                                 for c in value_cols)
             if not has_numbers and not is_basis_band:
-                out: dict[int, tuple[str, str | None]] = {}
-                for c in value_cols:
-                    text = str(row[c]).strip() if c < len(row) and row[c] else ""
-                    if not text:
-                        out[c] = (positional(c), None)
-                    elif looks_like_period(text):
-                        out[c] = (positional(c), text)
-                    else:
-                        out[c] = (text, text)          # an equity component names itself
-                return out
+                texts = {c: (str(row[c]).strip() if c < len(row) and row[c] else "")
+                         for c in value_cols}
+                return _column_labels(texts, value_cols, basis_map, restated)
     # No text header row at all: positional, first value column of each basis = current period.
-    return {c: (positional(c), None) for c in value_cols}
+    return _column_labels({c: "" for c in value_cols}, value_cols, basis_map, restated)
+
+
+def _column_labels(texts: dict[int, str], value_cols: list[int], basis_map,
+                   restated: tuple[str, ...]) -> dict[int, tuple[str, str | None]]:
+    """(period_label, period_display) per value column, ordered by heading date within each basis."""
+    from app.services.periods import looks_like_period
+    from app.services.row_reconstruct import _is_restated, _period_date
+
+    out: dict[int, tuple[str, str | None]] = {}
+    bands = {(basis_map or {}).get(c, Basis.CONSOLIDATED) for c in value_cols}
+    for band in bands:
+        cols = [c for c in value_cols if (basis_map or {}).get(c, Basis.CONSOLIDATED) == band]
+        # A header that names something other than a period ("Retained profits") is an equity
+        # component, and its identity IS its name.
+        periods = [c for c in cols if not texts[c] or looks_like_period(texts[c])]
+        dates = {c: _period_date(texts[c]) for c in periods}
+        flags = {c: _is_restated(texts[c], restated) for c in periods}
+        groups = sorted({d for d in dates.values() if d}, reverse=True)
+        if len(groups) > 1 and all(dates[c] for c in periods):
+            slot_of = {c: groups.index(dates[c]) for c in periods}
+        else:
+            slot_of = {c: i for i, c in enumerate(periods)}
+        used: set[str] = set()
+        for c in sorted(periods, key=lambda c: (slot_of[c], flags[c])):
+            base = _positional(slot_of[c], c)
+            label = base if base not in used else (
+                f"{base}_restated" if flags[c] else f"{base}_col{c}")
+            used.add(label)
+            out[c] = (label, texts[c] or None)
+        for c in cols:
+            if c not in out:
+                out[c] = (texts[c], texts[c])
+    return out
 
 
 def _note_from_cell(v) -> str | None:
@@ -245,7 +326,9 @@ def _note_from_cell(v) -> str | None:
 
 
 def _row_item(sheet, sheet_index, r_idx, label, row, label_col, value_cols, headers,
-              document_id, ordinal, note_col=None, basis_map=None) -> LineItem | None:
+              document_id, ordinal, note_col=None, basis_map=None, *,
+              unit_ctx: UnitContext | None = None, dims: tuple[str, ...] = (),
+              log=None, store=None) -> LineItem | None:
     from app.core.models.line_item import NoteRef
 
     li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
@@ -272,8 +355,14 @@ def _row_item(sheet, sheet_index, r_idx, label, row, label_col, value_cols, head
         label_, display_ = headers.get(c, (f"col{c}", None))
         ev = ExtractedValue(value_raw=dec, value=dec, basis=basis,
                             period_label=label_, period_display=display_,
-                            unit_ctx=UnitContext(), provenance=prov)
-        li.set_value(ev)
+                            unit_ctx=unit_ctx or UnitContext(), provenance=prov)
+        if store is not None:
+            # Two columns can carry the same header text ("Total" twice, a period repeated under
+            # two units): column_guard says those are distinct facts, and set_value alone would
+            # keep whichever cell was read last.
+            store(li, ev, dims, log=log, where=f"sheet={sheet}:{r_idx + 1}:")
+        else:
+            li.set_value(ev)
         got = True
     return li if got else None
 

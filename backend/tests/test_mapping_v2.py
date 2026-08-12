@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from app.config import get_settings
-from app.core.models.enums import MappingMethod
+from app.core.models.enums import LineRole, MappingMethod
 from app.schemas.loader import load_ontology
 from app.schemas.ontology import OntologyDefinition, OntologyMapping
 from app.services.mapping import (
@@ -461,6 +461,268 @@ def test_a_reroute_is_recorded_on_the_row_it_moved(v2):
     li = doc.line_items[0]
     assert li.canonical_key == BOTTOM_LINE
     assert "section_reroute_from:pl_profit_for_the_year" in li.confidence.flags
+
+
+# --- 4. extraction_mode: derive is COMPUTED, extract_or_derive may be printed -------------------
+# Both used to behave exactly like `extract` — only `do_not_extract` suppressed anything — so the
+# distinction the v2 file draws between "the framework computes this" and "the filing sometimes
+# prints it" existed only in the JSON.
+
+DERIVED = "pl_profit_before_exceptional_items_and_tax"
+
+
+def test_a_derive_concept_is_computed_and_never_bound_to_a_printed_caption(v2):
+    """It carries an alias ("Profit before exceptional items and tax") and the template invented the
+    line — HKEX filings do not print it. Offered as a candidate, a row that fuzzes against it
+    OVERWRITES the computation with whatever caption happened to score, at a confidence that looks
+    like a real hit. It stays EXTRACTABLE, because that is what `derive` means: the arithmetic in its
+    own `derivation` produces it."""
+    m = _matcher(v2)
+
+    assert m._computed_only == {DERIVED}
+    assert DERIVED in m._extractable_keys()          # extractable — by computation
+    assert DERIVED not in m._mappable_keys()         # …and not by a caption
+    assert not [k for keys in m._alias_index.values() for k in keys if k == DERIVED]
+    assert DERIVED not in m._alias_by_key
+    assert not m._concept_payload([DERIVED])
+    assert m.match("Profit before exceptional items and tax",
+                   statement="profit_and_loss").canonical_key != DERIVED
+
+
+def test_extract_or_derive_is_still_bound_to_the_caption_that_prints_it(v2):
+    """The neighbouring value, and the reason `derive` cannot simply be read as "do not extract": 20
+    concepts are subtotals a filing may print on the face or leave to arithmetic. Refusing those would
+    sweep a printed subtotal into the section residual, the more expensive of the two mistakes."""
+    m = _matcher(v2)
+    printed = [c.canonical_key for c in v2.mappings if c.extraction_mode == "extract_or_derive"]
+
+    assert len(printed) == 20
+    assert set(printed) <= set(m._mappable_keys())
+    assert m.match("Total income", statement="profit_and_loss",
+                   section="REVENUE").canonical_key == "pl_income__total_income"
+
+
+def test_editing_extraction_mode_to_derive_takes_the_concept_out_of_matching():
+    """The A/B on the shipped file: change one concept's `extraction_mode` and the caption that used
+    to map to it stops mapping to it."""
+    edited = json.loads(json.dumps(V2))
+    for c in edited["mappings"]:
+        if c["canonical_key"] == "pl_income__total_income":
+            c["extraction_mode"] = "derive"
+    m = _matcher(load_ontology(edited, resolve=True))
+
+    assert m.match("Total income", statement="profit_and_loss",
+                   section="REVENUE").canonical_key != "pl_income__total_income"
+    assert "pl_income__total_income" in m._extractable_keys()
+
+
+# --- 5. the per-concept rulebook prose the decider is given --------------------------------------
+
+def test_the_criteria_the_rulebook_wrote_for_the_decision_reach_the_decider(v2):
+    """`section_disambiguation`, `derivation`, `is_gross_parent`/`children_if_decomposed` and
+    `equivalence` were authored for a reader and read by nobody. They are prose (or a graph over
+    keys), so the reader that can act on them is the semantic tier — which means the payload."""
+    m = _matcher(v2)
+    entries = {e["canonical_key"]: e
+               for e in m._concept_payload([c.canonical_key for c in v2.mappings])}
+
+    # 18 concepts carry the sentence that separates two look-alike captions.
+    assert sum(1 for e in entries.values() if "section_disambiguation" in e) == 18
+    assert "printed section only" in (
+        entries["bs_current_liabilities__current_lease_liabilities"]["section_disambiguation"])
+    # A subtotal the framework can compute says how, and says which mode it is in.
+    oci = entries["pl_other_comprehensive_income_for_the_year"]
+    assert oci["derivation"].startswith("pl_total_comprehensive_income_for_the_year")
+    assert oci["extraction_mode"] == "extract_or_derive"
+    # Containment, so the model does not propose the parent for a filing that prints the children.
+    reserves = entries["bs_equity__reserves"]
+    assert reserves["is_gross_parent"] is True
+    assert "bs_equity__share_premium" in reserves["children_if_decomposed"]
+    # One fact under two captions, so the twin is not read as a rival answer.
+    assert entries["bs_net_assets"]["same_fact_as"]["canonical_key"] == "bs_equity__total_equity"
+    assert "route to review" in entries["bs_net_assets"]["same_fact_as"]["rule"]
+
+
+def test_the_sections_residual_expectations_are_offered_without_naming_the_bucket(v2):
+    """`expected_components` lists the captions a section is EXPECTED to have no concept for. The
+    buckets are locked out of every candidate list, which left the model with no licence to answer
+    "none of these" — and a model offered concepts and a caption picks the nearest one, putting the
+    figure on a specific wrong line while the section still ties. So the expectations are handed over
+    and the bucket's own key is not."""
+    spy = Spy(items=[])
+    m = _matcher(v2, spy)
+    m.match_batch([("a", "Bank overdrafts")], statement="balance_sheet",
+                  sections={"a": "CURRENT LIABILITIES 流動負債"})
+
+    payload = spy.payloads[0]
+    expectations = payload["residual_expectations"]
+    assert [e["section"] for e in expectations] == ["current_liabilities"]
+    assert "Bank overdrafts" in expectations[0]["captions_with_no_dedicated_concept"]
+    # The bucket itself is still unnameable: the expectations carry no canonical_key, and no
+    # candidate the model may choose from is a residual.
+    assert set(expectations[0]) == {"section", "captions_with_no_dedicated_concept"}
+    assert not [c for c in payload["candidates"] if c["canonical_key"].endswith("__others")]
+    assert "empty canonical_key" in m._batch_system
+
+
+def test_editing_expected_components_changes_what_the_decider_is_told(v2):
+    edited = json.loads(json.dumps(V2))
+    for c in edited["mappings"]:
+        if c["canonical_key"] == "bs_current_liabilities__others":
+            c["expected_components"] = ["MARKER: a caption with no concept"]
+    spy = Spy(items=[])
+    _matcher(load_ontology(edited, resolve=True), spy).match_batch(
+        [("a", "Anything")], statement="balance_sheet",
+        sections={"a": "CURRENT LIABILITIES 流動負債"})
+
+    assert spy.payloads[0]["residual_expectations"][0][
+        "captions_with_no_dedicated_concept"] == ["MARKER: a caption with no concept"]
+
+
+# --- 5b/6. containment: a gross parent is not filed alongside its mapped children ---------------
+
+EQUITY = "CAPITAL AND RESERVES 資本及儲備"
+
+
+def _equity_doc(*captions: str):
+    """A balance-sheet page printing the given equity captions, one figure each."""
+    from app.core.models.document import DocumentModel, PageSource
+    from app.core.models.enums import Basis
+    from app.core.models.geometry import Provenance
+    from app.core.models.line_item import ExtractedValue, LineItem
+
+    doc = DocumentModel(filename="f.pdf")
+    doc.pages = [PageSource(index=0, statement="balance_sheet")]
+    for ordinal, caption in enumerate(captions):
+        li = LineItem(source_label=caption, ordinal=ordinal, section_hint=EQUITY)
+        li.set_value(ExtractedValue(
+            value=Decimal(100 + ordinal), value_raw=Decimal(100 + ordinal),
+            basis=Basis.CONSOLIDATED, period_label="current",
+            provenance=Provenance(page_index=0)))
+        doc.line_items.append(li)
+    return doc
+
+
+def _run_stage(doc, ontology):
+    from app.core.stage import PipelineContext
+    from app.stages.map_ontology import MapOntologyStage
+
+    ctx = PipelineContext(raw_bytes=b"")
+    ctx.ontology = ontology                              # type: ignore[attr-defined]
+    ctx.settings.llm.provider = "stub"                   # deterministic, no provider call
+    MapOntologyStage().run(doc, ctx)
+    return {li.source_label: li for li in doc.line_items}
+
+
+def test_a_gross_parent_is_not_filed_alongside_the_children_it_contains(v2):
+    """"If any component is printed, populate components and leave the aggregate null." Filing both
+    double-counts equity, and every check still passes: the statement stays internally consistent, it
+    is only wrong. The aggregate's row keeps its value, provenance and label and loses the KEY."""
+    rows = _run_stage(_equity_doc("Reserves", "Share premium"), v2)
+
+    assert rows["Share premium"].canonical_key == "bs_equity__share_premium"
+    assert rows["Reserves"].canonical_key is None
+    flags = rows["Reserves"].confidence.flags
+    assert "alloc:parent_gross_evidence_only" in flags
+    assert "contains_mapped_children:bs_equity__share_premium" in flags
+    # Marked a subtotal, which it is — and which is what keeps the residual sweep from adding it back
+    # into the section under the name "Others", strictly worse than the double count.
+    assert rows["Reserves"].role is LineRole.SUBTOTAL
+    assert "alloc:child_component" in rows["Share premium"].confidence.flags
+
+
+def test_the_aggregate_survives_when_the_face_prints_only_it(v2):
+    """"Populate the aggregate only when the face prints a single undifferentiated 'Reserves' line."
+    The guard must not cost the reading it was written to protect."""
+    rows = _run_stage(_equity_doc("Reserves"), v2)
+
+    assert rows["Reserves"].canonical_key == "bs_equity__reserves"
+    assert rows["Reserves"].role is LineRole.LINE
+
+
+def test_the_global_mutually_exclusive_group_is_read_on_its_own():
+    """`global_rules.mutually_exclusive_groups` is the declaration, not a duplicate of the concept
+    flags: strip `is_gross_parent` from the concept and the containment must still be enforced, or the
+    global block is the inert half."""
+    edited = json.loads(json.dumps(V2))
+    for c in edited["mappings"]:
+        if c["canonical_key"] == "bs_equity__reserves":
+            c.pop("is_gross_parent", None)
+            c.pop("children_if_decomposed", None)
+    ont = load_ontology(edited, resolve=True)
+    assert not ont.mappings[[c.canonical_key for c in ont.mappings].index(
+        "bs_equity__reserves")].is_gross_parent
+
+    rows = _run_stage(_equity_doc("Reserves", "Share premium"), ont)
+    assert rows["Reserves"].canonical_key is None
+
+
+def test_the_concept_flags_are_read_on_their_own_too():
+    """…and the other way round: delete the global group and `is_gross_parent` +
+    `children_if_decomposed` must still keep the parent and its children apart."""
+    edited = json.loads(json.dumps(V2))
+    edited["global_rules"]["mutually_exclusive_groups"] = []
+    ont = load_ontology(edited, resolve=True)
+
+    rows = _run_stage(_equity_doc("Reserves", "Share premium"), ont)
+    assert rows["Reserves"].canonical_key is None
+    assert "contains_mapped_children:bs_equity__share_premium" in (
+        rows["Reserves"].confidence.flags)
+
+
+def test_a_rulebook_declaring_no_containment_leaves_both_rows_filed():
+    """The proof that the flags are what did it, not something else in the stage."""
+    edited = json.loads(json.dumps(V2))
+    edited["global_rules"]["mutually_exclusive_groups"] = []
+    for c in edited["mappings"]:
+        c.pop("is_gross_parent", None)
+        c.pop("children_if_decomposed", None)
+    rows = _run_stage(_equity_doc("Reserves", "Share premium"), load_ontology(edited, resolve=True))
+
+    assert rows["Reserves"].canonical_key == "bs_equity__reserves"
+
+
+# --- 5c. equivalence: two captions, one fact, and never a silent disagreement -------------------
+
+def test_two_captions_declared_one_fact_may_not_disagree_in_silence(v2):
+    """`equivalence`: "One economic fact under two captions… If both are printed and differ, route to
+    review — do not average or pick." Each row is individually plausible and each subtotal it feeds
+    still balances, so nothing else in the pipeline can see it."""
+    doc = _equity_doc("Net assets", "Total equity")
+    # One fact, two figures — and well beyond `recon_abs_tolerance`, which a rounding difference is
+    # not: 100 against 150.
+    for ev in doc.line_items[1].values.values():
+        ev.value = ev.value_raw = Decimal(150)
+    rows = _run_stage(doc, v2)
+
+    assert rows["Net assets"].canonical_key == "bs_net_assets"
+    assert rows["Total equity"].canonical_key == "bs_equity__total_equity"
+    assert "equivalence_conflict:bs_equity__total_equity" in rows["Net assets"].confidence.flags
+    assert "equivalence_conflict:bs_net_assets" in rows["Total equity"].confidence.flags
+    assert "low_mapping_confidence" in rows["Net assets"].confidence.flags
+
+
+def test_the_same_figure_under_both_captions_is_not_a_conflict(v2):
+    """The ordinary case — and rounding is not a disagreement, so the comparison uses the
+    reconciliation tolerance rather than exact equality."""
+    doc = _equity_doc("Net assets", "Total equity")
+    for li in doc.line_items:
+        for ev in li.values.values():
+            ev.value = ev.value_raw = Decimal(100)
+    rows = _run_stage(doc, v2)
+
+    assert not [f for f in rows["Net assets"].confidence.flags if f.startswith("equivalence")]
+
+
+def test_deleting_the_equivalence_declaration_silences_the_finding():
+    """Which is the point: the finding exists because the rulebook declares the two captions to be one
+    fact. Nothing else about the two rows says so."""
+    edited = json.loads(json.dumps(V2))
+    for c in edited["mappings"]:
+        c.pop("equivalence", None)
+    rows = _run_stage(_equity_doc("Net assets", "Total equity"), load_ontology(edited, resolve=True))
+
+    assert not [f for f in rows["Net assets"].confidence.flags if f.startswith("equivalence")]
 
 
 def test_a_v1_rulebook_declares_none_of_this_and_is_unchanged():

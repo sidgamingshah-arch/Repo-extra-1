@@ -93,6 +93,12 @@ _LLM_BATCH_ADDENDUM = (
     "identically in more than one place: an 'Others' line, or the 'Non-controlling interests' "
     "printed once under the profit split and again under the total-comprehensive split. An item "
     "with no `section` is unconstrained: decide it on meaning alone.\n"
+    "`residual_expectations` lists, per section, the kinds of caption that section is EXPECTED to "
+    "have no dedicated concept for. When an item's caption is one of those, return an empty "
+    "canonical_key instead of the nearest candidate: a later deterministic step files it in that "
+    "section's remainder, itemised under its own label. Choosing the nearest concept instead puts "
+    "the figure on a specific wrong line and the section still adds up, which is the one error "
+    "nothing downstream can detect.\n"
     "Return one entry per item_id you were given, and never an item_id that was not given to you."
 )
 
@@ -263,8 +269,34 @@ def section_of_key(canonical_key: str) -> str | None:
     """The section namespace a canonical key sits in, or None for a key that has none
     (``bs_total_assets``, ``pl_profit_before_tax``). Matched longest-first, since
     "bs_non_current_liabilities__x" also contains "_current_liabilities__".
+
+    This is the FALLBACK reading of a concept's section, not the authoritative one: a v2 rulebook
+    declares ``section_scope`` and that is what the gate reads (see
+    :meth:`OntologyMatcher._sections_of`). A key name is a naming convention an editor can break
+    without meaning to; ``section_scope`` is a statement of intent.
     """
     return next((tok for tok, _ in SECTION_WORDS if f"_{tok}__" in canonical_key), None)
+
+
+def section_token_of_scope(scope_id: str) -> str | None:
+    """The banner token a v2 ``section_scope`` id names, or None when it names no section.
+
+    The two vocabularies are authored for different readers and cannot simply be compared. A scope
+    id is authored per statement and carries the section's PRINTED POSITION as well as its name
+    ("bs_s4_non_current_liabilities", "cf_s1_cash_flow_from_operating_activities"), while
+    ``SECTION_WORDS`` is keyed on the section itself, because that is what a banner names. The id
+    ends with the section it is, so the token is read off the end.
+
+    Longest-first for the same reason ``section_of_key`` is: "bs_s1_non_current_assets" also ends
+    with "current_assets", and reading it as the current-asset section would let a current-asset
+    banner claim every non-current concept.
+
+    ``*_top_level`` scopes name no section and return None. Those concepts are the statement-level
+    totals ("bs_top_level" holds bs_total_assets, bs_net_assets), which no banner may constrain —
+    ``section_hint`` is the nearest PRECEDING banner, so a statement total routinely carries the
+    banner of the last section printed above it.
+    """
+    return next((tok for tok, _ in SECTION_WORDS if scope_id.endswith(tok)), None)
 
 
 # Vocabularies a caption can name only ONE member of. IAS 7 divides cash flows into exactly three
@@ -483,10 +515,19 @@ class OntologyMatcher:
                       # measurable: ids we never asked about, and answers the scoping gate
                       # refused. Both used to vanish on a bare `continue`.
                       "batch_unknown_ids": 0, "batch_refused": 0,
+                      # How the statement-wise batch was actually cut up: one entry per provider
+                      # call, so "one statement, two pages, one call" is verifiable from the run
+                      # record rather than asserted in a docstring.
+                      "batch_chunks": 0, "batch_max_items": 0,
                       # Wrong-variant answers the banner corrected instead of discarding, and the
                       # distinct routes taken. A silent correction is worse than a refusal: it puts
                       # a figure on a different line of the face with nothing to point at.
-                      "family_resolved": 0, "family_routes": []}
+                      "family_resolved": 0, "family_routes": [],
+                      # `binding.order` step 6: two concepts in each other's `confusable_with` that
+                      # the evidence rates equally and nothing resolved. Counted because the answer
+                      # is "both, for review", and a review item nobody can measure is a review
+                      # item nobody prioritises.
+                      "confusable_ties": 0}
         # System prompt = the base instruction + the ontology's own extraction policies and
         # worked examples, so the LLM follows one consistent, auditable rulebook.
         self._system = self._build_system()
@@ -519,9 +560,31 @@ class OntologyMatcher:
         # gap now ties. The sweep still assigns them — it reads the template, not this index.
         self._locked: set[str] = {m.canonical_key for m in ontology.mappings
                                   if m.alias_matching == "disabled"}
+        # `extraction_mode: "derive"` — a concept the framework COMPUTES and a filing does not
+        # print. It stays extractable (that is what `derive` means, and `_extractable_keys` still
+        # reports it), but it is not something a printed caption may be bound to: offering it as a
+        # mapping candidate asserts that a row on the page IS the derived subtotal, which then
+        # overwrites the computation with whatever caption happened to fuzz against it. The
+        # neighbouring value `extract_or_derive` is the one that means "sometimes printed, sometimes
+        # arithmetic", and those 20 concepts stay fully matchable.
+        self._computed_only: set[str] = {m.canonical_key for m in ontology.mappings
+                                         if m.extraction_mode == "derive"}
+        # One set for every index and payload below: a concept no printed caption may reach,
+        # whether because it is a swept residual or because it is computed.
+        self._unmatchable: set[str] = self._locked | self._computed_only
+        # `binding.order` is a v2 declaration, and step 6 below (a tie between mutually-confusable
+        # concepts is emitted for review, never picked by declaration order) is an implementation OF
+        # it — so it is enabled by its presence. A v1 rulebook declares no binding order and no
+        # `section_disambiguation` for the tie to be resolved by, so it keeps the behaviour it was
+        # authored against: the highest-priority claimant, ties to the first declared.
+        self._binding_order: list[str] = list(ontology.binding.order) if ontology.binding else []
+        # canonical_key -> the sections the RULEBOOK says the concept may claim a row in, read off
+        # `section_scope` (see `_sections_of` for why the declaration and not the key name).
+        self._section_scope: dict[str, frozenset[str]] = {}
         for m in ontology.mappings:
             self._by_key[m.canonical_key] = m
-            if m.canonical_key in self._locked:
+            self._section_scope[m.canonical_key] = self._scope_tokens(m)
+            if m.canonical_key in self._unmatchable:
                 continue
             # Index EVERY locale's aliases, not just the document's. A bilingual filing prints
             # both scripts on the same line, so restricting the index to the detected locale
@@ -539,6 +602,20 @@ class OntologyMatcher:
                     keys.append(m.canonical_key)
 
     # -- individual tiers -------------------------------------------------
+
+    @staticmethod
+    def _scope_tokens(m: OntologyMapping) -> frozenset[str]:
+        """The banner tokens one concept's ``section_scope`` resolves to.
+
+        Empty means UNCONSTRAINED, and it is reached two ways that must not be told apart here: a
+        concept declaring only a ``*_top_level`` scope (a statement total, which no banner may
+        constrain) and a v1 concept declaring no scope at all, which falls back to its key namespace
+        — also empty for a statement-level key. Both are "no banner refuses this concept".
+        """
+        if not m.section_scope:
+            tok = section_of_key(m.canonical_key)
+            return frozenset([tok]) if tok else frozenset()
+        return frozenset(t for s in m.section_scope if (t := section_token_of_scope(s)))
 
     def _priority_of(self, canonical_key: str) -> int:
         """The concept's declared ``match_priority``, or 0 when it declares none.
@@ -581,6 +658,46 @@ class OntologyMatcher:
                 return Candidate(target, MappingMethod.EXACT, 1.0, rerouted_from=k)
         return None
 
+    def _mutually_confusable(self, a: str, b: str) -> bool:
+        """Whether each concept names the other in its ``confusable_with``.
+
+        MUTUAL on purpose. The field is a directed confusion graph and a one-way edge is usually a
+        warning about a bigger concept ("do not confuse this leaf with that subtotal"); only a pair
+        that each names the other is the rulebook saying these two are mistaken for one another,
+        which is the set ``binding.order`` step 6 nominates.
+        """
+        ma, mb = self._by_key.get(a), self._by_key.get(b)
+        return bool(ma and mb and b in ma.confusable_with and a in mb.confusable_with)
+
+    def _confusable_tie(self, keys: list[str]) -> list[str]:
+        """The subset of equally-rated concepts that ``binding.order`` step 6 forbids picking between.
+
+        Returns [] unless at least two of them name each other in ``confusable_with``, and [] for a
+        rulebook that declares no ``binding.order`` at all (see `_binding_order`). Order is preserved
+        so the review item lists them as the tiers ranked them.
+        """
+        if not self._binding_order:
+            return []
+        tied = [k for k in keys
+                if any(other != k and self._mutually_confusable(k, other) for other in keys)]
+        return tied if len(tied) > 1 else []
+
+    def _exact_tie(self, norm: str, allowed) -> list[str]:
+        """Concepts claiming this exact alias that step 6 says may not be separated by priority.
+
+        An alias claimed by two concepts is settled by descending ``match_priority`` (step 4) — but
+        38 of the shipped file's 83 shared aliases are claimed by a mutually-confusable pair sitting
+        at the SAME priority (current vs non-current borrowings, notes payable, properties under
+        development). For those, taking the higher priority is taking the first declared, which step
+        6 forbids in as many words. The banner normally separates them and this never fires; when it
+        does not, the honest answer is both, for review.
+        """
+        keys = [k for k in (self._alias_index.get(norm) or []) if allowed(k)]
+        if len(keys) < 2:
+            return []
+        top = max(self._priority_of(k) for k in keys)
+        return self._confusable_tie([k for k in keys if self._priority_of(k) == top])
+
     def _vetoed(self, canonical_key: str, caption: str) -> bool:
         """Whether the concept's ``exclude_hints`` rule this caption out.
 
@@ -595,13 +712,27 @@ class OntologyMatcher:
         text = caption.lower()
         return any(re.search(ex, text) for ex in m.exclude_hints)
 
-    def _rule(self, raw: str) -> Candidate | None:
+    def _rule(self, raw: str, keys: set[str] | None = None) -> Candidate | None:
+        """The rule tier of ``binding.order`` step 4: regex / keyword hints, in DESCENDING
+        ``match_priority``, with ``exclude_hints`` as a hard veto.
+
+        ``keys`` is the restricted candidate set (step 3); None means the whole rulebook, which is
+        what a caller with no statement or section to restrict by has.
+
+        The ordering is the fix step 4 asks for: when several concepts' hints fire, the winner used
+        to be whichever the file declared first — so an editor adding a broad ``regex_hints`` entry
+        high in the file pre-empted every specific concept below it, and the only way to find out
+        was to read the JSON in order.
+        """
         text = raw.lower()
-        best: Candidate | None = None
+        hits: list[str] = []
         for m in self.ontology.mappings:
             # A locked residual is unreachable by matching, and a regex or keyword hint authored on
-            # one would otherwise reopen the hole the alias index was closed for.
-            if m.canonical_key in self._locked:
+            # one would otherwise reopen the hole the alias index was closed for. A `derive` concept
+            # is out for the other reason: it is computed, not read off the page.
+            if m.canonical_key in self._unmatchable:
+                continue
+            if keys is not None and m.canonical_key not in keys:
                 continue
             if any(re.search(ex, text) for ex in m.exclude_hints):
                 continue
@@ -611,13 +742,14 @@ class OntologyMatcher:
             elif m.keyword_hints and all(kw.lower() in text for kw in m.keyword_hints):
                 hit = True
             if hit:
-                cand = Candidate(m.canonical_key, MappingMethod.RULE, 0.95)
-                if best is None:
-                    best = cand
-                else:
-                    # multiple rule hits → ambiguous, drop confidence
-                    best = Candidate(best.canonical_key, MappingMethod.RULE, 0.6)
-        return best
+                hits.append(m.canonical_key)
+        if not hits:
+            return None
+        # Several hits stay ambiguous (0.6, below every accept threshold) — but the key reported is
+        # the highest-priority claimant, since that is the one the shortlist and `det_top` carry
+        # forward to the semantic tier.
+        return Candidate(max(hits, key=self._priority_of), MappingMethod.RULE,
+                         0.95 if len(hits) == 1 else 0.6)
 
     @staticmethod
     def _alias_coverage(caption: str, alias: str) -> float:
@@ -657,12 +789,16 @@ class OntologyMatcher:
         coverage = self._alias_coverage(norm, alias)
         return base * (0.4 + 0.6 * coverage)
 
-    def _fuzzy(self, norm: str) -> list[Candidate]:
+    def _fuzzy(self, norm: str, keys: set[str] | None = None) -> list[Candidate]:
         """Best fuzzy candidate per concept. Scores are EVIDENCE: the decision policy in
-        `match` only lets fuzzy decide alone when it is near-exact (see `_fuzzy_accepts`)."""
+        `match` only lets fuzzy decide alone when it is near-exact (see `_fuzzy_accepts`).
+
+        ``keys`` restricts the set scored at all (``binding.order`` step 3). Filtering afterwards
+        reached the same winner but not the same shortlist: the capped top-8 handed to the semantic
+        tier was drawn from a ranking that out-of-section concepts had already taken places in."""
         out: list[Candidate] = []
         for key, aliases in self._alias_by_key.items():
-            if not aliases:
+            if not aliases or (keys is not None and key not in keys):
                 continue
             best = max((self._fuzzy_score(norm, a) for a in aliases), default=0.0)
             if best > 0:
@@ -706,7 +842,7 @@ class OntologyMatcher:
                 indexed.append((key, list(vec)))
         self._alias_vecs = indexed
 
-    def _embedding(self, raw: str) -> list[Candidate]:
+    def _embedding(self, raw: str, keys: set[str] | None = None) -> list[Candidate]:
         """Cosine similarity of the raw caption against alias embeddings — catches paraphrases
         with no shared tokens ("Cash & bank balances" ↔ "Cash and cash equivalents"). Returns
         the best-scoring candidate per canonical key. A provider that is absent, unimplemented,
@@ -725,6 +861,8 @@ class OntologyMatcher:
         qv = list(query[0])
         best: dict[str, float] = {}
         for key, vec in self._alias_vecs:
+            if keys is not None and key not in keys:
+                continue                          # step 3: restricted before it is scored
             score = _cosine(qv, vec)
             if score > best.get(key, -1.0):
                 best[key] = score
@@ -765,11 +903,12 @@ class OntologyMatcher:
             m = self._by_key.get(k)
             if m is None or m.extraction_mode == "do_not_extract":
                 continue
-            # Also the choke point for the residual lock, not only `_extractable_keys`: the capped
-            # shortlist in `match` is assembled from fuzzy/embedding/rule keys rather than from that
-            # list, so a bucket kept out of one route has to be kept out of the other as well. A
-            # concept the model cannot see is a concept the model cannot pick.
-            if k in self._locked:
+            # Also the choke point for the residual lock and the `derive` lock, not only
+            # `_extractable_keys`/`_mappable_keys`: the capped shortlist in `match` is assembled from
+            # fuzzy/embedding/rule keys rather than from either list, so a concept kept out of one
+            # route has to be kept out of the other as well. A concept the model cannot see is a
+            # concept the model cannot pick.
+            if k in self._unmatchable:
                 continue
             entry: dict = {
                 "canonical_key": k,
@@ -788,11 +927,65 @@ class OntologyMatcher:
                 ]
             if m.decomposition_rule:
                 entry["decomposition_rule"] = m.decomposition_rule
+            # The rulebook's own prose about the decisions this tier is here to make. All three are
+            # sparse in the shipped file (18 / 8 / 2 concepts), so this costs input tokens only where
+            # the editor actually wrote something.
+            if m.section_disambiguation:
+                # WHICH of two look-alike captions this is. The semantic tier is the only reader
+                # that can act on it: the deterministic tiers compare strings, and step 6 hands a
+                # tie between two mutually-confusable concepts here precisely because the answer is
+                # in this sentence ("Bind by printed section only", "adjacent to trade payables").
+                entry["section_disambiguation"] = m.section_disambiguation
+            if m.derivation:
+                # How the concept is computed when the face does not print it. For an
+                # `extract_or_derive` subtotal that is the difference between "this row IS the
+                # subtotal" and "the subtotal is arithmetic and this row is one of its components".
+                entry["derivation"] = m.derivation
+                entry["extraction_mode"] = m.extraction_mode
+            if m.is_gross_parent:
+                # Containment, stated to the model as well as enforced after it
+                # (stages.map_ontology): a gross parent may not be filed alongside the children it
+                # contains, so a filing that prints the components must not also claim this concept.
+                entry["is_gross_parent"] = True
+                entry["children_if_decomposed"] = list(m.children_if_decomposed)
+            if m.equivalence is not None and m.equivalence.with_:
+                # One economic fact under two captions ("Net assets" / "Total equity"). Named so the
+                # model does not treat the twin as a rival reading of the caption.
+                entry["same_fact_as"] = {"canonical_key": m.equivalence.with_,
+                                         "relation": m.equivalence.relation,
+                                         "rule": m.equivalence.rule}
             out.append(entry)
         return out
 
+    def _residual_expectations(self, statement: str | None,
+                               sections: set[str] | None = None) -> list[dict]:
+        """What each section's residual is EXPECTED to absorb — ``expected_components``.
+
+        The buckets themselves are locked out of every candidate list, which leaves the model with
+        no licence to answer "none of these" for the captions the rulebook already knows have no
+        dedicated concept ("Bank overdrafts", "Contract assets", "Club memberships"). Offered a list
+        of concepts and a caption, a model picks the nearest one; the figure then lands on a specific
+        wrong line instead of in the section remainder, and the section still ties.
+
+        So the expectations are handed over WITHOUT naming the bucket's canonical_key: the answer
+        being licensed is an empty key, which routes the row to the sweep that owns those buckets.
+        """
+        out: list[dict] = []
+        for key in sorted(self._locked):
+            m = self._by_key.get(key)
+            if m is None or not m.expected_components:
+                continue
+            if statement and not self._in_statement(key, statement):
+                continue
+            tokens = self._sections_of(key)
+            if sections is not None and not (tokens & sections):
+                continue
+            out.append({"section": ", ".join(sorted(tokens)) or "statement",
+                        "captions_with_no_dedicated_concept": list(m.expected_components)})
+        return out
+
     def _extractable_keys(self) -> list[str]:
-        """The concepts a caption may be MAPPED to.
+        """The concepts the framework may EXTRACT — by matching a caption or by computing.
 
         Locked residuals are excluded even though they are extracted: they are extracted by the
         section sweep, which reads the template and never comes through here. Leaving them in put
@@ -800,6 +993,14 @@ class OntologyMatcher:
         """
         return [k for k, m in self._by_key.items()
                 if m.extraction_mode != "do_not_extract" and k not in self._locked]
+
+    def _mappable_keys(self) -> list[str]:
+        """The concepts a printed CAPTION may be bound to — extractable, minus the computed ones.
+
+        The narrower of the two sets, and the one every candidate list is built from. A `derive`
+        concept is extractable but not mappable: see `_computed_only`.
+        """
+        return [k for k in self._extractable_keys() if k not in self._computed_only]
 
     def _llm(self, raw: str, context: str | None, keys: list[str]) -> Candidate | None:
         """Description/criteria-based decision — the key driver in the ensemble."""
@@ -860,18 +1061,39 @@ class OntologyMatcher:
     def _section_of(self, text: str | None) -> str | None:
         return section_of_banner(text)
 
-    def _in_section(self, canonical_key: str, section: str | None) -> bool:
-        """False only when the key belongs to a DIFFERENT section than the banner names.
+    def _sections_of(self, canonical_key: str) -> frozenset[str]:
+        """The sections the RULEBOOK says this concept may claim a row in.
 
-        Keys that carry no section namespace (``bs_total_assets``, ``pl_profit_before_tax``)
-        and unrecognised banners are always allowed: like the statement constraint, this
-        suppresses a confident wrong answer without dropping concepts it cannot place.
+        ``section_scope`` is the declaration and is what this reads — the point of
+        ``binding.order``'s "a concept can only claim a row printed inside one of its section_scope
+        values". The key namespace is only the fallback, for a concept that declares no scope (every
+        v1 concept, and any v2 concept whose scope ids name no section this vocabulary knows).
+
+        They agree across all 173 concepts of the shipped file, which is exactly why reading the key
+        was survivable and not defensible: the two diverge the moment someone declares a concept in
+        a section its key name does not match, and then the gate quietly obeys the key while the
+        rulebook — the only place a reviewer can look up what the pipeline does — says otherwise.
+        """
+        declared = self._section_scope.get(canonical_key)
+        if declared is not None:
+            return declared
+        # A key from outside this rulebook (a caller checking the gate against a template key).
+        tok = section_of_key(canonical_key)
+        return frozenset([tok]) if tok else frozenset()
+
+    def _in_section(self, canonical_key: str, section: str | None) -> bool:
+        """False only when the concept's ``section_scope`` excludes the section the banner names.
+
+        Concepts scoped to no section (``bs_total_assets``, ``pl_profit_before_tax`` — a
+        ``*_top_level`` scope, or no scope and no section namespace in the key) and unrecognised
+        banners are always allowed: like the statement constraint, this suppresses a confident wrong
+        answer without dropping concepts it cannot place.
         """
         want = section_of_banner(section)
         if not want:
             return True
-        have = section_of_key(canonical_key)
-        if have is None:
+        have = self._sections_of(canonical_key)
+        if not have:
             # A key with no section namespace is normally unconstrained. The exception is one leaf
             # of a collision family: both P&L bottom lines are statement-level keys, so without this
             # arm "LOSS FOR THE YEAR" under a "TOTAL COMPREHENSIVE" banner is waved through onto
@@ -879,7 +1101,7 @@ class OntologyMatcher:
             # at confidence 1.0, with the comprehensive-income line left empty. Only ever narrows:
             # the banner must identify exactly one leaf, and a different one.
             return family_leaf_named_by(canonical_key, section) is None
-        return have == want
+        return want in have
 
     def _family_route(self, canonical_key: str, statement: str | None,
                       section: str | None, caption: str) -> str | None:
@@ -923,6 +1145,33 @@ class OntologyMatcher:
                 and not (caption and self._vetoed(canonical_key, caption))
                 and not (caption and _names_a_different_class(canonical_key, caption)))
 
+    def _answer_confusable_tie(self, raw_label: str, context: str | None,
+                               tied: list[str]) -> MappingResult:
+        """``binding.order`` step 6: resolve a mutual-``confusable_with`` tie, or emit both.
+
+        The semantic tier is offered exactly the tied concepts, so the decision is made on the one
+        piece of evidence that can settle it — each concept's ``section_disambiguation``, which
+        `_concept_payload` carries. With no provider, or when the model abstains or answers outside
+        the pair, both are emitted as candidates and the row is routed to review. Never a pick by
+        declaration order, which is what "highest priority, ties to the first declared" was for the
+        38 shared aliases in the shipped file whose claimants sit at equal priority.
+        """
+        llm = self._llm(raw_label, context, self._by_priority(tied)) if self.llm_enabled else None
+        if llm is not None and llm.canonical_key in tied:
+            alloc = llm.allocation_status or (
+                "direct_exclusive"
+                if self._by_key[llm.canonical_key].value_scope == "exclusive_leaf" else None)
+            return MappingResult(
+                canonical_key=llm.canonical_key, method=MappingMethod.LLM, confidence=llm.score,
+                candidates=[llm], needs_review=llm.score < self.settings.extraction.auto_accept_confidence,
+                scores={"exact": 1.0, "llm": llm.score}, allocation_status=alloc,
+                agreement=["llm", "exact"],
+            )
+        self.usage["confusable_ties"] += 1
+        return MappingResult(None, MappingMethod.UNMATCHED, 0.0,
+                             [Candidate(k, MappingMethod.EXACT, 1.0) for k in tied],
+                             True, {"exact": 1.0}, allocation_status="unmapped_review")
+
     @staticmethod
     def _best_per_key(cands: list[Candidate]) -> list[Candidate]:
         """Highest-scoring candidate per concept, best first (segments can both propose one)."""
@@ -960,15 +1209,27 @@ class OntologyMatcher:
         s = self.settings
         scores: dict[str, float] = {}
 
+        def _ok(k: str) -> bool:
+            return self._allowed(k, statement, section, raw_label)
+
         # 1. Exact normalized-alias identity — unambiguous and free. Tried on the caption and,
         #    for a bilingual line, on each script's half (either alone can be an exact alias).
         for seg in segments:
+            seg_norm = normalize_label(seg)
+            # `binding.order` step 6, before step 4 is allowed to settle it by priority: two
+            # concepts that claim this alias, sit at the same priority and name each other as
+            # confusable are a tie the rulebook forbids breaking by declaration order. The semantic
+            # tier gets the pair (with each one's `section_disambiguation`); if there is no semantic
+            # tier, or it abstains, both are emitted and the row goes to review.
+            tied = self._exact_tie(seg_norm, allowed=_ok)
+            if tied:
+                return self._answer_confusable_tie(raw_label, context, tied)
             # The scoping gate is handed to the alias lookup rather than applied after it: when
             # two concepts claim the same alias, the one that fits where this caption was printed
             # has to be the one returned.
             exact = self._exact(
-                normalize_label(seg),
-                allowed=lambda k: self._allowed(k, statement, section, raw_label),
+                seg_norm,
+                allowed=_ok,
                 # An alias of one family leaf printed under another's banner is corrected here too,
                 # not only on the batch path: the alias is real evidence of WHAT the row is, and
                 # dropping it would trade a confidently-wrong answer for an unmapped row rather than
@@ -981,17 +1242,21 @@ class OntologyMatcher:
                                      {"exact": 1.0}, allocation_status="direct_exclusive",
                                      rerouted_from=exact.rerouted_from)
 
-        # 2. Deterministic evidence from every method (each contributes; none forced out).
+        # 2. `binding.order` step 3 — RESTRICT the candidate set to the concepts the rulebook lets a
+        #    row printed here be bound to, BEFORE any matching runs. It used to be a filter applied
+        #    to each tier's OUTPUT, which reaches the same winner but not the same shortlist: the
+        #    capped top-8 handed to the semantic tier was drawn from a ranking in which out-of-section
+        #    concepts had already taken places, so a restricted concept could be squeezed off the list
+        #    by one the gate was about to refuse anyway.
+        allowed_keys = {k for k in self._mappable_keys() if _ok(k)}
+
+        # 3. Deterministic evidence from every method (each contributes; none forced out).
         #    Fuzzy/rule run per script segment and keep the best score per concept, so
         #    "REVENUE 收益" scores as well as the monolingual "Revenue" would.
-        rule = next((r for r in (self._rule(seg) for seg in segments) if r), None)
-        fuzzy = self._best_per_key([c for seg in segments for c in self._fuzzy(normalize_label(seg))])
-        emb = self._embedding(raw_label)
-        # Drop candidates belonging to another statement BEFORE they can win or shortlist.
-        if rule and not self._allowed(rule.canonical_key, statement, section, raw_label):
-            rule = None
-        fuzzy = [c for c in fuzzy if self._allowed(c.canonical_key, statement, section, raw_label)]
-        emb = [c for c in (emb or []) if self._allowed(c.canonical_key, statement, section, raw_label)]
+        rule = next((r for r in (self._rule(seg, allowed_keys) for seg in segments) if r), None)
+        fuzzy = self._best_per_key([c for seg in segments
+                                    for c in self._fuzzy(normalize_label(seg), allowed_keys)])
+        emb = self._embedding(raw_label, allowed_keys) or []
         by_method: dict[str, set[str]] = {}
         pool: list[Candidate] = []
         if rule:
@@ -1018,11 +1283,11 @@ class OntologyMatcher:
                         key=lambda c: (c.score, self._priority_of(c.canonical_key)), reverse=True)
         det_top = ranked[0] if ranked else None
 
-        # 3. LLM semantic decision — the key driver, shown the deterministic shortlist
-        #    (or every concept for a small ontology) plus each concept's criteria.
+        # 4. LLM semantic decision (`binding.order` step 5) — the key driver, shown the
+        #    deterministic shortlist, or the whole RESTRICTED set for a small ontology, plus each
+        #    concept's criteria. Never the full ontology: the restriction is step 3's, applied above.
         if self.llm_enabled:
-            all_keys = [k for k in self._extractable_keys()
-                        if self._allowed(k, statement, section, raw_label)]
+            all_keys = [k for k in self._mappable_keys() if k in allowed_keys]
             if len(all_keys) <= s.extraction.llm_candidate_cap:
                 shortlist = all_keys
             else:
@@ -1062,13 +1327,27 @@ class OntologyMatcher:
                     allocation_status=alloc, agreement=["llm", *agreement],
                 )
 
-        # 4. Deterministic decision (no LLM configured, or the LLM abstained).
+        # 5. Deterministic decision (no LLM configured, or the LLM abstained).
         #    Fuzzy is a LAST RESORT. A fuzzy score measures string overlap, not meaning, so
         #    letting it auto-map floods the review queue with shaky guesses. Decide from the
         #    "meaningful" methods first (exact already returned above; then rule, then
         #    embedding). Only if they produce nothing do we consult fuzzy — and even then
         #    only when the match is essentially an exact string hit (>= fuzzy_accept);
         #    anything weaker is left unmapped for a human rather than guessed.
+        #
+        #    First, though, step 6: when the top-scoring concepts are rated IDENTICALLY and name each
+        #    other as confusable, no deterministic method can separate them and the tie-break below
+        #    would fall to declared priority and then to declaration order. Emit both and route to
+        #    review, which is what the rulebook asks for and what a reviewer can act on — a coin-flip
+        #    at confidence 0.95 is not reviewable, because nothing about it looks uncertain.
+        if det_top is not None:
+            tie = self._confusable_tie([c.canonical_key for c in ranked
+                                        if c.score == det_top.score])
+            if tie:
+                self.usage["confusable_ties"] += 1
+                return MappingResult(None, MappingMethod.UNMATCHED, 0.0,
+                                     [c for c in ranked if c.canonical_key in tie], True, scores,
+                                     allocation_status="unmapped_review")
         if rule and rule.score >= 0.9:
             return MappingResult(rule.canonical_key, rule.method, rule.score, [rule], False,
                                  {**scores, "rule": rule.score}, allocation_status="direct_exclusive")
@@ -1099,6 +1378,34 @@ class OntologyMatcher:
         return MappingResult(None, MappingMethod.UNMATCHED, 0.0, ranked[:5], True, scores,
                              allocation_status="unmapped_review")
 
+    # One batch call's RESPONSE budget, and the chunk size it implies.
+    #
+    # Measured from the response envelope rather than guessed: `LlmBatchDecision` serialises one
+    # decision as {"item_id": "<uuid>", "canonical_key": "…", "confidence": 0.95,
+    # "allocation_status": "…"}, which is 238 characters for this file's longest canonical_key (101
+    # chars) with an allocation_status set — measured by dumping the model, not estimated from the
+    # schema. JSON made of UUIDs and long snake_case identifiers tokenises at roughly three
+    # characters per token, so one decision costs about 80 response tokens.
+    _BATCH_RESPONSE_TOKENS_PER_ITEM = 80
+    _BATCH_RESPONSE_RESERVE = 256          # the envelope itself, plus a margin against truncation
+    # The largest chunk whose worst-case response still fits a conventional 8k completion budget with
+    # headroom — and comfortably more than one HKEX statement page (40-60 rows), so the two-page
+    # statement this batching exists to keep whole is still decided in ONE call.
+    BATCH_MAX_ITEMS = 80
+
+    @classmethod
+    def _batch_max_tokens(cls, n_items: int) -> int:
+        """The response budget for a chunk of ``n_items`` decisions.
+
+        Derived from the chunk instead of reusing ``settings.llm.max_tokens`` (or the 4096 constant
+        that stood here), because that number is a REQUEST cap shared with every other call in the
+        app and has nothing to do with how many decisions were asked for. At 80 tokens a decision it
+        truncates a batch of ~48 items, and a truncated batch response is not a partial answer: the
+        JSON fails to parse, the whole chunk falls back to per-line matching, and the cross-line
+        context the batch existed for is lost silently — the run still reports itself as LLM-mapped.
+        """
+        return cls._BATCH_RESPONSE_RESERVE + n_items * cls._BATCH_RESPONSE_TOKENS_PER_ITEM
+
     def match_batch(self, items: list[tuple[str, str]],
                     statement: str | None = None,
                     sections: dict[str, str | None] | None = None) -> dict[str, MappingResult]:
@@ -1108,17 +1415,19 @@ class OntologyMatcher:
         LineItems. Falls back to per-line matching for anything the batch call can't resolve, or
         entirely when no LLM is configured.
 
-        The batch is ONE SOURCE PAGE, not one statement, because that is how the caller groups
-        (``stages.map_ontology``). A statement printed across two pages is therefore decided in two
-        calls and does not see itself whole — which matters most for exactly the judgements above,
-        since a subtotal and the lines it is made of can straddle the break. The setting that
-        selects this path is still named ``per_statement``; treat that as naming the intent, not
-        the unit. Changing the unit is a measured behaviour change (fewer, much larger calls,
-        against a fixed response-token cap) and belongs in its own change, not in this docstring.
+        The batch is ONE STATEMENT — the caller groups by (statement, basis, period) and no longer
+        by source page (``stages.map_ontology``), so a statement printed across two pages is decided
+        whole. That is what the judgements above need: a subtotal and the lines it is made of, or a
+        section and its residual, routinely straddle the page break.
+
+        Large statements are CHUNKED at ``BATCH_MAX_ITEMS`` rather than sent as one unbounded call,
+        each chunk with its own derived response budget (:meth:`_batch_max_tokens`). Chunks are
+        contiguous slices of print order, so a chunk boundary is the only place cross-line context
+        is lost, instead of every page boundary.
 
         ``items`` is a list of (item_id, source_label). ``sections`` maps an item_id to the
-        section banner that item was printed under; a batch spans a whole page and therefore
-        several sections, so the banner is per item, not per batch.
+        section banner that item was printed under; a batch spans several sections, so the banner
+        is per item, not per batch.
 
         The banner is given to the MODEL as well as being enforced after it answers. It used to
         be enforcement only: the model decided blind to the banner and a cross-section answer was
@@ -1135,15 +1444,35 @@ class OntologyMatcher:
         if not self.llm_enabled or not items:
             return {iid: self.match(label, statement=statement, section=sec.get(iid))
                     for iid, label in items}
+        out: dict[str, MappingResult] = {}
+        for start in range(0, len(items), self.BATCH_MAX_ITEMS):
+            chunk = items[start:start + self.BATCH_MAX_ITEMS]
+            out.update(self._match_chunk(chunk, statement, sec))
+        return out
 
-        # Only concepts from THIS statement are offered, so the batch cannot place a caption
-        # in another statement (see `match`). Section scoping is ALSO applied per decision
-        # below, since one batch covers rows from several sections.
+    def _match_chunk(self, items: list[tuple[str, str]], statement: str | None,
+                     sec: dict[str, str | None]) -> dict[str, MappingResult]:
+        """One provider call over at most ``BATCH_MAX_ITEMS`` captions. See :meth:`match_batch`."""
+        # `binding.order` step 3, on the batch path: RESTRICT the offered concepts before the call.
+        # Only concepts from THIS statement, and only from the sections this chunk was actually
+        # printed under — plus the statement-level concepts, which belong to no section and must stay
+        # reachable for a subtotal printed anywhere. Until now the whole statement was offered and a
+        # wrong-section answer was refused AFTER the model gave it, which spends the call, drops the
+        # row to the per-line path, and grades the model on a constraint it was never given a
+        # candidate list under.
+        tokens = {tok for iid, _ in items if (tok := section_of_banner(sec.get(iid)))}
+        unresolved = any(section_of_banner(sec.get(iid)) is None for iid, _ in items)
+        keys = [k for k in self._mappable_keys() if self._in_statement(k, statement)]
+        if tokens and not unresolved:
+            # One unresolvable banner and the restriction is off for the chunk: that row is
+            # unconstrained by the gate (see `_in_section`), so narrowing the list would refuse it a
+            # concept the gate would have allowed — a worse error than offering too much.
+            keys = [k for k in keys
+                    if not self._sections_of(k) or (self._sections_of(k) & tokens)]
         # Descending match_priority, for the reason the per-line shortlist is ordered that way: one
-        # batch offers the whole statement, so the order the model reads the list in is the only
+        # batch offers a whole statement, so the order the model reads the list in is the only
         # ranking it gets.
-        candidates = self._concept_payload(self._by_priority(
-            [k for k in self._extractable_keys() if self._in_statement(k, statement)]))
+        candidates = self._concept_payload(self._by_priority(keys))
         # No candidate to choose from is not a question worth asking. `_llm` already guards this;
         # the batch path did not, so a statement the ontology covers no concepts for (changes in
         # equity against the shipped ontology) spent a real provider call on an empty candidate
@@ -1161,7 +1490,7 @@ class OntologyMatcher:
         def _sec_token(iid: str) -> str | None:
             return section_of_banner(sec.get(iid))
 
-        user = json.dumps({
+        payload: dict = {
             "instruction": "Map each source_item to exactly one candidate canonical_key by "
                            "meaning, applying the policies. Reference item_id and canonical_key; "
                            "do not output values. source_items are in the order they are printed "
@@ -1173,13 +1502,21 @@ class OntologyMatcher:
                 for iid, label in items
             ],
             "candidates": candidates,
-        }, ensure_ascii=False, indent=2)
+        }
+        # What each section's residual is expected to absorb (`expected_components`), so "none of
+        # these" is a licensed answer for the captions the rulebook already knows have no concept.
+        expectations = self._residual_expectations(statement, tokens or None)
+        if expectations:
+            payload["residual_expectations"] = expectations
+        user = json.dumps(payload, ensure_ascii=False, indent=2)
+        self.usage["batch_chunks"] += 1
+        self.usage["batch_max_items"] = max(self.usage["batch_max_items"], len(items))
         try:
             decision, meta = self.llm_provider.complete_structured(
                 system=self._batch_system,
                 messages=[{"role": "user", "content": user}],
                 response_schema=LlmBatchDecision,
-                max_tokens=4096,
+                max_tokens=self._batch_max_tokens(len(items)),
             )
         except Exception as exc:  # noqa: BLE001
             # Record WHY, as `_llm` does. A truncated or refused batch used to fall back per line

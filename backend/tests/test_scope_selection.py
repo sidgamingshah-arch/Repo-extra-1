@@ -1,0 +1,565 @@
+"""``scope_selection`` and ``normalisation`` decide WHICH figure is loaded, and they are the two
+rulebook blocks a reader cannot check against a total.
+
+A statement prints several columns of equally valid numbers. Read the wrong one and every
+downstream check still passes — the column is internally consistent — so the only evidence that
+the right column was read is these tests. Each one names the declared field it exercises, and each
+is written so that removing the consumption (or emptying the field in the rulebook) fails it:
+
+* ``entity_scope``   — Group vs Company, from the declared signals, with the false positives that
+                       would SPLIT a comparative as the negative cases.
+* ``period_selection``— current period from the heading DATE, and a restated comparative that
+                       never overwrites the original.
+* ``units_and_currency`` — resolved per statement header, persisted per fact, and the 1000×
+                       subtotal conflict that routes a statement to review.
+* ``column_guard``   — two facts differing on a declared dimension are two facts.
+* ``normalisation``  — the declared strip rules, and banners recognised whatever their case.
+"""
+from __future__ import annotations
+
+import copy
+import json
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from app.core.models.enums import Basis
+from app.core.models.geometry import BBox
+from app.core.models.line_item import ExtractedValue, LineItem, UnitContext
+from app.schemas.ontology import Normalisation, ScopeSelection
+from app.services import row_reconstruct as rr
+from app.services.row_reconstruct import Word, build_line_items
+
+RULEBOOK = (Path(__file__).resolve().parent.parent / "app" / "sample" / "templates"
+            / "hkfrs_hk_china_v2_ontology.json")
+
+
+def _raw_blocks() -> tuple[dict, dict]:
+    raw = json.loads(RULEBOOK.read_text(encoding="utf-8"))
+    return copy.deepcopy(raw["scope_selection"]), copy.deepcopy(raw["normalisation"])
+
+
+def _scope(**edits) -> ScopeSelection:
+    """The rulebook's own ``scope_selection``, with ``edits`` applied to it.
+
+    Every "liveness" test below edits the block this way, so what it proves is that the FIELD is
+    what drives the behaviour — not a regex that happens to agree with it.
+    """
+    block, _ = _raw_blocks()
+    for path, value in edits.items():
+        node = block
+        parts = path.split(".")
+        for p in parts[:-1]:
+            node = node[p]
+        node[parts[-1]] = value
+    return ScopeSelection.model_validate(block)
+
+
+def _normalisation(pipeline=None) -> Normalisation:
+    _, block = _raw_blocks()
+    if pipeline is not None:
+        block["pipeline"] = pipeline
+    return Normalisation.model_validate(block)
+
+
+# --- rendering the fixtures --------------------------------------------------------------------
+
+def _pdf_words(data: bytes, page: int = 0) -> list[Word]:
+    """Words of a rendered fixture page, exactly as the native-PDF path reads them."""
+    fitz = pytest.importorskip("fitz")
+    from app.services.pdf_extract import _native_words
+
+    doc = fitz.open(stream=data, filetype="pdf")
+    try:
+        p = doc[page]
+        return _native_words(p, max(p.rect.width, 1.0), max(p.rect.height, 1.0), rotation=0)
+    finally:
+        doc.close()
+
+
+def _w(text: str, x: float, y: float, width: float = 0.06) -> Word:
+    return Word(text=text, bbox=BBox(x0=x, y0=y, x1=x + width, y1=y + 0.012))
+
+
+def _build(words, **kw):
+    logs: list[str] = []
+    items, _ = build_line_items(words, page_index=0, document_id=None, source_kind="native",
+                               log=logs.append, **kw)
+    return items, logs
+
+
+def _slots(item: LineItem) -> dict[tuple[str, str | None], str]:
+    return {(v.basis.value, v.period_label): str(v.value) for v in item.values.values()}
+
+
+# --- entity_scope -----------------------------------------------------------------------------
+
+def test_a_group_company_header_bands_the_page_from_the_declared_signals():
+    """The gap this batch exists to close: an HKEX filing heads its columns "Group | Company",
+    which the engine's own regexes ("consolidat", "standalone|separate") never matched — so the
+    Company's figures were filed as the Group's and added to them."""
+    pytest.importorskip("reportlab")
+    from tests.fixtures.generate import make_group_company_pdf
+
+    items, logs = _build(_pdf_words(make_group_company_pdf()))
+    tr = next(i for i in items if "Trade receivables" in i.source_label)
+    assert _slots(tr) == {
+        ("consolidated", "current"): "3410", ("consolidated", "prior"): "2900",
+        ("standalone", "current"): "310", ("standalone", "prior"): "270",
+    }
+    # …and the decision is auditable from the run log, not only from the figures.
+    assert any("entity_scope=two_basis_header" in m for m in logs), logs
+
+
+def test_emptying_the_declared_signals_stops_the_group_company_detection():
+    """Proof the DECLARED signals drive it: with ``entity_scope.signals`` emptied, Group/Company
+    is no longer a basis header (only the two words the engine read before any rulebook declared
+    one survive, and neither is printed here)."""
+    pytest.importorskip("reportlab")
+    from tests.fixtures.generate import make_group_company_pdf
+
+    words = _pdf_words(make_group_company_pdf())
+    items, _ = _build(words, scope=_scope(**{"entity_scope.signals": []}))
+    tr = next(i for i in items if "Trade receivables" in i.source_label)
+    assert {b for b, _ in _slots(tr)} == {"consolidated"}
+
+
+def test_the_rulebook_file_is_what_the_default_reads(monkeypatch, tmp_path):
+    """The same edit made to the shipped rulebook FILE changes an extraction that passes no scope
+    at all — which is how every real run reaches this code (``stages.extract`` runs before an
+    ontology is attached)."""
+    pytest.importorskip("reportlab")
+    from tests.fixtures.generate import make_group_company_pdf
+
+    raw = json.loads(RULEBOOK.read_text(encoding="utf-8"))
+    raw["scope_selection"]["entity_scope"]["signals"] = []
+    edited = tmp_path / "edited.json"
+    edited.write_text(json.dumps(raw), encoding="utf-8")
+
+    words = _pdf_words(make_group_company_pdf())
+    items, _ = _build(words)
+    assert {b for b, _ in _slots(next(i for i in items if "Trade" in i.source_label))} == {
+        "consolidated", "standalone"}
+
+    monkeypatch.setattr(rr, "_RULEBOOK_IN_FORCE", edited)
+    rr.in_force_rules.cache_clear()
+    try:
+        items, _ = _build(words)
+        assert {b for b, _ in _slots(next(i for i in items if "Trade" in i.source_label))} == {
+            "consolidated"}
+    finally:
+        rr.in_force_rules.cache_clear()
+
+
+def test_consolidated_standalone_headers_still_band():
+    """The words the engine read before the rulebook declared any are still read: a page headed
+    "Consolidated | Standalone" must not lose its second basis to the new both-or-nothing rule."""
+    pytest.importorskip("reportlab")
+    from tests.fixtures.generate import make_dual_basis_pdf
+
+    items, _ = _build(_pdf_words(make_dual_basis_pdf()))
+    tr = next(i for i in items if "Trade receivables" in i.source_label)
+    assert _slots(tr) == {
+        ("consolidated", "current"): "3410", ("consolidated", "prior"): "2900",
+        ("standalone", "current"): "3100", ("standalone", "prior"): "2700",
+    }
+
+
+def test_a_sentence_naming_both_entities_is_not_a_column_header():
+    """"The Group and the Company had no material contingent liabilities" is prose. Banding on it
+    splits the note's two-column comparative, so last year's guarantees are reported as this
+    year's for a second entity."""
+    pytest.importorskip("reportlab")
+    from tests.fixtures.generate import make_group_and_company_note_pdf
+
+    items, logs = _build(_pdf_words(make_group_and_company_note_pdf()))
+    total = next(i for i in items if "Total guarantees" in i.source_label)
+    assert _slots(total) == {("consolidated", "current"): "1680",
+                             ("consolidated", "prior"): "1440"}
+    assert not any("entity_scope" in m for m in logs), logs
+
+
+def test_the_filers_name_in_the_running_header_does_not_band_the_page():
+    """"… Company Limited" is printed on every page of a filing, and the filer here is a "Group".
+    Both words are in the running header, one of them over the value columns — and the page still
+    has exactly one basis and two intact periods."""
+    pytest.importorskip("reportlab")
+    from tests.fixtures.generate import make_company_limited_header_pdf
+
+    items, logs = _build(_pdf_words(make_company_limited_header_pdf()))
+    total = next(i for i in items if "Total assets" in i.source_label)
+    assert _slots(total) == {("consolidated", "current"): "6614",
+                             ("consolidated", "prior"): "5680"}
+    assert not any("entity_scope" in m for m in logs), logs
+
+
+def test_a_row_that_reports_an_amount_is_never_a_basis_header():
+    """The adversarial shape the geometric guards alone would admit: both captions in the header
+    area, in separate runs, over the value columns — but the row reports a figure, so it is a
+    statement line (or prose citing one), not a header band."""
+    words = [
+        _w("Group", 0.58, 0.05), _w("Company", 0.80, 0.05), _w("1,200", 0.90, 0.05),
+        _w("2024", 0.74, 0.09), _w("2023", 0.86, 0.09),
+        _w("Inventories", 0.10, 0.13), _w("2,000", 0.74, 0.13), _w("1,800", 0.86, 0.13),
+        _w("Receivables", 0.10, 0.17), _w("3,410", 0.74, 0.17), _w("2,900", 0.86, 0.17),
+        _w("Cash", 0.10, 0.21), _w("1,204", 0.74, 0.21), _w("980", 0.86, 0.21),
+    ]
+    items, _ = _build(words)
+    inv = next(i for i in items if "Inventories" in i.source_label)
+    assert _slots(inv) == {("consolidated", "current"): "2000",
+                           ("consolidated", "prior"): "1800"}
+
+
+def test_the_bands_are_read_from_the_unmerged_rows():
+    """``_merge_wrapped_labels`` glues a label-only caption onto the next valued line. Computed
+    after the merge, the basis captions arrive on the period row — at the period columns' own
+    positions — and the geometry the guards test is no longer the geometry that was printed."""
+    words = [
+        # The caption line sits paragraph-tight above the dated line, which is what makes the
+        # merge fire on it.
+        _w("Group", 0.58, 0.050), _w("Company", 0.80, 0.050),
+        _w("2024", 0.55, 0.063), _w("2023", 0.67, 0.063),
+        _w("2024", 0.79, 0.063), _w("2023", 0.91, 0.063),
+        _w("Inventories", 0.10, 0.11), _w("2,000", 0.55, 0.11), _w("1,800", 0.67, 0.11),
+        _w("200", 0.79, 0.11), _w("180", 0.91, 0.11),
+        _w("Receivables", 0.10, 0.15), _w("3,410", 0.55, 0.15), _w("2,900", 0.67, 0.15),
+        _w("341", 0.79, 0.15), _w("290", 0.91, 0.15),
+        _w("Cash", 0.10, 0.19), _w("1,204", 0.55, 0.19), _w("980", 0.67, 0.19),
+        _w("120", 0.79, 0.19), _w("98", 0.91, 0.19),
+    ]
+    items, _ = _build(words)
+    inv = next(i for i in items if "Inventories" in i.source_label)
+    assert _slots(inv) == {("consolidated", "current"): "2000",
+                           ("consolidated", "prior"): "1800",
+                           ("standalone", "current"): "200",
+                           ("standalone", "prior"): "180"}
+
+
+def _company_only_page() -> list[Word]:
+    return [
+        _w("2024", 0.74, 0.05), _w("2023", 0.86, 0.05),
+        _w("Investments", 0.10, 0.09), _w("in", 0.17, 0.09), _w("subsidiaries", 0.20, 0.09),
+        _w("8,000", 0.74, 0.09), _w("7,500", 0.86, 0.09),
+        _w("Trade", 0.10, 0.13), _w("receivables", 0.16, 0.13),
+        _w("310", 0.74, 0.13), _w("270", 0.86, 0.13),
+        _w("Cash", 0.10, 0.17), _w("105", 0.74, 0.17), _w("90", 0.86, 0.17),
+    ]
+
+
+def test_a_company_only_marker_files_an_unbanded_page_as_the_company():
+    """``company_only_markers``: consolidation eliminates a parent's investment in its
+    subsidiaries, so a face that prints one is the Company's own statement. Filed as the Group's
+    it adds an intra-group asset to the consolidated balance sheet."""
+    items, logs = _build(_company_only_page())
+    assert {b for i in items for b, _ in _slots(i)} == {"standalone"}
+    assert any("entity_scope=company_only" in m for m in logs), logs
+
+
+def test_clearing_the_declared_marker_returns_the_page_to_the_default_basis():
+    """The marker is the rulebook's, parsed out of the declared sentence — cleared, the page is
+    read as consolidated again (``entity_scope.default``)."""
+    items, _ = _build(_company_only_page(),
+                      scope=_scope(**{"entity_scope.company_only_markers": []}))
+    assert {b for i in items for b, _ in _slots(i)} == {"consolidated"}
+
+
+def test_a_note_is_not_relabelled_by_the_company_only_marker():
+    """The rule is declared about the FACE. "Investments in subsidiaries" is exactly what a NOTE
+    of a consolidated filing itemises, and relabelling that note standalone breaks the note→face
+    tie, which matches on (basis, period)."""
+    from app.services.notes_extract import extract_note_tables
+
+    words = [_w("Note", 0.10, 0.02), _w("18:", 0.15, 0.02),
+             _w("Investments", 0.20, 0.02), _w("in", 0.28, 0.02),
+             _w("subsidiaries", 0.31, 0.02), *_company_only_page()]
+    tables = extract_note_tables(words, page_index=1, document_id=None, source_kind="native")
+    bases = {v.basis.value for t in tables for it in t.items for v in it.values.values()}
+    assert bases == {"consolidated"}
+
+
+# --- period_selection -------------------------------------------------------------------------
+
+def _comparative_first_page() -> list[Word]:
+    """A page that prints the COMPARATIVE on the left — "HKEX filings are not consistently
+    current-first"."""
+    return [
+        _w("2023", 0.74, 0.05), _w("2024", 0.86, 0.05),
+        _w("Revenue", 0.10, 0.09), _w("100", 0.74, 0.09), _w("120", 0.86, 0.09),
+        _w("Costs", 0.10, 0.13), _w("40", 0.74, 0.13), _w("50", 0.86, 0.13),
+        _w("Profit", 0.10, 0.17), _w("60", 0.74, 0.17), _w("70", 0.86, 0.17),
+    ]
+
+
+def test_the_current_period_is_the_latest_heading_date_not_the_leftmost_column():
+    items, logs = _build(_comparative_first_page())
+    rev = next(i for i in items if "Revenue" in i.source_label)
+    assert _slots(rev) == {("consolidated", "prior"): "100",
+                           ("consolidated", "current"): "120"}
+    assert any("period_selection=by_heading_date" in m for m in logs), logs
+
+
+def test_a_cjk_dated_header_is_read_as_a_date():
+    """The comparative columns of a Chinese filing are headed 二零二四年 / 二零二三年."""
+    words = [
+        _w("二零二三年", 0.74, 0.05), _w("二零二四年", 0.86, 0.05),
+        _w("收益", 0.10, 0.09), _w("100", 0.74, 0.09), _w("120", 0.86, 0.09),
+        _w("成本", 0.10, 0.13), _w("40", 0.74, 0.13), _w("50", 0.86, 0.13),
+        _w("溢利", 0.10, 0.17), _w("60", 0.74, 0.17), _w("70", 0.86, 0.17),
+    ]
+    items, _ = _build(words)
+    rev = next(i for i in items if "收益" in i.source_label)
+    assert _slots(rev) == {("consolidated", "prior"): "100",
+                           ("consolidated", "current"): "120"}
+
+
+def _restated_page(marker: str = "(restated)") -> list[Word]:
+    return [
+        _w("2024", 0.62, 0.05), _w("2023", 0.74, 0.05), _w("2023", 0.86, 0.05),
+        _w(marker, 0.86, 0.068, 0.08),
+        _w("Revenue", 0.10, 0.11), _w("120", 0.62, 0.11), _w("100", 0.74, 0.11),
+        _w("101", 0.86, 0.11),
+        _w("Costs", 0.10, 0.15), _w("50", 0.62, 0.15), _w("40", 0.74, 0.15),
+        _w("41", 0.86, 0.15),
+        _w("Profit", 0.10, 0.19), _w("70", 0.62, 0.19), _w("60", 0.74, 0.19),
+        _w("61", 0.86, 0.19),
+    ]
+
+
+def test_a_restated_comparative_never_overwrites_the_original():
+    """``restatement_rule``: "Do not overwrite a previously loaded original comparative; keep both
+    with a restatement flag." Two columns of the same year share a period slot, and the ValueKey
+    has nowhere to put the flag — so the restated one is stored beside the original, named."""
+    items, logs = _build(_restated_page())
+    rev = next(i for i in items if "Revenue" in i.source_label)
+    assert _slots(rev) == {("consolidated", "current"): "120",
+                           ("consolidated", "prior"): "100",
+                           ("consolidated", "prior_restated"): "101"}
+    assert any("period_selection=kept_both" in m for m in logs), logs
+
+
+def test_a_chinese_restatement_marker_is_recognised():
+    items, _ = _build(_restated_page("經重列"))
+    rev = next(i for i in items if "Revenue" in i.source_label)
+    assert ("consolidated", "prior_restated") in _slots(rev)
+
+
+def test_dropping_the_declared_markers_stops_the_restatement_handling():
+    """With the marker list gone from ``restatement_rule`` the restated column is just a second
+    comparative — which is what the engine did before the rule was implemented."""
+    items, _ = _build(_restated_page(),
+                      scope=_scope(**{"period_selection.restatement_rule": "keep both"}))
+    rev = next(i for i in items if "Revenue" in i.source_label)
+    assert ("consolidated", "prior_restated") not in _slots(rev)
+    assert ("consolidated", "prior_col2") in _slots(rev)      # kept, but not named as restated
+
+
+# --- units_and_currency -----------------------------------------------------------------------
+
+def _unit_page(total: str = "6,000") -> list[Word]:
+    return [
+        _w("RMB'000", 0.72, 0.03, 0.08),
+        _w("2024", 0.74, 0.06), _w("2023", 0.86, 0.06),
+        _w("Inventories", 0.10, 0.10), _w("2,000", 0.74, 0.10), _w("1,800", 0.86, 0.10),
+        _w("Receivables", 0.10, 0.14), _w("3,000", 0.74, 0.14), _w("2,900", 0.86, 0.14),
+        _w("Cash", 0.10, 0.18), _w("1,000", 0.74, 0.18), _w("980", 0.86, 0.18),
+        _w("Total", 0.10, 0.22), _w("assets", 0.16, 0.22),
+        _w(total, 0.74, 0.22), _w("5,680", 0.86, 0.22),
+    ]
+
+
+def test_the_unit_is_resolved_from_the_statement_header_and_kept_on_every_fact():
+    items, logs = _build(_unit_page())
+    units = {(v.unit_ctx.currency, str(v.unit_ctx.scale_factor), v.unit_ctx.units_label)
+             for i in items for v in i.values.values()}
+    assert units == {("CNY", "1000", "thousand")}
+    assert any("units=CNY/thousand" in m for m in logs), logs
+    # The figures themselves are untouched — "never normalise scale silently".
+    inv = next(i for i in items if "Inventories" in i.source_label)
+    assert _slots(inv)[("consolidated", "current")] == "2000"
+
+
+def test_a_unit_the_rulebook_does_not_declare_is_not_read_off_the_page():
+    items, _ = _build(_unit_page(), scope=_scope(**{"units_and_currency.signals": ["HK$'000"]}))
+    units = {(v.unit_ctx.currency, str(v.unit_ctx.scale_factor))
+             for i in items for v in i.values.values()}
+    assert units == {("", "1")}
+
+
+def test_a_thousandfold_subtotal_conflict_routes_the_statement_to_review():
+    """"If header scale and a printed subtotal are inconsistent by a factor of 1,000, trust
+    neither." The header says RMB'000 and the printed total is in units: 2,000 + 3,000 + 1,000
+    against a total of 6,000,000. Neither reading is applied, and the statement is flagged."""
+    items, logs = _build(_unit_page("6,000,000"))
+    units = {(v.unit_ctx.currency, str(v.unit_ctx.scale_factor))
+             for i in items for v in i.values.values()}
+    assert units == {("", "1")}
+    assert any("units_conflict" in m and m.endswith(":review") for m in logs), logs
+
+
+def test_no_conflict_is_reported_when_the_subtotal_agrees_with_the_header():
+    _items, logs = _build(_unit_page())
+    assert not any("units_conflict" in m for m in logs), logs
+
+
+def test_removing_the_declared_factor_removes_the_conflict_check():
+    """The 1,000 is read out of the declared sentence; with the sentence emptied the check has no
+    factor to test and does not run (and the header scale is then trusted, as it was before)."""
+    items, logs = _build(_unit_page("6,000,000"),
+                         scope=_scope(**{"units_and_currency.conflict": ""}))
+    units = {str(v.unit_ctx.scale_factor) for i in items for v in i.values.values()}
+    assert units == {"1000"}
+    assert not any("units_conflict" in m for m in logs), logs
+
+
+# --- column_guard -----------------------------------------------------------------------------
+
+def _fact(value: int, *, currency: str = "CNY", scale: int = 1000,
+          period: str = "prior") -> ExtractedValue:
+    return ExtractedValue(value=Decimal(value), value_raw=Decimal(value),
+                          basis=Basis.CONSOLIDATED, period_label=period,
+                          unit_ctx=UnitContext(currency=currency, scale_factor=Decimal(scale)))
+
+
+def test_two_facts_differing_only_on_currency_are_two_facts():
+    """``ValueKey`` is (basis, period_end, period_label) — it cannot express a difference in
+    currency or scale, so the second fact used to REPLACE the first in silence."""
+    li = LineItem(source_label="Trade receivables")
+    dims = rr.guard_dimensions(_scope())
+    rr.store_fact(li, _fact(100, currency="CNY"), dims)
+    rr.store_fact(li, _fact(110, currency="HKD"), dims)
+    assert sorted(str(v.value) for v in li.values.values()) == ["100", "110"]
+
+
+def test_dropping_currency_from_the_declared_dimensions_collapses_them():
+    """Proof the dimension list is read from ``column_guard`` and not assumed: with currency
+    removed from the declared identity the two readings ARE the same fact."""
+    li = LineItem(source_label="Trade receivables")
+    dims = rr.guard_dimensions(_scope(column_guard="Every fact carries the resolved "
+                                                  "(entity_scope, period)."))
+    rr.store_fact(li, _fact(100, currency="CNY"), dims)
+    rr.store_fact(li, _fact(110, currency="HKD"), dims)
+    assert [str(v.value) for v in li.values.values()] == ["100"]
+
+
+def test_a_second_reading_of_one_column_keeps_the_first_figure():
+    """Two facts identical on every declared dimension are one fact read twice. Keeping the FIRST
+    is the auditable choice: overwriting means the row reports whichever cell the geometry
+    happened to visit last."""
+    li = LineItem(source_label="Trade receivables")
+    logs: list[str] = []
+    dims = rr.guard_dimensions(_scope())
+    rr.store_fact(li, _fact(100), dims, log=logs.append)
+    rr.store_fact(li, _fact(110), dims, log=logs.append)
+    assert [str(v.value) for v in li.values.values()] == ["100"]
+    assert any("duplicate_fact_dropped" in m for m in logs), logs
+
+
+def test_the_group_and_company_page_carries_four_distinct_facts_for_one_row():
+    """The same canonical row differing on entity_scope and period is four facts, not one — the
+    reason the guard exists at all."""
+    pytest.importorskip("reportlab")
+    from tests.fixtures.generate import make_group_company_pdf
+
+    items, _ = _build(_pdf_words(make_group_company_pdf()))
+    cash = next(i for i in items if "Cash and cash equivalents" in i.source_label)
+    assert len(_slots(cash)) == 4
+
+
+# --- normalisation.pipeline -------------------------------------------------------------------
+
+@pytest.mark.parametrize(("printed", "expected"), [
+    ("Trade receivables (note 12)", "trade receivables"),          # footnote / note markers
+    ("其他應付款項（附註12）", "其他应付款项"),
+    ("1. Non-operating expenses", "non-operating expenses"),       # leading numbering
+    ("(a) Other income", "other income"),
+    ("一、非經營開支", "非经营开支"),
+    ("Share of profits and losses of:", "share of profits and losses of"),   # trailing colon
+    ("Revenue RMB'000", "revenue"),                                # inline unit annotation
+    ("二零二三年（未經審核）", "二零二三年"),
+    ("Cash​ and­ cash  equivalents", "cash and cash equivalents"),  # zero-width, spaces
+    ("研發／開發成本", "研发/开发成本"),                              # ╱／⁄ → /
+    ("存貨、應收款項", "存货,应收款项"),                               # 、 → ,
+])
+def test_the_declared_strip_rules_are_implemented(printed, expected):
+    """Every one of these is a step the rulebook's ``pipeline`` lists. An unimplemented step is a
+    policy a reviewer can look up and the engine ignores."""
+    steps = rr._pipeline_steps(_normalisation(), _scope())
+    assert rr.apply_pipeline(printed, steps) == expected
+
+
+def test_the_pipeline_runs_in_the_declared_order():
+    """The list is ordered, and the order is load-bearing: the width fold maps 、 to a comma
+    BEFORE the numbering step, which is what lets "一、" be recognised as numbering at all."""
+    _, block = _raw_blocks()
+    reversed_pipeline = list(reversed(block["pipeline"]))
+    steps = rr._pipeline_steps(_normalisation(reversed_pipeline), _scope())
+    assert rr.apply_pipeline("一、非經營開支", steps) != "非经营开支"
+
+
+def _units_caption_row() -> list[Word]:
+    """A column-header row whose caption is nothing but an inline unit annotation."""
+    return [
+        _w("RMB'000", 0.66, 0.05, 0.08), _w("2024", 0.74, 0.05), _w("2023", 0.86, 0.05),
+        _w("Inventories", 0.10, 0.09), _w("2,000", 0.74, 0.09), _w("1,800", 0.86, 0.09),
+        _w("Receivables", 0.10, 0.13), _w("3,000", 0.74, 0.13), _w("2,900", 0.86, 0.13),
+        _w("Cash", 0.10, 0.17), _w("1,000", 0.74, 0.17), _w("980", 0.86, 0.17),
+    ]
+
+
+def test_a_units_caption_row_is_not_a_line_item():
+    """"RMB'000  2024  2023" is a header. Its caption survived the noise test, so the row was
+    emitted as a line item whose two "amounts" were the years."""
+    items, _ = _build(_units_caption_row())
+    assert [i.source_label for i in items] == ["Inventories", "Receivables", "Cash"]
+
+
+def test_removing_the_annotation_step_lets_the_header_row_through():
+    """The same page with the "Strip inline unit and currency annotations" step deleted from the
+    declared pipeline: the row comes back as a line item reporting 2024 and 2023."""
+    _, block = _raw_blocks()
+    without = [s for s in block["pipeline"] if "unit and currency annotation" not in s]
+    items, _ = _build(_units_caption_row(), normalisation=_normalisation(without))
+    assert any("RMB" in i.source_label for i in items)
+
+
+def test_a_units_caption_row_never_becomes_the_section():
+    items, _ = _build(_units_caption_row())
+    assert {i.section_hint for i in items} == {None}
+
+
+# --- normalisation.wrapped_caption_rule + title-case banners -----------------------------------
+
+def test_a_title_case_banner_sets_the_section():
+    """A label-only row reached ``section_hint`` only when it was ALL-CAPS or ended in a colon, so
+    a filing printing "Non-operating expenses" in title case set NO section — and the section gate
+    then had nothing to tell those captions apart from the ones printed elsewhere."""
+    words = [
+        _w("Non-operating", 0.10, 0.05, 0.10), _w("expenses", 0.21, 0.05),
+        _w("Interest", 0.10, 0.12), _w("expense", 0.17, 0.12),
+        _w("1,234", 0.74, 0.12), _w("1,000", 0.86, 0.12),
+        _w("Bank", 0.10, 0.16), _w("charges", 0.17, 0.16),
+        _w("12", 0.74, 0.16), _w("10", 0.86, 0.16),
+        _w("Sundry", 0.10, 0.20), _w("losses", 0.17, 0.20),
+        _w("5", 0.74, 0.20), _w("6", 0.86, 0.20),
+    ]
+    items, _ = _build(words)
+    assert [i.section_hint for i in items] == ["Non-operating expenses"] * 3
+
+
+def test_a_fullwidth_colon_subheading_does_not_displace_the_section():
+    """A sub-heading introduces a group WITHIN the section. Written with the CJK fullwidth colon
+    the plain ``endswith(":")`` test never saw it, so "其他全面收益：" replaced the section for
+    every row beneath it."""
+    words = [
+        _w("EXPENSES", 0.10, 0.05),
+        _w("其他全面收益：", 0.10, 0.10, 0.10),
+        _w("Interest", 0.10, 0.15), _w("expense", 0.17, 0.15),
+        _w("1,234", 0.74, 0.15), _w("1,000", 0.86, 0.15),
+        _w("Bank", 0.10, 0.19), _w("charges", 0.17, 0.19),
+        _w("12", 0.74, 0.19), _w("10", 0.86, 0.19),
+        _w("Sundry", 0.10, 0.23), _w("losses", 0.17, 0.23),
+        _w("5", 0.74, 0.23), _w("6", 0.86, 0.23),
+    ]
+    items, _ = _build(words)
+    assert {i.section_hint for i in items} == {"EXPENSES"}

@@ -310,6 +310,98 @@ def test_only_the_same_thing_in_another_section_may_be_rerouted():
                               "pl_total_comprehensive_income_for_the_year")
 
 
+# --- the gate's source of truth is section_scope, not the canonical key -------------------------
+# `section_scope` is resolved onto all 173 concepts and was then ignored: the gate derived a row's
+# section from the KEY namespace. The two agree in the shipped file, which is why reading the key was
+# survivable — and exactly why it was not defensible. They diverge the moment an editor declares a
+# concept in a section its key name does not match, and then the gate quietly obeys the key while the
+# rulebook, the only place a reviewer can look up what the pipeline does, says something else.
+
+CASH = "bs_current_assets__cash_and_cash_equivalents"
+CASH_CAPTION = "Cash and cash equivalents 現金及現金等價物"
+
+
+def _matcher_with(edit) -> OntologyMatcher:
+    definition = json.loads((TEMPLATES / "hkfrs_hk_china_v2_ontology.json").read_text())
+    edit(definition)
+    return OntologyMatcher(load_ontology(definition, resolve=True), locale="zh")
+
+
+def test_editing_section_scope_moves_the_concept_the_gate_will_accept():
+    """The A/B. As shipped, cash is a current asset and the gate refuses it under the non-current
+    banner. Redeclare its `section_scope` — and change nothing else, least of all its key — and the
+    gate follows the declaration, in both directions."""
+    def move_cash_to_non_current(d):
+        for c in d["mappings"]:
+            if c["canonical_key"] == CASH:
+                c["section_scope"] = ["bs_s1_non_current_assets"]
+
+    shipped = _matcher_with(lambda _d: None)
+    assert shipped.match(CASH_CAPTION, statement="balance_sheet",
+                         section="CURRENT ASSETS 流動資產").canonical_key == CASH
+    assert shipped.match(CASH_CAPTION, statement="balance_sheet",
+                         section="NON-CURRENT ASSETS 非流動資產").canonical_key != CASH
+
+    edited = _matcher_with(move_cash_to_non_current)
+    assert edited.match(CASH_CAPTION, statement="balance_sheet",
+                        section="NON-CURRENT ASSETS 非流動資產").canonical_key == CASH
+    assert edited.match(CASH_CAPTION, statement="balance_sheet",
+                        section="CURRENT ASSETS 流動資產").canonical_key != CASH
+
+
+def test_a_concept_may_be_declared_in_two_sections_and_the_banner_admits_both():
+    """`section_scope` is a LIST, which the key namespace cannot express at all. A concept declared in
+    both asset sections is claimable under either banner — the one thing reading the key could never
+    do, however the key was spelled."""
+    def widen_cash(d):
+        for c in d["mappings"]:
+            if c["canonical_key"] == CASH:
+                c["section_scope"] = ["bs_s1_non_current_assets", "bs_s2_current_assets"]
+
+    m = _matcher_with(widen_cash)
+    assert m._sections_of(CASH) == frozenset({"non_current_assets", "current_assets"})
+    for banner in ("CURRENT ASSETS 流動資產", "NON-CURRENT ASSETS 非流動資產"):
+        assert m.match(CASH_CAPTION, statement="balance_sheet",
+                       section=banner).canonical_key == CASH, banner
+
+
+def test_a_top_level_scope_is_constrained_by_no_banner():
+    """`bs_top_level` names no section, and must not be read as one. `section_hint` is the nearest
+    PRECEDING banner, so a statement total routinely carries the banner of the last section above it
+    — "TOTAL ASSETS LESS CURRENT LIABILITIES" is printed inside the current-liabilities block."""
+    m = _matcher_with(lambda _d: None)
+    assert m._sections_of("bs_total_assets") == frozenset()
+    assert m._in_section("bs_total_assets", "CURRENT LIABILITIES 流動負債")
+    assert m._in_section("bs_net_assets", "CURRENT ASSETS 流動資產")
+
+
+def test_a_scope_id_names_its_section_and_the_compound_wins():
+    """The scope ids carry the section's printed POSITION as well as its name, so the token is read
+    off the end — longest-first, since "bs_s1_non_current_assets" also ends with "current_assets"."""
+    from app.services.mapping import section_token_of_scope
+
+    assert section_token_of_scope("bs_s1_non_current_assets") == "non_current_assets"
+    assert section_token_of_scope("bs_s2_current_assets") == "current_assets"
+    assert section_token_of_scope("bs_s4_non_current_liabilities") == "non_current_liabilities"
+    assert section_token_of_scope("pl_s3_non_operating_expenses") == "non_operating_expenses"
+    assert section_token_of_scope("pl_s2_expenses") == "expenses"
+    assert section_token_of_scope("pl_s7_total_comprehensive_income_attributable_to") == (
+        "total_comprehensive_income_attributable_to")
+    assert section_token_of_scope("cf_s1_cash_flow_from_operating_activities") == (
+        "cash_flow_from_operating_activities")
+    for top in ("bs_top_level", "pl_top_level", "cf_top_level"):
+        assert section_token_of_scope(top) is None, top
+
+
+def test_a_v1_concept_declares_no_scope_and_falls_back_to_its_key(matcher):
+    """The fallback is the whole reason v1 keeps working: no `section_scope` is authored anywhere in
+    it, so the key namespace is all there is."""
+    assert not any(c.section_scope for c in matcher.ontology.mappings)
+    assert matcher._sections_of("bs_current_liabilities__current_borrowings") == frozenset(
+        {"current_liabilities"})
+    assert matcher._sections_of("bs_total_assets") == frozenset()
+
+
 def test_the_legitimate_variants_still_reroute():
     """The guard must not have disabled the feature it protects."""
     from app.services.mapping import family_leaf_named_by

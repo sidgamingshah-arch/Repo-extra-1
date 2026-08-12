@@ -4,12 +4,99 @@ Wires each extracted ``LineItem`` through ``services.mapping.OntologyMatcher`` a
 records the winning canonical key, method, and per-strategy confidence. The ontology
 + locale come from the extraction job; adapters (embedding/LLM) are pulled from the
 registry when configured.
+
+Two things happen here that the matcher cannot do, because they are judgements about the WHOLE
+document rather than about one caption:
+
+* **batching** — the unit handed to ``match_batch`` is one (statement, basis, period), so a
+  statement printed across two pages is decided whole (:func:`batch_groups`).
+* **containment and equivalence** — a gross parent may not be filed alongside the children it
+  contains (``is_gross_parent`` / ``children_if_decomposed``, and the same rule stated globally in
+  ``global_rules.mutually_exclusive_groups``), and two captions the rulebook declares to be one fact
+  (``equivalence``) may not disagree in silence. Both are only decidable once every row has a
+  concept, so they run as a pass over the mapped document.
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from app.core.models import DocumentModel
+from app.core.models.enums import AllocationStatus, LineRole
 from app.core.stage import PipelineContext
 from app.services.mapping import OntologyMatcher
+
+
+def _columns_of(li) -> set[tuple[str, str]]:
+    """The (basis, period) columns one row carries."""
+    return {(ev.basis.value, ev.period_label or "") for ev in li.values.values()}
+
+
+def _page_of(li) -> int | None:
+    return next((ev.provenance.page_index for ev in li.values.values()
+                 if ev.provenance is not None), None)
+
+
+def batch_groups(doc: DocumentModel,
+                 stmt_by_page: dict[int, str]) -> list[tuple[str | None, list]]:
+    """Partition the line items into the groups the mapper is called with, in print order.
+
+    The unit is **(statement, basis, period)**, not the source page it used to be. Grouping by page
+    decided a statement that spans two pages in two calls, so no cross-line judgement could span the
+    break — and a page break is exactly where a filing is most likely to cut a section in half,
+    leaving a subtotal in one call and the lines it is made of in the other.
+
+    Basis and period belong in the key because they are what identify WHICH statement: an annual
+    report prints the consolidated balance sheet and the company balance sheet under the same
+    classifier verdict, in different column blocks. Merged, the model would be shown each caption
+    twice and asked to map both rows to one concept.
+
+    They are read PER PAGE — the union of the columns that page's rows carry — and not per row,
+    because the columns are a property of the page's header bands. Per row, any line that happens to
+    print no prior-period figure would be split off into a call of its own, which is the
+    fragmentation this change exists to remove.
+
+    Rows the classifier gave no statement for are grouped by PAGE (the fallback key) and returned
+    with ``None`` as the statement, which the caller maps per line. A group with no statement is not
+    what a batch is for: it gets no statement-scoped candidate list, so the whole ontology would be
+    put in front of the model for the rows we are least able to place.
+    """
+    cols_by_page: dict[int | None, set[tuple[str, str]]] = {}
+    for li in doc.line_items:
+        cols_by_page.setdefault(_page_of(li), set()).update(_columns_of(li))
+
+    groups: dict[tuple, list] = {}
+    for li in sorted(doc.line_items, key=lambda x: x.ordinal):
+        page = _page_of(li)
+        statement = stmt_by_page.get(page) if page is not None else None
+        if statement:
+            key = ("stmt", statement, page)
+        else:
+            key = ("page", page)
+        groups.setdefault(key, []).append(li)
+    return [(k[1] if k[0] == "stmt" else None, items) for k, items in groups.items()]
+
+
+def _pairs_to_keep_apart(ontology) -> list[tuple[str, list[str], str]]:
+    """(aggregate, components, why) for every containment the rulebook declares.
+
+    Two declarations, one rule. ``is_gross_parent`` + ``children_if_decomposed`` states it on the
+    concept; ``global_rules.mutually_exclusive_groups`` states it globally, and its ``rule`` text is
+    the authoritative wording ("Populate the aggregate only when the face prints a single
+    undifferentiated 'Reserves' line. If any component is printed, populate components and leave the
+    aggregate null."). Both are read, because either one being ignored makes the other a lie.
+    """
+    out: list[tuple[str, list[str], str]] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for g in ontology.global_rules.mutually_exclusive_groups:
+        if g.aggregate and g.components:
+            out.append((g.aggregate, list(g.components), g.id or "mutually_exclusive_group"))
+            seen.add((g.aggregate, tuple(g.components)))
+    for m in ontology.mappings:
+        if m.is_gross_parent and m.children_if_decomposed:
+            if (m.canonical_key, tuple(m.children_if_decomposed)) in seen:
+                continue
+            out.append((m.canonical_key, list(m.children_if_decomposed), "is_gross_parent"))
+    return out
 
 
 class MapOntologyStage:
@@ -81,19 +168,27 @@ class MapOntologyStage:
 
         mapped = 0
         if scope == "per_statement":
-            # One grounded LLM call per statement — grouped by source sheet/page so
-            # cross-line context (containment, residual, "Others") is available.
-            by_group: dict[int, list] = {}
-            for li in doc.line_items:
-                pg = next((ev.provenance.page_index for ev in li.values.values()
-                           if ev.provenance is not None), 0)
-                by_group.setdefault(pg, []).append(li)
+            # One grounded LLM call per (statement, basis, period) — see `batch_groups` for why the
+            # unit is the statement and not the source page it used to be.
+            groups = batch_groups(doc, stmt_by_page)
             by_id = {str(li.id): li for li in doc.line_items}
-            for group in by_group.values():
+            batched = unstated = 0
+            for statement, group in groups:
+                if statement is None:
+                    # No statement means no statement-scoped candidate list and no coherent
+                    # neighbourhood, so these are decided one at a time rather than handed to a
+                    # batch as if they were a statement.
+                    unstated += len(group)
+                    for li in group:
+                        if _apply(li, matcher.match(li.source_label,
+                                                    section=li.section_hint)):
+                            mapped += 1
+                    continue
+                batched += len(group)
                 results = matcher.match_batch(
                     [(str(li.id), li.source_label) for li in group],
-                    statement=_statement_of(group[0]),
-                    # One page spans several section banners, so the banner is per row.
+                    statement=statement,
+                    # A statement spans several section banners, so the banner is per row.
                     sections={str(li.id): li.section_hint for li in group})
                 # Only ids from THIS group are applied. `by_id` spans the whole document, so an
                 # id echoed from another group would otherwise apply this statement's decision to
@@ -107,11 +202,20 @@ class MapOntologyStage:
                         continue
                     if _apply(by_id[iid], res):
                         mapped += 1
+            # How the document was actually cut up, so "one statement, two pages, one call" is
+            # verifiable from the run record instead of asserted in a docstring.
+            ctx.log(f"map_ontology:groups={len(groups)} batched_rows={batched}"
+                    f" per_line_rows={unstated} chunks={matcher.usage['batch_chunks']}"
+                    f" max_chunk={matcher.usage['batch_max_items']}")
         else:
             for li in doc.line_items:
                 if _apply(li, matcher.match(li.source_label, statement=_statement_of(li),
                                             section=li.section_hint)):
                     mapped += 1
+
+        # Whole-document rules, which need every row to have a concept first.
+        mapped -= self._enforce_containment(doc, ontology, ctx)
+        self._check_equivalence(doc, ontology, ctx)
 
         # Roll the mapper's LLM usage up onto the context for the audit log.
         ctx.llm_input_tokens += matcher.usage["input_tokens"]
@@ -133,4 +237,99 @@ class MapOntologyStage:
         if matcher.usage["family_resolved"]:
             ctx.log(f"map_ontology:section_reroutes={matcher.usage['family_resolved']}"
                     f" routes={','.join(matcher.usage['family_routes'])}")
+        if matcher.usage["confusable_ties"]:
+            # `binding.order` step 6: answered with both candidates and a review flag rather than a
+            # pick. Counted here because "the mapper declined N rows on purpose" reads very
+            # differently from "the mapper failed on N rows".
+            ctx.log(f"map_ontology:confusable_ties={matcher.usage['confusable_ties']}")
         return doc
+
+    @staticmethod
+    def _enforce_containment(doc: DocumentModel, ontology, ctx: PipelineContext) -> int:
+        """A gross parent may not be FILED alongside the children it contains. Returns rows unfiled.
+
+        The rulebook states this twice — ``is_gross_parent`` + ``children_if_decomposed`` on the
+        concept, ``global_rules.mutually_exclusive_groups`` globally — and states the consequence
+        once: "If any component is printed, populate components and leave the aggregate null."
+        Filing both double-counts (equity gains its reserves twice) and every check still passes,
+        because the statement remains internally consistent — it is just wrong.
+
+        The aggregate's row keeps its value and provenance and loses only its canonical_key, and it
+        is marked a SUBTOTAL. That second part is load-bearing: an unclaimed face row with a value is
+        swept into its section's "Others" (stages.residual), which would ADD the aggregate back into
+        the section under a different name — strictly worse than the double count this pass exists to
+        prevent. A row equal to the sum of the children printed around it IS a subtotal, and the
+        sweep's own eligibility rules already exclude those.
+        """
+        pairs = _pairs_to_keep_apart(ontology)
+        if not pairs:
+            return 0
+        unfiled = 0
+        for aggregate, components, why in pairs:
+            filed = [li for li in doc.line_items if li.canonical_key == aggregate]
+            if not filed:
+                continue
+            present = [c for c in components
+                       if any(li.canonical_key == c for li in doc.line_items)]
+            if not present:
+                continue                       # the face printed only the aggregate — keep it
+            for li in filed:
+                li.canonical_key = None
+                if li.role is LineRole.LINE:
+                    li.role = LineRole.SUBTOTAL
+                li.confidence.flags.append(
+                    f"alloc:{AllocationStatus.PARENT_GROSS_EVIDENCE_ONLY.value}")
+                li.confidence.flags.append(f"contains_mapped_children:{','.join(present)}")
+                unfiled += 1
+            for li in doc.line_items:
+                if li.canonical_key in present:
+                    # Named on the children too: a reviewer opening the empty aggregate needs the
+                    # rows that replaced it, and a reviewer opening a child needs to know why the
+                    # parent is empty.
+                    li.confidence.flags.append(
+                        f"alloc:{AllocationStatus.CHILD_COMPONENT.value}")
+            ctx.log(f"map_ontology:containment({why}):{aggregate}"
+                    f" unfiled_rows={len(filed)} components={','.join(present)}")
+        return unfiled
+
+    @staticmethod
+    def _check_equivalence(doc: DocumentModel, ontology, ctx: PipelineContext) -> int:
+        """Two captions the rulebook declares to be ONE fact must not disagree in silence.
+
+        ``equivalence`` ("Net assets" ↔ "Total equity", relation
+        ``identical_reported_amount``) says: populate whichever is printed, and "If both are printed
+        and differ, route to review — do not average or pick." Both printed and EQUAL is the ordinary
+        case and is left alone; both printed and different is a genuine finding — one of the two rows
+        is mis-mapped, or the filing itself does not tie — and it is invisible otherwise, because
+        each row is individually plausible and each subtotal it feeds still balances.
+
+        Compared per (basis, period) column, and only beyond ``recon_abs_tolerance``: the same figure
+        rounded in two places is not a disagreement.
+        """
+        tol = Decimal(str(ctx.settings.extraction.recon_abs_tolerance))
+        pairs = {tuple(sorted((m.canonical_key, m.equivalence.with_)))
+                 for m in ontology.mappings
+                 if m.equivalence is not None and m.equivalence.with_}
+        conflicts = 0
+        for a, b in sorted(pairs):
+            rows_a = [li for li in doc.line_items if li.canonical_key == a]
+            rows_b = [li for li in doc.line_items if li.canonical_key == b]
+            if not rows_a or not rows_b:
+                continue                       # only one caption printed: nothing to disagree with
+            for la in rows_a:
+                for lb in rows_b:
+                    for col, va in la.values.items():
+                        vb = lb.values.get(col)
+                        if vb is None or va.value is None or vb.value is None:
+                            continue
+                        if abs(va.value - vb.value) <= tol:
+                            continue
+                        for li, other in ((la, b), (lb, a)):
+                            flag = f"equivalence_conflict:{other}"
+                            if flag not in li.confidence.flags:
+                                li.confidence.flags.append(flag)
+                                li.confidence.flags.append("low_mapping_confidence")
+                        conflicts += 1
+                        ctx.log(f"map_ontology:equivalence_conflict {a}={va.value}"
+                                f" {b}={vb.value} column={col}")
+        return conflicts

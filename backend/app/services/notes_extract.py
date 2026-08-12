@@ -54,8 +54,14 @@ def extract_note_tables(words: list[Word], *, page_index: int, document_id: str 
 
     tables: list[NotesTable] = []
     for sec in sections:
+        # ``on_face=False``: the rulebook's ``company_only_markers`` rule is declared about the
+        # FACE ("presence of …investments_in_subsidiaries on the face is strong evidence the
+        # column is company-only"). A note IS where that caption is normally printed, and reading
+        # it here would relabel the note of a consolidated statement as the Company's — breaking
+        # the note→face tie, which matches on (basis, period).
         items, _ = build_line_items(sec["words"], page_index=page_index,
-                                    document_id=document_id, source_kind=source_kind)
+                                    document_id=document_id, source_kind=source_kind,
+                                    on_face=False)
         if not items and not sec["title"]:
             continue
         table = NotesTable(note_number=sec["no"], title=sec["title"], source_pages=[page_index])
