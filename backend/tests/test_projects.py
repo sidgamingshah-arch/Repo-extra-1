@@ -77,6 +77,55 @@ def test_review_notes_endpoints(client):
     assert note["linked_line"] == "trade_recv"
 
 
+def test_a_note_and_a_statement_cannot_label_the_same_figures_differently(client):
+    """The finding, as an assertion: the Notes screen hardcoded "FY25"/"FY24" over the same two
+    columns the Workspace labelled from the project's real periods. Both now read one list."""
+    note = client.get("/api/v1/projects/demo/notes/12").json()
+    stmt = client.get("/api/v1/projects/demo/statements/balance_sheet").json()
+    assert note["periods"] == stmt["periods"]
+    assert len(note["periods"]) == 2 and all(note["periods"])
+
+
+def test_every_sample_viewer_carries_exactly_one_active_chip(client):
+    """A chip is a LABEL naming what the viewer is showing. Each statement used to carry a second
+    `active: False` note chip — which is a tab control — and this viewer has no second tab: the
+    sample source pane is a rendered paper mock with no pages behind it. One chip is also the shape
+    the real routes serve, so the two paths cannot drift apart again."""
+    for statement in ("balance_sheet", "profit_and_loss", "cash_flow"):
+        viewer = client.get(f"/api/v1/projects/demo/statements/{statement}").json()["viewer"]
+        assert len(viewer["chips"]) == 1, statement
+        assert viewer["chips"][0]["active"] is True
+        # The dropped note references are not lost — the callout names them in prose.
+        assert "Note" in viewer["callout"]
+
+
+def test_the_sample_export_checklist_serves_only_options_the_workbook_reads(client):
+    """An option the builder never reads is a switch wired to nothing. `build_xlsx` honours
+    `confidence` and `notes_sheet` and no others, so those are the only two offered."""
+    options = client.get("/api/v1/projects/demo/export-options").json()["options"]
+    assert {o["key"] for o in options} == {"confidence", "notes_sheet"}
+
+
+def test_the_sample_export_checklist_gates_the_file(client):
+    import io
+
+    import openpyxl
+
+    def workbook(include: dict):
+        r = client.post("/api/v1/projects/demo/export",
+                        json={"format": "excel", "include": include})
+        assert r.status_code == 200, r.text
+        return openpyxl.load_workbook(io.BytesIO(r.content))
+
+    on = workbook({"confidence": True, "notes_sheet": True})
+    assert "All notes" in on.sheetnames
+    assert "Conf." in [c.value for c in on[on.sheetnames[0]][1]]
+
+    off = workbook({"confidence": False, "notes_sheet": False})
+    assert "All notes" not in off.sheetnames
+    assert "Conf." not in [c.value for c in off[off.sheetnames[0]][1]]
+
+
 def test_sample_counts_describe_the_lists_they_head(client):
     """Every count the sample serves is counted from the rows served with it.
 
@@ -96,6 +145,42 @@ def test_sample_counts_describe_the_lists_they_head(client):
         selected = (review["checks"] if tab["types"] is None
                     else [c for c in review["checks"] if c["type"] in tab["types"]])
         assert tab["count"] == len(selected), tab["label"]
+
+    # The Export footer's two figures, from the same seeded dataset the Review header counts.
+    progress = client.get("/api/v1/projects/demo").json()["project"]["progress"]
+    statements = {name: client.get(f"/api/v1/projects/demo/statements/{name}").json()
+                  for name in ("balance_sheet", "profit_and_loss", "cash_flow")}
+    items = sum(1 for s in statements.values() for r in s["rows"] if r.get("kind") == "item")
+    assert progress["line_items"] == items
+
+    # The header's third tile says "lines with no finding", so `passed` counts the statement LINES
+    # named by no served finding — the same quantity over the same POPULATION the real route serves
+    # under the same tile. It used to be `items - len(checks)`, which assumed one finding per line
+    # item; then it was the ITEM rows less the item rows a finding names, which is a THIRD population:
+    # the real path counts subtotals and totals as lines (a total is what the balance card names), so
+    # the sample was answering 31 over its 33 item rows while serving 6 subtotals and 4 totals beside
+    # them, 8 of which no finding names. Read off `names` — the field the real route serves for the
+    # same purpose — not re-derived here.
+    named = {n for c in review["checks"] for n in c["names"]}
+    assert named == {c["target"] for c in review["checks"]}
+    rows = [r for s in statements.values() for r in s["rows"]]
+    lines = [r for r in rows if r.get("kind") not in ("section", "subhead")]
+    indicted = [r for r in lines if r.get("id") in named]
+    assert review["summary"]["passed"] == len(lines) - len(indicted)
+    # THE ASSERTION THAT FAILS WITH THE DEFECT RESTORED: the two populations are provably different
+    # numbers on this very data, so the item-only count cannot pass as the served one.
+    assert len(lines) > items
+    assert review["summary"]["passed"] != items - len(
+        [r for r in indicted if r.get("kind") == "item"])
+    assert 0 < len(indicted) <= len(review["checks"])
+    # …and a subtotal/total IS in the population: findings name two of them here, which is exactly the
+    # row class the item-only count dropped from both sides of the subtraction.
+    assert len([r for r in indicted if r.get("kind") != "item"]) == 2
+    assert progress["in_review"] == review["summary"]["open"] == len(review["checks"])
+    # `pct` is gone rather than derived: "how far through the workflow" has no source in the
+    # sample, and 72 was a literal. A number with no source is not served under any name.
+    assert "pct" not in progress
+    assert set(progress) == {"line_items", "in_review"}
 
     notes = client.get("/api/v1/projects/demo/notes").json()
     assert notes["count"] == len(notes["notes"])

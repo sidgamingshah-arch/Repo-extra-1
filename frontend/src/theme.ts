@@ -92,12 +92,24 @@ export const layout = {
   gridCols: "minmax(140px,1.4fr) 56px 110px 110px 60px",
 } as const;
 
-/** Confidence category → badge colors + representative percentage. */
+/** Confidence category → badge COLORS. Colour only, and deliberately so.
+ *
+ *  This helper also returned a representative percentage per category
+ *  ({high:"96%", med:"78%", low:"54%"}) and three screens printed that literal as the MEASURED
+ *  confidence of the very thing it sat above: a page classified at 0.40 rendered "54%", a note
+ *  row at 0.41 rendered "54%", every 'high' row rendered "96%" whatever its real score, and a row
+ *  with NO confidence at all rendered "78%" because the backend's `_conf_cat(None)` buckets a
+ *  missing score as 'med'. A category is a bucket of a measurement, never the measurement, so the
+ *  bucket's stand-in figure is no longer reachable from here — there is nothing left to print by
+ *  accident. The measured percentage is served alongside the category (`Confidence.pct`,
+ *  `PageCard.conf_pct`, `NoteDetailRow.conf_pct`) and is printed through
+ *  components/ui.tsx::confReadout, which says "not scored" when the payload carries no number
+ *  rather than inventing one. */
 export type ConfCat = "high" | "med" | "low";
-export function confStyle(cat: ConfCat): { bg: string; fg: string; pct: string } {
-  if (cat === "high") return { bg: color.greenBg, fg: color.greenFg, pct: "96%" };
-  if (cat === "med") return { bg: color.amberBg, fg: color.amberFg, pct: "78%" };
-  return { bg: color.redBg, fg: color.redFg, pct: "54%" };
+export function confStyle(cat: ConfCat): { bg: string; fg: string } {
+  if (cat === "high") return { bg: color.greenBg, fg: color.greenFg };
+  if (cat === "med") return { bg: color.amberBg, fg: color.amberFg };
+  return { bg: color.redBg, fg: color.redFg };
 }
 
 /** Indian-grouping accounting formatter: negatives in parentheses, e.g. 12,68,100

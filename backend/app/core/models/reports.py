@@ -10,6 +10,13 @@ from .enums import Severity
 
 class ReconciliationEntry(BaseModel):
     face_item_id: str
+    # The face line this entry is about, named by something that SURVIVES a re-run.
+    # ``face_item_id`` is a per-run UUID, so a reader that identified the face by it would see
+    # every entry change identity on every extraction — and the review queue keys a human
+    # judgement on what it reads here. The canonical key (or the printed caption when the line
+    # mapped to nothing) is the same face line in run 2 that it was in run 1.
+    # Empty on runs stored before this field existed; readers must treat "" as "not named".
+    face_key: str = ""
     note_number: str
     basis: str
     period_label: str | None = None

@@ -145,6 +145,53 @@ class ExtractionRun(Base):
     document: Mapped["Document"] = relationship(back_populates="runs")
 
 
+class ReviewJudgement(Base):
+    """One human judgement on one review finding, keyed on WHAT was judged rather than on the
+    finding's id — two of the eight check builders key on row index (api/routes/documents.py:715
+    and :729), so an id-keyed acceptance would silently move onto a different line item after a
+    re-run and mark a real problem as vouched for by someone who never saw it.
+
+    ONE in-force row per (tenant_id, document_id, subject_key), never rival rows a reader has to
+    date-sort to find the current answer. ``history`` is appended to on every state change,
+    newest LAST, and nothing is ever deleted: a withdrawal flips ``verdict`` and keeps the row,
+    because erasing who accepted a break is not something an audit trail should permit.
+
+    No column holds a digest, a status or a count. All three are derived at serve time (see
+    ``services.judgement.apply_judgements``) — a derived value stored beside its source is the
+    two-places-computing-one-quantity bug, and here it would be the one that decides whether an
+    acceptance still stands.
+
+    Scope cut, stated rather than implied: nothing reads ``history`` yet, so this table is not
+    described as an audit trail anywhere until something serves it.
+    """
+
+    __tablename__ = "review_judgements"
+    __table_args__ = (UniqueConstraint("tenant_id", "document_id", "subject_key",
+                                       name="uq_judgement_subject"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), default="default")
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
+    # sha256 of the canonicalized subject — 64 hex characters, so it is URL-safe (unlike a check
+    # id, whose structural scope_key contains a "/").
+    subject_key: Mapped[str] = mapped_column(String(64), index=True)
+    subject: Mapped[dict] = mapped_column(JSON, default=dict)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Why the finding was RAISED (mapping confidence and method), as opposed to the claim that was
+    # confirmed. Recorded so a reader can see how uncertain a mapping was when it was accepted,
+    # and deliberately NOT part of any match: re-running the mapper at a different confidence
+    # must not withdraw a judgement about which concept the line is.
+    context: Mapped[dict] = mapped_column(JSON, default=dict)
+    verdict: Mapped[str] = mapped_column(String(16), default="accepted")   # accepted|withdrawn
+    reason: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(128), default="")
+    actor_role: Mapped[str] = mapped_column(String(16), default="")
+    run_id: Mapped[str] = mapped_column(String(96), default="")
+    history: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
 class SettingOverride(Base):
     """One administrator-changed setting, so a change survives a restart.
 

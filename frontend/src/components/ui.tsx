@@ -2,6 +2,7 @@
  * chrome (pills, confidence badges, chips, segmented toggles, cards, buttons). */
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 
+import { useT } from "../i18n";
 import { color, confStyle, font, radius, shadow, type ConfCat } from "../theme";
 
 export function Card({ children, style, pad = 18 }: { children: ReactNode; style?: CSSProperties; pad?: number }) {
@@ -60,10 +61,53 @@ export function Pill({
   );
 }
 
-export function ConfidencePill({ cat, label }: { cat: ConfCat; label?: string }) {
+/** The ONE rule for turning a served confidence into text, used by every screen that prints one.
+ *
+ *  Three cases, and they are different statements about the data:
+ *
+ *   1. a MEASURED percentage (`pct`, 0–100, exactly as the payload serves it) → print the number;
+ *   2. no measurement but a BAND (`cat`) → print the band's NAME ("High"), never its
+ *      representative percentage. The band is genuinely known and worth showing; a word cannot be
+ *      misread as a measurement, and 96/78/54 per band was read as exactly that — a page the
+ *      classifier scored 0.40 announced "54%", and every 'high' row announced "96%";
+ *   3. neither → say nothing is scored, rather than let a default band ('med' is what the server
+ *      buckets a MISSING score into) print "78%" over a line nothing ever scored.
+ *
+ *  `measured` lets the caller render 2 and 3 as the absences they are instead of as values. No
+ *  arithmetic here on purpose — the percentage is derived where it is served, so the browser cannot
+ *  produce a second, disagreeing figure. A non-finite or out-of-range value falls to case 2/3
+ *  rather than being printed: "1200%" over a mapping is a broken contract, not a confidence. */
+export function confReadout(
+  { cat, pct }: { cat?: ConfCat | null; pct?: number | null },
+  t: (key: string) => string,
+): { text: string; measured: boolean; title: string } {
+  if (typeof pct === "number" && Number.isFinite(pct) && pct >= 0 && pct <= 100) {
+    return { text: `${pct}%`, measured: true, title: t("conf.measuredHelp") };
+  }
+  if (cat) return { text: t(`conf.cat.${cat}`), measured: false, title: t("conf.bandOnlyHelp") };
+  return { text: t("conf.unscored"), measured: false, title: t("conf.unscoredHelp") };
+}
+
+/** Confidence badge: the band's colour, and the MEASURED percentage as its text.
+ *
+ *  It used to print `confStyle(cat).pct` — a literal per band — so the Workspace CONF column showed
+ *  "54%" against a row whose served `confidence.pct` was 41, and "78%" against a row with no score
+ *  at all. The measurement is passed in and printed; with no measurement the pill names the band
+ *  instead, in muted chrome, so nothing on screen looks like a figure that was never measured.
+ *  `label` still overrides the text for callers that print something other than a confidence. */
+export function ConfidencePill(
+  { cat, pct, label, testid }:
+  { cat: ConfCat; pct?: number | null; label?: string; testid?: string },
+) {
+  const t = useT();
   const c = confStyle(cat);
+  const r = confReadout({ cat, pct }, t);
+  const bare = !label && !r.measured;
   return (
     <span
+      data-testid={testid}
+      data-measured={label ? undefined : String(r.measured)}
+      title={label ? undefined : r.title}
       style={{
         display: "inline-block",
         minWidth: 38,
@@ -72,11 +116,12 @@ export function ConfidencePill({ cat, label }: { cat: ConfCat; label?: string })
         fontWeight: 600,
         padding: "2px 6px",
         borderRadius: radius.pill,
-        background: c.bg,
-        color: c.fg,
+        background: bare ? "transparent" : c.bg,
+        color: bare ? color.muted : c.fg,
+        border: bare ? `1px dashed ${color.dashed}` : undefined,
       }}
     >
-      {label ?? c.pct}
+      {label ?? r.text}
     </span>
   );
 }
@@ -116,6 +161,8 @@ export function Button({
   style,
   disabled = false,
   title,
+  testid,
+  data,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -123,6 +170,14 @@ export function Button({
   style?: CSSProperties;
   disabled?: boolean;
   title?: string;
+  /** Rendered as `data-testid`. A test cannot read a localized label, and the review actions
+   *  (accept / withdraw / flip sign) each need naming from outside the component. */
+  testid?: string;
+  /** Extra `data-*` attributes, keyed WITHOUT the prefix (`{withheld: "true"}` →
+   *  `data-withheld="true"`). One control whose meaning varies by case should stay one control
+   *  with one testid and state the case in an attribute; minting a second testid per case is how
+   *  a test ends up asserting about a button that no longer exists. */
+  data?: Record<string, string>;
 }) {
   const base: CSSProperties = {
     fontSize: 13,
@@ -139,6 +194,9 @@ export function Button({
   };
   return (
     <button onClick={disabled ? undefined : onClick} disabled={disabled} title={title}
+            data-testid={testid}
+            {...Object.fromEntries(
+              Object.entries(data ?? {}).map(([k, v]) => [`data-${k}`, v]))}
             style={{ ...base, ...variants[variant], ...style }}>
       {children}
     </button>

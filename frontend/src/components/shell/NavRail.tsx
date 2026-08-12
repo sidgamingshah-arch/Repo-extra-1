@@ -106,15 +106,16 @@ export function NavRail() {
           background: color.rowAltBg,
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: color.sec2, marginBottom: 6 }}>
-          <span>{t("progress.title")}</span>
-          <span style={{ fontWeight: 600, color: color.ink }}>{prog?.pct ?? 0}%</span>
-        </div>
-        <div style={{ height: 6, borderRadius: 4, background: color.trackBg, overflow: "hidden" }}>
-          <div style={{ width: `${prog?.pct ?? 0}%`, height: "100%", background: color.indigo }} />
-        </div>
-        <div style={{ fontSize: 10.5, color: color.muted2, marginTop: 7 }}>
-          {prog ? `${prog.line_items} line items · ${prog.in_review} in review` : ""}
+        {/* No percentage and no bar. Both rendered `progress.pct`, which was a literal 72 in the
+            sample payload derived from nothing, and read `?? 0` — so once the server stopped
+            serving a figure it could not compute, this card would have drawn an empty bar and
+            announced "0%" over a project with 33 mapped line items. The two counts below are the
+            server's own, over the data it serves, and they are all this card can honestly say.
+            The labels are translated: they were hardcoded English inside a localized shell. */}
+        <div style={{ fontSize: 11, color: color.sec2, marginBottom: 6 }}>{t("progress.title")}</div>
+        <div style={{ fontSize: 10.5, color: color.muted2 }}>
+          {prog ? `${prog.line_items} ${t("progress.lineItems")} · `
+                  + `${prog.in_review} ${t("progress.inReview")}` : ""}
         </div>
       </div>
     </div>

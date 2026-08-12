@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { ConfidencePill, NoteChip, Segmented, StatusIcon } from "../components/ui";
+import { ConfidencePill, NoteChip, Segmented, StatusIcon, confReadout } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { ExcelGrid, PageStack, toPicked, type Picked } from "../components/SourceViewer";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
@@ -73,6 +73,30 @@ function ToolSelect<T extends string>({
         ))}
       </select>
     </label>
+  );
+}
+
+/* ---- one zoom step in the viewer's dark header chrome ----
+ * Disabled at the end of the range: a control that cannot move must not look pressable. The title
+ * doubles as the accessible name, because the glyph (− / +) names nothing on its own. */
+function ZoomButton({ label, title, disabled, onClick }: {
+  label: string; title: string; disabled: boolean; onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={title}
+      style={{
+        fontSize: 12, lineHeight: 1, fontWeight: 600, width: 18, height: 18,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "#dfe3e9", background: "transparent", border: "none", padding: 0,
+        cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1,
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -139,6 +163,11 @@ const TARGET_SCALE: Record<Exclude<UnitTarget, "as_reported">, number> = {
  * source figures under a target-currency label is the failure mode this replaces.
  * The document's own currency stays the default (no conversion at all). */
 const CURRENCIES = ["USD", "EUR", "GBP", "INR", "CNY", "HKD", "JPY", "SGD", "AUD", "CAD"];
+
+/* Zoom levels for the live PDF viewer. Discrete steps rather than free scaling so the control can
+ * be honestly disabled at each end of the range — and so the percentage it reports is always one
+ * of these, never a rounding of an arbitrary float. */
+const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 /** The master's answer, but only when it actually carries a rate for the pair being shown.
  * Returning the resolved variant (or null) rather than the whole union makes the "no rate
@@ -488,7 +517,12 @@ function OutputRow({
       {valueCell("current", v1, links1, vwt, vfg)}
       {valueCell("prior", v2, links2, isSt || isTot ? 600 : 400, color.muted)}
       <div style={{ ...colDiv, display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-        {row.confidence ? <ConfidencePill cat={row.confidence.cat} /> : null}
+        {/* The CONF. column prints the row's OWN served percentage. The pill used to render the
+            CATEGORY's representative literal, so a row served `{cat:'low', pct:41}` displayed
+            "54%" — a number derived from the bucket, not from the mapping it labels. */}
+        {row.confidence
+          ? <ConfidencePill cat={row.confidence.cat} pct={row.confidence.pct} testid="ws-conf" />
+          : null}
       </div>
     </div>
   );
@@ -690,6 +724,12 @@ export default function WorkspaceScreen() {
   // Currency presentation: "" = the document's own currency (no conversion). A different target
   // is converted at the rate the FX master resolves for the pair — there is no manual entry.
   const [targetCcy, setTargetCcy] = useState<string>("");
+  // Live PDF viewer magnification. It was three spans with cursor:pointer, no handler and a
+  // literal "100%": a control that advertised a zoom the screen did not have.
+  const [zoom, setZoom] = useState(1);
+  // "Show only low-confidence rows" — the chip beside the toolbar count. It carried
+  // cursor:pointer and no handler, so it read as a filter that did nothing.
+  const [lowFilter, setLowFilter] = useState(false);
   // Open a note reference: select it and jump to the All Notes screen.
   const openNote = (ref: string) => {
     const n = parseInt(ref, 10);
@@ -801,6 +841,16 @@ export default function WorkspaceScreen() {
     fxCaption,
   ].filter(Boolean).join("  ·  ");
   const lowConfCount = d.rows.filter((r) => r.confidence?.cat === "low").length;
+  // The filter is only in force while there is something for it to select. A filter left on when a
+  // refetch drops the last low-confidence row would otherwise leave an unexplained empty grid.
+  const lowOnly = lowFilter && lowConfCount > 0;
+  // What the OUTPUT panel lists. The source-viewer column is never filtered: it shows the document
+  // as printed, and hiding a printed line there would misrepresent the page.
+  const gridRows = lowOnly ? d.rows.filter((r) => r.confidence?.cat === "low") : d.rows;
+  // Only the live PDF viewer has pages a zoom could act on. The Excel cell grid and the sample
+  // "paper" mock have nothing that would move, so they get no zoom control at all.
+  const pdfViewer = usingReal && d.format === "pdf" && !!activeDocumentId;
+  const zoomIdx = ZOOM_STEPS.indexOf(zoom);
   // A matrix statement (changes in equity) has NAMED component columns from the document
   // instead of the fixed current/prior pair, so it renders through MatrixGrid.
   const isMatrix = d.layout === "matrix";
@@ -808,6 +858,11 @@ export default function WorkspaceScreen() {
   const insp = selRowObj?.inspector;
   const isEdited = selRowObj?.status === "edited";
   const cs = selRowObj?.confidence ? confStyle(selRowObj.confidence.cat) : confStyle("med");
+  // The chip's TEXT comes from the served percentage, through the one helper every screen uses;
+  // `cs` supplies only its colour. Two spellings of "what confidence does this row have" is how
+  // the grid ended up printing a bucket's literal beside the inspector's real figure.
+  const inspConf = confReadout(
+    { cat: selRowObj?.confidence?.cat, pct: selRowObj?.confidence?.pct }, t);
   // Not every row is a figure someone can correct. A KPI is computed (fix its inputs instead), a
   // line mapped to no concept has no address to save against, and an equity movement is a
   // component grid. Offering a control that cannot work is how "editing doesn't work" starts.
@@ -946,33 +1001,34 @@ export default function WorkspaceScreen() {
         />
         )}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 9 }}>
-          <span
-            style={{
-              fontSize: 11.5,
-              color: color.redFg,
-              fontWeight: 600,
-              background: color.redBg,
-              padding: "5px 10px",
-              borderRadius: radius.pill,
-              cursor: "pointer",
-            }}
-          >
-            {usingReal ? lowConfCount : 3} {t("ws.lowconf")}
-          </span>
-          {!usingReal && (
-            <span
+          {/* The count is the rows the grid holds — it read `usingReal ? lowConfCount : 3` on the
+              sample path, a fabricated 3 with the true count on the line above it. Both paths
+              carry per-row confidence (the demo statement route sets it too), so there is one
+              spelling. Shown only when there is something to count: a red "0 low-confidence" pill
+              is noise, and pressing it would filter to an empty grid.
+              There is no "unreconciled" chip any more. Nothing in the statement payload means it —
+              `status: "recon"` covers BOTH a calculated-vs-printed divergence and a netting
+              restatement — so the only options were a fabricated 2 or nothing, and the Review
+              queue already counts reconciliation findings from the checks themselves. */}
+          {lowConfCount > 0 && (
+            <button
+              data-testid="ws-lowconf"
+              aria-pressed={lowOnly}
+              title={lowOnly ? t("ws.showAll") : t("ws.lowconfOnly")}
+              onClick={() => setLowFilter((v) => !v)}
               style={{
                 fontSize: 11.5,
-                color: color.amberFg,
                 fontWeight: 600,
-                background: color.amberBg,
+                color: lowOnly ? "#fff" : color.redFg,
+                background: lowOnly ? color.redFg : color.redBg,
+                border: `1px solid ${lowOnly ? color.redFg : "transparent"}`,
                 padding: "5px 10px",
                 borderRadius: radius.pill,
                 cursor: "pointer",
               }}
             >
-              2 {t("ws.unreconciled")}
-            </span>
+              {lowConfCount} {t("ws.lowconf")}
+            </button>
           )}
           <button
             onClick={() => navigate(SCREENS.export.path)}
@@ -1017,10 +1073,16 @@ export default function WorkspaceScreen() {
             }}
           >
             <span style={{ fontSize: 11.5, fontWeight: 600 }}>{d.viewer.company}</span>
+            {/* A chip names what the viewer is showing. It carries NO cursor:pointer: there is no
+                page navigation behind these labels, and the pointer promised a tab switch that
+                never existed — worst of all on the sample path, which served an inactive-looking
+                "Note 12 · p.171" chip beside the active one, reading as a tab that cannot be
+                selected. The note references live in the viewer callout, as prose. */}
             <div style={{ display: "flex", gap: 4, marginLeft: 6 }}>
               {d.viewer.chips.map((c) => (
                 <span
                   key={c.label}
+                  data-testid="ws-viewer-chip"
                   style={{
                     fontSize: 10.5,
                     padding: "3px 8px",
@@ -1028,32 +1090,63 @@ export default function WorkspaceScreen() {
                     background: c.active ? color.indigo : "#3c4450",
                     color: c.active ? "#fff" : "#dfe3e9",
                     fontWeight: c.active ? 600 : 400,
-                    cursor: "pointer",
                   }}
                 >
                   {c.label}
                 </span>
               ))}
             </div>
-            <div
-              style={{
-                marginLeft: "auto",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                fontSize: 11,
-                color: "#aab1bc",
-              }}
-            >
-              <span style={{ cursor: "pointer" }}>−</span>
-              <span>100%</span>
-              <span style={{ cursor: "pointer" }}>+</span>
-            </div>
+            {/* Zoom — rendered ONLY over the live PDF page stack, the one viewer where scaling the
+                page column does something (the bbox highlight is already in percentages of that
+                box, so the highlight scales with it). The level is read from state, never the
+                literal "100%" that used to sit here, and each end of the range is visibly disabled
+                rather than silently inert. */}
+            {pdfViewer && (
+              <div
+                data-testid="viewer-zoom"
+                style={{
+                  marginLeft: "auto",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 11,
+                  color: "#aab1bc",
+                }}
+              >
+                <ZoomButton
+                  label="−"
+                  title={t("ws.zoomOut")}
+                  disabled={zoomIdx <= 0}
+                  onClick={() => setZoom(ZOOM_STEPS[Math.max(0, zoomIdx - 1)])}
+                />
+                <button
+                  data-testid="viewer-zoom-level"
+                  title={t("ws.zoomReset")}
+                  aria-label={t("ws.zoomReset")}
+                  disabled={zoom === 1}
+                  onClick={() => setZoom(1)}
+                  style={{
+                    fontFamily: font.mono, fontSize: 11, color: "#dfe3e9",
+                    background: "transparent", border: "none", padding: 0,
+                    cursor: zoom === 1 ? "default" : "pointer", opacity: zoom === 1 ? 0.6 : 1,
+                  }}
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
+                <ZoomButton
+                  label="+"
+                  title={t("ws.zoomIn")}
+                  disabled={zoomIdx >= ZOOM_STEPS.length - 1}
+                  onClick={() => setZoom(ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, zoomIdx + 1)])}
+                />
+              </div>
+            )}
           </div>
-          {usingReal && d.format === "pdf" && activeDocumentId ? (
+          {pdfViewer && activeDocumentId ? (
             <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12, background: "#e9ebef" }}>
               <PageStack documentId={activeDocumentId} pageCount={d.page_count ?? 1}
-                         picked={picked?.kind === "pdf" ? picked : null} maxHeight="100%" />
+                         picked={picked?.kind === "pdf" ? picked : null} maxHeight="100%"
+                         scale={zoom} />
             </div>
           ) : usingReal && (d.format === "xlsx" || d.format === "xls") && activeDocumentId ? (
             <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12, background: "#fff" }}>
@@ -1183,13 +1276,13 @@ export default function WorkspaceScreen() {
             </div>
           )}
 
-          {/* scroll body */}
+          {/* scroll body — `gridRows` is `d.rows` unless the low-confidence chip is pressed. */}
           {isMatrix ? (
-            <MatrixGrid columns={d.columns ?? []} rows={d.rows} sel={sel} present={present}
+            <MatrixGrid columns={d.columns ?? []} rows={gridRows} sel={sel} present={present}
                         linkable={usingReal} onSelect={handleSelect} />
           ) : (
             <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-              {d.rows.map((r) => (
+              {gridRows.map((r) => (
                 <OutputRow
                   key={r.id} row={r} sel={sel} present={present} linkable={usingReal}
                   onSelect={handleSelect}
@@ -1221,18 +1314,27 @@ export default function WorkspaceScreen() {
             >
               <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 12.5, fontWeight: 600 }}>{selRowObj?.label ?? ""}</span>
+                {/* The selected row's measured mapping confidence, with the word around it
+                    localized — it was the English literal "confidence" beside four localized
+                    labels, so the chip read "41% confidence" to a zh reader. `confReadout` also
+                    keeps this honest if the payload ever carries no number: it says so rather than
+                    rendering a bare "%". */}
                 {selRowObj?.confidence && (
                   <span
+                    data-testid="inspector-conf"
+                    data-measured={String(inspConf.measured)}
+                    title={inspConf.title}
                     style={{
                       fontSize: 10.5,
                       fontWeight: 600,
                       padding: "2px 8px",
                       borderRadius: radius.pill,
-                      background: cs.bg,
-                      color: cs.fg,
+                      background: inspConf.measured ? cs.bg : "transparent",
+                      color: inspConf.measured ? cs.fg : color.muted,
+                      border: inspConf.measured ? undefined : `1px dashed ${color.dashed}`,
                     }}
                   >
-                    {selRowObj.confidence.pct}% confidence
+                    {inspConf.text} {t("conf.label")}
                   </span>
                 )}
                 {/* Where the figure on show came from — extracted, computed from its components,

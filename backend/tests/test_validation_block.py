@@ -441,6 +441,44 @@ def test_renaming_the_concept_in_a_guard_changes_what_is_compared(template, raw_
     assert not [r for r in report.results if "investments_in_subsidiaries" in r.rule_id]
 
 
+def test_two_guard_sentences_that_reduce_to_one_id_are_kept_apart(template, raw_ontology):
+    """A guard id is ``guard:{predicate}:{keys[0]}``, so two sentences sharing a predicate and a
+    first key collapsed into ONE id — and ontologies are admin-uploadable, so this is authorable.
+
+    Everything downstream keys on the id: the review card's DOM id (also the client's expand key),
+    the coverage report's per-rule alarms, ``report.unenforceable()``. One id over two guards is one
+    card for two different assertions, and a reviewer's verdict landing on a sentence they never
+    read. The shipped ids are unchanged — the suffix appears only where a collision would otherwise.
+    """
+    shipped = cross_concept_guards(_ontology(raw_ontology))
+    assert len({g.id for g in shipped}) == len(shipped)
+    assert not [g for g in shipped if "#" in g.id]        # no shipped id is disambiguated
+
+    edited = copy.deepcopy(raw_ontology)
+    key = "bs_equity__non_controlling_interests"
+    edited["validation"]["cross_concept_guards"] = [
+        f"{key} equal to pl_profit_attributable_to__non_controlling_interests — balance vs flow.",
+        f"{key} equal to bs_equity__general_reserve — two captions cannot carry one figure.",
+    ]
+    guards = cross_concept_guards(_ontology(edited))
+    assert len(guards) == 2 and len({g.id for g in guards}) == 2
+    assert [g.broken for g in guards] == ["", ""]          # both still evaluated, neither suppressed
+    # Deterministic: loading the same rulebook twice gives the same two ids.
+    assert [g.id for g in guards] == [g.id for g in cross_concept_guards(_ontology(edited))]
+
+    # And both are evaluated, as two rows, when both fail on one column.
+    report = evaluate_structure(template, _facts({
+        key: 4000, "pl_profit_attributable_to__non_controlling_interests": 4000,
+        "bs_equity__general_reserve": 4000}), ontology=_ontology(edited))
+    failed = [r for r in report.results if r.kind == "guard" and r.status == "fail"]
+    assert len(failed) == 2 and len({r.rule_id for r in failed}) == 2
+    # Each row carries the operands ITS sentence names, which is what tells the two apart in a
+    # judgement subject (api/routes/documents.py::_guard_check).
+    assert sorted(r.details["guard_keys"] for r in failed) == sorted([
+        [key, "pl_profit_attributable_to__non_controlling_interests"],
+        [key, "bs_equity__general_reserve"]])
+
+
 def test_a_guard_whose_wording_matches_no_predicate_is_reported_as_a_defect(template,
                                                                            raw_ontology):
     """A guard the engine cannot recognise must not read as a guard that found nothing."""

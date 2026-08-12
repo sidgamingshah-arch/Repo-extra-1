@@ -24,8 +24,31 @@ the API:
 ## Persistence (SQLAlchemy)
 
 `app/db/models.py` — this foundation persists `Document`, versioned
-`TemplateVersion` / `OntologyVersion`, and `ExtractionRun` (SQLite by default;
-Postgres via `FINEX_DATABASE_URL`). The full relational model (Statement, LineItem,
+`TemplateVersion` / `OntologyVersion`, `ExtractionRun`, `FxRate`, `SettingOverride`
+and `ReviewJudgement` (SQLite by default; Postgres via `FINEX_DATABASE_URL`).
+
+**`ReviewJudgement`** is one human judgement on one review finding — the record that a
+named person examined a finding's figures and recorded that they stand. It is keyed on
+`(tenant_id, document_id, subject_key)`, where `subject_key` is the sha256 of the
+finding's canonicalized *subject* rather than its id: two of the review-check builders
+key their id on the extracted row's INDEX, so an id-keyed acceptance would silently move
+onto a different line item after a re-run. `app/services/judgement.py` is the only place
+in the codebase that hashes, and it holds the reasoning. A subject carries only what the
+finding ASSERTS: no figure (a figure that moves means "stale, look again", not "different
+finding") and nothing positional — not a row index, and not the rule id, because
+`structural_checks._unique` disambiguates a repeated authored id with the entry's ordinal
+among the rulebook's sentences, so deleting an unrelated sentence would otherwise
+renumber a still-failing one and orphan its acceptance. Nor may a figure decide whether a
+finding is EMITTED: a guard's `details.target` is derived from its violations, and while
+it gated emission a failing guard could vanish from the queue by colliding with the
+balance card's target. No column stores a digest, a
+status or a count — all three are derived at serve time, because a derived value
+persisted beside its source drifts from it.
+
+Coverage is likewise NOT persisted: `run.result["structural"]` already holds every
+relation row, and `app/services/coverage.py` recomputes the report from a stored run.
+
+The full relational model (Statement, LineItem,
 NotesTable, FaceNoteLink, ReviewItem, EditEvent, RuleResult, Export) is designed as:
 
 - **Reproducibility** — each `ExtractionRun` pins document hash + template version +
@@ -116,15 +139,31 @@ after any edit touching a rule's operands.
 
 No `eval`. Parse to a whitelisted AST (numbers, cell/`note:` refs, `+ - * /`,
 `SUM/AVG/MIN/MAX/ABS/IF`); refs resolve only within the run. Per-run dependency graph
-+ topological recompute; cycles surfaced as a cell error. Excel export writes native
-Excel formulas (refs → cell addresses) for a live spreadsheet.
++ topological recompute; cycles surfaced as a cell error.
 
-## API (`/api/v1`, REST + WebSocket)
+The Excel export does not build a live spreadsheet. A formula is carried for AUDIT, not
+for recalculation: the flat extraction sheet has a `Formula` column holding the
+expression as the analyst entered it (`build_rows_xlsx`), and the statement workbook
+attaches it as a cell note on the row's label cell, beside the arithmetic of any
+calculated line (`build_statement_workbook`). References are canonical line-item keys
+(`bs_current_assets__inventories`), resolved server-side by `services/formula.py`, and
+are never translated to cell addresses — the number in the cell is the value the server
+computed.
+
+## API (`/api/v1`, REST)
 
 Implemented now: `POST /documents` (upload + integrity, hash-dedup),
-`GET /documents/{id}`, `POST /documents/{id}/extractions`, `GET /extractions/{id}`,
-`templates` + `ontologies` CRUD (with validation), `GET /languages` (parity),
-`GET /extractions/{id}/review` (stub shape). Designed next: WebSocket progress stream,
-`PATCH /line-items/{id}` (`If-Match`, value or formula, returns recomputed +
-revalidated), `POST /statements/{id}/convert` (non-destructive unit/currency view),
-`POST /extractions/{id}/exports` + `GET /exports/{id}`.
+`GET /documents/{id}`, `POST /documents/{id}/extractions`,
+`GET /extractions/{run_id}` (status + progress — the client polls this once a second
+while a run is `running`; there is no WebSocket),
+`PATCH`/`DELETE /documents/{id}/line-items/{key}` (value, formula, comment,
+revert-to-extracted), `GET /documents/{id}/export`
+(`fmt=excel|json`, `layout=flat|statement`, `include=…`),
+`GET /documents/{id}/review` (findings + their human judgements + the coverage
+contract), `POST`/`DELETE /documents/{id}/review/judgements` (accept a finding, withdraw
+an acceptance), `templates` + `ontologies` CRUD (with validation),
+`GET /languages` (parity).
+
+Not built: a push/WebSocket progress channel, `If-Match` optimistic concurrency on
+edits, and `POST /statements/{id}/convert` (unit/currency conversion is a display
+transform in the Workspace plus an export-time unit target).

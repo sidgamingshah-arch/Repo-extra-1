@@ -13,7 +13,7 @@ from app.config import get_settings
 from app.sample.demo import CONF_PCT, DEMO, localize_label
 from app.sample.i18n_data import tr
 from app.security import Permission, current_principal, require
-from app.services import checks as checks_engine
+from app.services import review_lines
 from app.services.export import build_json, build_xlsx
 from app.services.page_scope import scope_counts
 
@@ -40,32 +40,69 @@ _EMPTY_PROJECT = {
     "id": "demo", "entity": "", "title": "No project yet", "filename": "",
     "pages": 0, "standard": "", "currency": "", "currency_symbol": "", "units": "",
     "periods": ["", ""], "bases": ["consolidated", "standalone"],
-    "progress": {"pct": 0, "line_items": 0, "in_review": 0},
+    # `progress` is filled in by `get_project` from `_demo_progress`, on both paths, so the
+    # greenfield zeros are counted from empty inputs rather than written out as zeros.
     "template": {"key": "", "name": "— none selected —", "line_items": 0},
     "ontology": {"file": "— none —", "rules": 0, "aliases": 0, "status": "none"},
 }
 
 _STD_SCALE = 0.88
+# ONE chip per statement — a label naming what the viewer is showing, matching the single-chip
+# shape the real routes serve (api/routes/documents.py:1599 and the statement builders).
+#
+# Each statement used to carry a second `active: False` note chip ("Note 12 · p.171"). An inactive
+# chip beside an active one IS a tab control, and this viewer has no second tab to show: the sample
+# source pane is a rendered paper mock with no pages behind it, so there is no p.171 to navigate
+# to. The note references are not lost — every callout below names them in prose the reader can
+# act on, instead of a chip that cannot be clicked.
 _VIEWER = {
     "balance_sheet": {
         "company": "RELIANCE INDUSTRIES LIMITED",
         "subtitle": "Consolidated Balance Sheet as at 31 March 2025",
-        "chips": [{"label": "BS · p.142", "active": True}, {"label": "Note 12 · p.171", "active": False}],
+        "chips": [{"label": "BS · p.142", "active": True}],
         "callout": "↳ Linked to Note 12 — Trade receivables (p.171). Face value shown net of ₹12,400 cr related-party receivables reclassified under Note 12.3.",
     },
     "profit_and_loss": {
         "company": "RELIANCE INDUSTRIES LIMITED",
         "subtitle": "Consolidated Statement of Profit and Loss for the year ended 31 March 2025",
-        "chips": [{"label": "P&L · p.145", "active": True}, {"label": "Note 25 · p.184", "active": False}],
+        "chips": [{"label": "P&L · p.145", "active": True}],
         "callout": "↳ Finance costs (Note 25) flagged: extracted as a credit; ontology expects an expense (negative).",
     },
     "cash_flow": {
         "company": "RELIANCE INDUSTRIES LIMITED",
         "subtitle": "Consolidated Statement of Cash Flows for the year ended 31 March 2025",
-        "chips": [{"label": "CF · p.149", "active": True}, {"label": "Note 13 · p.172", "active": False}],
+        "chips": [{"label": "CF · p.149", "active": True}],
         "callout": "↳ Closing cash ties to Note 13 (Cash & bank balances) and the face of the Balance Sheet.",
     },
 }
+
+
+def _demo_statement_line_items(statements: dict) -> int:
+    """Statement rows that ARE line items — the sample's answer to "how many line items", which is
+    the Export footer's question and nobody else's.
+
+    A DIFFERENT QUANTITY from the review header's "lines with no finding", and no longer confused
+    with it: that tile counts LINES, and a subtotal and a total are lines (they are what the balance
+    card names) even though neither is a line item. Its population lives in
+    services/review_lines.py, shared with the real route, and this count feeds only `_demo_progress`.
+    """
+    return sum(1 for s in statements.values() for r in s["rows"] if r.get("kind") == "item")
+
+
+def _demo_progress(statements: dict, checks: list[dict]) -> dict:
+    """The sample project's progress figures, COUNTED from the data the sample serves.
+
+    These were the literals {"pct": 72, "line_items": 148, "in_review": 12} in sample/demo.py,
+    read by the Export footer — 148 line items over 33 rows, 12 in review over 4 findings, and a
+    72% that was never a ratio of anything. `in_review` is the review route's own `open` count, so
+    the Export footer and the Review header cannot state different numbers of outstanding
+    findings for one seeded dataset.
+
+    `pct` is GONE rather than derived: "how far through the workflow is this project" has no source
+    in the sample at all, and a number with no source is the thing this codebase keeps deleting.
+    """
+    return {"line_items": _demo_statement_line_items(statements),
+            "in_review": _demo_review_summary(checks, statements=statements)["open"]}
 
 
 @router.get("/{project_id}")
@@ -73,8 +110,12 @@ def get_project(project_id: str) -> dict:
     if project_id != "demo":
         raise HTTPException(404, "Unknown project")
     if _active():
-        return {"project": DEMO["project"], "documents": DEMO["documents"], "loaded": True}
-    return {"project": _EMPTY_PROJECT, "documents": [], "loaded": False}
+        checks = [_sample_check(c) for c in DEMO["review"]]
+        return {"project": {**DEMO["project"],
+                            "progress": _demo_progress(DEMO["statements"], checks)},
+                "documents": DEMO["documents"], "loaded": True}
+    return {"project": {**_EMPTY_PROJECT, "progress": _demo_progress({}, [])},
+            "documents": [], "loaded": False}
 
 
 @router.get("/{project_id}/integrity")
@@ -223,15 +264,22 @@ def _demo_linked_lines(notes: list[dict]) -> int:
 
 @router.get("/{project_id}/notes/{note_no}")
 def get_note(project_id: str, note_no: int, locale: str = Query("en")) -> dict:
+    # `periods` is read from the SAME list get_statement serves (DEMO["project"]["periods"]), which
+    # is what makes the sample Workspace and the sample Notes screen structurally unable to label
+    # the same figures differently. A blank pair is the empty-state shape; the client treats blank
+    # as absent and falls back to its own Current/Prior wording.
     if not _active():
-        return {"no": note_no, "title": "", "rows": [], "reconciliation": None}
+        return {"no": note_no, "title": "", "rows": [], "periods": ["", ""],
+                "reconciliation": None}
     detail = DEMO["note_detail"].get(note_no)
     if detail is None:
         idx = next((n for n in DEMO["notes_index"] if n["no"] == note_no), None)
         if idx is None:
             raise HTTPException(404, "Unknown note")
-        return {"no": note_no, "title": tr(idx["title"], locale), "rows": [], "reconciliation": None}
+        return {"no": note_no, "title": tr(idx["title"], locale), "rows": [],
+                "periods": ["", ""], "reconciliation": None}
     detail = deepcopy(detail)
+    detail["periods"] = list(DEMO["project"]["periods"])
     if locale != "en":
         detail["title"] = tr(detail["title"], locale)
         detail["linked_label"] = tr(detail["linked_label"], locale)
@@ -241,11 +289,43 @@ def get_note(project_id: str, note_no: int, locale: str = Query("en")) -> dict:
     return detail
 
 
+# The judgement/fix fields every sample check carries, so the shared TypeScript type is TOTAL and
+# the screen needs no "is this the demo?" branch. `subject_key: None` is the signal that this
+# finding cannot be judged: the sample has no run and no document row to key a judgement to, so
+# the accept control is absent here rather than rendered and dead. `fix_action: None` says the same
+# about the mechanical fix — the two buttons that did nothing disappear on the demo path too.
+def _sample_check(check: dict) -> dict:
+    """One sample finding in the same shape the real route serves.
+
+    ``names`` — the lines a finding indicts — is DERIVED from the check's own ``target`` rather than
+    stored beside it: the sample states one target per finding, and the review header counts the
+    line items no finding names. A hand-written second list would be the same quantity twice.
+    """
+    return {**check, **_SAMPLE_JUDGEMENT_FIELDS,
+            "names": [check["target"]] if check.get("target") else []}
+
+
+_SAMPLE_JUDGEMENT_FIELDS = {
+    "subject_key": None, "status": "open", "judgement": None,
+    "ambiguous": False, "ambiguous_count": 0, "fix_action": None,
+    # No subject is keyed here, so two sample findings can never collide on one identity: the
+    # conflict state the real route can serve is impossible, and the fields say so outright rather
+    # than being absent for the client to guess at.
+    "conflict": False, "conflict_count": 0, "conflict_note": "", "judgement_withheld": False,
+    "inputs_edited": False, "inputs_edited_keys": [], "inputs_edited_note": "",
+}
+
+
 @router.get("/{project_id}/review")
 def get_review(project_id: str, locale: str = Query("en")) -> dict:
     if not _active():
-        return {"checks": [], "tabs": [], "summary": {"open": 0, "resolved": 0, "total": 0}}
-    checks = deepcopy(DEMO["review"])
+        return {"run_id": "", "checks": [], "tabs": [],
+                # Greenfield: no checks and no statements, so every count derives to zero from
+                # the empty inputs rather than being written out as four zeros.
+                "summary": _demo_review_summary([], statements={}),
+                "judgements": {"orphaned": []},
+                "coverage": _sample_coverage(locale)}
+    checks = [_sample_check(c) for c in deepcopy(DEMO["review"])]
     tabs = _demo_review_tabs(checks)
     if locale != "en":
         for c in checks:
@@ -256,7 +336,21 @@ def get_review(project_id: str, locale: str = Query("en")) -> dict:
             c["calc"] = [[tr(row[0], locale), tr(row[1], locale), row[2]] for row in c["calc"]]
         for t in tabs:
             t["label"] = tr(t["label"], locale)
-    return {"checks": checks, "tabs": tabs, "summary": _demo_review_summary(checks)}
+    return {"run_id": "", "checks": checks, "tabs": tabs,
+            "summary": _demo_review_summary(checks),
+            "judgements": {"orphaned": []},
+            "coverage": _sample_coverage(locale)}
+
+
+def _sample_coverage(locale: str) -> dict:
+    """Coverage stated as unavailable on the sample path, never rendered as zeros.
+
+    The sample carries no structural validation run, so there is nothing to report — and "0 of 0
+    relations evaluated" is the exact misread services/coverage.py exists to prevent.
+    """
+    return {"available": False, "reason": "sample",
+            "reason_label": tr("The seeded sample project carries no structural validation run.",
+                               locale)}
 
 
 # Tab labels for the sample's check types, in the order the tabs are shown. The COUNTS are never
@@ -278,14 +372,53 @@ def _demo_review_tabs(checks: list[dict]) -> list[dict]:
         for kind, label in _DEMO_TAB_LABELS]
 
 
-def _demo_review_summary(checks: list[dict]) -> dict:
-    """`open` is the findings actually served; `passed` the statement lines they do NOT indict.
+def _demo_lines_with_no_finding(statements: dict, checks: list[dict]) -> int:
+    """The sample's statement LINES that no served finding names.
 
-    `open: 12, passed: 136` were literals over four checks. `passed` mirrors the real route's
-    definition (rows that raised nothing) rather than being a second, unrelated number.
+    Read off each check's ``names`` — the same field the real route serves for the same purpose
+    (api/routes/documents.py::_accounting_checks) — so the two paths spell one definition. On the
+    sample a finding names exactly the row id in its ``target``; those are the ids in
+    ``demo.BALANCE_SHEET`` and its siblings, so this is derived from the two things being served
+    rather than assumed. Counting `len(checks)` instead — which is what `passed` used to subtract —
+    assumed one finding per line item and that every target IS a line item.
+
+    THE POPULATION IS THE SHARED ONE (services/review_lines.py), not this route's own. It used to be
+    ``kind == "item"`` only, so the tile answered 31 over 33 item rows while the same statements
+    served 6 subtotal and 4 total rows too — 8 of which no finding names — understating the quantity
+    its own label names by 8, under a label identical to the real route's.
     """
-    lines = sum(1 for s in DEMO["statements"].values() for r in s["rows"] if r.get("kind") == "item")
-    return {"open": len(checks), "passed": max(0, lines - len(checks))}
+    named = {n for c in checks for n in (c.get("names") or [])}
+    rows = [r for s in statements.values() for r in s["rows"]]
+    return review_lines.lines_with_no_finding(
+        rows, lambda _i, r: str(r.get("id") or "") in named)
+
+
+def _demo_review_summary(checks: list[dict], statements: dict | None = None) -> dict:
+    """`open` is the findings actually served; `passed` the statement lines NAMED BY NONE of them.
+
+    `open: 12, passed: 136` were literals over four checks. `passed` is the same QUANTITY over the
+    same POPULATION the real route serves under the same header tile — "lines with no finding", i.e.
+    statement lines no served finding names (services/review_lines.py, called by both routes) — and
+    not a second, unrelated number. It used to be `lines - len(checks)`, which is a different
+    definition again: it assumed one finding per line item; then it became the item rows less the
+    item rows a finding names, which excluded the sample's 6 subtotal and 4 total rows from a
+    population the real path included.
+
+    `accepted` and `stale` are COUNTED from the same list rather than written as zeros, so if the
+    sample ever gained a judged finding the header could not keep saying none were judged.
+    """
+    if statements is None:
+        statements = DEMO["statements"]
+    accepted = sum(1 for c in checks if c.get("status") == "accepted")
+    stale = sum(1 for c in checks if c.get("status") == "stale")
+    # A conflict — two findings the queue cannot tell apart — is impossible on the sample path
+    # (`subject_key: None`, so nothing is keyed at all), but it is COUNTED here rather than
+    # written as a zero: the real route serves the same key, and a hand-written zero beside a
+    # counted one is how the two shapes drift.
+    conflict = sum(1 for c in checks if c.get("status") == "conflict")
+    open_count = sum(1 for c in checks if c.get("status") != "accepted")
+    return {"open": open_count, "accepted": accepted, "stale": stale, "conflict": conflict,
+            "passed": _demo_lines_with_no_finding(statements, checks)}
 
 
 @router.get("/{project_id}/template",

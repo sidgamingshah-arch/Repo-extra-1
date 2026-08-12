@@ -273,6 +273,16 @@ TR: dict[str, dict[str, str]] = {
 }
 
 
+# The coverage contract's one sample-path sentence: the seeded project has no structural
+# validation run, so the Review screen's coverage band says so instead of showing zeros.
+TR.update({
+    "The seeded sample project carries no structural validation run.":
+        {"zh": "内置示例项目没有结构性校验运行记录。",
+         "ar": "المشروع النموذجي المُهيَّأ لا يحتوي على تشغيل تحقق بنيوي.",
+         "fr": "Le projet de démonstration ne comporte aucun traitement de validation structurelle."},
+})
+
+
 def tr(text: str | None, locale: str) -> str | None:
     """Translate a known English string; fall back to the original for en/unknown."""
     if text is None or locale == "en" or not locale:

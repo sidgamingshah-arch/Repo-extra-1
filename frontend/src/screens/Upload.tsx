@@ -585,10 +585,11 @@ export default function UploadScreen() {
         </div>
       </Card>
 
+      {/* There is no "Save draft" here any more: there was nowhere to save to. The document is
+          already persisted server-side by the upload, and everything else this screen holds
+          (extraction mode, the active document) is durable client state — so the button could
+          only ever have pretended. */}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
-        <Button variant="secondary" style={{ padding: "10px 18px" }}>
-          {t("u.saveDraft")}
-        </Button>
         {/* Fast path: skip the integrity REVIEW screen and go straight to extraction. The
             check itself still stands — a BLOCKER document (corrupt/encrypted) can't be
             skipped, and there must be an active uploaded document to extract. */}

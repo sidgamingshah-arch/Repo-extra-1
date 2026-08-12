@@ -15,7 +15,6 @@ export const scope: Record<Locale, Record<string, string>> = {
     "sc.inScope": "in scope",
     "sc.skipped": "skipped",
     "sc.preview": "Page preview",
-    "sc.previewHint": "Click a page to preview it here.",
     "sc.previewClose": "Close",
   },
   zh: {
@@ -32,7 +31,6 @@ export const scope: Record<Locale, Record<string, string>> = {
     "sc.inScope": "在范围内",
     "sc.skipped": "已跳过",
     "sc.preview": "页面预览",
-    "sc.previewHint": "点击某页在此预览。",
     "sc.previewClose": "关闭",
   },
   ar: {
@@ -49,7 +47,6 @@ export const scope: Record<Locale, Record<string, string>> = {
     "sc.inScope": "ضمن النطاق",
     "sc.skipped": "متخطّاة",
     "sc.preview": "معاينة الصفحة",
-    "sc.previewHint": "انقر صفحة لمعاينتها هنا.",
     "sc.previewClose": "إغلاق",
   },
   fr: {
@@ -66,7 +63,6 @@ export const scope: Record<Locale, Record<string, string>> = {
     "sc.inScope": "dans le périmètre",
     "sc.skipped": "ignorée",
     "sc.preview": "Aperçu de la page",
-    "sc.previewHint": "Cliquez une page pour l'afficher ici.",
     "sc.previewClose": "Fermer",
   },
 };

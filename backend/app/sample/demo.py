@@ -102,7 +102,11 @@ PROJECT = {
     "units": "Crore",
     "periods": ["FY25", "FY24"],
     "bases": ["consolidated", "standalone"],
-    "progress": {"pct": 72, "line_items": 148, "in_review": 12},
+    # NO `progress` HERE. It read {"pct": 72, "line_items": 148, "in_review": 12} — three figures
+    # derived from nothing, over a sample holding 33 statement line items and 4 review findings.
+    # The Export footer printed two of them, so replacing its hard-coded "148 · 12" with these
+    # literals moved the same fabrication one file down. Counted at the point of service instead:
+    # api/routes/projects.py::_demo_progress.
     "template": {"key": "indas_std_v4", "name": "Ind-AS Standard Spread v4", "line_items": 312},
     "ontology": {"file": "ontology_indas_v4.json", "rules": 1240, "aliases": 380, "status": "valid"},
 }
@@ -343,13 +347,14 @@ NODE_CONFIG = {
 
 # --- Export (screen 8) ------------------------------------------------------
 
+# ONLY the options the workbook builder actually reads. `build_xlsx` honours `confidence`
+# (services/export.py:704, :723) and `notes_sheet` (:735) and nothing else — "formulas",
+# "note_refs", "audit" and "hyperlinks" were read nowhere in the codebase, so ticking them changed
+# no byte of the file. A switch wired to nothing is a control that looks like it does something
+# and does not, which is the same defect as a button with no handler.
 EXPORT_OPTIONS = [
     {"key": "confidence", "label": "Confidence score column", "on": True},
-    {"key": "formulas", "label": "Cell formulas (edited items)", "on": True},
-    {"key": "note_refs", "label": "Note number references", "on": True},
     {"key": "notes_sheet", "label": "Separate All-notes sheet", "on": True},
-    {"key": "audit", "label": "Reconciliation audit trail", "on": True},
-    {"key": "hyperlinks", "label": "Source page hyperlinks", "on": False},
 ]
 
 # Illustrative audit trail for the seeded project — two prior LLM analysis runs plus

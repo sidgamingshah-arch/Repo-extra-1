@@ -8,8 +8,14 @@ def _row(key, cur):
             "values": [{"basis": "consolidated", "period_label": "current", "value": str(cur)}]}
 
 
-def _recon(residual, *, face=1000, note="9", **extra):
+def _recon(residual, *, face=1000, note="9", face_key="bs_ca__trade_receivables", **extra):
+    """One reconciliation entry as the stage writes it — per FACE LINE, per note, per column.
+
+    ``face_key`` is what names the face line across runs (stages/reconcile.py); ``face_item_id`` is
+    a per-run UUID and is deliberately not what any reader keys on.
+    """
     ent = {"note_number": note, "basis": "consolidated", "period_label": "current",
+           "face_key": face_key,
            "raw_face": face, "residual": residual, "within_tolerance": residual == 0}
     ent.update(extra)
     return ent
@@ -43,14 +49,74 @@ def test_a_note_that_is_not_a_breakdown_of_the_face_figure_is_not_a_finding():
     assert _accounting_checks(rows, [_recon(-15_645_284_739, face=88_611)], "en") == []
 
 
-def test_one_finding_per_note_basis_and_period():
-    """A note spanning several tables (continuation pages, sub-analyses) asks one question."""
+def test_one_finding_per_note_but_every_untied_face_line_is_on_it():
+    """A note asks ONE question, and the card has to answer it for every face line that fails.
+
+    Reconciliation records one untied entry per FACE LINE (stages/reconcile.py keys on
+    ``(face_item_id, note_number)``, and ``link_notes`` has a first-class
+    NOTE_SPLITS_TO_MANY_FACE relationship for a note that breaks down several of them), so
+    "one card per note" is a presentation choice, not a claim that there is one break. The card used
+    to be built from the FIRST entry alone: it printed "Face figure 1,000 / Residual vs note total
+    20" and a second face line out by 2,000,000 on the same note appeared on no screen anywhere.
+    """
     from app.api.routes.documents import _accounting_checks
 
     rows = [_row("bs_total_assets", 100), _row("bs_total_equity_and_liabilities", 100)]
-    dupes = [_recon(20), _recon(21), _recon(22)]
-    ties = [c for c in _accounting_checks(rows, dupes, "en") if c["type"] == "note_tie"]
-    assert len(ties) == 1
+    lines = [_recon(20, face_key="bs_ca__face_a"),
+             _recon(2_000_000, face="99000000", face_key="bs_ca__face_b"),
+             # 4.5% of its face figure: unmistakably the same quantity, so a real break rather
+             # than a note that is not a breakdown at all.
+             _recon(900_000_000, face="20000000000", face_key="bs_ca__face_c")]
+    ties = [c for c in _accounting_checks(rows, lines, "en") if c["type"] == "note_tie"]
+    assert len(ties) == 1                       # still one question per note…
+    card = ties[0]
+
+    # …and every face line that does not tie is named ON it, with its own two figures.
+    printed = {row[0]: row[1] for row in card["calc"]}
+    assert printed["bs_ca__face_a"] == "1,000 / 20"
+    assert printed["bs_ca__face_b"] == "99,000,000 / 2,000,000"
+    assert printed["bs_ca__face_c"] == "20,000,000,000 / 900,000,000"
+    assert printed["Face lines that do not tie"] == "3"
+    # Every figure the card prints is derived from the entries it sits above: the headline is the total
+    # BREAK across them — the sum of their magnitudes — never the first face line's residual passed off
+    # as the note's, and never a signed sum two breaks can cancel.
+    assert printed["Total break across the untied face lines"] == "902,000,020"
+    assert card["delta"] == "902,000,020"
+    assert card["evidence"]["total_break"] == 902_000_020
+    # …and the whole set is what the digest is taken over, not its first member.
+    assert card["evidence"]["entry_count"] == 3
+    assert set(card["evidence"]["entries"]) == {"bs_ca__face_a", "bs_ca__face_b",
+                                                "bs_ca__face_c"}
+    # The lines it names are the lines it lists, so the header's "no finding" tile cannot count them.
+    assert card["names"] == ["bs_ca__face_a", "bs_ca__face_b", "bs_ca__face_c"]
+
+
+def test_two_untied_face_lines_that_cannot_be_told_apart_are_both_still_printed():
+    """A run stored before ``face_key`` existed carries no face name at all, and two printed lines
+    can legitimately map to one concept. Both would collapse into a single dict key — dropping a
+    break off the card, which is the defect this shape exists to close — so they are numbered."""
+    from app.api.routes.documents import _accounting_checks
+
+    rows = [_row("bs_total_assets", 100), _row("bs_total_equity_and_liabilities", 100)]
+    old_run = [_recon(20, face_key=""), _recon(40, face_key="")]
+    card = next(c for c in _accounting_checks(rows, old_run, "en") if c["type"] == "note_tie")
+    assert card["evidence"]["entry_count"] == 2
+    assert card["evidence"]["entries"] == {"—": "1,000 / 20", "— (2)": "1,000 / 40"}
+    assert card["delta"] == "60"
+
+
+def test_the_untied_set_is_ordered_by_content_so_two_runs_agree():
+    """The digest must not depend on the order the stage happened to emit its entries in: two runs
+    that found the same breaks have to hash alike, or every acceptance reads stale on every re-run.
+    """
+    from app.api.routes.documents import _accounting_checks
+
+    rows = [_row("bs_total_assets", 100), _row("bs_total_equity_and_liabilities", 100)]
+    lines = [_recon(20, face_key="bs_ca__face_a"), _recon(40, face_key="bs_ca__face_b")]
+    one = next(c for c in _accounting_checks(rows, lines, "en") if c["type"] == "note_tie")
+    other = next(c for c in _accounting_checks(rows, list(reversed(lines)), "en")
+                 if c["type"] == "note_tie")
+    assert one["evidence"] == other["evidence"]
 
 
 def test_the_grade_is_derived_for_runs_stored_before_it_existed():
@@ -239,6 +305,57 @@ def test_a_single_source_row_carries_no_contributions():
     assert row["contributions"] is None
 
 
+def test_the_header_counts_the_lines_no_finding_names():
+    """``summary.passed`` heads a tile reading "lines with no finding" in all four locales, so it has
+    to be the lines no finding names.
+
+    It was ``len(rows) - (unmapped + low_confidence)``, which subtracts only the two row-shaped
+    findings: every line indicted by a balance, note tie, structural, guard, calculated_mismatch or
+    uncomputed finding counted as having no finding. The reviewers' reproduction was a 9-row run with
+    4 checks whose targets were 4 of those 9 rows rendering "4 open · 0 accepted · 9 lines with no
+    finding". The number did not change when the tile was relabelled — the label did, and the label
+    now asserts something the number has to be true of.
+    """
+    from app.api.routes.documents import _build_review
+
+    rows = [
+        # named by the balance identity (both sides)
+        _row("bs_total_assets", 100), _row("bs_total_equity_and_liabilities", 90),
+        # named by the note tie
+        _row("bs_ca__trade_receivables", 1000),
+        # named by the guard's violation set
+        _row("pl_expenses__cost_of_goods_sold", 600),
+        # its own finding
+        {"source_label": "Unplaceable", "canonical_key": None,
+         "values": [{"basis": "consolidated", "period_label": "current", "value": "5"}]},
+        # named by nothing at all
+        _row("bs_ca__inventories", 7), _row("bs_ca__cash", 8),
+        _row("pl_income__revenue_from_operations", 9), _row("bs_nca__goodwill", 10),
+    ]
+    guard = [{"rule_id": "guard:sign_expectation", "kind": "guard", "status": "fail",
+              "scope_key": "consolidated/current", "expected": None, "actual": None,
+              "difference": None,
+              "details": {"target": "pl_expenses__cost_of_goods_sold", "components": [],
+                          "op": "sign_expectation", "statement": "profit_and_loss",
+                          "basis": "consolidated", "period_label": "current",
+                          "guard": "sign_expectation", "severity": "blocking", "guard_keys": [],
+                          "precondition": "always", "rule_text": "expenses are negative",
+                          "violations": [{"key": "pl_expenses__cost_of_goods_sold",
+                                          "expected": "negative_expected", "value": "600"}],
+                          "violations_keys": ["pl_expenses__cost_of_goods_sold"],
+                          "sign_suspect": None}}]
+    review = _build_review(rows, "doc.pdf", "en", [_recon(20)], guard)
+
+    # balance, note tie, guard, unmapped
+    assert len(rows) == 9 and len(review["checks"]) == 4
+    named = {k for c in review["checks"] for k in (c.get("names") or [])}
+    assert named == {"bs_total_assets", "bs_total_equity_and_liabilities",
+                     "bs_ca__trade_receivables", "pl_expenses__cost_of_goods_sold"}
+    # Four rows are named by an accounting finding and one is its own finding, so four are left.
+    assert review["summary"]["passed"] == 4
+    assert review["summary"]["passed"] != len(rows) - review["tabs"][2]["count"]
+
+
 def test_every_review_tab_counts_exactly_what_it_selects():
     """A tab's count is the length of the list clicking it produces.
 
@@ -267,3 +384,67 @@ def test_every_review_tab_counts_exactly_what_it_selects():
     assert {c["type"] for c in review["checks"]} == {ty for t in buckets for ty in t["types"]
                                                     if any(c["type"] == ty
                                                            for c in review["checks"])}
+
+
+def test_a_note_broken_in_both_directions_cannot_report_a_zero_break():
+    """FINDING 4. ``residual = raw_face - note_total`` is SIGNED, and TIE_UNTIED only bounds
+    abs(residual), so a note out +2,000,000 on one face line and −2,000,000 on another summed to
+    zero: the card served tone 'high', title "Note does not tie to the face figure", delta '0' and an
+    emphasised row reading "Total residual vs note total 0" — with ``evidence['residual']`` cancelling
+    in exactly the same way, so the digest's own summary figure was blind to both breaks moving in
+    step. The summary is the sum of the MAGNITUDES; the per-entry residuals keep their signs, because
+    the direction is the truth about each line.
+    """
+    from app.api.routes.documents import _accounting_checks
+
+    rows = [_row("bs_total_assets", 100), _row("bs_total_equity_and_liabilities", 100)]
+    opposed = [_recon(2_000_000, face=99_000_000, note="12",
+                      face_key="bs_ca__trade_receivables"),
+               _recon(-2_000_000, face=99_000_000, note="12",
+                      face_key="bs_ca__other_receivables")]
+    card = next(c for c in _accounting_checks(rows, opposed, "en") if c["type"] == "note_tie")
+    printed = {row[0]: row[1] for row in card["calc"]}
+
+    # THE ASSERTIONS THAT FAIL WITH THE DEFECT RESTORED: neither the headline nor the digest's
+    # summary can be zero while two nine-figure breaks sit under them.
+    assert card["delta"] == "4,000,000" and card["delta"] != "0"
+    assert printed["Total break across the untied face lines"] == "4,000,000"
+    assert card["evidence"]["total_break"] == 4_000_000
+    # …and each line still says which WAY it is out, which is what a reader needs next.
+    assert printed["bs_ca__trade_receivables"] == "99,000,000 / 2,000,000"
+    assert printed["bs_ca__other_receivables"] == "99,000,000 / -2,000,000"
+    # The label says what the figure IS, so nothing reads "residual" over a sum of magnitudes.
+    assert "Total residual vs note total" not in printed
+
+
+def test_the_lines_with_no_finding_tile_counts_subtotals_and_totals_but_not_captions():
+    """FINDING 9, from the real path's side: ONE definition of the population, in
+    services/review_lines.py, called by this route and by the sample route.
+
+    A subtotal and a total ARE lines — they are what the balance card and a section reconciliation
+    name — so a subtotal no finding names is a line with no finding. A section HEADING is not a line
+    at all: it carries no figure and no finding can be about it. The sample path counted only its
+    ``kind == "item"`` rows, which excluded 6 subtotals and 4 totals from a population the real path
+    included, under an identical label.
+    """
+    from app.api.routes.documents import _build_review
+    from app.services.review_lines import is_statement_line
+
+    rows = [{**_row("bs_total_assets", 100), "role": "total"},
+            {**_row("bs_total_equity_and_liabilities", 90), "role": "total"},
+            {**_row("bs_current_assets__total_current_assets", 40), "role": "subtotal",
+             "mapping_confidence": 0.99},
+            {**_row("bs_current_assets__inventories", 40), "role": "line",
+             "mapping_confidence": 0.99},
+            # A caption row: no figure of its own to be right or wrong about.
+            {"canonical_key": None, "source_label": "Current assets", "role": "header",
+             "values": []}]
+    review = _build_review(rows, "d.pdf", "en")
+    named = {n for c in review["checks"] for n in c["names"]}
+    assert named == {"bs_total_assets", "bs_total_equity_and_liabilities"}   # the balance card
+    # 4 lines in the population (the header is not one), 2 of them named → 2 with no finding.
+    assert [is_statement_line(r) for r in rows] == [True, True, True, True, False]
+    assert review["summary"]["passed"] == 2
+    # THE ASSERTION THAT FAILS WITH THE ITEM-ONLY DEFINITION RESTORED: the two named lines are
+    # TOTALS, so a population of plain lines only would answer 1 and count neither of them.
+    assert review["summary"]["passed"] != len([r for r in rows if r.get("role") == "line"])

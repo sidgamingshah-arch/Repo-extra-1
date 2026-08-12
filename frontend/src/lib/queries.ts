@@ -299,6 +299,41 @@ export const useDocumentReview = (documentId: string | undefined, locale: Locale
     retry: false,
   });
 
+/** Everything a judgement changes — and nothing else. Accepting a finding moves no figure, so
+ *  the statement and the run are deliberately NOT invalidated; the review payload is refreshed
+ *  by its whole prefix so every cached locale re-derives its counts, and the commentary with it
+ *  because its data-quality prose consumes summary.open. */
+function invalidateAfterJudgement(
+  qc: ReturnType<typeof useQueryClient>, documentId: string | undefined,
+) {
+  qc.invalidateQueries({ queryKey: ["document-review", documentId] });
+  qc.invalidateQueries({ queryKey: ["document-commentary", documentId] });
+}
+
+/** Record a judgement on one finding: a named person examined these figures and they stand.
+ *  Errors are NOT swallowed — a 409 means the figures moved while the card was open, and the
+ *  screen has to say so rather than leave the reviewer believing their acceptance landed. */
+export function useAcceptFinding(documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { subjectKey: string; evidenceDigest: string; reason: string;
+                         locale?: Locale }) =>
+      api.acceptFinding(documentId as string, vars.subjectKey, vars.evidenceDigest, vars.reason,
+                        vars.locale ?? "en"),
+    onSuccess: () => invalidateAfterJudgement(qc, documentId),
+  });
+}
+
+/** Withdraw an acceptance, putting the finding back in the open queue. The stored row keeps the
+ *  history; only the in-force verdict changes. */
+export function useWithdrawAcceptance(documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (subjectKey: string) => api.withdrawAcceptance(documentId as string, subjectKey),
+    onSuccess: () => invalidateAfterJudgement(qc, documentId),
+  });
+}
+
 /** Derived analysis (ratios / disclosures / notes) for a document. */
 export const useDocumentAnalysis = (documentId: string | undefined, locale: Locale = "en") =>
   useQuery({
@@ -316,10 +351,13 @@ export const useDocumentNotes = (documentId: string | undefined) =>
     enabled: !!documentId,
     retry: false,
   });
-export const useDocumentNote = (documentId: string | undefined, no: number) =>
+/** One note's detail. `locale` is in the key as well as the request: the response carries the
+ *  note's column labels, whose Current/Prior fallback is localized, so a cached English detail
+ *  must not be reused for a zh reader. */
+export const useDocumentNote = (documentId: string | undefined, no: number, locale: Locale = "en") =>
   useQuery({
-    queryKey: ["document-note", documentId, no],
-    queryFn: () => api.documentNote(documentId as string, no),
+    queryKey: ["document-note", documentId, no, locale],
+    queryFn: () => api.documentNote(documentId as string, no, locale),
     enabled: !!documentId,
     retry: false,
   });
@@ -342,7 +380,9 @@ export function useEditDocumentLineItem(documentId: string | undefined) {
   return useMutation({
     mutationFn: (vars: {
       key: string; value: number | null; formula: string;
-      basis: Basis; period: "current" | "prior"; comment?: string;
+      // A slot name ("current"/"prior") or the period's printed label — the Review screen's
+      // flip-sign fix names the period the way the relation that failed named it.
+      basis: Basis; period: string; comment?: string;
     }) =>
       api.editDocumentLineItem(documentId as string, vars.key, vars.value, vars.formula,
                                vars.basis, vars.period, vars.comment ?? ""),

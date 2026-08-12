@@ -1,8 +1,12 @@
-"""Extraction endpoints: start a run (thin) and fetch status.
+"""Extraction endpoints: start a run and fetch its status.
 
-Runs the pipeline synchronously against the stored document for this foundation. The
-WebSocket progress stream is stubbed with the contract shape; the background-worker
-swap does not change these routes.
+``POST /documents/{id}/extractions`` returns 202 immediately and runs the pipeline in a FastAPI
+BackgroundTask; progress and results are read by polling ``GET /extractions/{run_id}`` (the
+frontend polls once a second while the run is ``running`` — see ``lib/queries.ts``).
+
+There is no WebSocket stream. The earlier "stubbed WS contract" note in this docstring described
+something that was never built, and the run has not been synchronous since extraction moved to the
+background task.
 """
 from __future__ import annotations
 
@@ -92,13 +96,7 @@ def _serialize_rows(doc_model) -> list[dict]:
             p = ev.provenance
             prov = None
             if p is not None:
-                prov = {
-                    "source_kind": p.source_kind,
-                    "page_index": p.page_index,
-                    "sheet": p.sheet, "cell": p.cell, "label_cell": p.label_cell,
-                    "bbox": (p.bbox.model_dump() if p.bbox is not None else None),
-                    "text_snippet": p.text_snippet,
-                }
+                prov = _prov_dict(p)
             cv = ev.confidence
             values.append({
                 "period_label": ev.period_label,
@@ -128,12 +126,26 @@ def _serialize_rows(doc_model) -> list[dict]:
 
 
 def _prov_dict(p):
+    """One provenance record as the API serves it — ONE spelling, used by the face rows and the
+    note rows alike (the face path used to carry an inline copy of this dict, and the two then
+    disagreed about which fields exist).
+
+    ``label_bbox`` is carried because the row LABEL's geometry is the only box on a paginated source
+    that does not move when the figure does. ``bbox`` is the value word's box (row_reconstruct.py),
+    so "Cash and cash equivalents 1,204" and the same line printed 12,048 have different ``bbox``
+    x0s — right-aligned figures grow leftwards. The review queue's judgement subject is anchored on
+    this geometry (api/routes/documents.py::_prov_anchor), and an anchor that moves with the figure
+    means a reviewer's acceptance is reported as belonging to a finding that was corrected when the
+    figure merely changed. The label box is what makes the anchor value-independent, and it never
+    reached the anchor before because this serializer dropped it.
+    """
     if p is None:
         return None
     return {
         "source_kind": p.source_kind, "page_index": p.page_index,
         "sheet": p.sheet, "cell": p.cell, "label_cell": p.label_cell,
         "bbox": (p.bbox.model_dump() if p.bbox is not None else None),
+        "label_bbox": (p.label_bbox.model_dump() if p.label_bbox is not None else None),
         "text_snippet": p.text_snippet,
     }
 
@@ -146,7 +158,13 @@ def _serialize_notes(doc_model) -> list[dict]:
         rows = []
         for it in nt.items:
             values = [{
-                "period_label": ev.period_label, "basis": ev.basis.value,
+                "period_label": ev.period_label,
+                # The printed column header ("31 December 2024"), carried the same way the face
+                # serializer carries it above. Without it a note table's own column dates were
+                # dropped on the way to the API, so the Notes screen could only ever fall back to
+                # Current/Prior even for Excel and date-banded PDFs.
+                "period_display": ev.period_display,
+                "basis": ev.basis.value,
                 "value": (str(ev.value) if ev.value is not None else None),
                 "provenance": _prov_dict(ev.provenance),
             } for ev in it.values.values()]
@@ -415,8 +433,15 @@ def start_extraction(
     background.add_task(_run_extraction_task, run_id, doc.object_key, doc.filename or "",
                         body.model_dump(), entity, settings.llm.provider, settings.llm.model,
                         doc.page_scope)
+    # The URL of the mechanism that ACTUALLY reports progress — the endpoint the client polls.
+    # This field used to name `/extractions/{run_id}/stream`, a WebSocket route that exists
+    # nowhere in this codebase: a GET on it 404s, no client ever read it, and the docs correction
+    # that removed the same claim from the prose left it standing here in machine-readable form.
+    # Pointing it at GET /extractions/{run_id} rather than deleting it keeps the response
+    # self-describing for a caller that has only the response to go on, and there is now a test
+    # holding this URL to being the one the API serves.
     return {"run_id": run_id, "status": "running", "rulebook": rulebook,
-            "stream_url": f"/api/v1/extractions/{run_id}/stream"}
+            "progress_url": f"/api/v1/extractions/{run_id}"}
 
 
 @router.get("/extractions/{run_id}")

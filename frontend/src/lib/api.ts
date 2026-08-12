@@ -29,14 +29,22 @@ export function setStoredActiveDoc(id: string | null): void {
 
 /** Error carrying the HTTP status so callers (e.g. auth gating) can special-case 401.
  *  `detail` is the server's own explanation when it sent one — editors show it verbatim
- *  rather than a generic failure, so a rejected value says WHY it was rejected. */
+ *  rather than a generic failure, so a rejected value says WHY it was rejected.
+ *
+ *  `code` is the machine-readable `detail.error` the judgement endpoints send instead of a
+ *  sentence. Three different refusals share status 409 there — the figures moved, the subject is a
+ *  conflict the queue cannot resolve, the write itself lost a race — and one status cannot tell
+ *  them apart, so a screen that explains a 409 must read the code rather than assume the first
+ *  meaning. */
 export class ApiError extends Error {
   status: number;
   detail?: string;
-  constructor(status: number, message: string, detail?: string) {
+  code?: string;
+  constructor(status: number, message: string, detail?: string, code?: string) {
     super(message);
     this.status = status;
     this.detail = detail;
+    this.code = code;
   }
 }
 
@@ -45,6 +53,20 @@ function errorDetail(text: string): string | undefined {
   try {
     const body = JSON.parse(text) as { detail?: unknown };
     return typeof body.detail === "string" ? body.detail : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Pull `detail.error` out of a structured error body — the endpoint's own name for what it
+ *  refused. Undefined when the body carries no such code, which is what keeps a caller from
+ *  reporting a specific cause it was never told. */
+function errorCode(text: string): string | undefined {
+  try {
+    const body = JSON.parse(text) as { detail?: { error?: unknown } };
+    const code = body.detail && typeof body.detail === "object"
+      ? (body.detail as { error?: unknown }).error : undefined;
+    return typeof code === "string" ? code : undefined;
   } catch {
     return undefined;
   }
@@ -62,7 +84,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`, errorDetail(text));
+    throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`,
+                       errorDetail(text), errorCode(text));
   }
   if (res.status === 204) return undefined as T; // no content (e.g. DELETE)
   return res.json() as Promise<T>;
@@ -167,21 +190,45 @@ export const api = {
    * confidence). */
   documentReview: (documentId: string, locale: Locale = "en") =>
     req<ReviewResponse>(`/documents/${documentId}/review?locale=${locale}`),
+  /** Record that a named person examined a finding's figures and judged that they stand. The key
+   *  travels in the BODY, not the path: a structural finding's scope key contains "/" and no
+   *  check identifier is URL-safe. `evidenceDigest` is the figures the human was looking at —
+   *  the server refuses the acceptance with 409 when they have since moved. */
+  acceptFinding: (
+    documentId: string, subjectKey: string, evidenceDigest: string, reason: string,
+    locale: Locale = "en",
+  ) =>
+    req<{ ok: boolean; subject_key: string; status: string }>(
+      `/documents/${documentId}/review/judgements?locale=${locale}`,
+      { method: "POST", body: JSON.stringify({
+          subject_key: subjectKey, evidence_digest: evidenceDigest, reason }) },
+    ),
+  /** Withdraw an acceptance. The row is not deleted — the verdict changes and the history keeps
+   *  who accepted what — because erasing the record of who vouched for a break is not something
+   *  an audit trail should permit. The 64-hex subject key is URL-safe. */
+  withdrawAcceptance: (documentId: string, subjectKey: string) =>
+    req<{ ok: boolean; subject_key: string; withdrawn: boolean }>(
+      `/documents/${documentId}/review/judgements/${subjectKey}`, { method: "DELETE" },
+    ),
   /** Derived analysis for a document: computed ratios, disclosure scan, free-form notes. */
   documentAnalysis: (documentId: string, locale: Locale = "en") =>
     req<AnalysisResponse>(`/documents/${documentId}/analysis?locale=${locale}`),
   /** Real per-document notes index + detail, from line-item note references. */
   documentNotes: (documentId: string) =>
     req<NotesResponse>(`/documents/${documentId}/notes`),
-  documentNote: (documentId: string, no: number) =>
-    req<NoteDetail>(`/documents/${documentId}/notes/${no}`),
+  /** One note's detail. `locale` is passed because the response now carries the note's own
+   *  column labels, and their Current/Prior fallback is localized server-side. */
+  documentNote: (documentId: string, no: number, locale: Locale = "en") =>
+    req<NoteDetail>(`/documents/${documentId}/notes/${no}?locale=${locale}`),
   /** Edit ONE figure of a real extraction: a concept, in one basis, for one period.
    *  Basis and period are required, not defaulted — without them every edit landed on the
    *  consolidated current column, so editing the standalone grid or the prior year did nothing
-   *  visible. The response echoes the figures the grid will now show. */
+   *  visible. The response echoes the figures the grid will now show.
+   *  `period` is a slot name ("current"/"prior") OR a literal period label, which the server
+   *  resolves the same way: a review finding's fix names the period as the filing printed it. */
   editDocumentLineItem: (
     documentId: string, key: string, value: number | null, formula: string,
-    basis: Basis, period: "current" | "prior", comment = "",
+    basis: Basis, period: string, comment = "",
   ) =>
     req<{
       status: string; value: string | null; label: string; comment: string;

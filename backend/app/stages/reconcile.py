@@ -132,7 +132,13 @@ class ReconcileStage:
                 if best.tie_status in (TIE_TIED, TIE_UNTIED):
                     ev.reconciled = best.reconciled
                 report.entries.append(ReconciliationEntry(
-                    face_item_id=str(face.id), note_number=note_number,
+                    face_item_id=str(face.id),
+                    # One entry per FACE LINE, so the entry has to say which face line — by a
+                    # name that means the same thing next run. The review queue serves one card
+                    # per (note, basis, period) covering every untied face line on that note, and
+                    # it can only list them (and fingerprint them) if they are named.
+                    face_key=(face.canonical_key or face.source_label or ""),
+                    note_number=note_number,
                     basis=ev.basis.value, period_label=ev.period_label,
                     raw_face=best.raw_face, subtracted=best.subtracted,
                     reconciled=best.reconciled, residual=best.residual,

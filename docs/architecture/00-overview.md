@@ -16,7 +16,7 @@ Upload
   → Extraction job (pipeline, async worker)
       ingest → integrity → language → classify → reconstruct → extract
              → map(ontology) → normalize(sign/units) → link notes → reconcile → validate
-  → Progressive results (WebSocket)
+  → Progressive results (client polls GET /extractions/{run_id} while status = running)
   → Review workspace (side-by-side source ↔ editable grid)
   → Review queue (failed checks) → resolve
   → Export (Excel / JSON)
@@ -36,9 +36,9 @@ persisted so stages are independently re-runnable and the UI hydrates progressiv
 | 5 | Ontology drives description-based extraction | ontology schema + `services/mapping.py` |
 | 6 | Hyperlinked side-by-side view | `Provenance` (normalized bbox) + viewer overlay |
 | 7 | Edit output in UI | editable grid + `EditEvent` audit log |
-| 8 | Export Excel / JSON | export model (openpyxl/ExcelJS native formulas) |
+| 8 | Export Excel / JSON | `services/export.py` (openpyxl; formulas travel as a text column + cell notes, not live `=` cells) |
 | 9 | Confidence per extraction | `ConfidenceVector` |
-| 10 | Edits show formulas | HyperFormula (client) + safe AST engine (server) |
+| 10 | Edits show formulas | `services/formula.py` — whitelisted-AST engine, server-side; the client sends/stores the formula string |
 | 11 | Review queue on failed checks | validation engine → `RuleResult` → `ReviewItem` |
 | 12 | Sign detection & normalization | `services/numbers.py` + normalize stage |
 | 13 | Consolidated + standalone in one pass | `Basis`; values keyed by (basis, period) |

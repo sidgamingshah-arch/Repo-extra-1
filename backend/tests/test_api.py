@@ -86,6 +86,32 @@ def test_ontology_rejects_unknown_template(client):
     assert r.status_code == 422
 
 
+def test_starting_an_extraction_names_the_progress_mechanism_that_exists(client):
+    """The API must not advertise a route it does not serve.
+
+    The 202 body used to carry ``stream_url: /api/v1/extractions/{run_id}/stream`` — a WebSocket
+    endpoint that exists nowhere in this codebase. Progress is POLLED (docs/architecture
+    06-testing-and-roadmap.md), the prose was corrected to say so, and the false claim survived in
+    machine-readable form in the response one file away. So: no key names a stream, and the URL the
+    body DOES name answers.
+    """
+    doc_id = client.post("/api/v1/documents",
+                         files={"file": ("poll.pdf", make_native_pdf(),
+                                         "application/pdf")}).json()["id"]
+    started = client.post(f"/api/v1/documents/{doc_id}/extractions", json={})
+    assert started.status_code == 202, started.text
+    body = started.json()
+
+    assert not [k for k in body if "stream" in k]
+    assert not [v for v in body.values() if isinstance(v, str) and v.endswith("/stream")]
+    # The mechanism the response names is the one the client polls, and it answers.
+    polled = client.get(body["progress_url"])
+    assert polled.status_code == 200, body["progress_url"]
+    assert polled.json()["run_id"] == body["run_id"]
+    # …and the route the old field pointed at is genuinely absent, not merely unmentioned.
+    assert client.get(f"/api/v1/extractions/{body['run_id']}/stream").status_code == 404
+
+
 def test_extraction_confirm_scope_defaults_to_auto(client):
     """confirm_scope defaults to False (auto mode) and round-trips when set."""
     pdf_bytes = make_native_pdf()

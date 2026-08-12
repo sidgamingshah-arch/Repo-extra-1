@@ -4,7 +4,6 @@ export const commentary: Record<Locale, Record<string, string>> = {
   en: {
     "cm.title": "Financial analysis",
     "cm.subhead": "Automated one-page commentary derived from the extracted statements — indicative, not investment advice.",
-    "cm.assessment": "Assessment",
     "cm.metrics": "Key metrics",
     "cm.trends": "Year-on-year trends",
     "cm.trendVs": "vs",
@@ -41,7 +40,6 @@ export const commentary: Record<Locale, Record<string, string>> = {
   zh: {
     "cm.title": "财务分析",
     "cm.subhead": "基于提取报表自动生成的一页式评述——仅供参考，非投资建议。",
-    "cm.assessment": "总体评估",
     "cm.metrics": "关键指标",
     "cm.trends": "同比趋势",
     "cm.trendVs": "对比",
@@ -78,7 +76,6 @@ export const commentary: Record<Locale, Record<string, string>> = {
   ar: {
     "cm.title": "التحليل المالي",
     "cm.subhead": "تعليق آلي من صفحة واحدة مُستمد من القوائم المستخرجة — إرشادي وليس نصيحة استثمارية.",
-    "cm.assessment": "التقييم",
     "cm.metrics": "المؤشرات الرئيسية",
     "cm.trends": "الاتجاهات السنوية",
     "cm.trendVs": "مقابل",
@@ -115,7 +112,6 @@ export const commentary: Record<Locale, Record<string, string>> = {
   fr: {
     "cm.title": "Analyse financière",
     "cm.subhead": "Commentaire automatique d'une page, dérivé des états extraits — indicatif, pas un conseil en investissement.",
-    "cm.assessment": "Évaluation",
     "cm.metrics": "Indicateurs clés",
     "cm.trends": "Tendances annuelles",
     "cm.trendVs": "contre",

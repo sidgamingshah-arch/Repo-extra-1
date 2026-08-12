@@ -88,7 +88,7 @@ def test_real_review_and_export_from_extraction(client):
 
     # Review queue derives from the real rows.
     rev = client.get(f"/api/v1/documents/{doc_id}/review").json()
-    assert set(rev) == {"checks", "tabs", "summary"}
+    assert set(rev) == {"run_id", "checks", "tabs", "summary", "judgements", "coverage"}
     assert rev["tabs"][0]["label"] == "All"
     assert rev["summary"]["open"] + rev["summary"]["passed"] >= 1
 
@@ -405,6 +405,30 @@ def test_extracted_note_detail_served_and_exported(client):
     assert "Cash on hand" in text and "Balances with banks" in text
 
 
+def test_note_detail_serves_the_same_period_labels_as_the_statement(client):
+    """The Notes screen used to print "FY25"/"FY24" as literals above these very columns, so on any
+    filing whose periods are not those two it labelled the same figures differently from the
+    Workspace. The endpoint now serves `periods` — the SAME key, in the same order, the statement
+    routes serve — derived from exactly the value lists the note's v1/v2 came out of.
+    """
+    from tests.fixtures.generate import make_multipage_pdf
+
+    doc_id = _extract_with_ontology(client, filename="multi.pdf", data=make_multipage_pdf())
+
+    detail = client.get(f"/api/v1/documents/{doc_id}/notes/14").json()
+    assert len(detail["periods"]) == 2 and all(p.strip() for p in detail["periods"])
+    stmt = client.get(f"/api/v1/documents/{doc_id}/statement",
+                      params={"statement": "balance_sheet"}).json()
+    assert detail["periods"] == stmt["periods"]
+
+    # The Current/Prior fallback was reaching a zh/ar/fr reader in English — this fixture's columns
+    # carry no printed date, so it is exactly the path that was broken.
+    zh = client.get(f"/api/v1/documents/{doc_id}/notes/14", params={"locale": "zh"}).json()
+    assert zh["periods"] == ["本期", "上期"]
+    fr = client.get(f"/api/v1/documents/{doc_id}/notes/14", params={"locale": "fr"}).json()
+    assert fr["periods"] == ["Actuel", "Précédent"]
+
+
 def test_real_integrity_and_review_localized(client):
     doc_id = _extract_with_ontology(client)
     zh = client.get(f"/api/v1/documents/{doc_id}/integrity", params={"locale": "zh"}).json()
@@ -453,7 +477,14 @@ def test_review_and_run_404_before_extraction(client):
     assert client.get(f"/api/v1/documents/{doc_id}/run").status_code == 404
     assert client.get(f"/api/v1/documents/{doc_id}/export", params={"fmt": "json"}).status_code == 404
     rev = client.get(f"/api/v1/documents/{doc_id}/review").json()
-    assert rev["summary"] == {"open": 0, "passed": 0}
+    assert rev["summary"] == {"open": 0, "accepted": 0, "stale": 0, "conflict": 0,
+                              "passed": 0}
+    # The empty queue is the SAME shape as a real one — four tabs, not the one-tab literal this
+    # branch used to hand-write — so the screen has no second empty-state to render.
+    assert [t["label"] for t in rev["tabs"]] == ["All", "Checks", "Unmapped", "Low confidence"]
+    assert rev["coverage"] == {"available": False, "reason": "not_extracted",
+                               "reason_label": rev["coverage"]["reason_label"]}
+    assert rev["coverage"]["reason_label"]
 
 
 def test_missing_integrity_report_is_not_shown_as_clean(client):
@@ -571,3 +602,81 @@ def test_template_authoring_roundtrip(client):
 
     bad = client.post("/api/v1/templates", json={"definition": {"not": "a template"}})
     assert bad.status_code == 422
+
+
+def test_a_page_card_carries_the_measured_confidence_and_never_a_category_literal(client):
+    """FINDING 7, backend half. `_conf_cat` computed the classifier's percentage and the page builder
+    threw it away (``cat, _ = …``), so the screen printed a hardcoded literal PER CATEGORY instead —
+    a page scored 0.40 rendered "54%", and `_conf_cat(None)` answered ('med', 60) so a page with no
+    score at all rendered "78%". The measured figure is served beside the category, and it is null
+    where nothing measured it, so a screen can say so instead of printing a number."""
+    from app.api.routes.documents import _build_pages, _conf_cat
+
+    pages = [{"index": 0, "kind": "face", "classification_confidence": 0.40,
+              "source_kind": "native"},
+             {"index": 1, "kind": "notes", "classification_confidence": 0.91,
+              "source_kind": "native"},
+             # No classification confidence at all — the case that used to render as "78%".
+             {"index": 2, "kind": "other", "source_kind": "scanned"}]
+    cards = _build_pages(pages)["pages"]
+    # THE ASSERTIONS THAT FAIL WITH THE DEFECT RESTORED: the measured percentage is on the payload…
+    assert [c["conf_pct"] for c in cards] == [40, 91, None]
+    # …and it is the classifier's own number, not a function of the badge category.
+    assert [c["conf"] for c in cards] == ["low", "high", "med"]
+    assert _conf_cat(None) == ("med", None)
+    assert _conf_cat(0.40) == ("low", 40)
+
+    # And through the route, on a real document, every card carries the key.
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}
+    ).json()["id"]
+    served = client.get(f"/api/v1/documents/{doc_id}/pages").json()["pages"]
+    assert served and all("conf_pct" in p for p in served)
+    for p in served:
+        assert p["conf_pct"] is None or 0 <= p["conf_pct"] <= 100
+
+
+def test_a_note_detail_row_carries_the_measured_confidence_beside_its_badge(client):
+    """The same literal reached the Notes detail table: every 'high' row printed "96%" whatever it
+    scored. A note has no measured confidence of its own, so the index says so with a null rather than
+    letting a category stand in for a measurement."""
+    doc_id = client.post(
+        "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}
+    ).json()["id"]
+    onts = client.get("/api/v1/ontologies").json()
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    tpls = client.get("/api/v1/templates").json()
+    tpl = next((t for t in tpls if t["template_key"] == ont["target_template_key"]), tpls[0])
+    client.post(f"/api/v1/documents/{doc_id}/extractions",
+                json={"ontology_version_id": ont["id"], "template_version_id": tpl["id"]})
+    index = client.get(f"/api/v1/documents/{doc_id}/notes").json()["notes"]
+    for n in index:
+        assert n["conf_pct"] is None, "a note carries no measurement, so it may serve no percentage"
+
+    # A detail row that DOES carry a score serves it. The stored run is given one note table whose
+    # rows carry real confidences, because whether THIS fixture's pages parse into a note table is a
+    # property of the fixture, not of the contract being pinned.
+    from app.db.base import SessionLocal
+    from app.db.models import ExtractionRun
+
+    with SessionLocal() as session:
+        run = session.query(ExtractionRun).filter(
+            ExtractionRun.document_id == doc_id).order_by(ExtractionRun.created_at.desc()).first()
+        run.result = {**run.result, "note_details": [{
+            "no": 12, "title": "Trade receivables", "page": 7,
+            "rows": [{"label": "Trade receivables, gross", "confidence": 0.72,
+                      "values": [{"period_label": "current", "value": "500"}]},
+                     {"label": "Loss allowance", "confidence": 0.93,
+                      "values": [{"period_label": "current", "value": "-20"}]},
+                     {"label": "Unscored line", "values": [{"period_label": "current",
+                                                            "value": "480"}]}]}]}
+        session.commit()
+
+    detail = client.get(f"/api/v1/documents/{doc_id}/notes/12").json()
+    rows = detail["rows"]
+    # THE ASSERTIONS THAT FAIL WITH THE DEFECT RESTORED: the badge carries the row's OWN measured
+    # percentage, so two rows in one category cannot print the same number…
+    assert [r.get("conf") for r in rows] == ["med", "high", None]
+    assert [r.get("conf_pct") for r in rows] == [72, 93, None]
+    # …and a row nothing scored carries no confidence key at all rather than a fabricated 'med'/78%.
+    assert "conf" not in rows[2] and "conf_pct" not in rows[2]

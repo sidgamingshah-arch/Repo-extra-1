@@ -152,6 +152,7 @@ def build_rows_xlsx(rows: list[dict], *, filename: str, scale: float = 1.0) -> b
     headers = ["#", "Line item", "Note", "Mapped to", "Method", "Confidence",
                "Current", "Prior", "Formula", "Source"]
     ws.append(headers)
+    formula_col = headers.index("Formula") + 1
     for i, r in enumerate(rows, start=1):
         values = r.get("values") or []
         cur_v, prior_v = split_current_prior(values)
@@ -169,6 +170,12 @@ def build_rows_xlsx(rows: list[dict], *, filename: str, scale: float = 1.0) -> b
             r.get("formula") or "",                       # edited-item formula, if any
             _prov_str(values[0].get("provenance")) if values else "",
         ])
+        # The formula is carried for AUDIT, as the analyst typed it — it is not a live cell.
+        # openpyxl promotes any string starting with "=" to a real formula, and this one's
+        # references are canonical line-item keys resolved server-side (services/formula.py), not
+        # cell addresses, so Excel opened the workbook showing #NAME? exactly where an audit trail
+        # was intended. Forcing the string type keeps the expression readable.
+        ws.cell(row=ws.max_row, column=formula_col).data_type = "s"
     ws.freeze_panes = "A2"
     for col, width in zip("ABCDEFGHIJ", (5, 34, 8, 28, 12, 11, 14, 14, 18, 16)):
         ws.column_dimensions[col].width = width

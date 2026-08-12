@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import re
+from collections.abc import Iterable
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
@@ -14,6 +15,7 @@ from app.api.deps import db, object_store
 from app.ports.object_store import LocalObjectStore
 from app.security import Permission, Principal, Role, current_principal, require
 from app.services.documents import analyze_document, content_hash
+from app.services import review_lines
 from app.services.page_scope import normalise_kind, scope_counts
 from app.services.periods import (
     basis_values as _basis_values_of, concept_value as _concept_value, edited_for as _edited_for,
@@ -168,6 +170,219 @@ _TR.update({
 })
 
 
+# The Current/Prior fallback used when a filing's columns carry no printed header. Copied verbatim
+# from services/export.py:36-37 so the two modules cannot drift: without these entries
+# ``_t("Current", "zh")`` returned English, so a zh/ar/fr reader saw an English column header on
+# every native-PDF statement and on every note detail.
+_TR.update({
+    "Current": {"zh": "本期", "ar": "الحالية", "fr": "Actuel"},
+    "Prior": {"zh": "上期", "ar": "السابقة", "fr": "Précédent"},
+})
+
+
+# Coverage contract + review judgements. The coverage vocabulary is deliberately verbal rather
+# than numeric ("Nothing verified", not "0%"): the whole point of services/coverage.py is that a
+# count of passes read alone is how a barely-checked filing looks clean.
+_TR.update({
+    "All statements": {"zh": "所有报表", "ar": "جميع القوائم", "fr": "Tous les états"},
+    # statement coverage statuses
+    "Nothing verified": {"zh": "未验证任何项", "ar": "لم يُتحقَّق من شيء", "fr": "Rien de vérifié"},
+    "Partly verified": {"zh": "部分已验证", "ar": "تم التحقق جزئيًا", "fr": "Partiellement vérifié"},
+    "Failed": {"zh": "未通过", "ar": "فاشل", "fr": "En échec"},
+    "Fully verified": {"zh": "全部已验证", "ar": "تم التحقق بالكامل", "fr": "Entièrement vérifié"},
+    "Not in this filing": {"zh": "本次报告中不存在", "ar": "غير موجود في هذا التقرير",
+                           "fr": "Absent de ce dépôt"},
+    # skip-taxonomy buckets
+    "Inputs not extracted": {"zh": "输入项未提取", "ar": "المدخلات غير مستخرجة",
+                             "fr": "Entrées non extraites"},
+    "better extraction would recover these":
+        {"zh": "提升提取质量即可恢复这些关系", "ar": "استخراج أفضل سيستعيد هذه العلاقات",
+         "fr": "une meilleure extraction les récupérerait"},
+    "Fed by a derived value": {"zh": "由派生值驱动", "ar": "مُغذّى بقيمة مشتقة",
+                               "fr": "Alimenté par une valeur dérivée"},
+    "fed by a derived value — cannot fail, however good extraction gets":
+        {"zh": "由派生值驱动——无论提取质量多高都不可能失败",
+         "ar": "مُغذّى بقيمة مشتقة — لا يمكن أن يفشل، مهما تحسّن الاستخراج",
+         "fr": "alimenté par une valeur dérivée — ne peut pas échouer, quelle que soit la qualité de l'extraction"},
+    "No printed subtotal": {"zh": "文档未打印小计", "ar": "لا يوجد مجموع فرعي مطبوع",
+                            "fr": "Aucun sous-total imprimé"},
+    "the filing prints no subtotal to reconcile against":
+        {"zh": "该报告未打印可用于核对的小计", "ar": "لا يطبع التقرير مجموعًا فرعيًا للمطابقة",
+         "fr": "le dépôt n'imprime aucun sous-total à rapprocher"},
+    "Rule cannot run as authored": {"zh": "规则按当前写法无法运行",
+                                    "ar": "القاعدة لا يمكن تشغيلها كما صيغت",
+                                    "fr": "Règle inexécutable telle qu'écrite"},
+    "the rule cannot run as authored — an authoring defect, not an extraction gap":
+        {"zh": "该规则按当前写法无法运行——这是规则编写缺陷，而非提取缺口",
+         "ar": "القاعدة لا يمكن تشغيلها كما صيغت — عيب في الصياغة، لا فجوة استخراج",
+         "fr": "la règle ne peut pas s'exécuter telle qu'écrite — un défaut de rédaction, pas une lacune d'extraction"},
+    "Unclassified skip reason": {"zh": "未分类的跳过原因", "ar": "سبب تجاوز غير مصنَّف",
+                                 "fr": "Motif d'exclusion non classé"},
+    "a new skip reason nobody has classified":
+        {"zh": "出现了尚无人分类的新跳过原因", "ar": "سبب تجاوز جديد لم يصنّفه أحد",
+         "fr": "un nouveau motif d'exclusion que personne n'a classé"},
+    "Statement not in this filing": {"zh": "本次报告不含该报表",
+                                     "ar": "القائمة غير موجودة في هذا التقرير",
+                                     "fr": "État absent de ce dépôt"},
+    "not counted — this filing has no such statement":
+        {"zh": "不计入——本次报告没有该报表",
+         "ar": "غير محتسب — لا توجد مثل هذه القائمة في هذا التقرير",
+         "fr": "non compté — ce dépôt ne contient pas cet état"},
+    # alarms
+    "Blocking rule cannot be enforced": {"zh": "阻断性规则无法执行",
+                                         "ar": "قاعدة حاجبة لا يمكن إنفاذها",
+                                         "fr": "Règle bloquante inapplicable"},
+    "declared blocking and cannot run as authored, so it fires on no filing — this filing was "
+    "never checked against it.":
+        {"zh": "该规则被声明为阻断性，但按当前写法无法运行，因此对任何报告都不会触发——本次报告从未据此检查。",
+         "ar": "أُعلنت حاجبة ولا يمكن تشغيلها كما صيغت، فهي لا تُطلق على أي تقرير — ولم يُفحص هذا التقرير مقابلها أبدًا.",
+         "fr": "déclarée bloquante et inexécutable telle qu'écrite : elle ne se déclenche sur aucun dépôt — ce dépôt n'a jamais été contrôlé par elle."},
+    "Statement proved nothing": {"zh": "该报表未验证任何内容",
+                                 "ar": "القائمة لم تُثبت شيئًا", "fr": "État sans aucune vérification"},
+    "every relation declared for this statement was skipped, so it has no failures and has "
+    "proved nothing.":
+        {"zh": "为该报表声明的每一条关系都被跳过，因此它没有失败项，也没有验证任何内容。",
+         "ar": "تم تجاوز كل علاقة مُعلنة لهذه القائمة، فلا توجد بها إخفاقات ولم تُثبت شيئًا.",
+         "fr": "toutes les relations déclarées pour cet état ont été ignorées : il n'a aucun échec et n'a rien prouvé."},
+    "Mostly checking its own arithmetic": {"zh": "多数只是在核对自身算术",
+                                           "ar": "يتحقق في الغالب من حسابه الذاتي",
+                                           "fr": "Vérifie surtout sa propre arithmétique"},
+    "more relations were fed by derived values than were actually evaluated, so the validation "
+    "layer is largely confirming its own arithmetic.":
+        {"zh": "由派生值驱动的关系数量多于实际评估的关系数量，因此验证层多半只是在确认自身的算术。",
+         "ar": "عدد العلاقات المُغذّاة بقيم مشتقة يفوق عدد ما تم تقييمه فعليًا، فطبقة التحقق تؤكد في الغالب حسابها الذاتي.",
+         "fr": "plus de relations ont été alimentées par des valeurs dérivées qu'il n'y en a eu d'évaluées : la couche de validation confirme surtout sa propre arithmétique."},
+    "Pipeline defect": {"zh": "流水线缺陷", "ar": "عيب في خط المعالجة", "fr": "Défaut de traitement"},
+    "a rule that needs nothing of the filing still could not be run, so this is a defect in the "
+    "pipeline or the rulebook rather than a fact about the document.":
+        {"zh": "一条无需依赖报告内容的规则仍然无法运行，因此这是流水线或规则手册的缺陷，而不是关于该文档的事实。",
+         "ar": "قاعدة لا تحتاج شيئًا من التقرير لم يُمكن تشغيلها، فهذا عيب في خط المعالجة أو في دليل القواعد وليس واقعة عن المستند.",
+         "fr": "une règle qui n'exige rien du dépôt n'a pas pu s'exécuter : c'est un défaut du traitement ou du référentiel, pas un fait sur le document."},
+    # coverage unavailable
+    "This document has not been extracted, so no relation has been evaluated.":
+        {"zh": "该文档尚未提取，因此没有评估任何关系。",
+         "ar": "لم يُستخرج هذا المستند، لذا لم تُقيَّم أي علاقة.",
+         "fr": "Ce document n'a pas été extrait : aucune relation n'a été évaluée."},
+    "No template was attached to this run, so structural validation never ran.":
+        {"zh": "本次运行未附加模板，因此结构性校验从未运行。",
+         "ar": "لم يُرفق قالب بهذا التشغيل، لذا لم يُنفَّذ التحقق البنيوي إطلاقًا.",
+         "fr": "Aucun modèle n'était attaché à ce traitement : la validation structurelle n'a jamais eu lieu."},
+    "A template was attached but it declares no relation for this filing, so nothing was "
+    "checked. That is an authoring gap, not a clean result.":
+        {"zh": "已附加模板，但它没有为本次报告声明任何关系，因此什么都没有检查。这是规则编写的缺口，而不是干净的结果。",
+         "ar": "أُرفق قالب لكنه لا يعلن أي علاقة لهذا التقرير، فلم يُفحص شيء. هذه فجوة صياغة، وليست نتيجة سليمة.",
+         "fr": "Un modèle est attaché mais ne déclare aucune relation pour ce dépôt : rien n'a été contrôlé. C'est une lacune de rédaction, pas un résultat propre."},
+    "The seeded sample project carries no structural validation run.":
+        {"zh": "内置示例项目没有结构性校验运行记录。",
+         "ar": "المشروع النموذجي المُهيَّأ لا يحتوي على تشغيل تحقق بنيوي.",
+         "fr": "Le projet de démonstration ne comporte aucun traitement de validation structurelle."},
+    # the flip-sign edit comment + the edited-inputs caveat
+    "Sign flipped on the figure the structural check named as the one whose sign, reversed, "
+    "would satisfy the relation":
+        {"zh": "已对结构性校验指认的数字取反——该校验认为反转其符号即可使关系成立",
+         "ar": "تم قلب إشارة الرقم الذي حدده التحقق البنيوي بأن عكس إشارته يُحقّق العلاقة",
+         "fr": "Signe inversé sur le montant désigné par le contrôle structurel comme celui dont l'inversion satisferait la relation"},
+    "A figure this relation uses has been edited since it was evaluated. The relation is "
+    "re-evaluated on the next extraction.":
+        {"zh": "该关系所用的某个数字在其评估之后被修改过。该关系将在下一次提取时重新评估。",
+         "ar": "تم تعديل رقم تستخدمه هذه العلاقة بعد تقييمها. تُعاد تقييم العلاقة في الاستخراج التالي.",
+         "fr": "Un montant utilisé par cette relation a été modifié depuis son évaluation. La relation sera réévaluée lors de la prochaine extraction."},
+    # evidence-row labels for an accepted finding (same two-column shape as a check's `calc`).
+    # Several of these are also the labels on the live check cards, which were reaching a
+    # zh/ar/fr reader in English because they were never in this table.
+    "Total assets": {"zh": "资产总计", "ar": "إجمالي الأصول", "fr": "Total de l'actif"},
+    "Total equity and liabilities": {"zh": "权益与负债总计", "ar": "إجمالي حقوق الملكية والالتزامات",
+                                     "fr": "Total du passif et des capitaux propres"},
+    "Total equity per the balance sheet": {"zh": "资产负债表列示的权益总额",
+                                           "ar": "إجمالي حقوق الملكية حسب الميزانية العمومية",
+                                           "fr": "Total des capitaux propres selon le bilan"},
+    "Difference": {"zh": "差额", "ar": "الفرق", "fr": "Écart"},
+    "Face figure": {"zh": "表内数字", "ar": "الرقم في القائمة", "fr": "Montant au bilan"},
+    "Residual": {"zh": "余额差", "ar": "المتبقي", "fr": "Résidu"},
+    "Residual vs note total": {"zh": "与附注合计的差额", "ar": "المتبقي مقابل إجمالي الإيضاح",
+                               "fr": "Résidu par rapport au total de la note"},
+    "Yes": {"zh": "是", "ar": "نعم", "fr": "Oui"},
+    "No": {"zh": "否", "ar": "لا", "fr": "Non"},
+    "Closing balance": {"zh": "期末余额", "ar": "الرصيد الختامي", "fr": "Solde de clôture"},
+    "Computed": {"zh": "计算值", "ar": "محسوب", "fr": "Calculé"},
+    "Printed": {"zh": "文档打印值", "ar": "المطبوع", "fr": "Imprimé"},
+    "Value": {"zh": "数值", "ar": "القيمة", "fr": "Valeur"},
+    "Sign suspect": {"zh": "疑似符号错误项", "ar": "الإشارة المشتبه بها", "fr": "Signe suspect"},
+    "Components": {"zh": "组成部分", "ar": "المكونات", "fr": "Composantes"},
+    "Totals derived from the section subtotals":
+        {"zh": "合计由各分节小计推导得出", "ar": "المجاميع مشتقة من المجاميع الفرعية للأقسام",
+         "fr": "Totaux dérivés des sous-totaux de section"},
+    # orphaned-judgement subject phrasing
+    "Balance sheet identity": {"zh": "资产负债表恒等式", "ar": "معادلة الميزانية العمومية",
+                               "fr": "Équation du bilan"},
+    "Equity statement closing balance": {"zh": "权益变动表期末余额",
+                                         "ar": "الرصيد الختامي لقائمة التغيرات في حقوق الملكية",
+                                         "fr": "Solde de clôture de l'état des variations des capitaux propres"},
+    "Note": {"zh": "附注", "ar": "إيضاح", "fr": "Note"},
+    "Template relation": {"zh": "模板关系", "ar": "علاقة القالب", "fr": "Relation du modèle"},
+    "Printed subtotal": {"zh": "打印的小计", "ar": "المجموع الفرعي المطبوع",
+                         "fr": "Sous-total imprimé"},
+    "Unverified subtotal": {"zh": "未验证的小计", "ar": "مجموع فرعي غير مُتحقَّق منه",
+                            "fr": "Sous-total non vérifié"},
+    "Unmapped line": {"zh": "未映射的行", "ar": "سطر غير مُعيَّن", "fr": "Ligne non rattachée"},
+    "Low-confidence mapping": {"zh": "低置信度映射", "ar": "تعيين منخفض الثقة",
+                               "fr": "Rattachement à faible confiance"},
+    "A finding that is no longer raised": {"zh": "已不再提出的问题",
+                                           "ar": "ملاحظة لم تُعد تُرفع",
+                                           "fr": "Une anomalie qui n'est plus signalée"},
+})
+
+
+# A failed rulebook guard, and the one state in which the queue refuses to answer. Both are card
+# vocabulary, so both belong here: an untranslated string on a review card is a zh/ar/fr reader
+# being shown English, which is how several of the live check labels were reaching them before.
+_TR.update({
+    "Rulebook guard failed": {"zh": "规则手册的守卫检查未通过",
+                              "ar": "فشل شرط في كتاب القواعد",
+                              "fr": "Garde-fou du référentiel en échec"},
+    "Rule": {"zh": "规则", "ar": "القاعدة", "fr": "Règle"},
+    "Lines in violation": {"zh": "违反规则的行", "ar": "السطور المخالفة",
+                           "fr": "Lignes en infraction"},
+    # The low-confidence card's own subject matter: the mapping's method and how strong it was, plus
+    # the BAND the acceptance is fingerprinted on (`_confidence_evidence`). The band is labelled as a
+    # band in every locale, so nobody reads "40-49%" as the measured score.
+    "Source label": {"zh": "原始标签", "ar": "التسمية الأصلية", "fr": "Libellé source"},
+    "Mapped to": {"zh": "映射到", "ar": "مطابق إلى", "fr": "Rattaché à"},
+    "— (no confident match)": {"zh": "—（无可信匹配）", "ar": "— (لا تطابق موثوق)",
+                               "fr": "— (aucune correspondance fiable)"},
+    "Face lines that do not tie": {"zh": "未勾稽的报表行数", "ar": "سطور القوائم غير المطابَقة",
+                                   "fr": "Lignes non rapprochées"},
+    "Method": {"zh": "匹配方式", "ar": "طريقة المطابقة", "fr": "Méthode"},
+    "Confidence": {"zh": "置信度", "ar": "درجة الثقة", "fr": "Confiance"},
+    "Confidence band": {"zh": "置信度区间", "ar": "نطاق درجة الثقة",
+                        "fr": "Plage de confiance"},
+    # The note-tie card's at-a-glance magnitude. Translated here rather than left to fall back to
+    # English, for the reason the guard vocabulary above is: an untranslated card string is a
+    # zh/ar/fr reader shown English on the figure the card is titled after.
+    "Total break across the untied face lines":
+        {"zh": "未勾稽的报表行合计差额（取绝对值）",
+         "ar": "إجمالي الفروق على السطور غير المطابَقة (بالقيمة المطلقة)",
+         "fr": "Écart total sur les lignes non rapprochées (en valeur absolue)"},
+    "Violations": {"zh": "违反项数量", "ar": "عدد المخالفات", "fr": "Infractions"},
+    "The rulebook declares this must hold, and it does not for the lines listed. Check each one "
+    "against the document; the guard is re-evaluated on the next extraction.":
+        {"zh": "规则手册要求此条件必须成立，但所列各行并不满足。请逐行与文档核对；该守卫检查将在下次提取时重新评估。",
+         "ar": "يقرر كتاب القواعد أن هذا الشرط يجب أن يتحقق، ولم يتحقق للسطور المذكورة. راجع كل سطر مقابل المستند؛ ويُعاد تقييم الشرط في الاستخراج التالي.",
+         "fr": "Le référentiel exige que cette condition soit vérifiée ; elle ne l'est pas pour les lignes listées. Vérifiez chacune dans le document ; le garde-fou est réévalué à la prochaine extraction."},
+    "findings here share one identity but printed different figures, so the queue cannot tell "
+    "them apart. None of them can be accepted until the extraction distinguishes them.":
+        {"zh": "个问题共用同一标识，但打印的数字不同，因此队列无法区分它们。在提取能够区分它们之前，均不可被接受。",
+         "ar": "ملاحظات هنا تتشارك هوية واحدة لكنها طبعت أرقامًا مختلفة، فلا يمكن للقائمة التمييز بينها. لا يمكن قبول أي منها حتى يميّزها الاستخراج.",
+         "fr": "anomalies partagent ici une même identité mais affichent des montants différents : la file ne peut pas les distinguer. Aucune ne peut être acceptée avant que l'extraction ne les sépare."},
+    "A recorded acceptance for this identity is being withheld: it cannot be matched to one of "
+    "these findings, and attributing it to the wrong one would put a name against figures nobody "
+    "examined.":
+        {"zh": "针对该标识已记录的一项接受意见被暂缓采用：它无法与其中某一个问题对应，若归属错误，便会把某人的名字记在无人核对过的数字上。",
+         "ar": "قبولٌ مسجَّل لهذه الهوية مُعلَّق: لا يمكن مطابقته بإحدى هذه الملاحظات، ونسبته إلى الملاحظة الخطأ يضع اسمًا أمام أرقام لم يفحصها أحد.",
+         "fr": "Une acceptation enregistrée pour cette identité est suspendue : elle ne peut être rattachée à l'une de ces anomalies, et l'attribuer à la mauvaise apposerait un nom sur des montants que personne n'a examinés."},
+})
+
+
 def _t(s: str, locale: str) -> str:
     if not s or locale == "en":
         return s
@@ -279,10 +494,14 @@ def delete_document(
     """Delete a document the caller owns (admins may delete any), along with its extraction
     runs. The stored blob is content-addressed and de-duplicated, so it's only removed when
     no other document still references it."""
-    from app.db.models import Document, ExtractionRun
+    from app.db.models import Document, ExtractionRun, ReviewJudgement
 
     object_key = doc.object_key
     session.execute(sql_delete(ExtractionRun).where(ExtractionRun.document_id == doc.id))
+    # Children before the parent: both tables carry a FK to documents.id, and SQLite tolerates
+    # the wrong order while Postgres raises on it — so a deployment on the real database would
+    # 500 on every delete of a reviewed document if this ran after session.delete(doc).
+    session.execute(sql_delete(ReviewJudgement).where(ReviewJudgement.document_id == doc.id))
     session.delete(doc)
     session.commit()
 
@@ -422,12 +641,102 @@ def _latest_run(session: Session, document_id: str):
     ).scalars().first()
 
 
+def _run_template_id(run) -> str | None:
+    """Which template version a run was launched against — ONE spelling of the answer.
+
+    The id is written in two places when the run is created (the ``template_version_id`` column
+    and ``options["template_version_id"]``, routes/extractions.py), and either can be the only one
+    populated: a run built straight from ``options`` (as several fixtures and callers do) leaves
+    the column None. Answering the question in two places meant ``_coverage_block`` read the
+    column while the check builders read the option, so one response served template-derived
+    findings above a band stating no template was attached — the exact misread the band exists to
+    prevent, inside a single payload.
+    """
+    return run.template_version_id or (run.options or {}).get("template_version_id")
+
+
 def _prov_label(prov: dict | None) -> str:
+    """The HUMAN-FACING source label a card prints. Page-level on purpose — "p.1" is what the
+    reader wants to see. It is display text and nothing else: never put it in a judgement subject,
+    because two printed lines on one page share it. Use ``_prov_anchor`` for identity."""
     if not prov:
         return "—"
     if prov.get("source_kind") == "spreadsheet" and prov.get("sheet"):
         return f"{prov['sheet']}!{prov.get('cell', '')}"
     return f"p.{(prov.get('page_index', 0) or 0) + 1}"
+
+
+# Grid the normalized bbox is snapped to for the identity anchor: thousandths of the page.
+#
+# THE TWO FAILURE DIRECTIONS ARE NOT SYMMETRIC, so this number is chosen against the worse one.
+# Too COARSE and two separately printed lines land on one anchor: they collide on one subject_key,
+# and accepting one attributes a named reviewer's verdict to the other — a fabricated judgement,
+# which is unacceptable. Too FINE and OCR/re-render jitter moves a line's box across a bucket
+# boundary between runs: the anchor changes, the finding reads as new and RE-OPENS, and a reviewer
+# is asked to look at something they already looked at — annoying, and safe.
+#
+# So: err fine. On an A4 page (~842pt tall) a thousandth is ~0.84pt vertically, while the shortest
+# line a filing prints is ~7pt — eight buckets tall — so two printed lines cannot share a y
+# bucket, and x0/x1 separate two sub-tables printed side by side on the same baseline. Jitter is
+# normally a fraction of a point and lands in the same bucket; when it straddles a boundary the
+# finding re-opens, which is the direction we chose.
+#
+# Quantized to an INT rather than kept as a float: the digest must not be hostage to float
+# repr ("0.30000000000000004" vs "0.3" hash differently while naming one position).
+_ANCHOR_GRID = 1000
+
+
+def _snap(box, keys: tuple[str, ...]) -> str:
+    """``keys`` of one normalized box, snapped to ``_ANCHOR_GRID``, or "" if the box is not one."""
+    if not isinstance(box, dict) or not all(isinstance(box.get(k), (int, float))
+                                            for k in ("x0", "y0", "x1", "y1")):
+        return ""
+    return "/".join(str(int(round(float(box[k]) * _ANCHOR_GRID))) for k in keys)
+
+
+def _prov_anchor(prov: dict | None) -> str:
+    """A PRECISE, content-derived source locator, for the judgement subject only.
+
+    ``_prov_label`` returns "p.1" for every line on page 1, and a subject built on it makes two
+    printed lines one identity — which is how accepting an unmapped "Others 1,234" came to stamp
+    the accepting reviewer's name, time and reason onto a different unmapped "Others 5,678". The
+    anchor is derived from the geometry the extractor recorded instead
+    (core/models/geometry.py::Provenance), snapped to ``_ANCHOR_GRID``.
+
+    IT ANCHORS ON THE ROW LABEL, NEVER ON THE FIGURE. A subject must be independent of the numbers
+    the card prints: evidence changing means "stale, come look again", while a subject changing means
+    "different finding", which the screen reports as the old one having been corrected or no longer
+    raised. ``Provenance.bbox`` is the VALUE word's box (services/row_reconstruct.py), and a figure's
+    box moves when the figure does — "Cash and cash equivalents" printed 1,204 gave
+    p0#b798/101/840/118 and the same line printed 12,048 gave p0#b789/…, nine buckets left, because
+    right-aligned numbers grow leftwards. So an acceptance on the two check types this whole layer
+    was built around ORPHANED on a re-priced figure instead of going stale. ``label_bbox`` is the
+    caption's own geometry: it does not move when the amount beside it does, and
+    routes/extractions.py::_prov_dict carries it precisely so it can be used here.
+
+    Three fallbacks, in order, each giving up discrimination rather than faking it:
+
+    * a spreadsheet cell is already an exact address that no figure can move, so sheet + cell
+      (or the label cell) is used verbatim;
+    * a paginated source with no label geometry falls back to the value box's VERTICAL BAND alone —
+      the printed line's y extent, which right-alignment does not touch — and deliberately drops x0
+      and x1, which do move with the digit count. Two sub-tables printed on one baseline then share
+      an anchor, and ``judgement.apply_judgements`` refuses to attribute a judgement to either. A
+      refusal is honest; an anchor that silently follows a figure is not;
+    * ``#noprov`` when the value carries no provenance at all, and ``#nobox`` for a paginated source
+      with no geometry whatsoever (an adapter reporting a page and nothing else). Both are
+      page-level, so two such lines on one page collide into that same refusal.
+    """
+    if not prov:
+        return "#noprov"
+    if prov.get("sheet"):
+        return f"{prov['sheet']}!{prov.get('cell') or prov.get('label_cell') or ''}"
+    page = int(prov.get("page_index") or 0)
+    label = _snap(prov.get("label_bbox"), ("x0", "y0", "x1", "y1"))
+    if label:
+        return f"p{page}#l{label}"
+    band = _snap(prov.get("bbox") or prov.get("value_bbox"), ("y0", "y1"))
+    return f"p{page}#" + (f"y{band}" if band else "nobox")
 
 
 def _low_conf_threshold() -> float:
@@ -436,6 +745,50 @@ def _low_conf_threshold() -> float:
     from app.config import get_settings
 
     return get_settings().extraction.auto_accept_confidence
+
+
+# Width, in printed percentage points, of one confidence band. See `_confidence_evidence`.
+_CONF_BAND = 10
+
+
+def _confidence_evidence(conf, method) -> dict:
+    """The mapping's strength and method, as the low-confidence card's fingerprint carries them.
+
+    A low-confidence finding is a statement ABOUT THE MAPPING — "this label really is this concept,
+    weak score notwithstanding" — and the card prints the score twice (its collapsed ``delta`` and
+    its "Confidence" row) plus the method. Leaving them out of the evidence made the one thing the
+    finding is about unable to move the digest: 0.41/'fuzzy' accepted, then 0.02/'llm' served as
+    'accepted' with ``changed == []`` while the card read "Method llm · Confidence 2%" under the
+    reviewer's name. Every other served type fingerprints what it prints.
+
+    They are QUANTIZED rather than omitted, the same answer ``_prov_anchor`` gave to the same worry:
+
+    * ``confidence_band`` is the printed percentage floored into ``_CONF_BAND``-point bands, so 41%
+      and 44% are one band and a collapse to 2% is four bands away. THE FAILURE DIRECTIONS ARE NOT
+      SYMMETRIC and this is chosen on them: too coarse and a collapse hides behind an acceptance
+      nobody re-made, which puts a named verdict on a mapping that is now barely a guess; too fine
+      and a re-scored 0.41→0.39 withdraws a sound acceptance and nags. 10 points is the coarsest
+      band that cannot contain a collapse — the queue only raises this finding below the
+      auto-accept threshold, so the whole reachable range is a handful of bands and any real
+      deterioration crosses one. Jitter that straddles a band edge re-opens the finding, which is
+      the direction worth accepting: it asks for another look rather than asserting one happened.
+    * ``method`` is EXACT, unbucketed. A method change is not jitter — 'fuzzy' and 'llm' are
+      different kinds of evidence for the same claim, and a reviewer who accepted a fuzzy alias
+      match has not thereby accepted a model's guess. There is nothing to quantize: the value is
+      one of a handful of names, and a re-run does not wobble between them by accident.
+
+    ``None`` for a card raised by the ``low_mapping_confidence`` flag with no score at all: the band
+    is absent rather than a fabricated number, and the card prints "—" over the same absence.
+
+    The band is stored as the RANGE it stands for ("40-49%") and not as a bucket index, because this
+    dict is also what the accepted-figures panel renders back to a reader (``_evidence_rows``): "4"
+    under a confidence label would be a number that means nothing it appears to mean.
+    """
+    band = None
+    if isinstance(conf, (int, float)):
+        lo = (int(round(conf * 100)) // _CONF_BAND) * _CONF_BAND
+        band = f"{lo}-{min(lo + _CONF_BAND - 1, 100)}%"
+    return {"confidence_band": band, "method": str(method or "")}
 
 
 def _row_value(rows: list[dict], key: str, basis: str = "consolidated", period: str = "current"):
@@ -448,8 +801,19 @@ def _row_value(rows: list[dict], key: str, basis: str = "consolidated", period: 
     return _concept_value([r for r in rows if r.get("canonical_key") == key], basis, period)
 
 
+_BALANCE_KEYS = {
+    "assets": "bs_total_assets",
+    "assets_derived": ("bs_non_current_assets__total_non_current_assets",
+                       "bs_current_assets__total_current_assets"),
+    "eqliab": "bs_total_equity_and_liabilities",
+    "eqliab_derived": ("bs_equity__total_equity",
+                       "bs_non_current_liabilities__total_non_current_liabilities",
+                       "bs_current_liabilities__total_current_liabilities"),
+}
+
+
 def _balance_sides(rows: list[dict], basis: str, period: str) -> tuple[float | None, float | None,
-                                                                     bool]:
+                                                                      bool]:
     """The two sides of the accounting identity, derived from subtotals when the filing does
     not print the totals themselves.
 
@@ -458,43 +822,333 @@ def _balance_sides(rows: list[dict], basis: str, period: str) -> tuple[float | N
     the printed total meant the identity check silently never ran on exactly those filings.
     Both sides are reconstructed from the section subtotals instead, which the template already
     defines, so the identity is genuinely checked. Returns (assets, equity+liabilities,
-    whether either side was derived).
+    whether either side was derived, the concepts the two figures were actually read from).
+
+    That last element is what lets the queue say which extracted lines this finding NAMES without
+    a second function guessing at the same key list from the outside.
     """
     def v(key: str):
         return _row_value(rows, key, basis, period)
 
-    assets, derived = v("bs_total_assets"), False
-    if assets is None:
-        nca, ca = v("bs_non_current_assets__total_non_current_assets"), \
-            v("bs_current_assets__total_current_assets")
+    used: list[str] = []
+    assets, derived = v(_BALANCE_KEYS["assets"]), False
+    if assets is not None:
+        used.append(_BALANCE_KEYS["assets"])
+    else:
+        nca, ca = (v(k) for k in _BALANCE_KEYS["assets_derived"])
         if nca is not None and ca is not None:
             assets, derived = nca + ca, True
+            used += list(_BALANCE_KEYS["assets_derived"])
 
-    eqliab = v("bs_total_equity_and_liabilities")
-    if eqliab is None:
-        eq = v("bs_equity__total_equity")
-        ncl = v("bs_non_current_liabilities__total_non_current_liabilities")
-        cl = v("bs_current_liabilities__total_current_liabilities")
+    eqliab = v(_BALANCE_KEYS["eqliab"])
+    if eqliab is not None:
+        used.append(_BALANCE_KEYS["eqliab"])
+    else:
+        eq, ncl, cl = (v(k) for k in _BALANCE_KEYS["eqliab_derived"])
         if eq is not None and ncl is not None and cl is not None:
             eqliab, derived = eq + ncl + cl, True
-    return assets, eqliab, derived
+            used += list(_BALANCE_KEYS["eqliab_derived"])
+    return assets, eqliab, derived, used
 
 
-def _structural_checks(structural: list[dict], locale: str, covered: set[str]) -> list[dict]:
+def _flip_sign_action(res: dict, rows: list[dict], template_def: dict | None,
+                      locale: str) -> dict | None:
+    """The one MECHANICAL fix this product offers: reverse the sign of the single figure the
+    structural check already named as the culprit.
+
+    Every condition below refuses the button rather than offering one that would do the wrong
+    thing, because a button that lands on the wrong line is worse than prose telling the analyst
+    to look:
+
+    * the suspect is whichever concept ``_sign_suspect`` (structural_checks.py:510) named, and no
+      other. That function already declines to name a candidate when two tie, on the grounds that
+      a wrong pointer is worse than none; the judgement is reused here, never re-derived;
+    * exactly ONE printed row may map to the concept. PATCH replaces a multi-row concept's SUM
+      with the typed figure, so flipping a composed concept would destroy the composition — and
+      which of the printed lines carries the wrong sign is precisely what a human must decide;
+    * the slot must not already carry a typed figure. A machine flip must never overwrite an
+      analyst's value, which also means the button cannot be clicked twice; a revert brings
+      it back;
+    * the suspect must not be a template-CALCULATED subtotal. Flipping one writes an override the
+      rollup then honours, papering over the mis-signed component that is the actual defect.
+
+    Without ``template_def`` that last exclusion cannot be tested at all, and a fix that cannot
+    be checked is not offered.
+    """
+    from app.services.rollups import node_labels
+
+    d = res.get("details") or {}
+    suspect = d.get("sign_suspect")
+    basis, period = d.get("basis"), d.get("period_label")
+    if not template_def or not isinstance(suspect, str) or not suspect:
+        return None
+    if basis not in ("consolidated", "standalone") or not isinstance(period, str) or not period:
+        return None
+    group = [r for r in rows if r.get("canonical_key") == suspect]
+    if len(group) != 1 or _edited_for(group[0], basis, period):
+        return None
+    current = _concept_value(group, basis, period)
+    if not isinstance(current, (int, float)) or current == 0:
+        return None
+    if suspect in _calculated(rows, template_def, basis, period, locale):
+        return None
+    flipped = -float(current)
+    # The edit is recorded with the RULE that prompted it and the concept it names, so
+    # `edit_comments` says why the figure was changed rather than that it was.
+    reason = _t("Sign flipped on the figure the structural check named as the one whose sign, "
+                "reversed, would satisfy the relation", locale)
+    rule_id = res.get("rule_id") or ""
+    return {
+        "kind": "flip_sign", "canonical_key": suspect, "basis": basis, "period": period,
+        "label": node_labels(template_def, locale).get(suspect, suspect),
+        "from": float(current), "to": flipped,
+        # Formatted here, not in the browser: the card prints ':,.0f' everywhere and the client
+        # formats no figure — which is also why judgement.q quantizes evidence to whole units.
+        "from_display": f"{float(current):,.0f}", "to_display": f"{flipped:,.0f}",
+        "comment": f"{reason} ({rule_id}: {suspect})." if rule_id else f"{reason} ({suspect}).",
+    }
+
+
+def _structural_inputs_edited(d: dict, rows: list[dict], locale: str) -> dict:
+    """Whether a figure this relation uses has been typed over since the relation was evaluated.
+
+    ``run.result["structural"]`` is written once by the pipeline (routes/extractions.py:320) and
+    NOTHING recomputes it on an edit, so a structural card survives its own correction — including
+    the flip-sign fix — until the next extraction. Rather than let the card look like a button
+    that did nothing, it says so: after a successful flip ``fix_action`` becomes null (the slot is
+    now edited) and this note explains why the finding is still on screen.
+    """
+    # A guard's `target`/`components` are the FIRST violation and the rest, so on a guard the set
+    # that matters is `violations_keys` — every line the card lists. Naming only the first would
+    # under-report an edit exactly the way the guard's evidence used to under-report a violation.
+    keys = {d.get("target") or "", *(d.get("components") or []),
+            *(d.get("violations_keys") or [])}
+    basis, period = d.get("basis") or "consolidated", d.get("period_label")
+    edited = sorted({r.get("canonical_key") for r in rows
+                     if r.get("canonical_key") in keys and r.get("canonical_key")
+                     and _edited_for(r, basis, period)})
+    note = _t("A figure this relation uses has been edited since it was evaluated. The relation "
+              "is re-evaluated on the next extraction.", locale) if edited else ""
+    return {"inputs_edited": bool(edited), "inputs_edited_keys": edited,
+            "inputs_edited_note": note}
+
+
+def _guard_violation_label(v: dict) -> str:
+    """The lines one guard violation names, as the card's row label.
+
+    A violation dict is shaped by its predicate (``_guard_slot``): a signed key, an aggregate plus
+    the components loaded beside it, or a pair asserted equal. All of them are canonical keys, so
+    the label is locale-free by construction — the same reason a component list is keyed on
+    canonical_key rather than its localized label.
+    """
+    names = [str(x) for x in (v.get("key"), v.get("aggregate"), v.get("non_zero")) if x]
+    names += [str(x) for x in (v.get("equal") or [])]
+    names += [str(x) for x in (v.get("components") or [])]
+    label = " · ".join(dict.fromkeys(names))
+    return f"{label} ({v['expected']})" if v.get("expected") else label
+
+
+# The figure fields a violation can carry, in the order they are printed. Named explicitly rather
+# than "every numeric-looking value", so a new field in `_guard_slot` shows up as a missing figure
+# on the card (fix it here) instead of silently joining a fingerprint nobody displayed.
+_GUARD_FIGURE_FIELDS = ("value", "aggregate_value", "non_zero_value")
+
+
+def _guard_violations(d: dict) -> dict[str, str]:
+    """A guard's violation set as ``{lines: figures}`` — what the card prints and what the
+    evidence digest is taken over, so the two cannot disagree."""
+    from app.services import judgement
+
+    out: dict[str, str] = {}
+    for v in d.get("violations") or []:
+        figures = [f"{judgement.q(v[f]):,.0f}" for f in _GUARD_FIGURE_FIELDS
+                   if v.get(f) is not None]
+        out[_guard_violation_label(v)] = " / ".join(figures) if figures else "—"
+    return out
+
+
+def _guard_check(res: dict, d: dict, locale: str) -> dict:
+    """A failed rulebook GUARD as a review item, fingerprinted on its VIOLATION SET.
+
+    A guard leaves ``RuleResult.expected``/``actual``/``difference`` at their None defaults
+    (core/models/reports.py:38-40) and puts everything it asserts in ``details.violations`` /
+    ``violations_keys``. Built like an arithmetic relation, its card therefore printed "Reported 0
+    · Sum of template components 0 · Difference 0" — three numbers derived from nothing — and
+    fingerprinted exactly those constants. An acceptance on a guard could then NEVER go stale: a
+    mapping regression that took the same BLOCKING guard from one violated key to nine left the
+    subject unchanged and the evidence byte-identical, so nine violations came back as 'accepted'
+    by a person who examined one, dropped out of ``summary.open``, out of the red counter and out
+    of the commentary's data-quality count. The stale mechanism was structurally unreachable for
+    every guard kind — sign_expectation, consolidation_eliminated, mutually_exclusive,
+    equal_values, equal_while_third_non_zero.
+
+    So the card shows the violation set and the digest is taken over the same set: it moves when a
+    violation is added, removed, or its figure changes. ``delta`` is "—" rather than a computed
+    zero, because a guard has no difference to report.
+
+    THE SUBJECT IS THE GUARD, AND NOTHING THE VIOLATIONS OR THE RULEBOOK'S ORDER DECIDE. It used to
+    be ``{rule_id, scope, target}``, and both halves of that were wrong:
+
+    * ``rule_id`` is ``guard:{predicate}:{keys[0]}`` (structural_checks.py), so two rulebook
+      sentences sharing a predicate and a first key were ONE identity — verified against the real
+      loader with two ``equal to`` sentences both starting bs_equity__non_controlling_interests.
+      Run 1 fails sentence A and a reviewer accepts; run 2 sentence A passes and sentence B fails,
+      and B was served 'stale' carrying A's reviewer, A's reason and A's figures on a BLOCKING
+      finding nobody had examined. ``structural_checks._unique`` then made the id unique by
+      appending the sentence's 1-based ORDINAL among those sharing the base id — and an ordinal is a
+      fact about POSITION, about neither the guard nor its figures. Deleting an unrelated sentence A
+      renumbered a byte-identical, still-failing sentence B from ``…#2`` to ``…#1``, which moved
+      subject_key and orphaned the acceptance under "corrected, or no longer raised". So the id is
+      not in the identity at all: the sentence itself and the operands it names are, and those
+      cannot be moved by another sentence being edited, added or removed. The id stays on the card
+      (``id``/``where``) for the SCREEN's DOM key and coverage's per-rule alarms, which have only
+      the id — a stored judgement is not pinned to it;
+    * ``target`` is ``violations[0]["key"]`` for sign_expectation — DERIVED FROM THE FIGURES. One
+      more violated key changed the SUBJECT, so the acceptance detached and the screen reported the
+      finding as corrected or no longer raised while the blocking guard was failing on MORE lines
+      than when it was accepted. A subject must move only when the claim changes; a figure moving
+      belongs in the evidence, where it reads as 'stale' — come look again.
+
+    ``rule`` is whitespace/case-collapsed (``judgement.norm``): re-wrapping a rulebook sentence is
+    not a different assertion, while re-writing it is — and that legitimately withdraws an
+    acceptance made against what the sentence used to say.
+    """
+    from app.services import judgement
+
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    violations = _guard_violations(d)
+    keys = ", ".join(sorted(d.get("violations_keys") or []))
+    asserts = [str(k) for k in (d.get("guard_keys") or [])]
+    calc = [[L("Rule"), str(d.get("rule_text") or d.get("guard") or ""), False],
+            [L("Lines in violation"), keys or "—", True],
+            [L("Violations"), str(len(violations)), False]]
+    # The operands the SENTENCE names, printed because they are part of the identity a reviewer's
+    # acceptance is pinned to — and because they are what distinguishes this guard from another one
+    # the rulebook may state under the same predicate. sign_expectation names none: it scans every
+    # concept with a declared sign convention, and the row would be an empty assertion.
+    if asserts:
+        calc.append([L("Concepts the rule names"), " · ".join(asserts), False])
+    calc += [[label, figures, False] for label, figures in violations.items()]
+    return {
+        "id": f"chk-guard-{res.get('rule_id')}-{res.get('scope_key')}",
+        "type": "structural", "icon": "≠",
+        "title": L("Rulebook guard failed"),
+        "where": f"{res.get('rule_id')} · {res.get('scope_key')}",
+        "severity": L("Check failed"), "tone": "high",
+        # No difference exists for a guard: it asserts a condition, not an equality.
+        "delta": "—", "target": d.get("target") or "",
+        # Every line in the violation set — the card lists them all, so a finding stands against
+        # each. `target` is only the first of them.
+        "names": sorted(str(k) for k in (d.get("violations_keys") or []) if k),
+        "calc": calc,
+        "fix": L("The rulebook declares this must hold, and it does not for the lines listed. "
+                 "Check each one against the document; the guard is re-evaluated on the next "
+                 "extraction."),
+        # A guard is not an arithmetic relation, so it does not share the relation's subject kind:
+        # the two carry different fields, and one `k` over two shapes is how `target` came to mean
+        # "the declared total" on one card and "whichever key happened to break first" on the other.
+        "subject": {"k": "guard",
+                    "scope": str(res.get("scope_key") or ""),
+                    "predicate": str(d.get("guard") or d.get("op") or ""),
+                    "asserts": asserts,
+                    "rule": judgement.norm(d.get("rule_text") or "")},
+        "evidence": {
+            # The violation set, and its size beside it so a set that grew still moves the digest
+            # even if two violations were to render under one label.
+            "violations": violations,
+            "violation_count": len(violations),
+            "violations_keys": keys,
+        },
+        # A guard names no single suspect figure (`sign_suspect` is None by construction), so there
+        # is no mechanical fix to offer — and a button that cannot land on one line is not offered.
+        "fix_action": None,
+    }
+
+
+def _suppression_targets(checks: list[dict]) -> set[str]:
+    """The targets served cards OWN — the only ones that may suppress a second card about one figure.
+
+    A GUARD OWNS NOTHING HERE, and that is the whole point of the function. A guard card's ``target``
+    is ``violations[0]["key"]`` under sign_expectation (services/structural_checks.py::_guard_slot),
+    derived from the FIGURES — so letting it into this set means WHICH LINE IS MIS-SIGNED decides
+    whether a different card exists: mis-sign bs_total_equity_and_liabilities and the "Printed subtotal
+    could not be verified" card for that very line disappears from the queue. That is the defect that
+    dropped the guard card itself (see ``_structural_checks``), one field along, and it got worse the
+    moment guards started being emitted unconditionally — so both suppression sets are built here.
+
+    Every other kind's ``target`` is DECLARED: the balance identity's side, the note the tie is about,
+    a relation's template target, a calculated line's key. Those may legitimately stop a second card
+    restating the same difference.
+    """
+    return {c["target"] for c in checks
+            if c.get("target") and (c.get("subject") or {}).get("k") != "guard"}
+
+
+def _relation_reported_elsewhere(res: dict, covered: set[str]) -> bool:
+    """True when this failed ARITHMETIC relation's difference is already raised by a card above it.
+
+    ONE spelling of the suppression, read by the emitter (``_structural_checks``) and by the count
+    the coverage band prints beside its failed bucket (``failed_reported_elsewhere``). The two used
+    to be two expressions of one decision, and they disagreed about guards: the emitter dropped a
+    guard whose figure-derived ``details.target`` collided with a target the balance card owned,
+    while the count reported that guard as "reported elsewhere" when NOTHING reported it.
+
+    A GUARD IS NEVER SUPPRESSED. `covered` exists to stop an arithmetic relation restating the
+    difference the balance / equity / note card already prints; a guard asserts a condition rather
+    than an equality, so it is not a duplicate of any of them — and its ``target`` is derived from
+    the violations for several predicates, which may not decide whether a card exists (see
+    ``_structural_checks``).
+    """
+    d = res.get("details") or {}
+    if res.get("status") != "fail":
+        return False
+    if res.get("kind") == "guard" or d.get("guard"):
+        return False
+    return (d.get("target") or "") in covered
+
+
+def _structural_checks(structural: list[dict], locale: str, covered: set[str],
+                       rows: list[dict] | None = None,
+                       template_def: dict | None = None) -> list[dict]:
     """Failed template-structure relations as review items (from the structural stage).
 
     Only ``fail`` rows become checks: a ``skipped`` row means the relation could not be
     evaluated because a participant was never extracted, which is a coverage fact, not a
     defect. Relations whose total already has its own check (the balance identity) are left to
     it so the analyst doesn't see the same difference twice.
+
+    The fix action and the edited-inputs note are derived HERE rather than by the caller because
+    the relation's ``details`` dict is what both need: carrying it out on the payload just so a
+    later pass could re-read it would be the same data in two places.
+
+    A GUARD is not an arithmetic relation and gets its own card — see ``_guard_check`` — and it is
+    emitted whatever is in ``covered``: see ``_relation_reported_elsewhere``.
     """
+    from app.services import judgement
+
     def L(s: str) -> str:
         return _t(s, locale)
 
     out: list[dict] = []
     for res in structural:
         d = res.get("details") or {}
-        if res.get("status") != "fail" or d.get("target") in covered:
+        if res.get("status") != "fail":
+            continue
+        # THE GUARD BRANCH COMES FIRST, AND NO SUPPRESSION TEST RUNS BEFORE IT. `covered` used to be
+        # tested one line above this branch, and for sign_expectation `details.target` is
+        # `violations[0]["key"]` (services/structural_checks.py::_guard_slot) — derived from the
+        # FIGURES. So a run that mis-signed one more line could move the guard's target onto
+        # bs_total_assets, which the balance card owns, and the whole guard card vanished from the
+        # queue: the reviewer's acceptance was then reported as orphaned under "corrected, or no
+        # longer raised" while the rulebook rule was failing on two lines and nothing anywhere showed
+        # it. Whether a card EXISTS may not be decided by a figure-derived field.
+        if res.get("kind") == "guard" or d.get("guard"):
+            out.append({**_guard_check(res, d, locale),
+                        **_structural_inputs_edited(d, rows or [], locale)})
+            continue
+        if _relation_reported_elsewhere(res, covered):
             continue
         expected, actual = float(res.get("expected") or 0), float(res.get("actual") or 0)
         suspect = d.get("sign_suspect")
@@ -515,29 +1169,135 @@ def _structural_checks(structural: list[dict], locale: str, covered: set[str]) -
             "where": f"{d.get('target')} · {res.get('scope_key')}",
             "severity": L("Check failed"), "tone": "high",
             "delta": f"{actual - expected:,.0f}", "target": d.get("target") or "",
+            # The total AND its components: the card prints every component's figure and tells the
+            # analyst to check them, so each of those lines is named by this finding.
+            "names": [k for k in [d.get("target") or "", *(d.get("components") or [])] if k],
             "calc": calc, "fix": fix,
+            # WHAT THE RELATION ASSERTS, and ONLY that: the target, the operator and the components,
+            # in declared order (order carries the signs for a `diff`). An authored identity id is
+            # free text, so two rulebook entries can share one; with only {rule_id, scope, target} in
+            # the subject, run 1 failing entry A and run 2 failing entry B served B as 'stale' under
+            # A's reviewer and A's reason. Every field here is DECLARED by the template or the
+            # rulebook and moves only when the rule is re-authored — which is exactly when an
+            # acceptance made against what the rule used to assert should detach.
+            #
+            # `rule_id` is NOT here, for the same reason it left the guard subject (see
+            # `_guard_check`): `structural_checks._unique` disambiguates a repeated authored id by
+            # appending the entry's 1-based ORDINAL, which is a fact about POSITION in the rulebook.
+            # Deleting an unrelated entry that shared the id renumbers a byte-identical, still-failing
+            # relation from `dup#2` to `dup`, and a positional identity would then report that
+            # acceptance as "corrected, or no longer raised". The id stays on the card's `id` and
+            # `where`, which is what the screen and coverage's per-rule alarms key on.
+            # Nothing derived from the figures may go in either: see `_guard_check`.
+            "subject": {"k": "structural",
+                        "scope": str(res.get("scope_key") or ""),
+                        "target": str(d.get("target") or ""),
+                        "op": str(d.get("op") or ""),
+                        "components": [str(c) for c in (d.get("components") or [])]},
+            "evidence": {
+                "actual": judgement.q(actual), "expected": judgement.q(expected),
+                "diff": judgement.q(actual - expected),
+                "components": {k: judgement.q(float(v))
+                               for k, v in (d.get("component_values") or {}).items()},
+                "sign_suspect": suspect or None,
+            },
+            "fix_action": _flip_sign_action(res, rows or [], template_def, locale),
+            **_structural_inputs_edited(d, rows or [], locale),
         })
+    return out
+
+
+def _untied_by_note(reconciliation: list[dict]) -> dict[tuple, list[dict]]:
+    """The untied reconciliation entries grouped by (note, basis, period).
+
+    Reconciliation records one entry per FACE LINE per note (stages/reconcile.py), and one note
+    legitimately breaks down several face lines. The queue asks ONE question per note — "this note
+    does not tie" — so the entries are grouped rather than deduplicated: taking the first and
+    dropping the rest is how a second face line out by 2,000,000 appeared on no screen at all.
+    """
+    groups: dict[tuple, list[dict]] = {}
+    for ent in reconciliation:
+        if tie_status(ent) != "untied":
+            continue
+        groups.setdefault((ent.get("note_number"), ent.get("basis"),
+                           ent.get("period_label")), []).append(ent)
+    return groups
+
+
+def _note_tie_entries(group: list[dict]) -> dict[str, str]:
+    """One note's untied face lines as ``{face line: "face / residual"}`` — what the card prints
+    and what the evidence digest is taken over, so the two cannot disagree.
+
+    Keyed on ``face_key`` (the canonical key, or the printed caption for a face line that mapped to
+    nothing) and NOT on ``face_item_id``, which is a fresh UUID every run: a digest over per-run
+    ids would report every acceptance as stale on every re-extraction. Sorted by content, not by
+    the order the stage happened to emit, so two runs that found the same set hash alike; two
+    entries that would share a label (two printed lines mapping to one concept, or a run stored
+    before ``face_key`` existed) are numbered, because collapsing them into one dict key would drop
+    a break off the card — the very defect this shape closes.
+    """
+    from app.services import judgement
+
+    def figures(ent: dict) -> str:
+        return f"{judgement.q(float(ent.get('raw_face') or 0)):,.0f} / " \
+               f"{judgement.q(float(ent.get('residual') or 0)):,.0f}"
+
+    ordered = sorted(group, key=lambda e: (str(e.get("face_key") or ""),
+                                           judgement.q(float(e.get("residual") or 0)),
+                                           judgement.q(float(e.get("raw_face") or 0))))
+    out: dict[str, str] = {}
+    for ent in ordered:
+        label = str(ent.get("face_key") or "") or "—"
+        if label in out:
+            n = 2
+            while f"{label} ({n})" in out:
+                n += 1
+            label = f"{label} ({n})"
+        out[label] = figures(ent)
     return out
 
 
 def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str,
                        structural: list[dict] | None = None,
-                       template_def: dict | None = None) -> list[dict]:
+                       template_def: dict | None = None,
+                       stats: dict | None = None) -> list[dict]:
     """Failed accounting validations for the review queue (Req 11): the balance-sheet
     identity, note→face ties, the template's structural relations, and — since the face now
     carries the COMPUTED figure for every calculated line — what the document printed instead.
-    Computed from the real extracted values."""
+    Computed from the real extracted values.
+
+    Each check also carries a locale-free ``subject`` (WHAT is being asserted) and ``evidence``
+    (the figures asserted about it), because only the builder knows the semantics. They are what a
+    human judgement is keyed on — see services/judgement.py for why that is not the check id.
+
+    ``stats`` is an out-parameter for one quantity the caller cannot recompute without repeating
+    this function's work: how many failed relations were suppressed because their target already
+    has its own check. The coverage panel needs it, and deriving it from a second pass over the
+    same rows is exactly the two-places-computing-one-count bug.
+
+    Every check also carries ``names``: the canonical keys of the extracted lines the card actually
+    indicts. Only the builder knows them — the balance identity names both sides (the section
+    subtotals when a side was reconstructed from them), a guard names every line in its violation
+    set, a note tie names every face line that did not tie — and the review header's third tile
+    counts the lines NOT in any of them, so a second pass guessing at this list from the outside is
+    the two-places-computing-one-count bug again.
+    """
+    from app.services import judgement
+
     def L(s: str) -> str:
         return _t(s, locale)
 
     checks: list[dict] = []
-    a, e, derived = _balance_sides(rows, "consolidated", "current")
+    a, e, derived, sides = _balance_sides(rows, "consolidated", "current")
     if a is not None and e is not None and abs(a - e) > 1:
         checks.append({
             "id": "chk-balance", "type": "balance", "icon": "≠",
             "title": L("Balance sheet does not balance"), "where": L("Balance sheet identity"),
             "severity": L("Check failed"), "tone": "high", "delta": f"{a - e:,.0f}",
             "target": "bs_total_assets",
+            # BOTH sides, and the subtotals a reconstructed side was read from: the card prints
+            # each of those figures, so each of those lines has a finding against it.
+            "names": sides,
             "calc": [
                 [L("Total assets"), f"{a:,.0f}", False],
                 [L("Total equity and liabilities"), f"{e:,.0f}", True],
@@ -545,6 +1305,15 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
             ] + ([[L("Totals derived from the section subtotals"), "", False]] if derived else []),
             "fix": L("Assets do not equal equity plus liabilities. Check the extracted totals "
                      "and their components against the document."),
+            # basis/period are recorded explicitly even though this check is hardcoded to the
+            # consolidated current column today: if it ever runs per basis, an existing acceptance
+            # stays pinned to the pair it was made on instead of silently widening to cover both.
+            "subject": {"k": "balance", "basis": "consolidated", "period": "current"},
+            # `derived` is on the card ("Totals derived from the section subtotals"), so it is part
+            # of what the human judged — the same difference reached from printed totals is a
+            # different claim from one reached from reconstructed ones.
+            "evidence": {"assets": judgement.q(a), "eqliab": judgement.q(e),
+                         "diff": judgement.q(a - e), "derived": bool(derived)},
         })
     # The statement of changes in equity must END where the balance sheet says equity stands.
     # It is the one relation that crosses two statements, and it is worth checking precisely
@@ -559,6 +1328,15 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
             "where": L("Statement of changes in equity"),
             "severity": L("Check failed"), "tone": "high",
             "delta": f"{eq_close[1] - bs_equity:,.0f}", "target": "bs_equity__total_equity",
+            # BOTH lines: the balance sheet's equity total AND the equity statement's closing row.
+            # The comment here used to say the closing row "is a matrix row, not one of `rows`",
+            # which was false — `_equity_closing` iterates `_matrix_rows(rows, basis)`, which FILTERS
+            # `rows`, so the row it returns IS one of them. The card prints that row's caption and its
+            # figure and tells the analyst to check it, and the header tile was counting it as "a line
+            # with no finding" while this card indicted it. It is named by canonical_key when it has
+            # one and by its printed caption otherwise, which is the only handle an unmapped matrix
+            # row has (see `_build_review`, which matches rows on either).
+            "names": sorted({"bs_equity__total_equity", eq_close[2]} - {""}),
             "calc": [
                 [eq_close[0], f"{eq_close[1]:,.0f}", False],
                 [L("Total equity per the balance sheet"), f"{bs_equity:,.0f}", True],
@@ -566,38 +1344,95 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
             ],
             "fix": L("The closing balance of the equity statement should equal total equity on "
                      "the balance sheet. Check both figures against the document."),
+            "subject": {"k": "equity_tie", "basis": "consolidated", "period": "current"},
+            # The CAPTION of the row taken as the closing balance is on the card (it is the first
+            # calc row's label), so it is fingerprinted: a re-run that picks a DIFFERENT closing row
+            # carrying the same figure is a different claim, and it used to keep the acceptance
+            # silently. Normalized, because re-parsing a page legitimately shifts a caption's
+            # spacing and that is not a different row. It is evidence and not subject: which row
+            # closes the statement is a figure-level fact this check discovers, not the thing being
+            # asserted, so a change means "come look again" rather than "different finding".
+            "evidence": {"closing_label": judgement.norm(eq_close[0]),
+                         "closing": judgement.q(eq_close[1]),
+                         "bs_equity": judgement.q(bs_equity),
+                         "diff": judgement.q(eq_close[1] - bs_equity)},
         })
     # Only a note that IS a breakdown of the face figure, yet does not tie, is a finding. An
     # "unconfirmed" entry means the cited note is an analysis/segment/commitments table rather
     # than a decomposition — raising those turned the queue into hundreds of non-findings.
-    # One item per (note, basis, period): a note spanning several tables asks one question.
-    seen_ties: set[tuple] = set()
-    for ent in reconciliation:
-        if tie_status(ent) != "untied":
-            continue
-        note = ent.get("note_number")
-        ident = (note, ent.get("basis"), ent.get("period_label"))
-        if ident in seen_ties:
-            continue
-        seen_ties.add(ident)
+    for ident, group in _untied_by_note(reconciliation).items():
+        note, basis, period = ident
+        entries = _note_tie_entries(group)
+        # THE SUMMARY FIGURE OF A CARD TITLED "DOES NOT TIE" MUST NOT BE ABLE TO BE ZERO.
+        # `residual = raw_face - note_total` is SIGNED and TIE_UNTIED only bounds abs(residual)
+        # (services/reconcile.py), so a note breaking +2,000,000 on one face line and −2,000,000 on
+        # another summed to 0: the card served tone 'high', title "Note does not tie to the face
+        # figure", delta '0' and a highlighted row reading "0" — and `evidence['residual']` cancelled
+        # with it, so the fingerprint's own summary was blind to both breaks growing in step. The
+        # figure is now the sum of the ABSOLUTE residuals: it is the total break across the untied
+        # face lines, it can only be zero when nothing is untied, and no two lines can cancel it. The
+        # per-entry residuals stay SIGNED in `entries` — the direction is the truth about each line,
+        # and a reader needs it to know which side the note is out on.
+        total_break = sum(abs(float(ent.get("residual") or 0)) for ent in group)
         checks.append({
-            "id": f"chk-note-{note}-{ent.get('basis')}-{ent.get('period_label')}",
+            "id": f"chk-note-{note}-{basis}-{period}",
             "type": "note_tie", "icon": "≠",
             "title": L("Note does not tie to the face figure"),
-            "where": f"Note {note} · {ent.get('basis')}/{ent.get('period_label')}",
+            "where": f"Note {note} · {basis}/{period}",
             "severity": L("Check failed"), "tone": "high",
-            "delta": f"{float(ent.get('residual') or 0):,.0f}", "target": f"note:{note}",
-            "calc": [
-                [L("Face figure"), f"{float(ent.get('raw_face') or 0):,.0f}", False],
-                [L("Residual vs note total"), f"{float(ent.get('residual') or 0):,.0f}", True],
-            ],
-            "fix": L("The note's detail rows do not sum to the face figure it supports. "
-                     "Verify the note breakdown and the face value."),
+            # Every face line that does not tie, as a total that cannot cancel — never the first
+            # one's residual passed off as the note's, which is what "Residual vs note total 20" said
+            # over a second face line out by 2,000,000 on the same note.
+            "delta": f"{total_break:,.0f}", "target": f"note:{note}",
+            # EVERY untied face line, not the first: the card indicts each of them, and the header
+            # tile counts the lines no finding names.
+            "names": sorted({str(ent.get("face_key") or "") for ent in group} - {""}),
+            "calc": [[L("Face lines that do not tie"), str(len(entries)), False],
+                     # Named for what it IS: the total break, not a "total residual", because a
+                     # residual is signed and this is the sum of their magnitudes. One quantity, one
+                     # spelling — the same label the accepted-figures panel shows it under.
+                     [L("Total break across the untied face lines"),
+                      f"{total_break:,.0f}", True],
+                     *([label, figures, False] for label, figures in entries.items())],
+            "fix": L("The note's detail rows do not sum to the face figure(s) it supports. "
+                     "Verify the note breakdown and each face value listed."),
+            # WHICH note, and nothing about which face lines broke. Reconciliation holds one entry
+            # per FACE LINE (stages/reconcile.py keys on (face_item_id, note_number)) and
+            # link_notes has a first-class NOTE_SPLITS_TO_MANY_FACE relationship, so several face
+            # lines citing one note is normal, not an anomaly. This card speaks for all of them, and
+            # the untied SET therefore lives in the evidence rather than the subject: a set that
+            # grows must read as 'stale' — come look again — and never as a subject that changed,
+            # which the screen would caption as the finding having been corrected while a
+            # nine-figure break was still on it.
+            "subject": {"k": "note_tie", "note": str(note),
+                        "basis": str(basis or ""), "period": str(period or "")},
+            # Every entry the card prints, and the count beside them so a set that grew still moves
+            # the digest even if two face lines were to render under one label. The old evidence was
+            # the FIRST entry's face and residual, so a reviewer who accepted "out by 20; the note
+            # rounds" kept an 'accepted' card while two further face lines on the same note went out
+            # by 2,000,000 and 900,000,000 — byte-identical evidence, and both breaks dropped out of
+            # summary.open and out of the commentary's data-quality count.
+            # `total_break` and not the signed sum: the digest's own summary figure used to cancel
+            # exactly as the card's did, so a +2,000,000 and a −2,000,000 break both growing to
+            # ±9,000,000 left it at 0. The per-entry residuals are what actually discriminate, and the
+            # magnitude beside them can no longer be zero while a break is on the card.
+            "evidence": {"entries": entries, "entry_count": len(entries),
+                         "total_break": judgement.q(total_break)},
         })
-    checks += _structural_checks(structural or [], locale,
-                                 covered={c["target"] for c in checks})
+    covered = _suppression_targets(checks)
+    checks += _structural_checks(structural or [], locale, covered=covered,
+                                 rows=rows, template_def=template_def)
+    if stats is not None:
+        # Derived from the SAME `covered` set AND the same predicate the emitter used, in the same
+        # call: `_structural_checks` drops a failed relation whose target already has its own check,
+        # so coverage.failed can legitimately exceed the number of structural cards. Counting it
+        # anywhere else — or with a second expression of "was this suppressed" — is how the panel
+        # starts lying, and it did: this sum counted a dropped GUARD as reported elsewhere while no
+        # card anywhere reported it.
+        stats["failed_reported_elsewhere"] = sum(
+            1 for res in (structural or []) if _relation_reported_elsewhere(res, covered))
     checks += _calculated_checks(rows, template_def, locale,
-                                 covered={c["target"] for c in checks})
+                                 covered=_suppression_targets(checks))
     return checks
 
 
@@ -616,10 +1451,17 @@ def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
 
     Relations that already have their own check (the balance identity) are left to it, so the same
     difference is never raised twice.
+
+    NEITHER finding offers a mechanical fix, and the mismatch case is the important one: writing
+    the PRINTED figure over the computed subtotal would close the card while hiding the
+    mis-mapped, missing or double-counted component that caused it. That is the anti-fix — it
+    makes the symptom disappear and leaves the defect — so no button is offered and nobody may
+    re-add one.
     """
     def L(s: str) -> str:
         return _t(s, locale)
 
+    from app.services import judgement
     from app.services.rollups import node_labels
 
     if not template_def:
@@ -654,11 +1496,29 @@ def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
                     "title": L("Printed subtotal could not be verified"),
                     "where": where, "severity": L("Not computable"), "tone": "med",
                     "delta": "—", "target": key,
+                    # The subtotal itself; its components are by definition not extracted here
+                    # (that is what "uncomputed" means), so there is no extracted line to name.
+                    "names": [key],
+                    # COUNTED, not the literal "0" this row used to print. It is always zero here
+                    # (`computable` is False exactly when no component carried a value), but a
+                    # number on a card has to be derived from the data it sits above — otherwise a
+                    # later change to what "not computable" means leaves a false 0 behind.
                     "calc": [[L("Printed in the document"), f"{reported:,.0f}", True],
-                             [L("Components extracted"), "0", False], *parts],
+                             [L("Components extracted"),
+                              str(sum(1 for comp in c.components if comp.value is not None)),
+                              False], *parts],
                     "fix": L("None of the lines this subtotal is made of were extracted, so it "
                              "could not be recomputed. The printed figure is on the face "
                              "unverified — map its components, or accept it as reported."),
+                    "subject": {"k": "uncomputed", "key": key, "basis": basis,
+                                "period": "current"},
+                    # This check's `delta` is the literal "—", so `reported` is the ONLY thing
+                    # standing between an acceptance and a silently changed printed figure.
+                    # Components are keyed by canonical_key, never comp.label, which
+                    # node_labels() localizes — a locale must not change an identity.
+                    "evidence": {"reported": judgement.q(reported),
+                                 "components": {comp.canonical_key: judgement.q(comp.value)
+                                                for comp in c.components}},
                 })
                 continue
             if reported is None:
@@ -671,24 +1531,362 @@ def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
                 "title": L("Printed subtotal differs from its components"),
                 "where": where, "severity": L("Check failed"), "tone": "high",
                 "delta": f"{diff:,.0f}", "target": key,
+                # The printed subtotal and every component the card lists beside it: the fix text
+                # tells the analyst to check those components against the page.
+                "names": [key, *(comp.canonical_key for comp in c.components
+                                 if comp.canonical_key)],
                 "calc": [[L("Printed in the document"), f"{reported:,.0f}", False],
                          [L("Computed from components"), f"{c.value:,.0f}", True],
                          [L("Difference"), f"{diff:,.0f}", False], *parts],
                 "fix": L("The face shows the computed figure. The document printed a different "
                          "one, so a component is mis-mapped, missing, or double-counted — check "
                          "the components below against the page."),
+                "subject": {"k": "calculated_mismatch", "key": key, "basis": basis,
+                            "period": "current"},
+                "evidence": {"reported": judgement.q(reported),
+                             "computed": judgement.q(c.value),
+                             "diff": judgement.q(c.value - reported),
+                             "components": {comp.canonical_key: judgement.q(comp.value)
+                                            for comp in c.components}},
             })
     return out
+
+
+# --- Coverage contract, presented ------------------------------------------------------------
+# NOTHING NEW IS PERSISTED. `run.result["structural"]` is already the substrate — every relation
+# row, pass, fail and skip alike, written once at routes/extractions.py:320 — and
+# services/coverage.py exists so the report can be recomputed from a stored run months later. A
+# stored snapshot would be a second copy of numbers whose source sits in the same JSON column of
+# the same row, and it would drift from the failures the same response lists (an unknown skip
+# reason deliberately routes to UNCLASSIFIED, so the taxonomy WILL gain entries).
+#
+# It is derived at the point it is SERVED, inside GET /documents/{id}/review rather than on an
+# endpoint of its own: one fetch, one run. A separate endpoint could show run A's coverage above
+# run B's findings, which is this module's own trap in miniature.
+#
+# ACCEPTING A FINDING NEVER CHANGES COVERAGE. A failed relation stays failed:1 while its finding
+# reads "accepted". Judgement is about findings; coverage is about what was evaluable. Collapsing
+# the two would rebuild the trap coverage.py exists to prevent.
+_COVERAGE_STATUS_LABELS = {
+    "UNVALIDATED": "Nothing verified", "PARTIAL": "Partly verified", "FAILED": "Failed",
+    "PASSED": "Fully verified", "ABSENT": "Not in this filing",
+}
+
+# Buckets in the order a reader should meet them: recoverable first, structurally unrecoverable
+# next, authoring defects after that, and the one bucket outside the denominator last. Only
+# buckets PRESENT in the report are served — a zero row invites the reader to average them.
+_COVERAGE_SKIP_ORDER = ("INPUT_ABSENT", "TAUTOLOGICAL", "NO_REPORTED_SUBTOTAL",
+                        "UNEVALUABLE_RULE", "UNCLASSIFIED", "STATEMENT_ABSENT")
+_COVERAGE_SKIPS = {
+    "INPUT_ABSENT": ("Inputs not extracted", "better extraction would recover these"),
+    "TAUTOLOGICAL": ("Fed by a derived value",
+                     "fed by a derived value — cannot fail, however good extraction gets"),
+    "NO_REPORTED_SUBTOTAL": ("No printed subtotal",
+                             "the filing prints no subtotal to reconcile against"),
+    "UNEVALUABLE_RULE": ("Rule cannot run as authored",
+                         "the rule cannot run as authored — an authoring defect, not an "
+                         "extraction gap"),
+    "UNCLASSIFIED": ("Unclassified skip reason", "a new skip reason nobody has classified"),
+    "STATEMENT_ABSENT": ("Statement not in this filing",
+                         "not counted — this filing has no such statement"),
+}
+_COVERAGE_ALARMS = {
+    "BLOCKING_RULE_UNENFORCEABLE": (
+        "Blocking rule cannot be enforced",
+        "declared blocking and cannot run as authored, so it fires on no filing — this filing "
+        "was never checked against it."),
+    "UNVALIDATED": (
+        "Statement proved nothing",
+        "every relation declared for this statement was skipped, so it has no failures and has "
+        "proved nothing."),
+    "TAUTOLOGICAL_EXCEEDS_EVALUATED": (
+        "Mostly checking its own arithmetic",
+        "more relations were fed by derived values than were actually evaluated, so the "
+        "validation layer is largely confirming its own arithmetic."),
+    "PIPELINE_DEFECT": (
+        "Pipeline defect",
+        "a rule that needs nothing of the filing still could not be run, so this is a defect in "
+        "the pipeline or the rulebook rather than a fact about the document."),
+}
+_COVERAGE_UNAVAILABLE = {
+    "not_extracted": "This document has not been extracted, so no relation has been evaluated.",
+    "no_template": "No template was attached to this run, so structural validation never ran.",
+    "no_relations": "A template was attached but it declares no relation for this filing, so "
+                    "nothing was checked. That is an authoring gap, not a clean result.",
+    "sample": "The seeded sample project carries no structural validation run.",
+}
+
+
+def _coverage_unavailable(reason: str, locale: str) -> dict:
+    """Coverage stated as unavailable, never rendered as zeros. "0 of 0 relations evaluated" is
+    the exact misread services/coverage.py exists to prevent, and 0% is worse."""
+    return {"available": False, "reason": reason,
+            "reason_label": _t(_COVERAGE_UNAVAILABLE[reason], locale)}
+
+
+def _coverage_block(run, template_def: dict | None, locale: str) -> dict:
+    """The coverage report for a run, as labels and ordering over ``CoverageReport.as_dict()``.
+
+    RECOMPUTES NO NUMBER: every integer and both rates come from the one existing spelling in
+    services/coverage.py. This adds only localized labels, a reading order for the buckets and
+    the alarms, and nothing else. ``failed_reported_elsewhere`` is filled in by ``_build_review``,
+    which is the frame that has the `covered` set it must be derived from.
+
+    The unavailable reasons are resolved from ``_run_template_id`` and ``run.result`` only, never
+    by parsing ``run.logs`` — the run log keeps the forensic headline (StructuralStage still calls
+    ``cov.headline()``, unchanged, over the same rows), and a payload built by scraping a log is a
+    second parser of a format nobody versioned.
+
+    ``_run_template_id`` is the SAME resolution the check builders use (``_template_for_run``).
+    Reading ``run.template_version_id`` here while they read ``run.options`` let one response say
+    "no template was attached to this run" directly above structural and uncomputed findings
+    derived from that very template.
+    """
+    from app.services.coverage import ALARM_UNENFORCEABLE, NOT_DECLARABLE, coverage
+
+    if run is None or not run.result:
+        return _coverage_unavailable("not_extracted", locale)
+    if _run_template_id(run) is None:
+        return _coverage_unavailable("no_template", locale)
+    rows = run.result.get("structural") or []
+    if not rows:
+        # Said loudly: a template WAS attached and it declares nothing for this filing. That is an
+        # authoring gap, and rendering it as a clean sheet is the whole failure mode here.
+        return _coverage_unavailable("no_relations", locale)
+
+    report = coverage(rows)
+    served = report.as_dict()
+
+    def status_label(status: str) -> str:
+        return _t(_COVERAGE_STATUS_LABELS.get(status, status), locale)
+
+    aggregate = {**served["aggregate"], "label": _t("All statements", locale),
+                 "status_label": status_label(served["aggregate"]["status"])}
+    statements = [{**cov, "label": _stmt_label(template_def, cov["statement"], locale),
+                   "status_label": status_label(cov["status"])}
+                  for cov in served["statements"]]
+    # Ordered buckets first, then ANY bucket the report carries that this order list does not know
+    # — a new taxonomy bucket must show up unlabelled rather than drop out of the skip list, or the
+    # chips would stop totalling the `skipped` count printed beside them. Same reasoning as
+    # coverage.py routing an unknown skip reason to UNCLASSIFIED instead of discarding it.
+    present = served["aggregate"]["skips"]
+    ordered = [b for b in _COVERAGE_SKIP_ORDER if b in present]
+    skips = [{"bucket": bucket, "count": present[bucket],
+              "label": _t(_COVERAGE_SKIPS[bucket][0], locale) if bucket in _COVERAGE_SKIPS
+              else bucket,
+              "meaning": _t(_COVERAGE_SKIPS[bucket][1], locale) if bucket in _COVERAGE_SKIPS
+              else "",
+              # STATEMENT_ABSENT is the only bucket outside the denominator: holding a cash flow
+              # statement a standalone-only filing never had against its coverage would make every
+              # such filing look incomplete.
+              "counts_in_denominator": bucket not in NOT_DECLARABLE}
+             for bucket in [*ordered, *sorted(set(present) - set(ordered))]]
+
+    def alarm(a: dict) -> dict:
+        code = str(a.get("code") or "")
+        # An alarm code with no entry here shows its raw code rather than being hidden: an
+        # unfamiliar token on screen is the signal to add a label, and a dropped alarm is a
+        # missing warning.
+        label, text = _COVERAGE_ALARMS.get(code, (code, code))
+        return {"code": code, "label": _t(label, locale), "rule_id": a.get("rule_id"),
+                "statement": a.get("statement"), "text": _t(text, locale),
+                # An unenforceable blocking rule is the one alarm that names an assurance the run
+                # claims and does not have; coverage.py's raw English `note` is not served.
+                "assurance_gap": code == ALARM_UNENFORCEABLE}
+
+    unenforceable = report.unenforceable()
+    return {
+        "available": True,
+        "run_id": run.id,
+        "engine_version": run.engine_version,
+        "aggregate": aggregate,
+        "statements": statements,
+        "skips": skips,
+        # Unenforceable first — it is the only one invisible in every count — then the rest in the
+        # report's own order. UNVALIDATED alarms are included and the statement rows also carry
+        # the status, so the client renders alarms from THIS list only and never synthesises one
+        # from a status, or the same alarm appears twice.
+        "alarms": [alarm(a) for a in unenforceable]
+                  + [alarm(a) for a in report.alarms if a.get("code") != ALARM_UNENFORCEABLE],
+        # `failed_reported_elsewhere` is deliberately absent here rather than seeded with a zero:
+        # this frame cannot derive it, and a placeholder integer that a later frame is supposed to
+        # overwrite is precisely the fabricated count this codebase keeps deleting. `_build_review`
+        # sets it from the `covered` set that suppressed those relations.
+    }
+
+
+# Evidence key → the label the accepted figure is shown under, per subject kind. The keys are the
+# ones each builder in this module emits; the labels are the ones its `calc` already uses, so an
+# accepted card reads like the card that was accepted.
+_EVIDENCE_LABELS: dict[str, dict[str, str]] = {
+    "balance": {"assets": "Total assets", "eqliab": "Total equity and liabilities",
+                "diff": "Difference", "derived": "Totals derived from the section subtotals"},
+    "equity_tie": {"closing_label": "Closing balance row", "closing": "Closing balance",
+                   "bs_equity": "Total equity per the balance sheet", "diff": "Difference"},
+    # One card per (note, basis, period) covering every untied face line on that note, so the
+    # figures are per-face and `entries` is a nested map printing each face line under its own key.
+    "note_tie": {"entries": "Face figure / residual vs note total",
+                 "entry_count": "Face lines that do not tie",
+                 "face": "Face figure",
+                 "total_break": "Total break across the untied face lines"},
+    "structural": {"actual": "Reported", "expected": "Sum of template components",
+                   "diff": "Difference", "sign_suspect": "Sign suspect",
+                   "components": "Components"},
+    # A guard asserts a condition, not an equality: its figures ARE its violation set (`violations`
+    # is a nested map, so its members print under their own canonical keys).
+    "guard": {"violation_count": "Violations", "violations_keys": "Lines in violation",
+              "violations": "Violations"},
+    "calculated_mismatch": {"reported": "Printed", "computed": "Computed",
+                            "diff": "Difference", "components": "Components"},
+    "uncomputed": {"reported": "Printed", "components": "Components"},
+    "unmapped": {"value": "Value"},
+    # `confidence_band` is the printed confidence quantized (`_confidence_evidence`), so it is shown
+    # under a label that says BAND — a reader of an accepted card must not read "40-49%" as the score.
+    "low_confidence": {"value": "Value", "confidence_band": "Confidence band",
+                       "method": "Method"},
+}
+
+
+def _evidence_label(subject: dict, key: str, locale: str) -> str:
+    """The localized label for one evidence key, falling back to the key itself.
+
+    A component's key IS its label here: ``components`` is keyed on canonical_key precisely so a
+    locale cannot change an identity, and printing the raw key beats printing nothing.
+    """
+    return _t(_EVIDENCE_LABELS.get(str(subject.get("k") or ""), {}).get(key, key), locale)
+
+
+def _evidence_value(v, locale: str) -> str:
+    """One accepted figure, formatted HERE. The client formats no number — same reason the card's
+    `calc` and the flip action's displays are server-formatted."""
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return _t("Yes" if v else "No", locale)
+    if isinstance(v, (int, float)):
+        return f"{v:,.0f}"
+    return str(v)
+
+
+def _evidence_rows(subject: dict, evidence: dict, locale: str) -> list[list[str]]:
+    """The judged figures as ``[label, value]`` pairs — the same two-column shape as a check's
+    ``calc``, so the client reuses one renderer for both."""
+    out: list[list[str]] = []
+    for key, val in (evidence or {}).items():
+        if isinstance(val, dict):
+            # A nested map is the component list; each component is its own row.
+            out += [[_evidence_label(subject, k, locale), _evidence_value(v, locale)]
+                    for k, v in val.items()]
+            continue
+        out.append([_evidence_label(subject, key, locale), _evidence_value(val, locale)])
+    return out
+
+
+def _subject_label(subject: dict, locale: str) -> str:
+    """A judged finding named in prose, for a judgement whose finding is no longer raised.
+
+    An orphaned row is never auto-deleted, so the screen has to be able to say what it was about
+    without the check that produced it.
+    """
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    kind = str(subject.get("k") or "")
+    if kind == "balance":
+        return L("Balance sheet identity")
+    if kind == "equity_tie":
+        return L("Equity statement closing balance")
+    if kind == "note_tie":
+        return f"{L('Note')} {subject.get('note') or ''}".strip()
+    if kind == "structural":
+        return f"{L('Template relation')} {subject.get('rule_id') or ''} · " \
+               f"{subject.get('scope') or ''}"
+    if kind == "guard":
+        # Named by the SENTENCE, not only the id: the id is what could not tell two guards apart,
+        # and an orphaned row has no card left to read the sentence off.
+        return f"{L('Rulebook guard')} {subject.get('rule_id') or ''} · " \
+               f"{subject.get('scope') or ''} · {subject.get('rule') or ''}".strip()
+    if kind == "calculated_mismatch":
+        return f"{L('Printed subtotal')} · {subject.get('key') or ''}"
+    if kind == "uncomputed":
+        return f"{L('Unverified subtotal')} · {subject.get('key') or ''}"
+    if kind == "unmapped":
+        return f"{L('Unmapped line')} · {subject.get('label') or ''}"
+    if kind == "low_confidence":
+        return f"{L('Low-confidence mapping')} · {subject.get('label') or ''}"
+    return L("A finding that is no longer raised")
+
+
+def _changed_label(subject: dict, keys: list[str], locale: str) -> str:
+    """The quantities that moved since the acceptance, named. "Something changed" over a card of
+    figures leaves the reader to diff by eye."""
+    return ", ".join(_evidence_label(subject, k, locale) for k in keys)
+
+
+def _conflict_note(subject: dict, count: int, withheld: bool, locale: str) -> str:
+    """What the screen must say when the queue cannot tell two findings apart.
+
+    Said outright, in the reviewer's own words, because the alternative shipped once: the queue
+    attributed one reviewer's verdict to a finding they never saw and captioned both cards
+    "accepting one accepts them all", which was false of figures that differed. There is no
+    honest acceptance available here, so the card says why and offers none.
+    """
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    cannot_tell = L("findings here share one identity but printed different figures, so the queue "
+                    "cannot tell them apart. None of them can be accepted until the extraction "
+                    "distinguishes them.")
+    note = f"{count} {cannot_tell}"
+    if withheld:
+        note = note + " " + L("A recorded acceptance for this identity is being withheld: it "
+                              "cannot be matched to one of these findings, and attributing it to "
+                              "the wrong one would put a name against figures nobody examined.")
+    return note
 
 
 def _build_review(rows: list[dict], filename: str, locale: str = "en",
                   reconciliation: list[dict] | None = None,
                   structural: list[dict] | None = None,
-                  template_def: dict | None = None) -> dict:
+                  template_def: dict | None = None,
+                  judgements: list[dict] | None = None,
+                  run_id: str = "",
+                  coverage_block: dict | None = None) -> dict:
     """Derive the human-in-the-loop review queue from a real extraction: failed accounting
     checks (balance identity, note ties, template structure) plus unmapped and low-confidence
     line items become review items (the QA the analyst works before export). No demo data
-    involved."""
+    involved.
+
+    ``judgements`` are the in-force ACCEPTED judgement rows for this document; each check comes
+    back carrying its ``status`` (open / accepted / stale) so the queue distinguishes "nobody has
+    looked at this" from "a named person examined these figures and recorded that they stand".
+
+    What travels in the fingerprint, and what deliberately does NOT:
+
+    * ``mapping_confidence`` and ``mapping_method`` are IN the low-confidence card's evidence,
+      quantized — see ``_confidence_evidence``. They used to be excluded as "why the finding was
+      raised rather than what was confirmed", and that was half right and ended in the wrong place: a
+      low-confidence finding is a statement about the mapping, so the mapping's strength and method
+      are what the acceptance is about, and the card prints both. Excluded, a collapse from 0.41
+      'fuzzy' to 0.02 'llm' was served 'accepted' with nothing changed. The churn worry is answered
+      by bucketing the score, not by omitting it; the RAW score still travels on the judgement row's
+      ``context``, where it records what the reviewer was shown without controlling identity.
+    * every localized string — title, where, severity, fix, calc labels — because one judgement
+      has to hold in all four locales.
+    * the formatted ``delta``, the row index and the check id.
+    * the human-facing source LABEL ("p.1"). The subject carries ``_prov_anchor`` instead — the
+      precise, content-derived locator — because the page label is shared by every line on the
+      page, and two findings sharing an identity is how an acceptance on one came to be reported
+      as a named judgement on another. That anchor is the row LABEL's geometry, never the value's:
+      a subject that moved with the figure reported a still-open finding as corrected. Label-box
+      jitter across the anchor's grid re-opens a finding, which is the failure direction worth
+      accepting; see ``_ANCHOR_GRID``.
+    * ``details.assumed_zero`` and ``details.tolerance``, because they are not displayed on the
+      card today. Fingerprinting an invisible field would withdraw an acceptance for a reason the
+      human was never shown; the honest order is to display them first, then fingerprint them.
+    """
+    from app.services import judgement
+
     def L(s: str) -> str:
         return _t(s, locale)
 
@@ -696,11 +1894,21 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                      "line item, or add an alias so future runs map it automatically.")
     _LOWCONF_FIX = ("The mapping is uncertain. Confirm the concept is correct or reassign it; "
                     "the value and its source location are shown so you can verify against the document.")
+    stats: dict = {}
     accounting = _accounting_checks(rows, reconciliation or [], locale, structural or [],
-                                    template_def)
+                                    template_def, stats=stats)
     checks: list[dict] = list(accounting)
+    # The extracted lines the accounting findings NAME, each contributed by the builder that knows
+    # which lines its card indicts. The header's third tile counts the rows in none of them.
+    named = {k for c in accounting for k in (c.get("names") or []) if k}
     unmapped = low_conf = 0
+    # Row POSITIONS with a finding against them, not keys: an unmapped row has no canonical key,
+    # and two rows can legitimately print the same caption, so matching those by label would credit
+    # one row's finding to another.
+    indicted: set[int] = set()
     for i, r in enumerate(rows):
+        if (r.get("canonical_key") or "") in named or (r.get("source_label") or "") in named:
+            indicted.add(i)
         key = r.get("canonical_key")
         conf = r.get("mapping_confidence")
         flags = r.get("flags") or []
@@ -711,42 +1919,139 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
 
         if not key:
             unmapped += 1
+            indicted.add(i)
             checks.append({
                 "id": f"chk-unmapped-{i}", "type": "unmapped", "icon": "?",
                 "title": r.get("source_label", "Line item"), "where": where,
                 "severity": L("Unmapped"), "tone": "low", "delta": "—",
                 "target": r.get("source_label", ""),
+                # Localized like every other card's labels: "Value" already had a translation that
+                # this expression never asked for, which is a translation that does not reach the
+                # screen it was written for.
                 "calc": [
-                    ["Source label", r.get("source_label", ""), False],
-                    ["Mapped to", "— (no confident match)", True],
-                    ["Value", str(val) if val is not None else "—", False],
+                    [L("Source label"), r.get("source_label", ""), False],
+                    [L("Mapped to"), L("— (no confident match)"), True],
+                    [L("Value"), str(val) if val is not None else "—", False],
                 ],
                 "fix": L(_UNMAPPED_FIX),
+                # The row INDEX in this id is a render key only — the React list key and the
+                # store's openCheck expand key. Judgement identity is `subject_key`, never `id`,
+                # because a row index moves whenever extraction composition changes and an
+                # acceptance that followed it would land on a different line item and hide a real
+                # problem. Do not rename the id: the client keys its expanded state on it.
+                #
+                # `anchor` is `_prov_anchor`, NOT the "p.1" the card prints: a page label makes
+                # every unmapped line on a page one identity, and accepting one of two "Others"
+                # lines then fabricated a judgement on the other.
+                "subject": {"k": "unmapped", "label": judgement.norm(r.get("source_label")),
+                            "anchor": _prov_anchor(first.get("provenance"))},
+                # The card prints str(val), so string equality invents no rounding the screen
+                # never applied.
+                "evidence": {"value": str(val) if val is not None else None},
             })
         elif "low_mapping_confidence" in flags or (isinstance(conf, (int, float)) and conf < _low_conf_threshold()):
             low_conf += 1
+            indicted.add(i)
             checks.append({
                 "id": f"chk-lowconf-{i}", "type": "low_confidence", "icon": "!",
                 "title": r.get("source_label", "Line item"), "where": where,
                 "severity": L("Low confidence"), "tone": "med", "delta": pct,
                 "target": r.get("source_label", ""),
+                # `Method` and `Confidence` are the finding's own subject matter, and both are in the
+                # evidence digest (quantized — see `_confidence_evidence`), so the reader sees exactly
+                # what the acceptance is a statement about.
                 "calc": [
-                    ["Source label", r.get("source_label", ""), False],
-                    ["Mapped to", key, True],
-                    ["Method", r.get("mapping_method") or "—", False],
-                    ["Confidence", pct, False],
-                    ["Value", str(val) if val is not None else "—", False],
+                    [L("Source label"), r.get("source_label", ""), False],
+                    [L("Mapped to"), key, True],
+                    [L("Method"), r.get("mapping_method") or "—", False],
+                    [L("Confidence"), pct, False],
+                    [L("Value"), str(val) if val is not None else "—", False],
                 ],
                 "fix": L(_LOWCONF_FIX),
+                # Same render-key-only note as chk-unmapped-{i} above: `i` is a list key, not an
+                # identity. The MAPPED CONCEPT is in the subject because the judgement being made
+                # is "this label really is this concept" — a re-run mapping it somewhere else is a
+                # different finding, not the same one re-confirmed.
+                "subject": {"k": "low_confidence", "label": judgement.norm(r.get("source_label")),
+                            "anchor": _prov_anchor(first.get("provenance")), "key": key},
+                # THE MAPPING'S STRENGTH AND METHOD ARE PART OF WHAT WAS JUDGED, because a
+                # low-confidence finding IS a statement about the mapping — and the card prints both,
+                # as its collapsed `delta` and as its Method and Confidence rows. With only `value` in
+                # here, run 1 at 0.41 / 'fuzzy' accepted by "41% fuzzy — checked p.42, the concept is
+                # right" served run 2 at 0.02 / 'llm' as 'accepted', digest byte-identical, changed
+                # == [] — the card printing "Method llm · Confidence 2%" under that reviewer's name.
+                # The churn worry that kept them out is real and is answered by QUANTIZING, the way
+                # `_prov_anchor` answered it for geometry, not by omitting.
+                "evidence": {"value": str(val) if val is not None else None,
+                             **_confidence_evidence(conf, r.get("mapping_method"))},
+                # Kept, and now beside the digest rather than instead of it: this is the RAW score,
+                # recorded on the judgement row so a reader can see the exact number the reviewer was
+                # shown. The evidence carries the band, which is what identity turns on.
+                "context": {"confidence": r.get("mapping_confidence"),
+                            "method": r.get("mapping_method") or ""},
             })
+    for c in checks:
+        c["subject_key"] = judgement.subject_key(c["subject"])
+        c["evidence_digest"] = judgement.evidence_digest(c["evidence"])
+        # Only the structural builder can offer a mechanical fix, and only it can have edited
+        # inputs behind an un-recomputed relation. Every other card is explicit about having
+        # neither rather than leaving the key absent for the client to guess at.
+        c.setdefault("fix_action", None)
+        # `names` — the extracted lines a card indicts — is EMPTY on the two row-shaped findings
+        # rather than absent: an unmapped card is about the row it was built from and nothing else,
+        # and naming that row by its caption would match a second row printed under the same
+        # caption. The header's tile counts those two by row POSITION instead (see `indicted`).
+        c.setdefault("names", [])
+        c.setdefault("inputs_edited", False)
+        c.setdefault("inputs_edited_keys", [])
+        c.setdefault("inputs_edited_note", "")
+    applied = judgement.apply_judgements(
+        checks, judgements or [],
+        label_fn=lambda subj: _subject_label(subj, locale),
+        rows_fn=lambda subj, ev: _evidence_rows(subj, ev, locale),
+        changed_fn=lambda subj, keys: _changed_label(subj, keys, locale),
+        conflict_fn=lambda subj, n, withheld: _conflict_note(subj, n, withheld, locale))
+    # Conflict first, then stale, then open, then accepted, stably so builder order survives
+    # inside a rank. The client does no sorting: two orderings of one list is two answers to one
+    # question.
+    checks.sort(key=lambda c: judgement.rank(c["status"]))
+
+    counts = applied["counts"]
+    cov_block = coverage_block if coverage_block is not None \
+        else _coverage_unavailable("not_extracted", locale)
+    if cov_block.get("available"):
+        # Derived by `_accounting_checks` from the very `covered` set that suppressed those
+        # relations, and injected here because this is the only frame that has both. Computing it
+        # a second time inside the coverage presenter is how the band starts contradicting the
+        # cards above it.
+        cov_block["failed_reported_elsewhere"] = stats.get("failed_reported_elsewhere", 0)
     total = len(checks)
-    passed = max(0, len(rows) - (unmapped + low_conf))
+    # ROWS NAMED BY NO FINDING — which is what the header tile beside it says, in all four locales.
+    # It used to be `len(rows) - (unmapped + low_conf)`, so every line indicted by a balance, note
+    # tie, structural, guard, calculated_mismatch or uncomputed finding was counted as having no
+    # finding: a 9-row run with 4 checks against 4 of those rows rendered "4 open · 9 lines with no
+    # finding". The old label ("passed") did not assert WHICH lines it counted; the new one does, so
+    # the quantity is now the one the label names. `names` is contributed by each builder — see
+    # `_accounting_checks`.
+    #
+    # THE POPULATION IS DEFINED ONCE, FOR BOTH PATHS, in services/review_lines.py — this route and
+    # the sample route (api/routes/projects.py::_demo_review_summary) call the same predicate. Spelled
+    # here as `len(rows) - len(indicted)`, it counted every serialized row including subtotals and
+    # totals, while the sample counted only its `kind == "item"` rows: two populations under one
+    # label, and the sample understated its own by the 8 subtotal/total rows no finding named.
+    passed = review_lines.lines_with_no_finding(rows, lambda i, _r: i in indicted)
     # Each tab carries the check TYPES it selects, so the client filters by what the tab means
     # rather than by its position in this list. `types: None` is the everything tab. Positional
     # agreement between a server list and a client array is the bug that made the page-scope
     # chips filter by the wrong kind, and it is not repeated here.
+    #
+    # The tabs count by TYPE over the FULL list regardless of status, and no `statuses` dimension
+    # is added: a second predicate would have to be spelled once here for the counts and once in
+    # the TSX for the rows, and that drift is the counts-disagree-with-content bug the last three
+    # commits closed. An accepted finding therefore stays in its tab and stays on screen.
     accounting_types = sorted({c["type"] for c in accounting})
     return {
+        "run_id": run_id,
         "checks": checks,
         "tabs": [
             {"label": L("All"), "count": total, "types": None},
@@ -754,7 +2059,15 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
             {"label": L("Unmapped"), "count": unmapped, "types": ["unmapped"]},
             {"label": L("Low confidence"), "count": low_conf, "types": ["low_confidence"]},
         ],
-        "summary": {"open": total, "passed": passed},
+        # `open` is outstanding work, so it includes the stale cards — someone vouched for figures
+        # that have since moved, which is more urgent than an untouched finding, not less — and the
+        # conflict cards, which nobody can accept at all. `stale` and `conflict` are those subsets,
+        # reported separately so the screen can say each one out loud.
+        "summary": {"open": counts["open"] + counts["stale"] + counts["conflict"],
+                    "accepted": counts["accepted"], "stale": counts["stale"],
+                    "conflict": counts["conflict"], "passed": passed},
+        "judgements": {"orphaned": applied["orphaned"]},
+        "coverage": cov_block,
     }
 
 
@@ -901,6 +2214,7 @@ def get_document_commentary(document_id: str, locale: str = Query("en"),
     extraction (ratios, year-on-year trends, strengths/weaknesses) — not the demo project.
     Open review items are counted from the same extraction so the assessment stays honest
     about provisional figures. Empty (valid) shape until the document is extracted."""
+    from app.db.models import Document
     from app.services.commentary import build_commentary_from_rows
 
     run = _latest_run(session, document_id)
@@ -908,8 +2222,16 @@ def get_document_commentary(document_id: str, locale: str = Query("en"),
         return {"headline": "", "assessment": "", "metrics": [], "trends": [],
                 "strengths": [], "weaknesses": [], "data_quality": "", "basis": ""}
     rows = run.result.get("rows", [])
+    # The in-force judgements are passed here too, so the data-quality prose stops counting
+    # findings a human has already accepted. An accepted finding is no longer OPEN because a named
+    # person examined those figures and recorded that they stand; the reason and the actor on the
+    # judgement row are the record of that, and they are the only guard — this route will report
+    # better data quality after a reviewer accepts breaks, which is correct and is why the
+    # acceptance carries a name.
+    doc = session.get(Document, document_id)
     review = _build_review(rows, "", locale, run.result.get("reconciliation", []),
-                           run.result.get("structural", []), _template_for_run(session, run))
+                           run.result.get("structural", []), _template_for_run(session, run),
+                           judgements=_inforce_judgements(session, doc), run_id=run.id)
     units = run.result.get("units") or {}
     c = build_commentary_from_rows(
         rows, open_review_items=review["summary"]["open"], basis=basis,
@@ -917,10 +2239,67 @@ def get_document_commentary(document_id: str, locale: str = Query("en"),
     return _localize_commentary(c, locale)
 
 
+def _judgement_history_entry(row) -> dict:
+    """The state a judgement row is LEAVING, for its history list.
+
+    Appended before every change and never removed, so an accept → withdraw → accept sequence is
+    one row with two history entries rather than three rival rows a reader has to date-sort. The
+    evidence goes in too: what the figures were when that verdict was recorded is the part a later
+    reader cannot reconstruct.
+
+    ``at`` is when THAT VERDICT WAS MADE, which is ``row.updated_at`` — read before this write
+    touches it, so it still holds the moment the state being left was recorded. Stamping
+    ``_now_iso()`` here dated every entry with the time of the CHANGE, i.e. its successor's
+    timestamp: accept at 10:00 and withdraw at 15:00 and the record said the acceptance was made
+    at 15:00, while 10:00 survived in no column at all (``updated_at`` is bumped by ``onupdate``
+    in the same flush). Nothing serves history yet, so no screen was wrong — but the audit trail
+    being accumulated was, from its first row.
+
+    No column was added to carry this. ``db/base.py::_reconcile_schema`` back-fills the
+    ``documents`` table ONLY and there is no Alembic, so a column added to ``review_judgements``
+    would simply be missing from any developer database that already has the table, and every
+    query selecting it would 500. ``updated_at`` is already the moment this row's current verdict
+    was written, so reading it is also the answer that keeps one quantity in one place.
+    """
+    at = row.updated_at or row.created_at
+    return {"verdict": row.verdict, "reason": row.reason or "", "actor": row.actor or "",
+            "actor_role": row.actor_role or "",
+            "at": at.isoformat(timespec="seconds") if at else _now_iso(),
+            "evidence": row.evidence or {}, "run_id": row.run_id or ""}
+
+
+def _inforce_judgements(session: Session, doc) -> list[dict]:
+    """The document's IN-FORCE accepted judgements, as plain dicts.
+
+    Only ``verdict == "accepted"`` matches. A withdrawn row is kept forever — erasing who accepted
+    a break is not something an audit trail should permit — but it governs nothing.
+    """
+    from app.db.models import ReviewJudgement
+
+    if doc is None:
+        return []
+    rows = session.execute(
+        select(ReviewJudgement).where(
+            ReviewJudgement.document_id == doc.id,
+            ReviewJudgement.tenant_id == doc.tenant_id,
+            ReviewJudgement.verdict == "accepted")
+    ).scalars().all()
+    return [{"subject_key": r.subject_key, "subject": r.subject or {},
+             "evidence": r.evidence or {}, "reason": r.reason or "", "actor": r.actor or "",
+             "actor_role": r.actor_role or "", "run_id": r.run_id or "",
+             "at": (r.updated_at or r.created_at).isoformat(timespec="seconds")}
+            for r in rows]
+
+
 @router.get("/{document_id}/review", dependencies=[Depends(authorized_document)])
 def get_document_review(document_id: str, locale: str = Query("en"),
                         session: Session = Depends(db)) -> dict:
-    """Real review queue for a document, derived from its latest extraction."""
+    """Real review queue for a document, derived from its latest extraction — each finding with
+    its human judgement, and the coverage contract for the relations that were never evaluable.
+
+    Both come from ONE read of ONE run: a coverage endpoint of its own could show run A's coverage
+    above run B's findings.
+    """
     from app.db.models import Document
 
     doc = session.get(Document, document_id)
@@ -928,11 +2307,185 @@ def get_document_review(document_id: str, locale: str = Query("en"),
         raise HTTPException(status_code=404, detail="Document not found")
     run = _latest_run(session, document_id)
     if run is None or not run.result:
-        return {"checks": [], "tabs": [{"label": _t("All", locale), "count": 0}],
-                "summary": {"open": 0, "passed": 0}}
+        # The empty shape is built by the SAME function as the real one rather than hand-written
+        # here: a second literal is a second answer to "what does an empty queue look like", and
+        # the previous one-tab literal disagreed with the four tabs the real branch serves.
+        return _build_review([], doc.filename or "document", locale, [], [], None, [], "",
+                             coverage_block=_coverage_unavailable("not_extracted", locale))
+    template_def = _template_for_run(session, run)
     return _build_review(run.result.get("rows", []), doc.filename or "document", locale,
                          run.result.get("reconciliation", []),
-                         run.result.get("structural", []), _template_for_run(session, run))
+                         run.result.get("structural", []), template_def,
+                         judgements=_inforce_judgements(session, doc), run_id=run.id,
+                         coverage_block=_coverage_block(run, template_def, locale))
+
+
+class JudgementBody(BaseModel):
+    """An acceptance, posted with the digest the card was showing.
+
+    The subject key travels in the BODY and never in a path: a structural finding's scope_key
+    contains a "/" (services/structural_checks.py:526), so no check identifier is URL-safe.
+    """
+
+    subject_key: str
+    evidence_digest: str
+    reason: str = ""
+
+
+@router.post("/{document_id}/review/judgements",
+             dependencies=[Depends(require(Permission.REVIEW_RESOLVE)),
+                           Depends(authorized_document)])
+def accept_review_finding(document_id: str, body: JudgementBody, locale: str = Query("en"),
+                          session: Session = Depends(db),
+                          principal: Principal = Depends(current_principal)) -> dict:
+    """Record that a named person examined a finding's figures and judged that they stand.
+
+    "Accepted" does NOT mean the check passed. It means a human looked, and it is the distinction
+    the review found missing: before this there was no way to tell "nobody has looked at this"
+    from "reviewed and deemed acceptable", so a finding examined and dismissed stayed red forever.
+
+    The posted ``evidence_digest`` must match the server's current one. An acceptance must never
+    attach to figures that changed while the card was open — that is the whole reason identity is
+    split into subject and evidence.
+
+    The posted subject is resolved against EVERY check sharing it, not the first in rank order.
+    Matching by subject_key alone compared the posted digest against whichever card sorted first,
+    so of two findings on one subject the second was told "the figures changed while this card was
+    open" — quoting the other line's figures — on every retry, forever. And a subject whose
+    findings disagree about their evidence is refused outright: see
+    ``judgement.apply_judgements`` for why no judgement may be attributed there at all.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db.models import Document, ReviewJudgement
+
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        raise HTTPException(status_code=404, detail={"error": "no_run"})
+    if not body.reason.strip():
+        # An acceptance with no stated reason is an unsigned claim: the actor is recorded either
+        # way, but what they concluded is the part a later reader needs.
+        raise HTTPException(status_code=422, detail={"error": "reason_required"})
+
+    doc = session.get(Document, document_id)
+    # One build, in the request locale. No separate English rebuild is needed because identity is
+    # locale-free by construction — see services/judgement.py.
+    review = _build_review(run.result.get("rows", []), doc.filename or "document", locale,
+                           run.result.get("reconciliation", []),
+                           run.result.get("structural", []), _template_for_run(session, run),
+                           judgements=_inforce_judgements(session, doc), run_id=run.id)
+    group = [c for c in review["checks"] if c["subject_key"] == body.subject_key]
+    if not group:
+        raise HTTPException(status_code=404, detail={"error": "finding_not_found",
+                                                    "subject_key": body.subject_key})
+    if any(c["conflict"] for c in group):
+        # The identity scheme failed for this subject. Refusing is the honest answer: accepting
+        # would write one reviewer's verdict against figures they demonstrably did not see, and
+        # there is no way to tell from the request which of the group they were looking at.
+        raise HTTPException(status_code=409, detail={
+            "error": "subject_conflict", "subject_key": body.subject_key, "count": len(group),
+            "evidence_digests": sorted({c["evidence_digest"] for c in group}),
+            "note": group[0]["conflict_note"]})
+    check = next((c for c in group if c["evidence_digest"] == body.evidence_digest), None)
+    if check is None:
+        # Every card on this subject carries one digest (the group is not a conflict), so quoting
+        # the first is quoting the figures now on screen — not another line's.
+        current = group[0]
+        raise HTTPException(status_code=409, detail={
+            "error": "evidence_changed",
+            "current": {"evidence_digest": current["evidence_digest"],
+                        "status": current["status"],
+                        "accepted_rows": _evidence_rows(current["subject"], current["evidence"],
+                                                        locale)}})
+
+    reason = body.reason.strip()[:2000]
+
+    def _current_row():
+        return session.execute(
+            select(ReviewJudgement).where(
+                ReviewJudgement.document_id == doc.id,
+                ReviewJudgement.tenant_id == doc.tenant_id,
+                ReviewJudgement.subject_key == body.subject_key)).scalars().first()
+
+    def _record(row) -> None:
+        row.subject = check["subject"]
+        row.evidence = check["evidence"]
+        row.context = check.get("context") or {}
+        row.verdict = "accepted"
+        row.reason = reason
+        row.actor = principal.username
+        row.actor_role = principal.role.value
+        row.run_id = run.id
+        flag_modified(row, "history")
+
+    row = _current_row()
+    if row is not None:
+        row.history = [*(row.history or []), _judgement_history_entry(row)]
+        _record(row)
+        session.commit()
+    else:
+        new = ReviewJudgement(tenant_id=doc.tenant_id, document_id=doc.id,
+                              subject_key=body.subject_key, history=[])
+        session.add(new)
+        _record(new)
+        try:
+            session.commit()
+        except IntegrityError:
+            # REVIEWER and ADMIN both hold REVIEW_RESOLVE, so two people can POST for the same
+            # subject at the same instant: both SELECTs return None and the loser's INSERT
+            # violates uq_judgement_subject. Letting that surface was a 500 with the reviewer's
+            # typed reason thrown away. The loser's acceptance is instead recorded onto the row
+            # that won, exactly as a second sequential POST would be — the winner's verdict is
+            # appended to `history`, so neither judgement is lost.
+            session.rollback()
+            row = _current_row()
+            if row is None:
+                # The unique constraint fired and yet nothing is there to record onto: the write
+                # failed for a reason this handler does not understand, so say so rather than
+                # reporting an acceptance that was never stored.
+                raise HTTPException(status_code=409, detail={
+                    "error": "judgement_write_conflict",
+                    "subject_key": body.subject_key}) from None
+            row.history = [*(row.history or []), _judgement_history_entry(row)]
+            _record(row)
+            session.commit()
+    # No summary and no check comes back: the client invalidates and refetches, so every count on
+    # the screen keeps exactly one origin.
+    return {"ok": True, "subject_key": body.subject_key, "status": "accepted"}
+
+
+@router.delete("/{document_id}/review/judgements/{subject_key}",
+               dependencies=[Depends(require(Permission.REVIEW_RESOLVE)),
+                             Depends(authorized_document)])
+def withdraw_review_judgement(document_id: str, subject_key: str,
+                              session: Session = Depends(db),
+                              principal: Principal = Depends(current_principal)) -> dict:
+    """Withdraw an acceptance. ``subject_key`` is 64 hex characters, so it IS URL-safe.
+
+    The row is never deleted — the verdict flips and the prior state is appended to ``history``.
+
+    Deliberately NOT refused on a conflicted subject, unlike acceptance: a judgement that can no
+    longer be attributed to one finding is precisely the one a reviewer needs to be able to take
+    back, and withdrawing it puts a name against nothing.
+    """
+    from app.db.models import Document, ReviewJudgement
+
+    doc = session.get(Document, document_id)
+    row = session.execute(
+        select(ReviewJudgement).where(
+            ReviewJudgement.document_id == doc.id,
+            ReviewJudgement.tenant_id == doc.tenant_id,
+            ReviewJudgement.subject_key == subject_key,
+            ReviewJudgement.verdict == "accepted")).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "no_judgement"})
+    row.history = [*(row.history or []), _judgement_history_entry(row)]
+    row.verdict = "withdrawn"
+    row.actor = principal.username
+    row.actor_role = principal.role.value
+    flag_modified(row, "history")
+    session.commit()
+    return {"ok": True, "subject_key": subject_key, "withdrawn": True}
 
 
 class LineItemEdit(BaseModel):
@@ -1234,9 +2787,17 @@ _PAGE_CLS = {"face": "Statement face", "notes": "Notes", "other": "Other",
              "cover": "Cover", "toc": "Contents", "unknown": "Unclassified"}
 
 
-def _conf_cat(c) -> tuple[str, int]:
+def _conf_cat(c) -> tuple[str, int | None]:
+    """A measured confidence as (badge category, MEASURED percentage).
+
+    The percentage is ``None`` when there is no confidence to report, and callers serve that absence
+    rather than a number. It used to be 60 — a figure derived from nothing, standing where the
+    measured one belongs: a page with no classification confidence was served as 'med', and the
+    client's per-CATEGORY literal then printed "78%" over it. A category is a bucket of a
+    measurement, so it can never be printed as one.
+    """
     if not isinstance(c, (int, float)):
-        return "med", 60
+        return "med", None
     pct = round(c * 100)
     return ("high" if c >= 0.85 else "med" if c >= 0.7 else "low"), pct
 
@@ -1256,13 +2817,19 @@ def _build_pages(pages: list[dict], scope: list[int] | None = None) -> dict:
         kind = p.get("kind", "unknown")
         idx = p.get("index", 0) or 0
         included = idx in chosen
-        cat, _ = _conf_cat(p.get("classification_confidence"))
+        cat, pct = _conf_cat(p.get("classification_confidence"))
         cards.append({
             "no": idx + 1,
             "kind": normalise_kind(kind),
             "cls": _PAGE_CLS.get(kind, kind.title()),
             "sub": "in scope" if included else "skipped",
             "conf": cat,
+            # THE MEASURED PERCENTAGE, SERVED BESIDE THE CATEGORY. The classifier's score was
+            # computed here and thrown away (`cat, _ = …`), so the screen printed a literal per
+            # CATEGORY instead — a page scored 0.40 rendered "54%" and a page with no score at all
+            # rendered "78%". `null` where the classifier reported nothing: the screen has to say so
+            # rather than print a number, and it cannot say so if the payload does not distinguish.
+            "conf_pct": pct,
             "included": included,
             "scan": "scanned" if p.get("source_kind") == "scanned" else "native",
         })
@@ -1413,17 +2980,32 @@ def _netting_rules_for_run(session: Session, run) -> list:
 
 
 def _template_for_run(session: Session, run) -> dict | None:
-    """The template the run used, else the seeded HK reference template."""
+    """The template THIS RUN was launched against, or None. There is no fallback.
+
+    The id comes from ``_run_template_id`` so this and the coverage band cannot disagree about
+    whether a template was attached at all.
+
+    It used to fall back to the newest seeded ``TemplateVersion`` when the run named none, and the
+    template is genuinely optional (``ExtractionOptions.template_version_id`` defaults to None and
+    the upload screen allows it). So a run extracted with only an ontology served a coverage band
+    reading {"available": false, "reason": "no_template"} directly above four
+    TEMPLATE-DERIVED findings — two calculated_mismatch and two uncomputed, built from some other
+    template's rollup children and node labels. That is the same self-contradiction inside one
+    payload that ``_run_template_id`` was introduced to close, reached by the other half of the
+    question: agreeing on how to READ the id is worth nothing while one reader answers "none" and
+    the other substitutes a template the analyst never chose.
+
+    Findings, labels and computed subtotals attributed to an unchosen template are worse than
+    absent ones: nothing on the screen says which template they came from. Without an id the answer
+    is None, and every caller already handles it — ``_calculated_checks`` returns [],
+    ``_flip_sign_action`` refuses the button, the statement falls back to the extracted labels.
+    """
     from app.db.models import TemplateVersion
 
-    tid = (run.options or {}).get("template_version_id")
-    if tid:
-        tv = session.get(TemplateVersion, tid)
-        if tv:
-            return tv.definition
-    tv = session.execute(
-        select(TemplateVersion).order_by(TemplateVersion.version.desc())
-    ).scalars().first()
+    tid = _run_template_id(run)
+    if not tid:
+        return None
+    tv = session.get(TemplateVersion, tid)
     return tv.definition if tv else None
 
 
@@ -1449,18 +3031,29 @@ def _disp_period(lbl: str | None, idx: int, locale: str) -> str:
 
 
 def _period_labels(rows: list[dict], basis: str, locale: str) -> list[str]:
-    """The two period-column headers for the statement. Uses the real headers the extractor
-    captured (Excel carries the year/date text); falls back to Current/Prior (e.g. native PDF,
-    where the column header date isn't yet detected).
+    """The two period-column headers for one basis of a statement's rows."""
+    # A generator, so the early `break` inside still stops before touching every row.
+    return _period_labels_from((_basis_values(r, basis) for r in rows), locale)
 
-    Each header is looked up by the period it NAMES, across every row, rather than taken
-    positionally from the first row that carries any value at all — a row printed for one year
+
+def _period_labels_from(value_lists: Iterable[list[dict]], locale: str) -> list[str]:
+    """The two period-column headers, from the value lists whose figures sit under them. Uses the
+    real headers the extractor captured (Excel carries the year/date text); falls back to
+    Current/Prior (e.g. native PDF, where the column header date isn't yet detected).
+
+    Taking the VALUE LISTS rather than rows-plus-basis is what lets the note-detail route reuse
+    this: a note row's values are the same shape, and the header a note table prints above its
+    figures has to be derived from those very figures. Two labellers would let the Notes screen
+    and the Workspace label the same figures differently, which is exactly what "FY25"/"FY24"
+    hardcoded above a 2023/2022 filing did.
+
+    Each header is looked up by the period it NAMES, across every list, rather than taken
+    positionally from the first one that carries any value at all — a row printed for one year
     only would otherwise label both columns with that year's period.
     """
     found: dict[str, str | None] = {}
     positional: list[str | None] | None = None
-    for r in rows:
-        vals = _basis_values(r, basis)
+    for vals in value_lists:
         if not vals:
             continue
         for period, disp in period_displays(vals).items():
@@ -1612,12 +3205,19 @@ def _looks_like_equity_total(label: str) -> bool:
     return bool(_EQUITY_TOTAL.search(label or ""))
 
 
-def _equity_closing(rows: list[dict], basis: str) -> tuple[str, float] | None:
-    """The equity statement's CLOSING total equity, as (caption, amount).
+def _equity_closing(rows: list[dict], basis: str) -> tuple[str, float, str] | None:
+    """The equity statement's CLOSING total equity, as (caption, amount, name of the line).
 
     The last balance line in document order is the closing one — an equity statement runs
     opening balance, movements, closing balance, and a two-year statement simply does that
     twice. Returns None when the document carries no equity matrix at all.
+
+    The third element is how the review queue NAMES the line this row is: its canonical_key when the
+    matrix row mapped to one, else the caption as printed. It is returned rather than re-derived by
+    the caller because this function is the only place that knows WHICH row was taken as the closing
+    one — and the equity_tie card indicts it, so the header tile counting "lines with no finding" has
+    to be able to exclude it. `_matrix_rows` FILTERS `rows`, so this row is one of them; the card
+    used to assert otherwise and named only the balance sheet's total.
     """
     total_col = None
     last = None
@@ -1627,7 +3227,8 @@ def _equity_closing(rows: list[dict], basis: str) -> tuple[str, float] | None:
         if total_col and _looks_like_equity_total(r.get("source_label") or ""):
             v = _to_num((cells.get(total_col) or {}).get("value"))
             if v is not None:
-                last = (r.get("source_label") or "", v)
+                last = (r.get("source_label") or "", v,
+                        str(r.get("canonical_key") or r.get("source_label") or ""))
     return last
 
 
@@ -2210,7 +3811,12 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
             "source_label": r.get("source_label"), "kind": kind,
             "note": next((x.get("note") for x in group if x.get("note")), None),
             "note2": None, "status": "edited" if edited else None,
-            "confidence": {"cat": cat, "pct": pct}, "editable": True,
+            # No confidence object at all when nothing measured one, rather than a category beside a
+            # made-up percentage: `_conf_cat` used to answer ('med', 60) for a row that carries no
+            # mapping confidence, and the inspector printed "60% confidence" over a figure nothing
+            # had scored. The screen already renders the badge only when this key is present.
+            "confidence": ({"cat": cat, "pct": pct} if pct is not None else None),
+            "editable": True,
             "origin": "manual" if edited else "extracted",
             # Why a figure was overridden, per period — kept beside the number it explains.
             "comments": notes or None,
@@ -2418,9 +4024,36 @@ def _fmt_amt(v) -> str:
         return str(v)
 
 
+def _entry_column(entry: dict) -> str:
+    """Which COLUMN a reconciliation entry compared, as ``basis/period`` — the same spelling the
+    review card's ``where`` uses for the same pair.
+
+    Reconciliation records one entry per (face line, note, basis, period) and ``_TIE_PERIODS`` is
+    ("current", "prior") (stages/reconcile.py), so an ordinary comparative filing holds TWO entries
+    for one face line. A residual printed without its column is a figure the reader cannot place:
+    the Notes screen listed one face line twice, under two different residuals, with no column named.
+    """
+    return f"{entry.get('basis') or '—'}/{entry.get('period_label') or '—'}"
+
+
 def _reconciliation_text(entries: list[dict], note_no: int) -> str | None:
     """A human-readable note→face reconciliation summary for one note, from the reconcile
-    stage's entries. Prefers the consolidated / current-period entry."""
+    stage's entries. Prefers the consolidated / current-period entry.
+
+    One note can break down SEVERAL face lines (reconcile.py records an entry per face line, and
+    ``link_notes`` has a first-class relationship for it), so when more than one of them does not
+    tie this says how many and names each residual. Printing the best-graded entry's residual alone
+    read as "the note is out by 20" over a second face line out by 2,000,000 — a number that was
+    not about the sentence it sat in.
+
+    COUNT AND NAME WHAT THE SENTENCE CLAIMS. ``mine`` spans every basis AND period for the note, so
+    ``len(untied)`` counted reconciliation ENTRIES while the sentence called them "face lines": a
+    comparative filing whose ONE face line missed on both columns read "does not tie to 2 of the face
+    lines it supports" and then listed that line twice under two different residuals with no column
+    named. Face lines and columns are now counted separately, each residual says which column it
+    belongs to, and the "Face figure … → reconciled …" clause above says which column IT is about —
+    it is taken from ``mine[0]``, the best-graded entry, while the residual list spans all of them.
+    """
     mine = [e for e in entries if _note_no(e.get("note_number")) == note_no]
     if not mine:
         return None
@@ -2438,14 +4071,32 @@ def _reconciliation_text(entries: list[dict], note_no: int) -> str | None:
         if abs(float(sub)) > 0:
             parts.append(
                 f"Face figure {_fmt_amt(raw)} less {_fmt_amt(sub)} of note detail already "
-                f"carried as separate line items → reconciled {_fmt_amt(rec)}.")
+                f"carried as separate line items → reconciled {_fmt_amt(rec)} "
+                f"({_entry_column(e)}).")
     except (TypeError, ValueError):
         pass
     if status == "tied":
-        parts.append(f"The note total ties to the face figure (residual {_fmt_amt(resid)}).")
+        parts.append(f"The note total ties to the face figure ({_entry_column(e)}, residual "
+                     f"{_fmt_amt(resid)}).")
     elif status == "untied":
-        parts.append(f"The note total does not tie to the face figure — residual {_fmt_amt(resid)} "
-                     f"(flagged for review).")
+        # EVERY face line this note fails to tie to, in the same sentence. `e` is the best-graded
+        # entry; with a second face line out by a different amount, naming only this residual states
+        # a figure that is not about the note as a whole.
+        untied = sorted([u for u in mine if tie_status(u) == "untied"],
+                        key=lambda u: (str(u.get("face_key") or ""), _entry_column(u)))
+        # The noun in the sentence is "face lines", so the count is of face LINES; the number of
+        # comparisons that missed is its own quantity and is stated as its own.
+        lines = {str(u.get("face_key") or "—") for u in untied}
+        if len(untied) > 1:
+            each = "; ".join(f"{u.get('face_key') or '—'} ({_entry_column(u)}) "
+                             f"{_fmt_amt(u.get('residual'))}" for u in untied)
+            noun = "face line" if len(lines) == 1 else "face lines"
+            parts.append(f"The note total does not tie to {len(lines)} of the {noun} it supports, "
+                         f"on {len(untied)} of the columns compared — residual by face line and "
+                         f"column: {each} (flagged for review).")
+        else:
+            parts.append(f"The note total does not tie to the face figure — residual "
+                         f"{_fmt_amt(resid)} ({_entry_column(e)}) (flagged for review).")
     else:
         parts.append("This note is not a breakdown of the face figure it is cited from, so no "
                      "tie is asserted.")
@@ -2462,22 +4113,37 @@ def get_document_notes(document_id: str, session: Session = Depends(db)) -> dict
         return {"notes": [], "count": 0, "linked": 0}
 
     details = _note_index(run.result.get("note_details", []))
+    # `conf_pct` is NULL on both branches, deliberately and explicitly. A note carries no measured
+    # confidence of its own — the categories below say which SOURCE the index was built from (a
+    # parsed detail table, or the face lines citing the note), not how confident anything is — so
+    # there is no percentage to serve, and the screen must say so instead of printing the literal
+    # its category happens to map to. Absent-versus-null is the distinction the client needs to
+    # tell "no measurement" from "not sent".
     if details:
-        notes = [{"no": n, "title": details[n].get("title") or f"Note {n}", "conf": "high"}
+        notes = [{"no": n, "title": details[n].get("title") or f"Note {n}",
+                  "conf": "high", "conf_pct": None}
                  for n in sorted(details)]
         linked = sum(len(details[n].get("rows", [])) for n in details)
         return {"notes": notes, "count": len(notes), "linked": linked}
 
     grouped = _rows_by_note(run.result.get("rows", []))
-    notes = [{"no": n, "title": f"Note {n}", "conf": "med"} for n in sorted(grouped)]
+    notes = [{"no": n, "title": f"Note {n}", "conf": "med", "conf_pct": None}
+             for n in sorted(grouped)]
     return {"notes": notes, "count": len(notes), "linked": sum(len(v) for v in grouped.values())}
 
 
 @router.get("/{document_id}/notes/{note_no}", dependencies=[Depends(authorized_document)])
-def get_document_note(document_id: str, note_no: int, session: Session = Depends(db)) -> dict:
+def get_document_note(document_id: str, note_no: int, locale: str = Query("en"),
+                      session: Session = Depends(db)) -> dict:
     """One note's detail for a real document: its EXTRACTED breakdown rows (label + period
     values) with the page they came from, plus the face line that cites it. Falls back to
-    the face line items referencing the note when no detail table was parsed."""
+    the face line items referencing the note when no detail table was parsed.
+
+    ``periods`` is the same key, in the same order, that the statement routes serve, so ONE client
+    field labels both screens. The Notes screen used to print "FY25"/"FY24" as literals above these
+    very columns, which said something different from the Workspace on any filing whose periods are
+    not those two.
+    """
     run = _latest_run(session, document_id)
     result = run.result if run and run.result else {}
     details = _note_index(result.get("note_details", []))
@@ -2497,15 +4163,22 @@ def get_document_note(document_id: str, note_no: int, session: Session = Depends
                 "v1": _to_num(cur.get("value")) or 0,
                 "v2": _to_num(prior.get("value")) or 0,
                 # Role → emphasis (subtotal/total) and mapping confidence → a per-row badge,
-                # so a real note detail shows the same role/confidence cues as the demo.
+                # so a real note detail shows the same role/confidence cues as the demo. The badge
+                # carries the MEASURED percentage beside its category: the category alone left the
+                # screen printing a per-category literal ("96%" on every 'high' row, whatever the row
+                # scored), and the number it needs was being computed here and dropped.
                 **({"kind": _note_row_kind(row)} if _note_row_kind(row) else {}),
-                **({"conf": _conf_cat(row.get("confidence"))[0]}
+                **(dict(zip(("conf", "conf_pct"), _conf_cat(row.get("confidence"))))
                    if isinstance(row.get("confidence"), (int, float)) else {}),
             })
         return {
             "no": note_no, "title": d.get("title") or f"Note {note_no}", "page": d.get("page", 0),
             "linked_line": linked_key, "linked_label": linked_label,
             "rows": detail_rows,
+            # Derived from exactly the value lists whose split_current_prior above produced v1/v2,
+            # so a header cannot disagree with the column under it.
+            "periods": _period_labels_from((r.get("values") or [] for r in d.get("rows", [])),
+                                           locale),
             "reconciliation": _reconciliation_text(result.get("reconciliation", []), note_no),
         }
 
@@ -2522,7 +4195,12 @@ def get_document_note(document_id: str, note_no: int, session: Session = Depends
         "no": note_no, "title": f"Note {note_no}",
         "page": (prov.get("page_index", 0) + 1) if prov else 0,
         "linked_line": linked_key, "linked_label": linked_label,
-        "rows": detail_rows, "reconciliation": None,
+        "rows": detail_rows,
+        # Same consolidated default `_cur_prior` uses for these fallback rows, so the header names
+        # the columns the figures were read from.
+        "periods": _period_labels_from((_basis_values(r, "consolidated") for r in linked_face),
+                                       locale),
+        "reconciliation": None,
     }
 
 

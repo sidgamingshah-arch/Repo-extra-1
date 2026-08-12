@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 
 from app.core.models import LineItem, RuleResult, StructuralReport
@@ -424,6 +424,36 @@ _GUARD_PHRASES: tuple[tuple[str, str, str], ...] = (
 _GUARD_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{5,}")
 
 
+def _unique(gid: str, taken: dict[str, int]) -> str:
+    """``gid``, suffixed only when this rulebook already declared a rule under it.
+
+    Used for both families that can collide: guards here, and the declared relations in
+    ``evaluate_structure`` (an authored identity id is free text, so two entries can repeat one).
+
+    TWO GUARD SENTENCES MUST NOT SHARE AN ID. The id is built from the predicate and the first
+    concept the sentence names, so two ``validation.cross_concept_guards`` sentences that share a
+    predicate and a first key — legal, and ontologies are admin-uploadable — used to collapse into
+    one identity. Everything downstream keys on it: the review card's DOM id
+    (``chk-guard-{rule_id}-{scope_key}``, which the client also uses as its expand key), the
+    coverage report's per-rule alarms, and ``report.unenforceable()``. One id over two guards means
+    one card for two different assertions, and a reviewer's verdict landing on a sentence they
+    never read.
+
+    The judgement layer does NOT rely on this: a guard's subject carries the sentence and the
+    operands it names, so identity holds even against a rulebook that repeats an id (see
+    api/routes/documents.py::_guard_check). Both are wanted. Uniqueness here is what the SCREEN
+    and the coverage report need — they have only the id — while the subject is what a stored human
+    judgement is pinned to, and that must not depend on a rulebook author getting ids right.
+
+    The suffix is the sentence's 1-based ordinal among those sharing the base id, so it is
+    deterministic for a given rulebook: reading the same definition twice yields the same ids.
+    Editing the rulebook can move it, which is the same acceptance-withdrawing event as editing
+    the sentence itself.
+    """
+    taken[gid] = taken.get(gid, 0) + 1
+    return gid if taken[gid] == 1 else f"{gid}#{taken[gid]}"
+
+
 def cross_concept_guards(ontology) -> list[Guard]:
     """The rulebook's ``validation.cross_concept_guards``, resolved into evaluable guards.
 
@@ -432,6 +462,9 @@ def cross_concept_guards(ontology) -> list[Guard]:
     so its presence does not break a subtotal, it means the column was read from the company-only
     statement. Same for an aggregate loaded alongside the components it contains: the total is
     right, the equity is double-counted.
+
+    Every guard leaves here with an id no other guard in the same rulebook carries — see
+    ``_unique``.
     """
     rules = getattr(ontology, "validation", None)
     if rules is None:
@@ -442,6 +475,7 @@ def cross_concept_guards(ontology) -> list[Guard]:
                                "mutually_exclusive_groups", [])}
 
     out: list[Guard] = []
+    taken: dict[str, int] = {}
     for text in rules.cross_concept_guards:
         lowered = text.lower()
         predicate = precondition = ""
@@ -455,7 +489,7 @@ def cross_concept_guards(ontology) -> list[Guard]:
                              statement="cross_statement", precondition="always", text=text,
                              broken="guard_unrecognised"))
             continue
-        gid = f"guard:{predicate}" + (f":{keys[0]}" if keys else "")
+        gid = _unique(f"guard:{predicate}" + (f":{keys[0]}" if keys else ""), taken)
         # "…together with its listed components" names the aggregate and points at the list, which
         # lives in ``global_rules.mutually_exclusive_groups``. Editing that list changes what the
         # guard compares; an aggregate with no group is an authoring gap, reported as one.
@@ -549,6 +583,15 @@ def evaluate_structure(template: TemplateDefinition,
     if ontology is not None:
         declared += ontology_identities(template, ontology)
         declared += section_relations(template, ontology)
+    # TWO RELATIONS MUST NOT SHARE AN ID, for the same reason two guards must not (see ``_unique``):
+    # the review card's DOM id is ``chk-structural-{rule_id}-{scope_key}`` and the coverage report
+    # keys its per-rule alarms on the id, so one id over two relations is one card for two
+    # assertions. An authored ``validation.identities``/``identities`` id is a free-text field, so
+    # two entries can share one — and then run 1 failing entry A and run 2 failing entry B served B
+    # under A's reviewer and A's reason. The judgement layer does not rely on this either: a
+    # relation's subject carries its operands (api/routes/documents.py::_structural_checks).
+    taken: dict[str, int] = {}
+    declared = [replace(rel, id=_unique(rel.id, taken)) for rel in declared]
 
     for rel in declared:
         keys = (rel.target, *rel.components)
@@ -790,9 +833,18 @@ def _guard_slot(guard: Guard, slot: Slot, vals: MappedValues,
     return RuleResult(
         rule_id=guard.id, kind="guard", scope_key=_scope(slot),
         status="fail" if violations else "pass",
+        # ``target``/``components`` are DERIVED FROM THE VIOLATIONS for most predicates (primary is
+        # violations[0]["key"] under sign_expectation, `others` is the loaded subset under
+        # mutually_exclusive). They are display and diagnosis only. ``guard_keys`` is the operand
+        # set the guard DECLARES — unchanged by which of them broke — and it is what a stored human
+        # judgement is keyed on: a subject built from a violation-derived field changes when a
+        # figure moves, so a still-failing finding gets reported as corrected. Empty for
+        # sign_expectation, whose sentence names no concept and which scans every concept carrying
+        # a declared sign convention.
         details={"target": primary, "components": others, "op": guard.predicate,
                  "statement": guard.statement, "basis": slot[0], "period_label": slot[1],
                  "guard": guard.predicate, "severity": guard.severity,
+                 "guard_keys": list(keys),
                  "precondition": guard.precondition, "rule_text": guard.text,
                  "violations": violations,
                  "violations_keys": sorted({k for v in violations
@@ -814,6 +866,9 @@ def _guard_skip(guard: Guard, reason: str, extra: dict) -> RuleResult:
         details={"target": guard.keys[0] if guard.keys else "", "components": list(guard.keys[1:]),
                  "op": guard.predicate, "statement": guard.statement, "reason": reason,
                  "guard": guard.predicate, "severity": guard.severity,
+                 # Carried on every guard row, evaluated or not, so a reader of a skip sees which
+                 # operands the sentence names without re-parsing the sentence.
+                 "guard_keys": list(guard.keys),
                  **({"authoring_defect": True} if reason in AUTHORING_REASONS else {}),
                  "precondition": guard.precondition, "rule_text": guard.text, **extra},
     )

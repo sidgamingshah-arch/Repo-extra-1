@@ -1,6 +1,6 @@
 /** Screen 8: Export — deliver the extracted, reviewed and reconciled dataset. */
 import { useState } from "react";
-import { useDocumentRun, useExportOptions, useProjectLoaded, useSubmitForReview } from "../lib/queries";
+import { useDocumentRun, useExportOptions, useProject, useProjectLoaded, useSubmitForReview } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { downloadDocumentExport, downloadExport } from "../lib/api";
 import { useUI } from "../store";
@@ -44,27 +44,29 @@ function FormatCard({
   );
 }
 
-/** A single include-checklist row. Presentational: reflects option.on. */
-function IncludeRow({ label, on }: { label: string; on: boolean }) {
+/** One include-checklist row, for both the real and the sample export — ONE spelling of one
+ *  control. The sample rows used to be a separate presentational component with no onChange,
+ *  wrapped in `pointerEvents: auto` for an admin, so they advertised a choice and delivered none
+ *  (and the sample download posted `include: {}`, discarding it anyway). */
+function IncludeRow({ label, on, onToggle }: { label: string; on: boolean; onToggle: () => void }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}>
+    <div
+      onClick={onToggle}
+      data-testid="e-include"
+      data-on={on}
+      style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 0", cursor: "pointer" }}
+    >
       <span
         style={{
-          width: 17,
-          height: 17,
-          borderRadius: 5,
-          background: on ? color.indigo : color.surface,
-          border: `1.5px solid ${on ? color.indigo : color.dashed}`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#fff",
-          fontSize: 11,
+          width: 15, height: 15, borderRadius: 4, flex: "0 0 auto",
+          border: `2px solid ${on ? color.indigo : color.dashed}`,
+          background: on ? color.indigo : "#fff", color: "#fff",
+          fontSize: 11, lineHeight: "11px", textAlign: "center",
         }}
       >
         {on ? "✓" : ""}
       </span>
-      <span style={{ fontSize: 12.5, color: color.ink2 }}>{label}</span>
+      <span style={{ fontSize: 12 }}>{label}</span>
     </div>
   );
 }
@@ -223,7 +225,12 @@ function RealPreview({ rows, isExcel }: { rows: ExtractionRow[]; isExcel: boolea
       </pre>
     );
   }
-  const head = ["", t("e.col.lineitem"), "Value", t("e.col.note"), t("e.col.conf"), t("e.col.source")];
+  // Six headers, six localized strings. The third was the English literal "Value" between five
+  // translated ones, so a zh reader saw "行项目 | Value | 附注 | 置信度 | 来源" — the missing-key half
+  // of this array was fixed while the untranslated-literal half stayed in the same expression.
+  const head = [
+    "", t("e.col.lineitem"), t("e.col.value"), t("e.col.note"), t("e.col.conf"), t("e.col.source"),
+  ];
   const cols = "30px 1fr 90px 46px 56px 80px";
   return (
     <div style={{ fontFamily: font.mono, fontSize: 11 }}>
@@ -261,6 +268,9 @@ export default function ExportScreen() {
   const activeDocumentId = useUI((s) => s.activeDocumentId);
   const usingReal = !!activeDocumentId;
   const loaded = useProjectLoaded();
+  // The sample footer's counts, as the demo project itself reports them — the same payload
+  // useProjectLoaded already reads, so no extra request and no second copy of the figures.
+  const sampleProgress = useProject().data?.project.progress;
   const { data, isPending } = useExportOptions();
   const runQ = useDocumentRun(activeDocumentId ?? undefined);
   const exportFmt = useUI((s) => s.exportFmt);
@@ -272,6 +282,10 @@ export default function ExportScreen() {
     note_details: true, ratios: true, disclosures: true,
   });
   const includeKeys = Object.keys(inc).filter((k) => inc[k]);
+  // The SAMPLE export's checklist. Null until the user touches it, so the boxes start at whatever
+  // the server declared (`option.on`) instead of a second default kept here — and the map that is
+  // shown is the map that is posted, which the sample download used to drop on the floor.
+  const [sampleInc, setSampleInc] = useState<Record<string, boolean> | null>(null);
   // Target presentation unit for a real export (empty = as reported). Conversion applies only
   // when the document declared its source units, which the run reports.
   const [targetUnits, setTargetUnits] = useState<string>("");
@@ -287,7 +301,12 @@ export default function ExportScreen() {
   }
 
   const realRows: ExtractionRow[] = usingReal ? (runQ.data?.result.rows ?? []) : [];
+  // Rows this export would carry with no canonical mapping, or carrying an extraction flag. That
+  // is NOT the sample path's review backlog, so the footer labels the two separately.
   const realFlagged = realRows.filter((r) => !r.canonical_key || (r.flags?.length ?? 0) > 0).length;
+  // Server defaults until the user overrides one, per option — never a client-side copy of them.
+  const sampleInclude: Record<string, boolean> =
+    sampleInc ?? Object.fromEntries((data?.options ?? []).map((o) => [o.key, o.on]));
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto", padding: "26px 30px 60px" }}>
@@ -325,16 +344,8 @@ export default function ExportScreen() {
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
                 <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
                   {(["note_details", "ratios", "disclosures"] as const).map((k) => (
-                    <div key={k} onClick={() => setInc((s) => ({ ...s, [k]: !s[k] }))}
-                         style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 0", cursor: "pointer" }}>
-                      <span style={{ width: 15, height: 15, borderRadius: 4, flex: "0 0 auto",
-                                     border: `2px solid ${inc[k] ? color.indigo : color.dashed}`,
-                                     background: inc[k] ? color.indigo : "#fff", color: "#fff",
-                                     fontSize: 11, lineHeight: "11px", textAlign: "center" }}>
-                        {inc[k] ? "✓" : ""}
-                      </span>
-                      <span style={{ fontSize: 12 }}>{t(`e.sheet.${k}`)}</span>
-                    </div>
+                    <IncludeRow key={k} label={t(`e.sheet.${k}`)} on={inc[k]}
+                                onToggle={() => setInc((s) => ({ ...s, [k]: !s[k] }))} />
                   ))}
                 </div>
               </Card>
@@ -345,7 +356,13 @@ export default function ExportScreen() {
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
                 <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
                   {data.options.map((o) => (
-                    <IncludeRow key={o.key} label={t(`e.opt.${o.key}`)} on={o.on} />
+                    <IncludeRow
+                      key={o.key}
+                      label={t(`e.opt.${o.key}`)}
+                      on={sampleInclude[o.key] ?? o.on}
+                      onToggle={() =>
+                        setSampleInc({ ...sampleInclude, [o.key]: !(sampleInclude[o.key] ?? o.on) })}
+                    />
                   ))}
                 </div>
               </Card>
@@ -434,10 +451,22 @@ export default function ExportScreen() {
               justifyContent: "space-between",
             }}
           >
-            <span style={{ fontSize: 11.5, color: color.muted }}>
+            {/* Each path names the quantity IT counts. "flagged" used to label both the real
+                path's rows-with-no-mapping-or-a-flag and the sample's review backlog — one word
+                over two different quantities, which is how a 12 the payload no longer contained
+                went on reading as "flagged" after the literals were deleted from this markup. The
+                sample's two figures are the demo project's own served counts (statement line items,
+                and the review route's open count); there is no third figure and no percentage,
+                because the payload carries none. Nothing is printed until the query resolves: a
+                pending request is not an empty project. */}
+            <span data-testid="e-footer-counts" style={{ fontSize: 11.5, color: color.muted }}>
               {usingReal
-                ? `${realRows.length} ${t("e.footer.lineitems")} · ${realFlagged} ${t("e.footer.flagged")}`
-                : `148 ${t("e.footer.lineitems")} · 48 ${t("e.footer.notes")} · 12 ${t("e.footer.flagged")}`}
+                ? `${realRows.length} ${t("e.footer.lineitems")} · `
+                  + `${realFlagged} ${t("e.footer.unmappedOrFlagged")}`
+                : sampleProgress
+                  ? `${sampleProgress.line_items} ${t("e.footer.lineitems")} · `
+                    + `${sampleProgress.in_review} ${t("e.footer.inReview")}`
+                  : ""}
             </span>
             {canExport ? (
               // Reviewer/admin, or analyst when the review step is off: deliver the file.
@@ -451,7 +480,9 @@ export default function ExportScreen() {
                         basis: "consolidated",
                         currency: "INR",
                         units: "crore",
-                        include: {},
+                        // What the checklist above shows. It was `{}`, so the workbook ignored
+                        // every box the screen had just presented as a choice.
+                        include: sampleInclude,
                       })
                 }
                 style={{

@@ -204,8 +204,14 @@ export type RowKind = "section" | "subhead" | "item" | "subtotal" | "total";
 export type ExportFmt = "excel" | "json";
 
 export interface Confidence {
+  /** The BAND — the badge's colour, and its text when there is no measurement. */
   cat: ConfCat;
-  pct: number;
+  /** The MEASURED confidence as a percentage (0–100). Optional, and it must stay optional: the
+   *  real path omits the whole object when nothing scored the row (documents.py serves
+   *  `confidence: null` rather than a band beside a made-up 60), and any payload that knows only
+   *  the band should serve the band alone — components/ui.tsx::confReadout then names it instead of
+   *  printing a figure nothing measured. */
+  pct?: number | null;
 }
 
 export interface Inspector {
@@ -343,7 +349,11 @@ export interface Project {
   units: string;
   periods: [string, string];
   bases: Basis[];
-  progress: { pct: number; line_items: number; in_review: number };
+  /** Both counted by the server from the data it serves: `line_items` is the statement rows that
+   *  are line items, `in_review` is the review route's own open count. There is no `pct` — "how
+   *  far through the workflow is this project" has no source anywhere in the payload, so it is
+   *  absent rather than served as a figure derived from nothing. */
+  progress: { line_items: number; in_review: number };
   template: { key: string; name: string; line_items: number };
   ontology: { file: string; rules: number; aliases: number; status: string };
 }
@@ -581,7 +591,13 @@ export interface PageCard {
   kind?: "face" | "notes" | "other";
   cls: string;
   sub: string;
+  /** The BUCKET the classifier's confidence fell into — a colour, not a quantity. */
   conf: ConfCat;
+  /** The MEASURED classification confidence as a percentage (0–100), or null/absent when the
+   *  classifier recorded none. The tile printed `confStyle(conf).pct` — 96/78/54 by bucket — as
+   *  though it were this figure, so a page scored 0.40 read "54%" and an unscored page read "78%".
+   *  Absent means unscored, and the tile says so rather than printing a bucket's stand-in. */
+  conf_pct?: number | null;
   included: boolean;
   scan: "native" | "scanned";
 }
@@ -598,6 +614,120 @@ export interface ReviewCalcRow {
   1: string;
   2: boolean;
 }
+/** The one mechanical correction the product offers: flip a mis-signed figure. DERIVED BY THE
+ *  SERVER — the client can never invent a fix, and most checks carry `fix_action: null` because
+ *  no single edit is implied (a balance identity has two sides; a wrong subtotal must not be
+ *  overwritten with the printed figure, which would hide the mis-mapped component).
+ *
+ *  Applying it is an ORDINARY edit — the same PATCH the Workspace uses — so the flip snapshots
+ *  the original (the existing revert undoes it), records WHY in the edit comment, and re-derives
+ *  every value-driven check. Both figures arrive pre-formatted: the browser formats no number. */
+export interface FixAction {
+  kind: "flip_sign";
+  canonical_key: string;
+  basis: Basis;
+  period: string;
+  label: string;
+  from: number;
+  to: number;
+  from_display: string;
+  to_display: string;
+  comment: string;
+}
+
+/** The in-force judgement on a finding — a named person examined these figures and recorded
+ *  that they stand. It does NOT mean the check passed, which is why an accepted card stays in
+ *  the list rather than disappearing.
+ *
+ *  `accepted_rows` is the evidence AS JUDGED, localized and formatted server-side in the same
+ *  [label, value] shape as `ReviewCheck.calc` so one renderer serves both. `changed` /
+ *  `changed_label` are populated only when the figures have moved since — the check is then
+ *  `stale`, which is the withdrawal of an acceptance made visible instead of silent. */
+export interface CheckJudgement {
+  verdict: "accepted";
+  actor: string;
+  actor_role: string;
+  at: string;
+  reason: string;
+  run_id: string;
+  accepted_rows: [string, string][];
+  changed: string[];
+  changed_label: string;
+}
+
+/** A judgement whose finding no longer exists in this run — corrected, or gone. Never
+ *  auto-deleted (erasing who accepted a break is not something an audit trail permits), so the
+ *  screen states that N prior judgements match nothing here rather than dropping them. */
+export interface OrphanedJudgement {
+  subject_key: string;
+  subject_label: string;
+  actor: string;
+  actor_role: string;
+  at: string;
+  reason: string;
+}
+
+/** Coverage of ONE statement's template relations: how many could be evaluated at all, not how
+ *  many passed. `validation_rate` / `coverage_rate` are the only rates the payload carries and
+ *  are null together when nothing was evaluable — the band renders the two FRACTIONS instead,
+ *  because a single rate shown alone reads as a score. */
+export interface CoverageStatement {
+  statement: string;
+  label: string;
+  passed: number;
+  failed: number;
+  skipped: number;
+  evaluated: number;
+  declarable: number;
+  validation_rate: number | null;
+  coverage_rate: number | null;
+  skips: Record<string, number>;
+  status: string;
+  status_label: string;
+}
+/** One reason relations could not be evaluated, with what that reason MEANS. `counts_in_denominator`
+ *  false marks a bucket excluded from `declarable` (the filing has no such statement). */
+export interface CoverageSkip {
+  bucket: string;
+  count: number;
+  label: string;
+  meaning: string;
+  counts_in_denominator: boolean;
+}
+/** A named defect in the coverage itself. `assurance_gap` marks the worst kind: a relation
+ *  declared blocking that cannot run as authored, so it fires on no filing at all. */
+export interface CoverageAlarm {
+  code: string;
+  label: string;
+  rule_id: string | null;
+  statement: string | null;
+  text: string;
+  assurance_gap: boolean;
+}
+/** The coverage contract, recomputed at serve time from the run's stored relation rows.
+ *
+ *  Unavailability is STATED, never rendered as zeros: "0 of 0 relations evaluated" is exactly
+ *  the misread the coverage report exists to prevent, so the two variants are disjoint and the
+ *  numbers only exist on the available one. */
+export type CoverageBlock =
+  | {
+      available: false;
+      reason: "not_extracted" | "no_template" | "no_relations" | "sample";
+      reason_label: string;
+    }
+  | {
+      available: true;
+      run_id: string;
+      engine_version: string;
+      aggregate: CoverageStatement;
+      statements: CoverageStatement[];
+      skips: CoverageSkip[];
+      alarms: CoverageAlarm[];
+      /** Failed relations suppressed from the card list because their target already has its own
+       *  finding — why the band's `failed` can exceed the number of structural cards above it. */
+      failed_reported_elsewhere: number;
+    };
+
 export interface ReviewCheck {
   id: string;
   type: string;
@@ -610,15 +740,84 @@ export interface ReviewCheck {
   target: string;
   calc: [string, string, boolean][];
   fix: string;
+  /** WHAT was judged, and the figures it was judged against — both locale-free, so one
+   *  acceptance holds in all four languages. `subject_key` is the identity a judgement is
+   *  keyed on; `id` never is, because two of the check builders key on row index and an
+   *  id-keyed acceptance would silently land on a different line item after a re-run.
+   *  Null on the sample path, which carries no judgements at all. */
+  subject: Record<string, unknown>;
+  subject_key: string | null;
+  evidence: Record<string, unknown>;
+  evidence_digest?: string;
+  /** "open" — nobody has recorded a judgement (the distinction that was missing);
+   *  "accepted" — an in-force judgement against THESE figures;
+   *  "stale" — accepted earlier against DIFFERENT figures, so it counts as outstanding work;
+   *  "conflict" — this finding shares its subject_key with another that printed DIFFERENT
+   *  figures, so identity cannot tell them apart and no judgement may be attributed to either.
+   *
+   *  The union is open-ended on purpose: a server that has learned a state this build does not
+   *  know must not be assumed acceptable. The screen whitelists the states it can act on and
+   *  treats anything else as non-judgeable — see KNOWN_STATUS / ACCEPTABLE_STATUS in
+   *  screens/Review.tsx. (Named wrongly here as "JUDGEABLE_STATUS", a constant that does not
+   *  exist: a comment pointing at nothing is how the next reader concludes the whitelist was
+   *  removed.) Withdrawal is deliberately NOT gated on this status — see `judgement_withheld`. */
+  status: "open" | "accepted" | "stale" | "conflict" | (string & {});
+  /** Two findings whose subject AND evidence are identical share one judgement — accepting one
+   *  accepts both. Knowingly allowed (the card showed the human nothing to tell them apart) and
+   *  made loud rather than silent by this count, which the server derives.
+   *
+   *  Never true together with `conflict`: "accepting one accepts them all" is FALSE of findings
+   *  that printed different figures, and that caption over such a pair is the defect. */
+  ambiguous: boolean;
+  ambiguous_count: number;
+  /** The identity scheme failed on this finding: `conflict_count` findings in this payload share
+   *  its subject_key while disagreeing about their evidence. `conflict_note` is the server's
+   *  localized sentence saying so (and, when `judgement_withheld`, that a recorded acceptance is
+   *  being held back rather than pinned to the wrong card). The screen prints that sentence and
+   *  offers no acceptance; `judgement` is null on every conflict card. */
+  conflict: boolean;
+  conflict_count: number;
+  conflict_note: string;
+  /** True when the server HOLDS an in-force acceptance for this subject but refuses to show it on
+   *  any card in the conflict group. It is the payload's only statement that a withdrawable row
+   *  exists on a conflict card, and it is what the withdraw control is gated on there: DELETE
+   *  /review/judgements/{subject_key} deliberately permits withdrawal on a conflicted subject,
+   *  and gating the control on `status === "accepted"` instead left that acceptance permanently
+   *  un-removable. */
+  judgement_withheld: boolean;
+  fix_action: FixAction | null;
+  /** Structural checks only. `run.result["structural"]` is written once by the pipeline and is
+   *  never recomputed on an edit, so the relation is not re-evaluated until the next extraction:
+   *  the card does NOT vanish after its own fix, and the note says so. */
+  inputs_edited: boolean;
+  inputs_edited_keys: string[];
+  inputs_edited_note: string;
+  judgement: CheckJudgement | null;
 }
 export interface ReviewResponse {
+  /** The run the findings were derived from — printed by the coverage band so a screenshot is
+   *  traceable. "" when the document has no run. */
+  run_id: string;
   checks: ReviewCheck[];
   /** `types` is the set of `ReviewCheck.type` a tab selects; `null` is the everything tab. The
    *  tab says what it means rather than the client inferring it from position — a positional
    *  contract between a server list and a client array is what made the Page Scope filter chips
-   *  filter by the wrong page kind. */
+   *  filter by the wrong page kind. Counts are by TYPE over the whole list regardless of status,
+   *  so each one still equals the length of the list clicking it produces. */
   tabs: { label: string; count: number; types?: string[] | null }[];
-  summary: { open: number; passed: number };
+  /** `open` counts open, stale AND conflict — all three are outstanding work, and a conflict
+   *  cannot be accepted by anyone at all; `stale` and `conflict` are those subsets, reported
+   *  separately so the screen can state each out loud instead of burying them in one number.
+   *
+   *  `open` / `accepted` / `stale` / `conflict` count CARDS. `passed` counts LINES: extracted line
+   *  items that NO served finding names, which is what the header tile above it says in all four
+   *  locales. It was rows minus (unmapped + low-confidence) — a narrower set, so a line indicted
+   *  by a balance, note-tie, structural, guard, calculated_mismatch or uncomputed finding counted
+   *  as having none — and both the real route and the sample route now derive the definition the
+   *  label states. Never recompute it client-side: one quantity, derived where it is served. */
+  summary: { open: number; accepted: number; stale: number; conflict: number; passed: number };
+  judgements: { orphaned: OrphanedJudgement[] };
+  coverage: CoverageBlock;
 }
 
 export interface NoteIndexItem {
@@ -630,7 +829,12 @@ export interface NoteDetailRow {
   label: string;
   v1: number;
   v2: number;
+  /** The BUCKET this row's mapping confidence fell into — the badge's colour. */
   conf?: ConfCat;
+  /** The MEASURED mapping confidence as a percentage (0–100), or null/absent when none was
+   *  recorded. The badge under the CONF. header printed the bucket's literal instead, so every
+   *  'high' row read "96%" whatever its real score. Absent → the badge says "not scored". */
+  conf_pct?: number | null;
   kind?: "sub" | "tot";
 }
 export interface NoteDetail {
@@ -641,6 +845,12 @@ export interface NoteDetail {
   linked_label: string;
   rows: NoteDetailRow[];
   reconciliation: string | null;
+  /** [current, prior] column labels, derived from the same value lists the rows' v1/v2 came
+   *  from — the SAME key and order the statement endpoints use, so one client field serves both
+   *  screens. The two headers were hardcoded "FY25"/"FY24" here while the Workspace showed the
+   *  filing's real periods, so a 2023/2022 filing had the two screens labelling one figure
+   *  differently. Absent (or blank) on a run extracted before the endpoint served it. */
+  periods?: string[];
 }
 export interface NotesResponse {
   notes: NoteIndexItem[];

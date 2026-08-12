@@ -19,10 +19,12 @@ view and a stored formula string) and deepen as the live extraction pipeline lan
 
 ## Routes
 
+The routes `App.tsx` actually registers:
+
 ```
-/  ·  /upload  ·  /documents/:id/progress (WS)  ·  /documents/:id/integrity (gate)
-/documents/:id/review  (workspace)  ·  /queue  ·  /notes  ·  /export
-/templates  ·  /templates/:id/edit  (editor + ontology upload)
+/ → /workspace  ·  /upload  ·  /documents/:id  (extraction progress, polled)
+/integrity  ·  /scope  ·  /workspace  ·  /notes  ·  /review  ·  /commentary
+/template  ·  /settings  ·  /export
 ```
 
 ## Signature screen — side-by-side hyperlinked viewer
@@ -115,5 +117,7 @@ upload validated with Zod), export dialog. Client TS types mirror the backend mo
 Bbox alignment across zoom/rotation/DPR (prototype first — normalized coords +
 `ResizeObserver` + server-side y-flip); formula recalc at scale (Worker + AG Grid
 transaction updates); keeping raw/override/formula/computed coherent with the units
-transform (single `resolveDisplay`/`resolveNumeric` helpers); realtime consistency
-(REST snapshot on reconnect); Excel formula fidelity (shared A1-translation module).
+transform (single `resolveDisplay`/`resolveNumeric` helpers); progress delivery — today
+a 1s poll of the run endpoint while it is `running` (`lib/queries.ts`); a push channel
+would additionally need a REST snapshot on reconnect; Excel formula fidelity (shared
+A1-translation module).

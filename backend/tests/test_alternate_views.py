@@ -149,7 +149,7 @@ def test_the_equity_statement_must_close_at_the_balance_sheets_equity():
     """The one relation that crosses two statements — and worth checking precisely because the
     two sides are extracted by completely different readers (a matrix reader and a two-column
     reader), so their agreement is evidence rather than a restatement."""
-    from app.api.routes.documents import _accounting_checks, _equity_closing
+    from app.api.routes.documents import _accounting_checks, _build_review, _equity_closing
 
     def equity_rows(closing):
         return [
@@ -166,9 +166,11 @@ def test_the_equity_statement_must_close_at_the_balance_sheets_equity():
                  "values": [{"basis": "consolidated", "period_label": "current",
                              "value": str(total)}]}]
 
-    # The LAST balance line is the closing one, not the opening one.
+    # The LAST balance line is the closing one, not the opening one — and it comes back with the NAME
+    # the review queue indicts it under (its canonical_key, or the printed caption when the matrix row
+    # mapped to nothing, as these do).
     assert _equity_closing(equity_rows(20_482_326), "consolidated") == (
-        "At 31 December 2023", 20_482_326.0)
+        "At 31 December 2023", 20_482_326.0, "At 31 December 2023")
 
     # Agreement is silent.
     agreeing = equity_rows(20_482_326) + bs_equity(20_482_326)
@@ -178,6 +180,40 @@ def test_the_equity_statement_must_close_at_the_balance_sheets_equity():
     conflicting = equity_rows(20_482_326) + bs_equity(19_000_000)
     tie = next(c for c in _accounting_checks(conflicting, [], "en") if c["type"] == "equity_tie")
     assert tie["delta"] == "1,482,326"
+
+    # BOTH lines the card indicts are named: the balance sheet's equity total AND the equity
+    # statement's closing row. The card used to name only the first, on the strength of a comment
+    # saying the closing row "is a matrix row, not one of `rows`" — but `_equity_closing` iterates
+    # `_matrix_rows(rows, basis)`, which FILTERS `rows`, so the row it returns is one of them. The
+    # header tile counts the lines no finding names, and it was counting this one.
+    assert tie["names"] == ["At 31 December 2023", "bs_equity__total_equity"]
+    # …and the header tile therefore stops counting the closing row as a line with no finding. Mapped
+    # rows, with a confident mapping, so the only card in the payload is the equity tie: an unmapped
+    # matrix row would be indicted by its OWN card and the count could not tell the two apart.
+    mapped = [{**r, "canonical_key": f"eq_{i}", "mapping_confidence": 0.99}
+              for i, r in enumerate(equity_rows(20_482_326))] + bs_equity(19_000_000)
+    review = _build_review(mapped, "d.pdf", "en")
+    assert [c["type"] for c in review["checks"]] == ["equity_tie"]
+    assert review["checks"][0]["names"] == ["bs_equity__total_equity", "eq_2"]
+    # THE ASSERTION THAT FAILS WITH THE DEFECT RESTORED: naming only the balance-sheet total leaves
+    # 3 of these 4 lines reading as having no finding while a card indicts 2 of them.
+    assert review["summary"]["passed"] == len(mapped) - 2
+
+    # The CAPTION of the row taken as the closing balance is printed on the card, so it is part of
+    # what a reviewer accepted and it is fingerprinted. A re-run that picks a different closing row
+    # carrying the same figure is a different claim, and it used to keep the acceptance in silence.
+    assert tie["calc"][0][0] == "At 31 December 2023"
+    assert tie["evidence"]["closing_label"] == "at 31 december 2023"
+    renamed = [dict(r) for r in conflicting]
+    renamed[2] = {**renamed[2], "source_label": "At 31 December 2023 (restated)"}
+    moved = next(c for c in _accounting_checks(renamed, [], "en") if c["type"] == "equity_tie")
+    assert moved["subject"] == tie["subject"]                 # the same claim is being checked…
+    assert moved["evidence"] != tie["evidence"]                   # …about a different row
+    # Re-wrapped whitespace and case are NOT a different row: that is re-parsing, not a change.
+    respaced = [dict(r) for r in conflicting]
+    respaced[2] = {**respaced[2], "source_label": "At  31 December  2023"}
+    same = next(c for c in _accounting_checks(respaced, [], "en") if c["type"] == "equity_tie")
+    assert same["evidence"] == tie["evidence"]
 
 
 def test_no_equity_statement_means_no_cross_statement_check():

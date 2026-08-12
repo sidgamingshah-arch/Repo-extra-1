@@ -1,5 +1,9 @@
 import type { Locale } from "../../types";
 
+/** `n.periodCurrent` / `n.periodPrior` are the FALLBACK column headers for a note whose source
+ *  named no columns. They deliberately use the same words the backend falls back to (see the
+ *  Current/Prior entries in documents.py `_TR`, copied from export.py), so a served label and a
+ *  fallback one never read as two different things on the same screen. */
 export const notes: Record<Locale, Record<string, string>> = {
   en: {
     "n.heading": "Extracted notes",
@@ -8,6 +12,8 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.lineItems": "line items",
     "n.search": "Search notes…",
     "n.particulars": "PARTICULARS",
+    "n.periodCurrent": "Current",
+    "n.periodPrior": "Prior",
     "n.conf": "CONF.",
     "n.note": "Note",
     "n.extractedFrom": "Extracted from p.",
@@ -24,6 +30,8 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.lineItems": "个项目",
     "n.search": "搜索附注…",
     "n.particulars": "项目",
+    "n.periodCurrent": "本期",
+    "n.periodPrior": "上期",
     "n.conf": "置信度",
     "n.note": "附注",
     "n.extractedFrom": "提取自第",
@@ -40,6 +48,8 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.lineItems": "بنود",
     "n.search": "بحث في الإيضاحات…",
     "n.particulars": "البيان",
+    "n.periodCurrent": "الحالية",
+    "n.periodPrior": "السابقة",
     "n.conf": "الثقة",
     "n.note": "إيضاح",
     "n.extractedFrom": "مستخرج من ص.",
@@ -56,6 +66,8 @@ export const notes: Record<Locale, Record<string, string>> = {
     "n.lineItems": "postes",
     "n.search": "Rechercher des notes…",
     "n.particulars": "DÉTAILS",
+    "n.periodCurrent": "Actuel",
+    "n.periodPrior": "Précédent",
     "n.conf": "CONF.",
     "n.note": "Note",
     "n.extractedFrom": "Extrait de la p.",

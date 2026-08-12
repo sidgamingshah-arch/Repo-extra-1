@@ -33,7 +33,8 @@ Run: `cd backend && pip install -e ".[dev]" && pytest -q`.
 6. Reconciliation stage wiring + `ReconciliationReport`; validation engine +
    review queue; full extraction persistence (Statement/LineItem/... tables).
 7. OCR path (PaddleOCR/PP-Structure adapter) into the same reconstruct stage.
-8. Formula engine; export renderers (Excel/JSON); WebSocket progress; edit + `If-Match`.
+8. ✅ Formula engine; export renderers (Excel/JSON); edit endpoints (no `If-Match` yet).
+   Progress is polled, not pushed — the WebSocket stream is not built.
 9. Confidence calibration; alternate adapters (Tesseract, TATR, local LLM); FX.
 
 **Frontend**

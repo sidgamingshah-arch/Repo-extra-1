@@ -64,6 +64,37 @@ def test_flat_export_has_formula_column(client):
     assert "Formula" in header
     text = " | ".join(str(v) for row in ws.iter_rows(values_only=True) for v in row if v)
     assert "=SUM(x)" in text
+    # …and it is TEXT, not a live formula cell. openpyxl promotes a leading "=" to a real formula,
+    # and this expression's references are canonical line-item keys, not cell addresses, so the
+    # workbook opened with #NAME? where an audit trail was intended.
+    cell = next(c for row in ws.iter_rows() for c in row if c.value == "=SUM(x)")
+    assert cell.data_type == "s"
+
+
+def test_workbook_carries_formulas_as_notes_not_live_cells(client):
+    """The Excel export does not build a live spreadsheet, and the docs now say so.
+
+    A formula travels for AUDIT: as text in the flat sheet's Formula column, and as a cell NOTE on
+    the row's label cell in the statement workbook. References are canonical line-item keys
+    resolved server-side by services/formula.py and are never translated to cell addresses, so
+    nothing in the file recalculates — the number in the cell is the value the server computed.
+    """
+    import openpyxl
+
+    doc_id = _extract(client)
+    rows = client.get(f"/api/v1/documents/{doc_id}/run").json()["result"]["rows"]
+    key = next(r["canonical_key"] for r in rows if r.get("canonical_key"))
+    client.patch(f"/api/v1/documents/{doc_id}/line-items/{key}",
+                 json={"value": 5, "formula": "=SUM(x)"})
+
+    x = client.get(f"/api/v1/documents/{doc_id}/export",
+                   params={"fmt": "excel", "layout": "statement"})
+    wb = openpyxl.load_workbook(io.BytesIO(x.content))
+    assert not [c for ws in wb.worksheets for row in ws.iter_rows() for c in row
+                if c.data_type == "f"]
+    notes = [c.comment.text for ws in wb.worksheets for row in ws.iter_rows() for c in row
+             if c.comment]
+    assert any("=SUM(x)" in note for note in notes)
 
 
 def test_include_gates_analysis_sheets(client):
