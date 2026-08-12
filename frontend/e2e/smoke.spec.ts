@@ -884,3 +884,40 @@ test("a run that used a superseded rulebook says so, however the client sees the
   await expect(page.getByTestId("ex-rulebook-used")).toContainText(/has since been replaced/);
   await page.unroute("**/api/v1/ontologies");
 });
+
+test("the upload screen describes the rulebook the run will use, not a fabricated one",
+     async ({ page }) => {
+  // The blocker this closes: the card printed the SAMPLE project's ontology filename over a fixed
+  // "1,240 rules · 380 aliases" and a green "Valid" badge. Three claims, none of them about any
+  // rulebook this product has ever held, on the screen where an analyst decides whether the run is
+  // configured correctly — and plausible enough in magnitude that nobody questioned them.
+  //
+  // Checked against the API rather than against expected text, because the point is that the two
+  // agree: the card is only right if it names the rulebook /ontologies reports in force and prints
+  // that rulebook's own counts.
+  await loginAs(page, "analyst");
+  const rows = await (await page.request.get("/api/v1/ontologies")).json();
+  expect(rows.length).toBeGreaterThan(0);
+
+  await page.goto("/upload", DCL);
+  const card = page.getByTestId("u-rulebook");
+  // Wait for the card to have RESOLVED a rulebook, not merely to be on screen: it renders while
+  // the list is in flight, and reading the id then says "no rulebook" about a request in progress.
+  await expect(card).toHaveAttribute("data-rulebook-id", /.+/, { timeout: 15_000 });
+  const id = await card.getAttribute("data-rulebook-id");
+  const ont = rows.find((o: { id: string }) => o.id === id);
+  expect(ont, "the card must name a rulebook the server actually serves").toBeTruthy();
+  // A rulebook the server says has been replaced would be the wrong default to describe.
+  expect(ont.superseded).toBeFalsy();
+  await expect(card).toHaveText(ont.ontology_key);
+
+  // Its size, off its own definition — and the counts have to be load-bearing, so a real rulebook
+  // names its concepts in more than one way.
+  const meta = page.getByTestId("u-rulebook-meta");
+  expect(ont.concept_count).toBeGreaterThan(100);
+  expect(ont.alias_count).toBeGreaterThan(ont.concept_count);
+  await expect(meta).toContainText(`v${ont.version}`);
+  await expect(meta).toContainText(`${ont.concept_count.toLocaleString("en")} concepts`);
+  await expect(meta).toContainText(`${ont.alias_count.toLocaleString("en")} aliases`);
+  await expect(page.getByText("1,240 rules")).toHaveCount(0);
+});

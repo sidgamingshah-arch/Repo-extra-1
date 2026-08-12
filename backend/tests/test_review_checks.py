@@ -237,3 +237,33 @@ def test_a_single_source_row_carries_no_contributions():
     row = next(r for r in _build_statement(rows, None, "cash_flow", "f.pdf")["rows"]
                if r["id"] == key)
     assert row["contributions"] is None
+
+
+def test_every_review_tab_counts_exactly_what_it_selects():
+    """A tab's count is the length of the list clicking it produces.
+
+    The tabs carry the check TYPES they select rather than relying on their position matching an
+    array on the client — positional agreement between a server list and a client array is what
+    made the page-scope filter chips filter by the wrong page kind.
+    """
+    from app.api.routes.documents import _build_review
+
+    rows = [_row("bs_total_assets", 100), _row("bs_total_equity_and_liabilities", 90),
+            {"source_label": "Something the mapper could not place", "canonical_key": None,
+             "values": [{"value": 5}]},
+            {"source_label": "A shaky match", "canonical_key": "bs_cash",
+             "mapping_confidence": 0.2, "flags": ["low_mapping_confidence"],
+             "values": [{"value": 7}]}]
+    review = _build_review(rows, "doc.pdf", "en", [_recon(20)])
+
+    for tab in review["tabs"]:
+        selected = (review["checks"] if tab["types"] is None
+                    else [c for c in review["checks"] if c["type"] in tab["types"]])
+        assert tab["count"] == len(selected), tab["label"]
+    # The per-tab types partition the list: every check belongs to exactly one non-All tab, so a
+    # finding can never be invisible under every filter.
+    buckets = [t for t in review["tabs"] if t["types"] is not None]
+    assert sum(t["count"] for t in buckets) == len(review["checks"])
+    assert {c["type"] for c in review["checks"]} == {ty for t in buckets for ty in t["types"]
+                                                    if any(c["type"] == ty
+                                                           for c in review["checks"])}

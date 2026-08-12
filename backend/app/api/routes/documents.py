@@ -14,6 +14,7 @@ from app.api.deps import db, object_store
 from app.ports.object_store import LocalObjectStore
 from app.security import Permission, Principal, Role, current_principal, require
 from app.services.documents import analyze_document, content_hash
+from app.services.page_scope import normalise_kind, scope_counts
 from app.services.periods import (
     basis_values as _basis_values_of, concept_value as _concept_value, edited_for as _edited_for,
     names_a_component, period_displays, slot_for, split_current_prior)
@@ -740,13 +741,18 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
             })
     total = len(checks)
     passed = max(0, len(rows) - (unmapped + low_conf))
+    # Each tab carries the check TYPES it selects, so the client filters by what the tab means
+    # rather than by its position in this list. `types: None` is the everything tab. Positional
+    # agreement between a server list and a client array is the bug that made the page-scope
+    # chips filter by the wrong kind, and it is not repeated here.
+    accounting_types = sorted({c["type"] for c in accounting})
     return {
         "checks": checks,
         "tabs": [
-            {"label": L("All"), "count": total},
-            {"label": L("Checks"), "count": len(accounting)},
-            {"label": L("Unmapped"), "count": unmapped},
-            {"label": L("Low confidence"), "count": low_conf},
+            {"label": L("All"), "count": total, "types": None},
+            {"label": L("Checks"), "count": len(accounting), "types": accounting_types},
+            {"label": L("Unmapped"), "count": unmapped, "types": ["unmapped"]},
+            {"label": L("Low confidence"), "count": low_conf, "types": ["low_confidence"]},
         ],
         "summary": {"open": total, "passed": passed},
     }
@@ -1246,7 +1252,6 @@ def _build_pages(pages: list[dict], scope: list[int] | None = None) -> dict:
     skipped)."""
     chosen = set(scope) if scope is not None else _default_scope(pages)
     cards = []
-    counts = {"face": 0, "notes": 0, "other": 0}
     for p in pages:
         kind = p.get("kind", "unknown")
         idx = p.get("index", 0) or 0
@@ -1254,26 +1259,16 @@ def _build_pages(pages: list[dict], scope: list[int] | None = None) -> dict:
         cat, _ = _conf_cat(p.get("classification_confidence"))
         cards.append({
             "no": idx + 1,
-            "kind": kind if kind in ("face", "notes") else "other",
+            "kind": normalise_kind(kind),
             "cls": _PAGE_CLS.get(kind, kind.title()),
             "sub": "in scope" if included else "skipped",
             "conf": cat,
             "included": included,
             "scan": "scanned" if p.get("source_kind") == "scanned" else "native",
         })
-        counts[kind if kind in counts else "other"] = counts.get(kind if kind in counts else "other", 0) + 1
-    total = len(cards)
-    focused = sum(1 for c in cards if c["included"])
-    return {
-        "pages": cards,
-        "filters": [
-            {"label": "All pages", "count": total},
-            {"label": "Face", "count": counts["face"]},
-            {"label": "Notes", "count": counts["notes"]},
-            {"label": "Other", "count": counts["other"]},
-        ],
-        "focused": focused, "total": total, "skipped": total - focused,
-    }
+    # Counted from the cards, by the same helper the sample route uses — see app/services/
+    # page_scope.py for why the two routes are no longer allowed their own arithmetic.
+    return {"pages": cards, **scope_counts(cards)}
 
 
 def _document_pages(row, store: LocalObjectStore) -> list[dict]:

@@ -71,11 +71,53 @@ def test_localized_dynamic_content(client):
 def test_review_notes_endpoints(client):
     review = client.get("/api/v1/projects/demo/review").json()
     assert len(review["checks"]) == 4
-    assert review["summary"]["open"] == 12
 
     note = client.get("/api/v1/projects/demo/notes/12").json()
     assert note["title"] == "Trade Receivables"
     assert note["linked_line"] == "trade_recv"
+
+
+def test_sample_counts_describe_the_lists_they_head(client):
+    """Every count the sample serves is counted from the rows served with it.
+
+    This replaces an assertion that pinned the defect: `summary["open"] == 12` was true of a
+    stored literal and false of the four checks beside it, so the screen read "12 open" over a
+    list of four. The same three literals headed all three screens — 84 pages over ten cards,
+    48 notes over twelve, 12 findings over four — so the invariant, not the number, is the test.
+    """
+    review = client.get("/api/v1/projects/demo/review").json()
+    assert review["summary"]["open"] == len(review["checks"])
+    by_label = {t["label"]: t["count"] for t in review["tabs"]}
+    assert by_label["All"] == len(review["checks"])
+    # Each tab counts its own type, so the per-type tabs sum to the whole list exactly once.
+    assert sum(c for label, c in by_label.items() if label != "All") == len(review["checks"])
+    # …and each tab's count is the count of what it SELECTS, which is what the client filters by.
+    for tab in review["tabs"]:
+        selected = (review["checks"] if tab["types"] is None
+                    else [c for c in review["checks"] if c["type"] in tab["types"]])
+        assert tab["count"] == len(selected), tab["label"]
+
+    notes = client.get("/api/v1/projects/demo/notes").json()
+    assert notes["count"] == len(notes["notes"])
+    # `linked` is statement lines citing one of those notes — real lines, so it cannot exceed them.
+    assert 0 < notes["linked"] <= 60
+
+    pages = client.get("/api/v1/projects/demo/pages").json()
+    assert pages["total"] == len(pages["pages"])
+    assert pages["focused"] == sum(1 for p in pages["pages"] if p["included"])
+    assert pages["skipped"] == pages["total"] - pages["focused"]
+    # The chips are matched to page kinds POSITIONALLY by the client: all / face / notes / other.
+    chips = pages["filters"]
+    assert [c["label"] for c in chips] == ["All pages", "Face", "Notes", "Other"]
+    assert chips[0]["count"] == len(pages["pages"])
+    for i, kind in enumerate(("face", "notes", "other"), start=1):
+        assert chips[i]["count"] == sum(1 for p in pages["pages"] if p["kind"] == kind)
+
+
+def test_sample_page_filter_labels_localize(client):
+    """The renamed chips still translate — a derived label is no use if it only exists in en."""
+    zh = client.get("/api/v1/projects/demo/pages?locale=zh").json()
+    assert [c["label"] for c in zh["filters"]] == ["全部页面", "表内", "附注", "其他"]
 
 
 def test_export_xlsx_and_json(client):

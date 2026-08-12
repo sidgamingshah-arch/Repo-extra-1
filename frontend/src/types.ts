@@ -540,6 +540,11 @@ export interface OntologyRef {
   supersedes?: string | null;
   /** True when another rulebook that is actually present declares it replaces this one. */
   superseded?: boolean;
+  /** How big the rulebook is: concepts it declares, and aliases across every locale. Counted by
+   *  the server off the stored definition, so a screen describing a rulebook's size never has to
+   *  invent one. */
+  concept_count?: number;
+  alias_count?: number;
 }
 export interface TemplateRef {
   id: string;

@@ -15,6 +15,7 @@ from app.sample.i18n_data import tr
 from app.security import Permission, current_principal, require
 from app.services import checks as checks_engine
 from app.services.export import build_json, build_xlsx
+from app.services.page_scope import scope_counts
 
 # Every project endpoint requires an authenticated caller (session token, or the
 # X-Role dev header when enabled). Per-action permissions are enforced with require().
@@ -100,14 +101,16 @@ def get_pages(project_id: str, locale: str = Query("en")) -> dict:
     if not _active():
         return {"pages": [], "filters": [], "focused": 0, "total": 0, "skipped": 0}
     pages = deepcopy(DEMO["pages"])
-    filters = deepcopy(DEMO["page_filters"])
+    # Counted from the cards rather than served as literals: this route used to answer
+    # `focused: 14, total: 84, skipped: 70` over ten page cards.
+    counts = scope_counts(pages)
     if locale != "en":
         for p in pages:
             p["cls"] = tr(p["cls"], locale)
             p["sub"] = tr(p["sub"], locale)
-        for f in filters:
+        for f in counts["filters"]:
             f["label"] = tr(f["label"], locale)
-    return {"pages": pages, "filters": filters, "focused": 14, "total": 84, "skipped": 70}
+    return {"pages": pages, **counts}
 
 
 # Every statement the app can ask for. The sample project carries only some of them.
@@ -205,7 +208,17 @@ def get_notes(project_id: str, locale: str = Query("en")) -> dict:
     if locale != "en":
         for n in notes:
             n["title"] = tr(n["title"], locale)
-    return {"notes": notes, "count": 48, "linked": 96}
+    # Both counted, not asserted: the header used to read "48 notes · linked to 96 line items"
+    # above a list of twelve. `linked` is the number of statement lines that cite one of these
+    # notes, which is the same quantity the real route derives from a run's own rows.
+    return {"notes": notes, "count": len(notes), "linked": _demo_linked_lines(notes)}
+
+
+def _demo_linked_lines(notes: list[dict]) -> int:
+    """Statement line items citing one of `notes` — the sample's answer to "linked to N lines"."""
+    cited = {str(n["no"]) for n in notes}
+    return sum(1 for s in DEMO["statements"].values() for r in s["rows"]
+               if str(r.get("note") or "") in cited)
 
 
 @router.get("/{project_id}/notes/{note_no}")
@@ -233,7 +246,7 @@ def get_review(project_id: str, locale: str = Query("en")) -> dict:
     if not _active():
         return {"checks": [], "tabs": [], "summary": {"open": 0, "resolved": 0, "total": 0}}
     checks = deepcopy(DEMO["review"])
-    tabs = deepcopy(DEMO["review_tabs"])
+    tabs = _demo_review_tabs(checks)
     if locale != "en":
         for c in checks:
             c["title"] = tr(c["title"], locale)
@@ -243,7 +256,36 @@ def get_review(project_id: str, locale: str = Query("en")) -> dict:
             c["calc"] = [[tr(row[0], locale), tr(row[1], locale), row[2]] for row in c["calc"]]
         for t in tabs:
             t["label"] = tr(t["label"], locale)
-    return {"checks": checks, "tabs": tabs, "summary": DEMO["review_summary"]}
+    return {"checks": checks, "tabs": tabs, "summary": _demo_review_summary(checks)}
+
+
+# Tab labels for the sample's check types, in the order the tabs are shown. The COUNTS are never
+# written here — see `_demo_review_tabs`.
+_DEMO_TAB_LABELS = (("balance", "Balance check"), ("subtotal", "Subtotals"),
+                    ("sign", "Sign anomalies"), ("note", "Note reconciliation"))
+
+
+def _demo_review_tabs(checks: list[dict]) -> list[dict]:
+    """One tab per check type, counted from `checks`, and carrying the type it selects.
+
+    The literals these replace claimed "All 12 · Balance check 1 · Subtotals 4 · Sign anomalies 3
+    · Note reconciliation 4" over a list of four checks, one of each type. `types` is what the
+    client filters by — see the same field on the real route in api/routes/documents.py.
+    """
+    return [{"label": "All", "count": len(checks), "types": None}] + [
+        {"label": label, "count": sum(1 for c in checks if c.get("type") == kind),
+         "types": [kind]}
+        for kind, label in _DEMO_TAB_LABELS]
+
+
+def _demo_review_summary(checks: list[dict]) -> dict:
+    """`open` is the findings actually served; `passed` the statement lines they do NOT indict.
+
+    `open: 12, passed: 136` were literals over four checks. `passed` mirrors the real route's
+    definition (rows that raised nothing) rather than being a second, unrelated number.
+    """
+    lines = sum(1 for s in DEMO["statements"].values() for r in s["rows"] if r.get("kind") == "item")
+    return {"open": len(checks), "passed": max(0, lines - len(checks))}
 
 
 @router.get("/{project_id}/template",
@@ -282,7 +324,8 @@ def get_commentary(project_id: str, locale: str = Query("en")) -> dict:
                 "strengths": [], "weaknesses": [], "data_quality": "", "basis": ""}
     from app.services.commentary import build_commentary
 
-    c = build_commentary(open_review_items=DEMO["review_summary"]["open"])
+    # The findings actually served, not a stored total: the commentary reads how many are open.
+    c = build_commentary(open_review_items=len(DEMO["review"]))
     if locale != "en":
         c["headline"] = tr(c["headline"], locale)
         c["assessment"] = tr(c["assessment"], locale)

@@ -116,6 +116,10 @@ TR: dict[str, dict[str, str]] = {
     "P&L": {"zh": "利润表", "ar": "الأرباح والخسائر", "fr": "Résultat"},
     "Notes": {"zh": "附注", "ar": "الإيضاحات", "fr": "Notes"},
     "Excluded": {"zh": "已排除", "ar": "مستبعد", "fr": "Exclu"},
+    # The four Page Scope filter chips (app/services/page_scope.py FILTER_LABELS). "Notes" and
+    # "Other" are already above; these two are the labels that set replaced.
+    "All pages": {"zh": "全部页面", "ar": "كل الصفحات", "fr": "Toutes les pages"},
+    "Face": {"zh": "表内", "ar": "وجه القوائم", "fr": "Face"},
 
     # ---- Notes ----
     "Property, plant & equipment": {"zh": "物业、厂房及设备", "ar": "الممتلكات والآلات والمعدات", "fr": "Immobilisations corporelles"},

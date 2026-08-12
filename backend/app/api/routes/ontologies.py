@@ -124,8 +124,31 @@ def list_ontologies(session: Session = Depends(db)) -> list[dict]:
              "target_template_key": r.target_template_key, "version": r.version,
              "schema_version": (r.definition or {}).get("schema_version", 1),
              "supersedes": ((r.definition or {}).get("metadata") or {}).get("supersedes") or None,
-             "superseded": r.ontology_key in dead}
+             "superseded": r.ontology_key in dead,
+             **_sizes(r.definition or {})}
             for r in rows]
+
+
+def _sizes(definition: dict) -> dict:
+    """How big a rulebook actually is: concepts declared, and aliases across every locale.
+
+    Served with the list because the screens that name a rulebook also describe its size, and with
+    nothing to read they described a fabricated one — the upload screen printed a fixed
+    "1,240 rules · 380 aliases" under a demo filename, true of no rulebook the product has ever
+    held. Counted off the stored definition rather than stored alongside it, so an edit that
+    publishes a new version cannot leave the count describing the old one.
+    """
+    mappings = definition.get("mappings") or []
+    aliases = 0
+    for m in mappings:
+        if not isinstance(m, dict):
+            continue
+        aliases += len(m.get("aliases") or [])
+        # Per-locale aliases count too: they are the same kind of recognition evidence, and a
+        # rulebook that carries most of its vocabulary in zh would otherwise look nearly empty.
+        for locale_aliases in (m.get("aliases_i18n") or {}).values():
+            aliases += len(locale_aliases or [])
+    return {"concept_count": len(mappings), "alias_count": aliases}
 
 
 def _slug(s: str) -> str:

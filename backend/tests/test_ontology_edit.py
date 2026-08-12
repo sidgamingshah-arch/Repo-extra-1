@@ -178,3 +178,28 @@ def test_editing_the_ontology_requires_admin(anon_client, auth):
     unchanged = {"canonical_key": key, "aliases": current.get("aliases") or [],
                  "aliases_i18n": current.get("aliases_i18n") or {}}
     assert anon_client.patch(url, json=unchanged, headers=auth("admin")).status_code == 200
+
+
+def test_the_list_reports_each_rulebook_s_real_size(client):
+    """`concept_count` / `alias_count` are counted from the stored definition.
+
+    They exist because the upload screen described the rulebook a run would use as
+    "1,240 rules · 380 aliases" under a sample filename — numbers plausible enough to go
+    unquestioned and true of nothing. A screen naming a rulebook now has its size to read.
+    """
+    rows = client.get(f"{API}/ontologies").json()
+    assert rows, "the reference rulebooks should be seeded"
+    for row in rows:
+        definition = _definition(client, row["id"])
+        mappings = definition["mappings"]
+        assert row["concept_count"] == len(mappings)
+        # Aliases across every locale, since a rulebook can carry most of its vocabulary in zh.
+        expected = sum(len(m.get("aliases") or []) for m in mappings) + sum(
+            len(v or []) for m in mappings for v in (m.get("aliases_i18n") or {}).values())
+        assert row["alias_count"] == expected
+
+    # And the counts are load-bearing, not zeroes that happen to match: the adopted rulebook is a
+    # real one, so it declares concepts and names them in more than one way.
+    ont = _seeded_ontology(client)
+    live = next(r for r in rows if r["id"] == ont["id"])
+    assert live["concept_count"] > 100 and live["alias_count"] > live["concept_count"]

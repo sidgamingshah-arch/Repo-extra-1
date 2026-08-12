@@ -139,21 +139,21 @@ INTEGRITY = {
 
 # --- Page scope (screen 3) --------------------------------------------------
 
+# `kind` is face / notes / other, the same three the real classifier emits, because the Page Scope
+# filter chips are matched to it by POSITION on the client. Without it these cards answered every
+# filter, so each chip appeared to work while filtering nothing. Counts for the chips and the
+# header are derived from these cards (app/services/page_scope.py) and are not stored here.
 PAGES = [
-    {"no": 142, "cls": "Balance Sheet", "sub": "Consolidated", "conf": "high", "included": True, "scan": "native"},
-    {"no": 143, "cls": "Balance Sheet", "sub": "Standalone", "conf": "high", "included": True, "scan": "native"},
-    {"no": 145, "cls": "Statement of P&L", "sub": "Consolidated", "conf": "high", "included": True, "scan": "native"},
-    {"no": 147, "cls": "Statement of P&L", "sub": "Standalone", "conf": "med", "included": True, "scan": "native"},
-    {"no": 149, "cls": "Cash Flow", "sub": "Consolidated", "conf": "high", "included": True, "scan": "native"},
-    {"no": 151, "cls": "Cash Flow", "sub": "Standalone", "conf": "med", "included": True, "scan": "scanned"},
-    {"no": 156, "cls": "Notes 1-4", "sub": "PPE, CWIP", "conf": "high", "included": True, "scan": "native"},
-    {"no": 171, "cls": "Note 12", "sub": "Trade receivables", "conf": "high", "included": True, "scan": "native"},
-    {"no": 43, "cls": "Other", "sub": "Directors report", "conf": "low", "included": False, "scan": "scanned"},
-    {"no": 288, "cls": "Duplicate", "sub": "Balance sheet (dup)", "conf": "med", "included": False, "scan": "native"},
-]
-PAGE_FILTERS = [
-    {"label": "All", "count": 84}, {"label": "Balance Sheet", "count": 2}, {"label": "P&L", "count": 2},
-    {"label": "Cash Flow", "count": 2}, {"label": "Notes", "count": 8}, {"label": "Excluded", "count": 70},
+    {"no": 142, "kind": "face", "cls": "Balance Sheet", "sub": "Consolidated", "conf": "high", "included": True, "scan": "native"},
+    {"no": 143, "kind": "face", "cls": "Balance Sheet", "sub": "Standalone", "conf": "high", "included": True, "scan": "native"},
+    {"no": 145, "kind": "face", "cls": "Statement of P&L", "sub": "Consolidated", "conf": "high", "included": True, "scan": "native"},
+    {"no": 147, "kind": "face", "cls": "Statement of P&L", "sub": "Standalone", "conf": "med", "included": True, "scan": "native"},
+    {"no": 149, "kind": "face", "cls": "Cash Flow", "sub": "Consolidated", "conf": "high", "included": True, "scan": "native"},
+    {"no": 151, "kind": "face", "cls": "Cash Flow", "sub": "Standalone", "conf": "med", "included": True, "scan": "scanned"},
+    {"no": 156, "kind": "notes", "cls": "Notes 1-4", "sub": "PPE, CWIP", "conf": "high", "included": True, "scan": "native"},
+    {"no": 171, "kind": "notes", "cls": "Note 12", "sub": "Trade receivables", "conf": "high", "included": True, "scan": "native"},
+    {"no": 43, "kind": "other", "cls": "Other", "sub": "Directors report", "conf": "low", "included": False, "scan": "scanned"},
+    {"no": 288, "kind": "other", "cls": "Duplicate", "sub": "Balance sheet (dup)", "conf": "med", "included": False, "scan": "native"},
 ]
 
 # --- Statements (screen 4) --------------------------------------------------
@@ -273,11 +273,9 @@ REVIEW = [
      "calc": [["Note 12 total", "96,900", False], ["Less: related-party (12.3)", "(12,400)", False], ["Net to face", "84,500", True]],
      "fix": "Netting rule matches. Confirm the related-party amount is carried under Other financial assets, then mark reconciled."},
 ]
-REVIEW_TABS = [
-    {"label": "All", "count": 12}, {"label": "Balance check", "count": 1}, {"label": "Subtotals", "count": 4},
-    {"label": "Sign anomalies", "count": 3}, {"label": "Note reconciliation", "count": 4},
-]
-REVIEW_SUMMARY = {"open": 12, "passed": 136}
+# No REVIEW_TABS / REVIEW_SUMMARY here. Both were stored counts that disagreed with the four
+# checks above — "All 12" over a list of four, "open: 12, passed: 136" over the same four — and
+# both are now counted from REVIEW where they are served (app/api/routes/projects.py).
 
 # --- Notes (screen 6) -------------------------------------------------------
 
@@ -376,9 +374,9 @@ AUDIT = [
 
 DEMO = {
     "project": PROJECT, "documents": DOCUMENTS, "integrity": INTEGRITY,
-    "pages": PAGES, "page_filters": PAGE_FILTERS, "statements": STATEMENTS,
+    "pages": PAGES, "statements": STATEMENTS,
     "inspector": INSPECTOR, "default_inspector": DEFAULT_INSPECTOR,
-    "review": REVIEW, "review_tabs": REVIEW_TABS, "review_summary": REVIEW_SUMMARY,
+    "review": REVIEW,
     "notes_index": NOTES_INDEX, "note_detail": NOTE_DETAIL,
     "template_tree": TEMPLATE_TREE, "node_config": NODE_CONFIG,
     "export_options": EXPORT_OPTIONS, "audit": AUDIT,
