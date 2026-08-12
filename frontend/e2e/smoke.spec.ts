@@ -921,3 +921,44 @@ test("the upload screen describes the rulebook the run will use, not a fabricate
   await expect(meta).toContainText(`${ont.alias_count.toLocaleString("en")} aliases`);
   await expect(page.getByText("1,240 rules")).toHaveCount(0);
 });
+
+test("a review filter chip filters, and its count is the length of the list it produces",
+     async ({ page }) => {
+  // The chips looked clickable — cursor: pointer, an active style — and did nothing: the active
+  // tab was hardcoded to index 0 and no chip carried an onClick. So five controls advertised a
+  // filter the screen did not have, above counts that had never been derived from the checks.
+  //
+  // Each tab now names the check TYPES it selects, and this asserts the two halves agree: the
+  // number on a chip is the number of cards clicking it leaves on screen.
+  await loginAs(page, "admin");
+  await setSampleLoaded(page, true);
+  await page.goto("/review", DCL);
+
+  const chips = page.getByTestId("rv-tab");
+  await expect(chips.first()).toBeVisible({ timeout: 15_000 });
+  const n = await chips.count();
+  expect(n).toBeGreaterThan(1);
+
+  // "All" is selected to begin with and shows every check.
+  await expect(chips.nth(0)).toHaveAttribute("data-on", "true");
+  const all = await page.getByTestId("rv-check").count();
+  expect(all).toBeGreaterThan(0);
+  expect(await chips.nth(0).textContent()).toContain(String(all));
+
+  for (let i = 1; i < n; i++) {
+    await chips.nth(i).click();
+    await expect(chips.nth(i)).toHaveAttribute("data-on", "true");
+    const label = (await chips.nth(i).textContent()) ?? "";
+    const want = Number(/(\d+)\s*$/.exec(label.trim())?.[1]);
+    expect(Number.isFinite(want)).toBeTruthy();
+    // The chip's own count, against the cards it actually leaves on screen.
+    await expect(page.getByTestId("rv-check")).toHaveCount(want);
+  }
+
+  // Every check is reachable under exactly one filter, so a finding cannot hide from all of them.
+  let summed = 0;
+  for (let i = 1; i < n; i++) {
+    summed += Number(/(\d+)\s*$/.exec(((await chips.nth(i).textContent()) ?? "").trim())?.[1]);
+  }
+  expect(summed).toBe(all);
+});

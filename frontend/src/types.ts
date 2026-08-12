@@ -613,7 +613,11 @@ export interface ReviewCheck {
 }
 export interface ReviewResponse {
   checks: ReviewCheck[];
-  tabs: { label: string; count: number }[];
+  /** `types` is the set of `ReviewCheck.type` a tab selects; `null` is the everything tab. The
+   *  tab says what it means rather than the client inferring it from position — a positional
+   *  contract between a server list and a client array is what made the Page Scope filter chips
+   *  filter by the wrong page kind. */
+  tabs: { label: string; count: number; types?: string[] | null }[];
   summary: { open: number; passed: number };
 }
 

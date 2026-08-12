@@ -1,5 +1,6 @@
 /** Screen 5 — Review queue. Automated-check failures grouped by type; each expands
  * into a reconciliation breakdown + suggested fix with resolution actions. */
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "../components/ui";
@@ -33,6 +34,9 @@ export default function ReviewScreen() {
   const openCheck = useUI((s) => s.openCheck);
   const toggleCheck = useUI((s) => s.toggleCheck);
   const navigate = useNavigate();
+  // Which tab is selected. It was hardcoded to 0 and the chips had no onClick, so five filters
+  // that looked clickable — cursor: pointer and all — did nothing.
+  const [tab, setTab] = useState(0);
 
   // No real document and no admin-seeded demo → greenfield guidance.
   if (!usingReal && !loaded) return <EmptyState />;
@@ -46,6 +50,13 @@ export default function ReviewScreen() {
   }
 
   const { checks, tabs, summary } = data;
+  // Each tab names the check types it selects (`types: null` = everything), so a chip filters by
+  // what it MEANS. Picking by chip position instead is how the Page Scope chips came to filter by
+  // the wrong page kind. A tab index that no longer exists (a refetch returning fewer tabs) falls
+  // back to everything rather than showing an empty list.
+  const active = tabs[tab] ?? tabs[0];
+  const selectedTypes = active?.types ?? null;
+  const shown = selectedTypes ? checks.filter((c) => selectedTypes.includes(c.type)) : checks;
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "26px 30px 60px" }}>
@@ -71,10 +82,13 @@ export default function ReviewScreen() {
       {/* Filter tabs */}
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         {tabs.map((t, i) => {
-          const on = i === 0;
+          const on = i === tab;
           return (
             <span
               key={t.label}
+              data-testid="rv-tab"
+              data-on={on}
+              onClick={() => setTab(i)}
               style={{
                 fontSize: 11.5,
                 fontWeight: 600,
@@ -92,13 +106,14 @@ export default function ReviewScreen() {
         })}
       </div>
 
-      {/* Check cards */}
-      {checks.map((c) => {
+      {/* Check cards — the selected tab's checks, so the chip's count IS this list's length. */}
+      {shown.map((c) => {
         const open = openCheck === c.id;
         const { ac, ib } = toneColors(c.tone);
         return (
           <div
             key={c.id}
+            data-testid="rv-check"
             style={{
               background: "#fff",
               border: `1px solid ${open ? ac : color.cardBorder}`,
