@@ -302,6 +302,58 @@ function useLineItemCounts(templates: TemplateRef[], locale: Locale): Record<str
   return counts;
 }
 
+/** The JSON Schema an uploaded ontology is validated against, saved as a file.
+ *
+ * Fetched rather than bundled: it is generated from the pydantic model the upload gate uses, so a
+ * copy shipped in the frontend would drift the first time a field is added — and the whole value of
+ * handing someone the contract is that it is the contract. Failures are surfaced, because the
+ * download is invisible when it works and a silently dead button is indistinguishable from one the
+ * browser blocked. */
+function SchemaDownload({ t }: { t: (k: string) => string }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const go = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const s = await api.ontologySchema();
+      const blob = new Blob([JSON.stringify(s.json_schema, null, 2)],
+                            { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ontology_schema_v${s.schema_version}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {err && (
+        <span data-testid="tpl-schema-error" style={{ fontSize: 11, color: color.redFg }}>{err}</span>
+      )}
+      <button
+        onClick={go}
+        disabled={busy}
+        data-testid="tpl-schema-download"
+        title={t("tp.list.schemaHelp")}
+        style={{ fontSize: 12, fontWeight: 600, color: color.indigo, background: "#fff",
+                 border: `1px solid ${color.indigoBorder2}`, borderRadius: radius.controlSm,
+                 padding: "7px 11px", cursor: busy ? "default" : "pointer",
+                 whiteSpace: "nowrap" }}
+      >
+        {busy ? t("tp.list.schemaBusy") : t("tp.list.schema")}
+      </button>
+    </div>
+  );
+}
+
 const GRID = "minmax(200px,2.4fr) minmax(130px,1.1fr) 74px 90px 96px minmax(130px,1.2fr)";
 
 function HeadCell({ label, right }: { label: string; right?: boolean }) {
@@ -440,10 +492,12 @@ export function TemplateList({
             </p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            {/* INTEGRATION SLOT — the "download the expected ontology structure" control belongs
-                HERE, next to the filter: it describes the collection, not one version. Left
-                unwired on purpose; the endpoint arrives in lib/api.ts under a separate change,
-                and a button that 404s would be worse than no button. */}
+            {/* The SHAPE an uploaded ontology must have, next to the filter because it describes
+                the collection rather than any one version. Generated from the model the upload gate
+                validates with, so it cannot describe a rule the gate does not enforce. The
+                per-template starter file is a different artifact and lives on the detail page,
+                where there is a template to derive it from. */}
+            {canEdit && <SchemaDownload t={t} />}
             <input
               value={filter}
               data-testid="tpl-filter"

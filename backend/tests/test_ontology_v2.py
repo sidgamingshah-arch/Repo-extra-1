@@ -283,3 +283,50 @@ def test_a_bad_value_in_a_section_default_is_refused_on_both_paths():
     for kwargs in ({}, {"resolve": True}):
         with pytest.raises(PydanticValidationError, match="sign_convention"):
             load_ontology(raw, **kwargs)
+
+
+# --- the resolver has to run where a filing is actually mapped -----------------------------------
+
+def test_the_extraction_path_resolves_the_section_layer():
+    """A resolver whose only callers are tests and the seeder does not describe production. The
+    extraction route is the one call site whose ontology maps a filing, so it is the one that has
+    to resolve: unresolved, every concept's statement / section_scope / temporality / face_only is
+    None and the section layer is absent, not degraded."""
+    import inspect
+
+    from app.api.routes import extractions
+
+    src = inspect.getsource(extractions)
+    assert "load_ontology(ont_row.definition, resolve=True)" in src
+
+
+def test_upload_refuses_an_inherits_naming_a_section_that_does_not_exist(client):
+    """Paired with the above: because the extraction path now resolves and raises, a stored
+    rulebook must not be able to carry a bad `inherits`. Unrefused, the fold silently contributes
+    nothing and the rulebook still reports itself as published."""
+    import copy
+    import json
+    from pathlib import Path
+
+    d = Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
+    bad = copy.deepcopy(json.loads((d / "hkfrs_hk_china_v2_ontology.json").read_text()))
+    bad["ontology_key"] = "inherits_probe"
+    bad["mappings"][0]["inherits"] = "bs_s1_non_current_assetz"      # one transposed letter
+
+    r = client.post("/api/v1/ontologies", json={"definition": bad})
+    assert r.status_code == 422
+    body = json.dumps(r.json())
+    assert "bs_s1_non_current_assetz" in body           # names the offender, not just "invalid"
+    assert bad["mappings"][0]["canonical_key"] in body
+
+
+def test_the_shipped_v2_rulebook_still_uploads(client):
+    """The guard must not accuse the file it was built for."""
+    import json
+    from pathlib import Path
+
+    d = Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
+    v2 = json.loads((d / "hkfrs_hk_china_v2_ontology.json").read_text())
+    v2 = {**v2, "ontology_key": "v2_upload_probe"}
+    r = client.post("/api/v1/ontologies", json={"definition": v2})
+    assert r.status_code == 201, r.text

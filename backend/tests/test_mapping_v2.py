@@ -378,19 +378,36 @@ def test_a_cross_section_answer_outside_any_family_is_still_refused(v2):
 
 
 def test_a_banner_naming_two_leaves_of_a_family_refuses_rather_than_guessing(v2):
-    """The notes/bonds family has two non-current leaves — notes payable and bonds payable — so
-    "NON-CURRENT LIABILITIES" does not identify one of them. Splitting notes from bonds is a
-    judgement the banner cannot make, and the rulebook forbids fabricating that split, so the
-    refusal stands. The current side, which has a single leaf, still resolves."""
-    ambiguous = Spy(items=[LlmBatchItem(
+    """A banner that settles nothing must not be treated as evidence.
+
+    This used to be exercised via bonds payable, which shared the notes family and gave
+    "NON-CURRENT LIABILITIES" two candidate leaves. Bonds has since been removed from the family
+    outright — the template has no current-bonds node, so "CURRENT LIABILITIES" named exactly one
+    leaf and a row printed "Bonds payable" was re-routed onto current NOTES payable, a different
+    instrument, at confidence 1.0. So the ambiguity is now tested where it still exists: a banner
+    naming a section no leaf of the family sits in.
+    """
+    spy = Spy(items=[LlmBatchItem(
         item_id="a", canonical_key="bs_current_liabilities__cuurent_notes_payable",
         confidence=0.95)])
-    m = _matcher(v2, ambiguous)
-    out = m.match_batch([("a", "Senior notes and domestic bonds 優先票據及境內債券")],
-                        statement="balance_sheet",
-                        sections={"a": "NON-CURRENT LIABILITIES 非流動負債"})
+    m = _matcher(v2, spy)
+    out = m.match_batch([("a", "Senior notes 優先票據")], statement="balance_sheet",
+                        sections={"a": "NON-CURRENT ASSETS 非流動資產"})
+    # The banner names a section the family has no leaf in, so nothing is corrected and the
+    # answer is refused rather than moved somewhere the evidence does not point.
     assert out["a"].canonical_key != "bs_current_liabilities__cuurent_notes_payable"
     assert m.usage["family_resolved"] == 0 and m.usage["batch_refused"] == 1
+
+    # And with bonds out of the family, the non-current NOTES leaf is now unambiguous, so the
+    # ordinary current/non-current correction this family exists for does fire.
+    ok = Spy(items=[LlmBatchItem(
+        item_id="a", canonical_key="bs_current_liabilities__cuurent_notes_payable",
+        confidence=0.95)])
+    m3 = _matcher(v2, ok)
+    out3 = m3.match_batch([("a", "Senior notes 優先票據")], statement="balance_sheet",
+                          sections={"a": "NON-CURRENT LIABILITIES 非流動負債"})
+    assert out3["a"].canonical_key == "bs_non_current_liabilities__non_current_notes_payable"
+    assert m3.usage["family_resolved"] == 1
 
     resolvable = Spy(items=[LlmBatchItem(
         item_id="a", canonical_key="bs_non_current_liabilities__non_current_notes_payable",

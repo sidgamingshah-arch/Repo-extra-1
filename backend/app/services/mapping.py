@@ -335,16 +335,15 @@ CONCEPT_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
                          "bs_non_current_liabilities__non_current_lease_liabilities")),
     ("borrowings", ("bs_current_liabilities__current_borrowings",
                     "bs_non_current_liabilities__non_current_borrowings")),
-    # Three leaves, two of them non-current: "NON-CURRENT LIABILITIES" therefore identifies no
-    # single leaf and a wrong-variant answer under it stays refused. That is the intended outcome —
-    # a note/bond split the banner cannot make is a guess, and the current side still resolves.
-    ("notes_and_bonds", ("bs_current_liabilities__cuurent_notes_payable",
-                         "bs_non_current_liabilities__non_current_notes_payable",
-                         "bs_non_current_liabilities__non_current_bonds_payable")),
+    # Notes payable only. Bonds payable was in this family and had to come out: the template has no
+    # current-bonds node, so "CURRENT LIABILITIES" identified exactly one leaf — current NOTES
+    # payable — and a row printed "Bonds payable" was re-routed onto a different instrument at
+    # confidence 1.0, replacing an honest residual with a specific wrong line that the subtotal
+    # still ties to. A bond is not a note in the wrong section.
+    ("notes_payable", ("bs_current_liabilities__cuurent_notes_payable",
+                       "bs_non_current_liabilities__non_current_notes_payable")),
     ("properties_under_development", ("bs_current_assets__properties_under_development",
                                       "bs_non_current_assets__properties_under_development")),
-    ("deferred_income", ("bs_current_liabilities__current_deferred_revenue",
-                         "bs_non_current_liabilities__non_current_deferred_income")),
     # HKAS 7.31 permits interest received in either activity, so the printed section is the whole
     # answer and the caption is byte-identical in both.
     ("interest_received", ("cf_cash_flow_from_operating_activities__interest_received",
@@ -360,22 +359,67 @@ CONCEPT_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
                         "pl_total_comprehensive_income_for_the_year")),
 )
 
-# A leaf is normally identified by the section its own key is namespaced under (`section_of_key`).
-# The two P&L bottom lines are statement-level keys with no namespace at all, so the
-# comprehensive-income variant is named here. Nothing names the profit variant on purpose: it is
-# printed under no banner this module recognises, and a leaf identified by nothing is what stops a
-# re-route firing when there is no evidence to fire on.
-FAMILY_LEAF_SECTION: dict[str, str] = {
-    "pl_total_comprehensive_income_for_the_year": "total_comprehensive_income_attributable_to",
-}
+# The bottom-line pair is the one family whose leaves carry NO section namespace, so it cannot be
+# identified by `section_of_key` and cannot lean on the same-thing rule below. It gets its own
+# banner test, and that test has to be far narrower than the section vocabulary.
+#
+# `SECTION_WORDS` identifies the comprehensive-income SECTION by the bare word "comprehensive",
+# deliberately, so that "comprehensive loss" and "income/(loss)" both match. Reusing it here fired
+# the re-route on "STATEMENT OF COMPREHENSIVE INCOME" — an ordinary HKEX page title, captured as the
+# section_hint for every row on the page. "Profit for the year" was filed as total comprehensive
+# income at confidence 1.0, two different figures collapsed onto one concept, and
+# pl_profit_for_the_year was left empty. Nothing downstream sees it: the subtotals still tie.
+#
+# So the evidence required is the word TOTAL bound to "comprehensive" — the wording a filing uses
+# for the line ITSELF, not for the statement it appears in — and never the attribution sub-heading,
+# which introduces the owners/NCI split rather than the bottom line.
+_TCI_BOTTOM_LINE = re.compile(r"total\s+comprehensive|全面(?:亏损|虧損|收益|收入|损益)?\s*总?總?额")
+_ATTRIBUTION = re.compile(r"attributable|归属|歸屬")
+
+
+def _names_the_comprehensive_bottom_line(banner: str | None) -> bool:
+    if not banner:
+        return False
+    folded = normalize_label(banner)
+    return bool(_TCI_BOTTOM_LINE.search(folded)) and not _ATTRIBUTION.search(folded)
 
 _FAMILY_MEMBERS: dict[str, tuple[str, ...]] = {
     key: members for _name, members in CONCEPT_FAMILIES for key in members
 }
 
+# The words that distinguish one SECTION VARIANT of a concept from another. Stripping them leaves
+# the thing itself, which is what two members of a family must have in common. ("cuurent" is a typo
+# retained in a shipped canonical key — keys are load-bearing, so it is matched rather than fixed.)
+_VARIANT_PREFIX = re.compile(r"^(non[_-]?current|current|cuurent)_")
 
-def _leaf_section(canonical_key: str) -> str | None:
-    return FAMILY_LEAF_SECTION.get(canonical_key) or section_of_key(canonical_key)
+
+def _the_thing_itself(canonical_key: str) -> str | None:
+    """What a key is ABOUT, with its section namespace and current/non-current wording removed.
+
+    None for a key carrying no section namespace at all: such a key names a statement-level figure,
+    and a statement-level figure has no section variant to be confused with.
+    """
+    _, sep, leaf = canonical_key.partition("__")
+    if not sep:
+        return None
+    return _VARIANT_PREFIX.sub("", leaf)
+
+
+def _is_variant_of(a: str, b: str) -> bool:
+    """Whether two keys are the SAME THING in different sections.
+
+    This is the whole licence for re-routing. A variant pair is one concept the filing may print in
+    either of two sections — current vs non-current lease liabilities, interest received under
+    operating vs investing — where the banner is the only evidence and the caption is often
+    byte-identical. Anything else is a different concept that merely resembles its sibling, and
+    "correcting" a decision onto it replaces a defensible answer with a confident wrong one:
+    bonds payable is not notes payable, deferred revenue is not deferred income, and profit for the
+    year is not total comprehensive income. Each of those was declared as a family and each produced
+    a wrong figure that the subtotal checks could not see, because nothing was arithmetically
+    inconsistent — only wrong.
+    """
+    ta, tb = _the_thing_itself(a), _the_thing_itself(b)
+    return ta is not None and ta == tb
 
 
 def family_leaf_named_by(canonical_key: str, banner: str | None) -> str | None:
@@ -390,11 +434,23 @@ def family_leaf_named_by(canonical_key: str, banner: str | None) -> str | None:
     members = _FAMILY_MEMBERS.get(canonical_key)
     if not members:
         return None
+    # The bottom-line pair, on its own narrow evidence. Only one direction is answerable: a banner
+    # can say "this line IS the total comprehensive one", but no banner says "this line is merely
+    # profit", so a caption already mapped to the comprehensive line is never moved off it.
+    if canonical_key == "pl_profit_for_the_year":
+        return ("pl_total_comprehensive_income_for_the_year"
+                if _names_the_comprehensive_bottom_line(banner) else None)
+    if canonical_key == "pl_total_comprehensive_income_for_the_year":
+        return None
     want = section_of_banner(banner)
     if not want:
         return None
-    named = [k for k in members if _leaf_section(k) == want]
+    named = [k for k in members if section_of_key(k) == want]
     if len(named) != 1 or named[0] == canonical_key:
+        return None
+    # Last gate, and the one that does not depend on the declaration being right: re-route only
+    # between two spellings of the same thing.
+    if not _is_variant_of(canonical_key, named[0]):
         return None
     return named[0]
 

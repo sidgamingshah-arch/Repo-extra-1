@@ -191,7 +191,13 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
         if oid:
             ont_row = session.get(OntologyVersion, oid)
             if ont_row is not None:
-                ontology = load_ontology(ont_row.definition)
+                # RESOLVED, because this is the one call site whose result actually maps a filing.
+                # A v2 rulebook declares statement / section_scope / temporality / face_only ONLY on
+                # its section_defaults entries — zero concepts carry them — so loading it
+                # unresolved gives every concept those fields as None and the whole section layer
+                # is absent rather than degraded. A v1 definition has no section layer to fold and
+                # comes back untouched, so this is safe for both.
+                ontology = load_ontology(ont_row.definition, resolve=True)
         # The template is the run's target definition; the structural stage validates the
         # extraction against the rollups and identities it declares.
         template = None

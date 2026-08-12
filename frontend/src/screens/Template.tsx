@@ -18,7 +18,7 @@ import { color, font, radius } from "../theme";
 import type {
   Locale, NettingRuleEdit, NettingRuleView, NodeConfig, TemplateRef, ValueScope,
 } from "../types";
-import { useTemplateDetail, useTemplates } from "../lib/queries";
+import { useDownloadOntologySkeleton, useTemplateDetail, useTemplates } from "../lib/queries";
 import { ApiError, api } from "../lib/api";
 import { useCan } from "../lib/rbac";
 import { NATIVE_NAME, useT } from "../i18n";
@@ -894,6 +894,11 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
   const { data, isError } = useTemplateDetail(id, locale);
   const tplSel = useUI((s) => s.tplSel);
   const setTpl = useUI((s) => s.setTpl);
+  // The starter-ontology download, and why it failed if it did: the file arrives through the
+  // browser's own download machinery, so success is invisible and an unreported failure looks
+  // exactly like a download the browser declined to show.
+  const skeleton = useDownloadOntologySkeleton();
+  const [skelErr, setSkelErr] = useState<string | null>(null);
 
   const cfg: NodeConfig | undefined = data
     ? (data.node_config[tplSel] ?? data.node_config["trade_recv"]
@@ -1109,6 +1114,37 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
               .filter(Boolean).join(" · ")}
           </div>
         </div>
+        {/* A ready-to-edit ontology for THIS template — every canonical_key it declares already a
+            stub inside its section, so an author fills in aliases and criteria instead of
+            reverse-engineering the shape from 422s. It lives here rather than on the index because
+            the file is derived from one template, and asking which one on a page listing seven of
+            them would be a worse question than clicking the one you mean. */}
+        {canEdit && (
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+            {skelErr && (
+              <span data-testid="tpl-skeleton-error"
+                    style={{ fontSize: 11, color: color.redFg }}>{skelErr}</span>
+            )}
+            <button
+              data-testid="tpl-skeleton-download"
+              disabled={skeleton.isPending}
+              title={t("tp.detail.skeletonHelp")}
+              onClick={() => {
+                setSkelErr(null);
+                skeleton.mutate(
+                  { templateId: id, fallbackName: tpl?.template_key ?? "ontology" },
+                  { onError: (e) => setSkelErr(e instanceof ApiError ? e.message : String(e)) },
+                );
+              }}
+              style={{ fontSize: 12, fontWeight: 600, color: color.indigo, background: "#fff",
+                       border: `1px solid ${color.indigoBorder2}`, borderRadius: radius.control,
+                       padding: "7px 12px", whiteSpace: "nowrap",
+                       cursor: skeleton.isPending ? "default" : "pointer" }}
+            >
+              {skeleton.isPending ? t("tp.detail.skeletonBusy") : t("tp.detail.skeleton")}
+            </button>
+          </div>
+        )}
       </div>
       {body()}
     </div>
@@ -1169,6 +1205,11 @@ export default function TemplateScreen() {
       />
       {openId && (
         <TemplateDetail
+          // Keyed on the template, so changing which one is open is a fresh MOUNT rather than a
+          // re-render of the same instance. Unkeyed, browser Back (or a Tab-reachable row under the
+          // overlay) swapped the subject while React reused the editor — leaving an unsaved alias
+          // authored against one version on screen, still dirty, under the other version's header.
+          key={openId}
           id={openId}
           tpl={templates.find((x) => x.id === openId)}
           locale={locale}

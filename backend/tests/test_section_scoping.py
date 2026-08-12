@@ -254,3 +254,72 @@ def test_a_balance_sheet_tax_caption_is_not_a_tax_section_banner():
     assert section_of_banner("Deferred income tax assets") is None
     assert section_of_banner("Prepaid income tax") is None
     assert section_of_banner("Income tax payable") is None
+
+
+# --- a re-route may only ever correct the SECTION, never the concept ----------------------------
+# Each case below was a real, reproduced wrong figure: the family was declared, the banner
+# identified exactly one sibling, and the answer was "corrected" onto a different thing at
+# confidence 1.0 — with the subtotals still tying, so nothing downstream could see it.
+
+def test_an_ordinary_comprehensive_income_page_title_does_not_restate_profit():
+    """The bare word "comprehensive" is the only banner vocabulary for the comprehensive bottom
+    line, and it is deliberately broad so "comprehensive loss" matches. An ordinary HKEX page
+    title, "STATEMENT OF COMPREHENSIVE INCOME", is captured as the section_hint for every row on
+    the page — which re-routed "Profit for the year" onto total comprehensive income for the whole
+    statement, collapsing two figures onto one concept and leaving pl_profit_for_the_year empty."""
+    from app.services.mapping import family_leaf_named_by
+
+    for banner in ("STATEMENT OF COMPREHENSIVE INCOME",
+                   "CONSOLIDATED STATEMENT OF COMPREHENSIVE INCOME",
+                   "OTHER COMPREHENSIVE INCOME",
+                   "Total comprehensive income attributable to:"):
+        assert family_leaf_named_by("pl_profit_for_the_year", banner) is None, banner
+        assert family_leaf_named_by("pl_total_comprehensive_income_for_the_year", banner) is None
+
+
+def test_bonds_payable_is_not_notes_payable_in_the_wrong_section():
+    """The template has no current-bonds node, so "CURRENT LIABILITIES" identified exactly one leaf
+    — current NOTES payable — and a row printed "Bonds payable" was filed there instead of the
+    residual bucket that was the correct answer."""
+    from app.services.mapping import family_leaf_named_by
+
+    assert family_leaf_named_by("bs_non_current_liabilities__non_current_bonds_payable",
+                                "CURRENT LIABILITIES") is None
+
+
+def test_only_the_same_thing_in_another_section_may_be_rerouted():
+    """The durable guard, independent of whether the family declarations are right: strip the
+    section namespace and the current/non-current wording, and the two leaves must be the same
+    concept. This is what makes a mistaken future declaration inert rather than dangerous."""
+    from app.services.mapping import _is_variant_of
+
+    # Same thing, different section — the entire licence for re-routing.
+    assert _is_variant_of("bs_current_liabilities__current_lease_liabilities",
+                          "bs_non_current_liabilities__non_current_lease_liabilities")
+    assert _is_variant_of("cf_cash_flow_from_operating_activities__interest_received",
+                          "cf_cash_flow_from_investing_activities__interest_received")
+    assert _is_variant_of("pl_profit_attributable_to__non_controlling_interests",
+                          "pl_total_comprehensive_income_attributable_to__non_controlling_interests")
+    # Different things that merely resemble a sibling.
+    assert not _is_variant_of("bs_non_current_liabilities__non_current_bonds_payable",
+                              "bs_current_liabilities__cuurent_notes_payable")
+    assert not _is_variant_of("bs_current_liabilities__current_deferred_revenue",
+                              "bs_non_current_liabilities__non_current_deferred_income")
+    # A statement-level key has no section variant to be confused with.
+    assert not _is_variant_of("pl_profit_for_the_year",
+                              "pl_total_comprehensive_income_for_the_year")
+
+
+def test_the_legitimate_variants_still_reroute():
+    """The guard must not have disabled the feature it protects."""
+    from app.services.mapping import family_leaf_named_by
+
+    assert family_leaf_named_by("bs_non_current_liabilities__non_current_lease_liabilities",
+                                "CURRENT LIABILITIES") \
+        == "bs_current_liabilities__current_lease_liabilities"
+    assert family_leaf_named_by("cf_cash_flow_from_operating_activities__interest_received",
+                               "INVESTING ACTIVITIES") \
+        == "cf_cash_flow_from_investing_activities__interest_received"
+    assert family_leaf_named_by("pl_profit_attributable_to__owners_of_the_parent",
+                               "Total comprehensive income attributable to:") \
+        == "pl_total_comprehensive_income_attributable_to__owners_of_the_parent"

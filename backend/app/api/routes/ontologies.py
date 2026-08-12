@@ -12,8 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db
 from app.schemas.loader import (
+    UnknownInheritsError,
     load_ontology,
     load_template,
+    resolve_inherits,
     unknown_keys,
     validate_ontology_against_template,
 )
@@ -54,6 +56,15 @@ def create_ontology(body: OntologyCreate, session: Session = Depends(db)) -> dic
             detail={"errors": [{"location": p, "message": "key is not part of the ontology schema"}
                                for p in stray]})
 
+    # An `inherits` naming a section that does not exist is refused HERE, which is what makes it
+    # safe for the extraction path to resolve and raise. Unrefused, the fold silently contributes
+    # nothing: the concept keeps none of the section layer, `_in_section` waves it through, and the
+    # rulebook reports itself as published and complete.
+    try:
+        resolve_inherits(definition)
+    except UnknownInheritsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     # Validate against the latest matching template version.
     tpl_row = session.execute(
         select(TemplateVersion)
@@ -93,7 +104,15 @@ def create_ontology(body: OntologyCreate, session: Session = Depends(db)) -> dic
 def list_ontologies(session: Session = Depends(db)) -> list[dict]:
     from app.db.models import OntologyVersion
 
-    rows = session.execute(select(OntologyVersion)).scalars().all()
+    # ORDERED, because two consumers pick a rulebook by scanning this list and both break ties by
+    # whichever row arrived first. With v1 and v2 both seeded at version 1 against the same
+    # template, an unordered query made which rulebook the product used a property of row order.
+    # Ordering does not make the choice right — that needs an explicit picker — but it makes it
+    # STABLE, so the behaviour is at least reproducible while the picker is outstanding.
+    rows = session.execute(
+        select(OntologyVersion)
+        .order_by(OntologyVersion.ontology_key, OntologyVersion.version.desc())
+    ).scalars().all()
     return [{"id": r.id, "ontology_key": r.ontology_key,
              "target_template_key": r.target_template_key, "version": r.version}
             for r in rows]
