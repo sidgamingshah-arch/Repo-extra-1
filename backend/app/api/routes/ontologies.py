@@ -109,12 +109,22 @@ def list_ontologies(session: Session = Depends(db)) -> list[dict]:
     # template, an unordered query made which rulebook the product used a property of row order.
     # Ordering does not make the choice right — that needs an explicit picker — but it makes it
     # STABLE, so the behaviour is at least reproducible while the picker is outstanding.
+    from app.services.ontology_select import superseded_keys
+
     rows = session.execute(
         select(OntologyVersion)
         .order_by(OntologyVersion.ontology_key, OntologyVersion.version.desc())
     ).scalars().all()
+    # `superseded` says this rulebook has been REPLACED by another one that is present. The client
+    # picks which ontology a run uses, and `version` alone cannot tell it apart from an unrelated
+    # rulebook targeting the same template — so the declaration travels with the row rather than
+    # being re-derived, differently, on the other side of the wire.
+    dead = superseded_keys(list(rows))
     return [{"id": r.id, "ontology_key": r.ontology_key,
-             "target_template_key": r.target_template_key, "version": r.version}
+             "target_template_key": r.target_template_key, "version": r.version,
+             "schema_version": (r.definition or {}).get("schema_version", 1),
+             "supersedes": ((r.definition or {}).get("metadata") or {}).get("supersedes") or None,
+             "superseded": r.ontology_key in dead}
             for r in rows]
 
 

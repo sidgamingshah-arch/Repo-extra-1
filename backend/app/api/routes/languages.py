@@ -46,11 +46,11 @@ def list_languages(
         if row:
             template = load_template(row.definition)
     if ontology is None and template is not None:
-        row = session.execute(
-            select(OntologyVersion)
-            .where(OntologyVersion.target_template_key == template.template_key)
-            .order_by(OntologyVersion.version.desc())
-        ).scalars().first()
+        from app.services.ontology_select import select_for_template
+
+        # The rulebook IN FORCE, not merely the highest-numbered one — language parity has to
+        # describe the aliases a real run would actually use.
+        row = select_for_template(session, template.template_key)
         if row:
             ontology = load_ontology(row.definition)
 

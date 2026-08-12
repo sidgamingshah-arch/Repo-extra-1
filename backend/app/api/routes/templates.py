@@ -206,11 +206,9 @@ def get_template_detail(template_id: str, locale: str = "en",
     # The ontology that targets this template (latest version) supplies aliases/sign/netting.
     from app.schemas.loader import load_ontology
 
-    ont_row = session.execute(
-        select(OntologyVersion)
-        .where(OntologyVersion.target_template_key == row.template_key)
-        .order_by(OntologyVersion.version.desc())
-    ).scalars().first()
+    from app.services.ontology_select import select_for_template
+
+    ont_row = select_for_template(session, row.template_key)
     by_key = {}
     netting_rules: list[dict] = []
     if ont_row:

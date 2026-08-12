@@ -211,12 +211,18 @@ function AnalysisSection({ id, locale, t }: { id: string; locale: Locale; t: (k:
   );
 }
 
-/** Highest-version ontology among those matching `pred` (ontology edits publish new versions,
- *  so "the ontology" always means the latest one, never the first row returned). */
+/** The rulebook IN FORCE among those matching `pred`.
+ *
+ *  Superseded ones drop out first, then the highest version of what is left. Version alone was not
+ *  enough: it counts edits to ONE rulebook, so when a v1 and the v2 that replaces it both sat at
+ *  version 1 the comparison was a tie and the run silently used whichever row arrived first. The
+ *  supersession is declared by the rulebook's own author (`metadata.supersedes`) and computed
+ *  server-side, so both sides of the wire cannot disagree about which one is live. */
 function latestOntology(rows: OntologyRef[] | undefined, pred: (o: OntologyRef) => boolean) {
   const matches = (rows ?? []).filter(pred);
   if (!matches.length) return undefined;
-  return matches.reduce((best, o) => (o.version > best.version ? o : best));
+  const live = matches.filter((o) => !o.superseded);
+  return (live.length ? live : matches).reduce((best, o) => (o.version > best.version ? o : best));
 }
 
 /** Known canonical-key prefixes → statement labels for the filter dropdown. */

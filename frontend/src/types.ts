@@ -500,7 +500,14 @@ export interface OntologyRef {
   id: string;
   ontology_key: string;
   target_template_key: string;
+  /** Edits to THIS rulebook. It counts revisions of one key, so it cannot rank two different
+   *  rulebooks that target the same template — which is what `superseded` is for. */
   version: number;
+  schema_version?: number;
+  /** The ontology_key this one replaces, as its own author declared. */
+  supersedes?: string | null;
+  /** True when another rulebook that is actually present declares it replaces this one. */
+  superseded?: boolean;
 }
 export interface TemplateRef {
   id: string;

@@ -321,7 +321,13 @@ def test_upload_refuses_an_inherits_naming_a_section_that_does_not_exist(client)
 
 
 def test_the_shipped_v2_rulebook_still_uploads(client):
-    """The guard must not accuse the file it was built for."""
+    """The guard must not accuse the file it was built for.
+
+    Cleans up after itself. The probe is a copy of v2, so it inherits v2's
+    ``metadata.supersedes`` and becomes a SECOND rulebook replacing v1 — leaving it stored makes
+    "which rulebook is in force" genuinely ambiguous, and every later test that reads the Template
+    screen or picks a rulebook then depends on how two probe keys happen to sort.
+    """
     import json
     from pathlib import Path
 
@@ -330,3 +336,73 @@ def test_the_shipped_v2_rulebook_still_uploads(client):
     v2 = {**v2, "ontology_key": "v2_upload_probe"}
     r = client.post("/api/v1/ontologies", json={"definition": v2})
     assert r.status_code == 201, r.text
+
+    from app.db.base import SessionLocal
+    from app.db.models import OntologyVersion
+
+    with SessionLocal() as s:
+        row = s.get(OntologyVersion, r.json()["id"])
+        s.delete(row)
+        s.commit()
+
+
+# --- v2 is the rulebook IN FORCE ----------------------------------------------------------------
+
+def test_the_rulebook_in_force_is_the_one_that_supersedes(client):
+    """Which rulebook maps a filing must not be a property of insertion order. `version` counts
+    edits to ONE key, so with v1 and v2 both at version 1 the comparison was a tie and the run used
+    whichever row came back first. Adoption is declared by the author instead."""
+    from app.db.base import SessionLocal
+    from app.services.ontology_select import select_for_template
+
+    with SessionLocal() as s:
+        row = select_for_template(s, "hkfrs_hk_china_v1")
+        assert row is not None
+        assert row.ontology_key == "hkfrs_hk_china_v2"
+
+
+def test_the_list_marks_the_superseded_rulebook(client):
+    """The client picks the ontology a run uses, so the supersession is computed once, server-side,
+    and travels with the row — two sides re-deriving it differently is how they disagree."""
+    rows = client.get("/api/v1/ontologies").json()
+    by_key = {r["ontology_key"]: r for r in rows}
+    assert by_key["hkfrs_hk_china_v1"]["superseded"] is True
+    assert by_key["hkfrs_hk_china_v2"]["superseded"] is False
+    assert by_key["hkfrs_hk_china_v2"]["supersedes"] == "hkfrs_hk_china_v1"
+    assert by_key["hkfrs_hk_china_v2"]["schema_version"] == 2
+
+
+def test_supersession_only_counts_when_the_replacement_is_actually_stored():
+    """A rulebook naming one that was never loaded must not exclude anything, and a v1 does not
+    become unusable because some v2 exists elsewhere."""
+    from app.services.ontology_select import superseded_keys
+
+    class R:
+        def __init__(self, key, sup=None):
+            self.ontology_key = key
+            self.definition = {"metadata": {"supersedes": sup}} if sup else {}
+
+    assert superseded_keys([R("v1"), R("v2", "v1")]) == {"v1"}
+    assert superseded_keys([R("v2", "v1")]) == set()          # the v1 it replaces is absent
+    assert superseded_keys([R("v1"), R("v2")]) == set()        # nothing claims a replacement
+    assert superseded_keys([R("v1", "v1")]) == set()           # a self-reference is not supersession
+
+
+def test_the_adopted_unbound_row_policy_is_stated_in_the_rulebook():
+    """The decision was to sweep an unclaimed in-section row into Others rather than surface it for
+    review. The shipped rulebook has to SAY that: as authored it said the opposite, and an ontology
+    documenting a policy the engine deliberately does not follow is worse than one saying nothing —
+    it is the only place a reviewer can look up what the pipeline is meant to do."""
+    import json
+    from pathlib import Path
+
+    d = Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
+    v2 = json.loads((d / "hkfrs_hk_china_v2_ontology.json").read_text())
+    policy = v2["binding"]["unbound_row_policy"]
+
+    assert "swept into that section's residual" in policy
+    # And the exclusions the sweep still applies, because relaxing them is the corruption this
+    # project has already fixed once: a narrative sentence in Others moves the subtotal.
+    for kept_out in ("narrative sentence", "per-share", "subtotal"):
+        assert kept_out in policy
+    assert "still routed to review" in policy
