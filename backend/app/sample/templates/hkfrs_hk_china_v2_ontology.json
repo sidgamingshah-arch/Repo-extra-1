@@ -95,7 +95,6 @@
     "column_guard": "Every fact carries the resolved (entity_scope, period, currency, unit). Two facts for the same canonical_key that differ on any of these are distinct facts, not duplicates."
   },
   "global_rules": {
-    "paren_means_negative": true,
     "source_fact_id": "document_id|entity_scope|period|currency|unit|page|table_or_note|source_row_id",
     "sign_convention": {
       "stored_value": "The reported value after paren-to-negative conversion.",

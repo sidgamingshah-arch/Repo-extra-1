@@ -252,7 +252,13 @@ class MutuallyExclusiveGroup(BaseModel):
 
 class GlobalRules(BaseModel):
     credit_balance_lines: list[str] = Field(default_factory=list)  # key globs
-    paren_means_negative: bool = True
+    # `paren_means_negative` was here and is deliberately gone. It stated the same rule as
+    # `number_format_by_locale[<locale>].negative`, which is the one the parser reads — and reads
+    # at EXTRACTION, before this block is ever consulted. So the global copy could not be honoured
+    # afterwards: the printed text is not retained, and a figure already negated is
+    # indistinguishable from one printed with a minus. A switch that cannot work is worse than no
+    # switch, because an author who flips it believes the parsing changed. Parentheses are decided
+    # in exactly one place now.
     # Natural-language extraction policies fed to the LLM system prompt so decisions
     # follow one consistent, auditable rulebook (learnings from prior ontologies):
     parent_child_allocation: list[str] = Field(default_factory=list)

@@ -295,8 +295,13 @@ function RulebookPicker({ rows, inForce, chosen, record, onChoose, templateKey, 
           {sorted.map((o) => (
             <option key={o.id} value={o.id}>
               {`${o.ontology_key} · v${o.version}`}
-              {o.id === inForce?.id ? ` — ${t("tp.rb.inForce")}` : ""}
-              {o.superseded ? ` — ${t("tp.rb.superseded")}` : ""}
+              {/* Exclusive, because the two read as a contradiction together. `ontologyInForce`
+                  prefers a live row, so a superseded rulebook is only ever in force when EVERY
+                  rulebook for the template has been superseded — which is exactly the state a
+                  reader most needs described plainly rather than as "— in force — superseded". */}
+              {o.id === inForce?.id
+                ? ` — ${t(o.superseded ? "tp.rb.inForceSuperseded" : "tp.rb.inForce")}`
+                : o.superseded ? ` — ${t("tp.rb.superseded")}` : ""}
               {templateKey && o.target_template_key !== templateKey
                 ? ` — ${t("tp.rb.otherTemplate").replace("{tpl}", o.target_template_key)}` : ""}
             </option>

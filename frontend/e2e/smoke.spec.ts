@@ -436,6 +436,11 @@ test("admin tunes the extraction thresholds and they persist", async ({ page }) 
 test("a saved threshold is still in force for a browser that never saw the edit", async ({
   page, browser,
 }) => {
+  // Four full page loads (two logins, two Settings) against the vite dev server, whose module
+  // graph is fetched unbundled: one `domcontentloaded` navigation measures ~13 s here, so the 60 s
+  // default was never a budget this test could hold — it failed on the clock, mid-cleanup, with
+  // every assertion still passing. Nothing is relaxed: each assertion keeps its own 15 s.
+  test.setTimeout(120_000);
   // The reason these are persisted: an admin's change must not evaporate. A second browser
   // context shares nothing with the first except the server, so reading the saved value back
   // there is what proves it left the first tab.

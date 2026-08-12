@@ -118,35 +118,50 @@ def test_sign_rule_still_normalises_and_the_expectation_only_judges_the_result(r
     assert not any(f.startswith("sign_opposite_to_expected") for f in li.confidence.flags)
 
 
-# --- paren_means_negative: a duplicate switch, reported rather than obeyed ----------------------
+# --- paren_means_negative: removed, not reported ------------------------------------------------
 
-def test_a_paren_switch_the_parser_never_sees_is_reported_not_read_as_honoured(raw_ontology):
-    """``global_rules.paren_means_negative`` is a second copy of a live switch, at the wrong
-    altitude, and it cannot be honoured here.
+def test_the_duplicate_paren_switch_is_gone_from_the_schema_and_the_rulebooks():
+    """The field stated the same rule as ``number_format_by_locale[<locale>].negative`` — which is
+    the one the parser reads, at EXTRACTION. So the global copy could never be honoured afterwards:
+    the printed text is not retained, and a figure already negated cannot be told apart from one
+    printed with a minus.
 
-    The parser reads the LOCALE's ``number_format.negative`` and keeps only the signed magnitude, so
-    by the time any stage runs there is nothing left that says whether −600 was printed "(600)" or
-    "-600" — turning the global flag off cannot un-negate one without also flipping the other. What
-    must not happen is the rulebook offering a switch that silently does nothing: the contradiction
-    is reported against the field that governs, and the negatives that arrived under the ignored
-    switch stop counting as verified.
+    It was previously answered with a contradiction DETECTOR that logged the disagreement and marked
+    the negatives unverified. That was better than pretending, but it left an author a switch to
+    flip and a warning as the reward. Deleting it leaves parentheses decided in exactly one place,
+    and an author who now types the key gets a 422 naming it rather than a no-op.
     """
+    import json
+    from pathlib import Path
+
+    from app.schemas.loader import load_ontology, unknown_keys
+    from app.schemas.ontology import GlobalRules
+
+    assert "paren_means_negative" not in GlobalRules.model_fields
+
+    d = Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
+    for f in ("hkfrs_hk_china_ontology.json", "hkfrs_hk_china_v2_ontology.json"):
+        raw = json.loads((d / f).read_text())
+        assert "paren_means_negative" not in (raw.get("global_rules") or {}), f
+        assert unknown_keys(raw, load_ontology(raw)) == [], f
+
+    # The live switch still works: the locale's number format is what decodes a parenthesis.
+    from app.services.numbers import parse_number
+
+    fmt = load_ontology(
+        json.loads((d / "hkfrs_hk_china_v2_ontology.json").read_text())).number_format("en")
+    assert any("paren" in str(m).lower() for m in fmt.negative)
+    got = parse_number("(600)", fmt)
+    assert got.ok and got.value == Decimal(-600) and got.is_negative_paren
+
+
+def test_declaring_the_removed_switch_is_now_refused_at_the_door(raw_ontology):
+    """The point of removing it rather than ignoring it: the mistake becomes visible."""
+    from app.schemas.loader import load_ontology, unknown_keys
+
     raw = copy.deepcopy(raw_ontology)
     raw["global_rules"]["paren_means_negative"] = False
-    doc, li = _row("Cost of sales", "pl_expenses__cost_of_goods_sold", -500, "profit_and_loss")
-    ctx = _run(doc, _ontology(raw))
-
-    conflict = next(line for line in ctx.logs if "paren_means_negative=false" in line)
-    assert "number_format[en].negative=['paren', 'minus']" in conflict
-    assert "paren_negative_unverified" in _value(li).confidence.flags
-    assert _value(li).confidence.sign == pytest.approx(0.35)
-    assert _value(li).value == Decimal(-500)      # and no figure is rewritten either way
-
-    # Left alone while the two declarations agree, which is every shipped rulebook.
-    doc, li = _row("Cost of sales", "pl_expenses__cost_of_goods_sold", -500, "profit_and_loss")
-    ctx = _run(doc, _ontology(raw_ontology))
-    assert not any("paren_means_negative" in line for line in ctx.logs)
-    assert li.confidence.flags == [] and _value(li).confidence.flags == []
+    assert "global_rules.paren_means_negative" in unknown_keys(raw, load_ontology(raw))
 
 
 # --- temporality / unit_of_account: the NCI guard ----------------------------------------------
