@@ -812,6 +812,19 @@ test("an analyst chooses which rulebook a run reads the filing against", async (
   await expect(page.getByRole("heading", { name: "Extracted data" }))
     .toBeVisible({ timeout: 60_000 });
   await expect(page.getByText("Trade receivables").first()).toBeVisible({ timeout: 60_000 });
+
+  // The pin has to survive a reload, and as component state it did not: reopening the screen moved
+  // the reader silently back to the rulebook in force, with nothing on screen saying the figures
+  // had been produced under a different one. The pin is in the URL now, so it is both durable and
+  // shareable — which is what comparing two rulebooks on one filing actually needs.
+  expect(new URL(page.url()).searchParams.get("rulebook")).toBe(other);
+  await page.reload(DCL);
+  await expect(page.getByRole("heading", { name: "Extracted data" }))
+    .toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("ex-rulebook-pick")).toHaveValue(other, { timeout: 60_000 });
+  const usedAgain = page.getByTestId("ex-rulebook-used");
+  await expect(usedAgain).toHaveAttribute("data-rulebook-id", other, { timeout: 60_000 });
+  await expect(usedAgain).toContainText(/not the rulebook in force/);
 });
 
 test("a run that used a superseded rulebook says so, however the client sees the list",

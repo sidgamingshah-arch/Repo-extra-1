@@ -4,8 +4,8 @@
  * selected template, or whichever one the reader pins here instead — and the rulebook the run
  * RECORDED is named above the rows, from the run's own record (see RulebookPicker).
  * Distinct from the demo-driven workspace: this reads a live extraction run. */
-import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useCallback, useState } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { Card } from "../components/ui";
 import { ExcelSourcePanel, PagedSource, toPicked, type Picked } from "../components/SourceViewer";
@@ -363,7 +363,29 @@ export default function ExtractionView() {
     ontologyInForce(ontQ.data);
   // …and the one the reader PINNED, which outranks it. Empty means "follow whatever is in force",
   // so publishing a new rulebook moves an unpinned reader forward rather than freezing them.
-  const [pinnedId, setPinnedId] = useState("");
+  //
+  // Held in the URL, not in component state. As state it did not survive a reload: the reader was
+  // silently moved back to the rulebook in force while still looking at figures the run had produced
+  // under the pinned one — the same class of mismatch as the reload blocker, arriving by a different
+  // door. The URL also makes the pin shareable, which is what someone comparing two rulebooks on one
+  // filing actually needs: `?rulebook=<id>` IS the comparison, and it is the same mechanism
+  // `?template=` uses on the Template screen. Deliberately not localStorage — a pin belongs to the
+  // thing being read, not to the person reading, and a sticky pin would silently govern the NEXT
+  // filing too.
+  const [params, setParams] = useSearchParams();
+  const pinnedId = params.get("rulebook") ?? "";
+  const setPinnedId = useCallback((next: string) => {
+    setParams((prev) => {
+      const p = new URLSearchParams(prev);
+      if (next) p.set("rulebook", next);
+      else p.delete("rulebook");
+      return p;
+      // `replace` so choosing a rulebook does not stack a history entry per click — Back should
+      // leave the screen, not walk the reader through every pick they tried.
+    }, { replace: true });
+  }, [setParams]);
+  // A pin naming a rulebook that is no longer served (deleted, or a stale shared link) must not
+  // leave the screen blank: fall through to what is in force, which is also what the picker shows.
   const ont = (pinnedId ? ontQ.data?.find((o) => o.id === pinnedId) : undefined) ?? inForce;
   const tpl = ont ? tplQ.data?.find((tt) => tt.template_key === ont.target_template_key) : undefined;
   // `rulebook` is what THIS run recorded — keyed on this document and this choice, so switching the
