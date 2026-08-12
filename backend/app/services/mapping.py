@@ -206,6 +206,32 @@ SECTION_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("profit_attributable_to",
      ("profit attributable", "loss attributable", "attributable to",
       "溢利归属", "亏损归属", "应占溢利")),
+    # The income statement's ordinary sections. Absent until now, which meant `section_of_key`
+    # returned None for every `pl_income__*`, `pl_expenses__*`, `pl_non_operating_expenses__*`,
+    # `pl_exceptional_items__*` and `pl_tax_expense__*` key — 34 of the 173 shipped concepts — so
+    # `_in_section` waved all of them through and a banner like "REVENUE" was captured as a
+    # section_hint that normalised to nothing. The two attributable-to families above were the
+    # only part of the P&L a banner could scope.
+    #
+    # ORDER IS LOAD-BEARING TWICE OVER. `section_of_key` matches "_<tok>__" as a substring, and
+    # "_non_operating_expenses__" CONTAINS "_expenses__" — so the compound must be tested first,
+    # exactly as non_current_liabilities is tested before current_liabilities. And
+    # `section_of_banner` returns the first match, so "Income tax expense" must reach tax_expense
+    # before it can reach income.
+    ("non_operating_expenses", ("non operating", "nonoperating", "非经营", "非营运")),
+    ("exceptional_items", ("exceptional", "非经常性", "特殊项目")),
+    # "income tax" is deliberately absent: it is contained in three BALANCE-SHEET captions the
+    # ontology maps as their own concepts — deferred income tax assets, prepaid income tax, income
+    # tax payable — and any of those reaching this function as a banner would scope the row to
+    # tax_expense and refuse every bs_ concept under it. "Income tax expense" still resolves here,
+    # via "tax expense".
+    ("tax_expense", ("tax expense", "taxation", "税项", "所得税")),
+    ("expenses", ("expenses", "开支", "费用")),
+    # Deliberately NOT the bare words "income" / "收入": a banner naming the income section says
+    # revenue or turnover, while "income" appears in captions all over a filing (deferred income
+    # tax, other comprehensive income). A banner that resolves to the WRONG section is worse than
+    # one that resolves to nothing, because the gate then refuses the correct concept.
+    ("income", ("revenue", "turnover", "营业额", "营业收入", "收益")),
 )
 
 

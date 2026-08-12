@@ -166,3 +166,45 @@ def test_a_heading_printed_on_the_same_line_as_its_first_figure_still_scopes_the
     # by the profit heading four rows above it.
     assert hints[1] == "Profit attributable to"
     assert hints[3] == "Total comprehensive loss attributable to"
+
+
+# --- the income statement's ordinary sections ---------------------------------------------------
+# Until these entries existed, section_of_key returned None for 34 of the 173 shipped concepts, so
+# a P&L banner scoped nothing and _in_section waved every one of them through.
+
+def test_pl_section_banners_resolve():
+    from app.services.mapping import section_of_banner
+
+    assert section_of_banner("REVENUE") == "income"
+    assert section_of_banner("Turnover") == "income"
+    assert section_of_banner("EXPENSES") == "expenses"
+    assert section_of_banner("Non-operating expenses") == "non_operating_expenses"
+    assert section_of_banner("Exceptional items") == "exceptional_items"
+    assert section_of_banner("Income tax expense") == "tax_expense"
+    assert section_of_banner("Taxation") == "tax_expense"
+
+
+def test_pl_section_keys_resolve_and_the_compound_wins():
+    """`section_of_key` matches "_<tok>__" as a substring, and "_non_operating_expenses__" contains
+    "_expenses__" — so the compound has to be tested first or every non-operating concept reports
+    itself as an ordinary expense."""
+    from app.services.mapping import section_of_key
+
+    assert section_of_key("pl_income__revenue_from_operations") == "income"
+    assert section_of_key("pl_expenses__cost_of_goods_sold") == "expenses"
+    assert section_of_key("pl_non_operating_expenses__finance_costs") == "non_operating_expenses"
+    assert section_of_key("pl_exceptional_items__impairment_loss") == "exceptional_items"
+    assert section_of_key("pl_tax_expense__current_tax") == "tax_expense"
+    # A statement-level total sits in no section and must stay unconstrained.
+    assert section_of_key("pl_profit_before_tax") is None
+
+
+def test_a_balance_sheet_tax_caption_is_not_a_tax_section_banner():
+    """"income tax" is excluded from the tax vocabulary on purpose: three BS captions contain it
+    and are their own concepts, so matching it here would scope a balance-sheet row to tax_expense
+    and refuse every bs_ concept under it."""
+    from app.services.mapping import section_of_banner
+
+    assert section_of_banner("Deferred income tax assets") is None
+    assert section_of_banner("Prepaid income tax") is None
+    assert section_of_banner("Income tax payable") is None
