@@ -232,12 +232,31 @@ test("the template screen is an index first: a row opens the detail, which dismi
   await expect(page.getByPlaceholder("New alias")).toBeVisible();
   await expect(page).toHaveURL(/[?&]template=/);              // reloadable / linkable
 
+  // The starter ontology for THIS template is downloadable from its detail — it is derived from
+  // one template, so it lives where a template is already chosen. Both halves of this feature
+  // existed for a while with no UI at all and nothing noticed, because everything was exported
+  // and tsc stayed quiet; these two assertions are what would have caught that.
+  const [starter] = await Promise.all([
+    page.waitForEvent("download", { timeout: 30_000 }),
+    page.getByTestId("tpl-skeleton-download").click(),
+  ]);
+  expect(starter.suggestedFilename()).toMatch(/_ontology_skeleton\.json$/);
+
   // Dismissed → back on the index, still filtered.
   await page.getByTestId("tpl-detail-close").click();
   await expect(page.getByTestId("template-detail")).toHaveCount(0);
   await expect(page.getByTestId("tpl-filter")).toHaveValue("hkfrs");
   await expect(rows.first()).toBeVisible();
   await expect(page).not.toHaveURL(/[?&]template=/);
+
+  // And the SHAPE any ontology must have is downloadable from the index, because it constrains
+  // every one of them rather than any single template.
+  const [schema] = await Promise.all([
+    page.waitForEvent("download", { timeout: 30_000 }),
+    page.getByTestId("tpl-schema-download").click(),
+  ]);
+  expect(schema.suggestedFilename()).toMatch(/^ontology_schema_v\d+\.json$/);
+  await expect(page.getByTestId("tpl-schema-error")).toHaveCount(0);
 });
 
 test("admin edits the ontology inline and the new version persists", async ({ page }) => {

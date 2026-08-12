@@ -20,7 +20,15 @@ export default defineConfig({
       command: "python -m uvicorn app.main:app --port 8000",
       cwd: "../backend",
       url: "http://127.0.0.1:8000/health",
-      reuseExistingServer: true,
+      // NEVER adopt a server that is already listening. It reads as a convenience, but it makes
+      // the suite's result depend on machine state: a server left running from an earlier run
+      // serves the code IT was started with, so the suite silently tests something other than the
+      // working tree. That is not hypothetical — it produced a 500 in the extraction view that
+      // could not be reproduced in-process, over HTTP, or against a fresh server, and it is why
+      // two agents reported 19 passed and 1 failed for the same commit: they were talking to
+      // different servers. Starting our own costs a few seconds; if the port is occupied,
+      // Playwright now fails loudly instead of testing the wrong thing.
+      reuseExistingServer: false,
       timeout: 120_000,
       // Force deterministic mapping so the (network-blocked) LLM isn't attempted during
       // e2e — keeps extraction fast and offline; alias-tier mapping still populates.
@@ -29,6 +37,10 @@ export default defineConfig({
     {
       command: "npm run dev",
       url: "http://localhost:5173",
+      // Reuse is fine HERE, and the asymmetry with the backend above is the point: vite reads the
+      // source from disk on request and hot-replaces it, so an already-running dev server is
+      // serving the working tree. Uvicorn is not — it imports the Python once at start-up and
+      // holds it — which is why only that one refuses to be adopted.
       reuseExistingServer: true,
       timeout: 120_000,
     },
