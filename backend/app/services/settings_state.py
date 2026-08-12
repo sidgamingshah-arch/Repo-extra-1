@@ -52,7 +52,11 @@ _LOADED = False
 
 # LLM fields an admin may edit from the UI (the key itself is intentionally excluded).
 LLM_EDITABLE = ("provider", "model", "base_url", "temperature", "max_tokens",
-                "timeout_seconds", "api_key_env")
+                "timeout_seconds", "api_key_env",
+                # Azure addresses a DEPLOYMENT on the customer's own resource, so the resource, the
+                # api-version and the deployment name are part of the address — as editable as
+                # base_url is for OpenAI, and unusable if they are not.
+                "azure_endpoint", "azure_api_version", "azure_deployment")
 
 
 class Knob(NamedTuple):

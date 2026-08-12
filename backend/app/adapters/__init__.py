@@ -41,6 +41,15 @@ def register_builtins() -> None:
     registry.register("llm", "openai", OpenAiLlmProvider)
     registry.register("llm", "openai_compatible", OpenAiLlmProvider)
 
+    # Azure OpenAI — the DEFAULT provider (GPT-5 mini). Same Chat Completions body as above, but the
+    # deployment is addressed on the customer's own resource and authenticated with an api-key
+    # header, so it needs its own adapter rather than a base_url. Lazy like the others: registering
+    # it needs neither a key nor a resource.
+    from .azure_openai_llm import AzureOpenAiLlmProvider
+
+    registry.register("llm", "azure_openai", AzureOpenAiLlmProvider)
+    registry.register("llm", "azure", AzureOpenAiLlmProvider)
+
     # Real OCR adapters (scanned pages) — registered under their ids so they're available
     # when ocr.engine selects them. Both are lazy: the engine + models load only on first
     # use, so registering needs neither the extra nor the models.

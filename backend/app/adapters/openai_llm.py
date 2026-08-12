@@ -37,6 +37,11 @@ class OpenAiLlmProvider:
         base = self._settings.llm.base_url or "https://api.openai.com/v1"
         return base.rstrip("/") + "/chat/completions"
 
+    def _headers(self) -> dict:
+        """Auth + content type. Overridden by the Azure adapter, which authenticates with an
+        ``api-key`` header rather than a bearer token."""
+        return {"Authorization": f"Bearer {self._api_key()}", "Content-Type": "application/json"}
+
     def _api_key(self) -> str:
         cfg = self._settings.llm
         key = os.environ.get(cfg.api_key_env)
@@ -79,7 +84,7 @@ class OpenAiLlmProvider:
         temperature: float = 0.0,
         max_tokens: int = 2048,
     ) -> tuple[BaseModel, LlmMeta]:
-        headers = {"Authorization": f"Bearer {self._api_key()}", "Content-Type": "application/json"}
+        headers = self._headers()
         body = self.build_body(
             system=system, messages=messages, response_schema=response_schema,
             temperature=temperature, max_tokens=max_tokens, json_mode=True,

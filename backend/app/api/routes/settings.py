@@ -60,6 +60,11 @@ def _snapshot() -> dict:
             "base_url": s.llm.base_url,
             "api_key_env": s.llm.api_key_env,
             "key_configured": bool(os.environ.get(s.llm.api_key_env)),
+            "azure_endpoint": s.llm.azure_endpoint,
+            "azure_api_version": s.llm.azure_api_version,
+            # What Azure will actually be asked for, deployment fallback resolved, so the screen
+            # shows the address that will be used rather than the field that was filled in.
+            "azure_deployment": s.llm.azure_deployment_name(),
         },
         "ocr": {"engine": s.ocr.engine, "languages": s.ocr.languages, "dpi": s.ocr.dpi},
         "embeddings": {"provider": s.embeddings.provider, "model": s.embeddings.model},
@@ -93,6 +98,10 @@ class LlmConfigPatch(BaseModel):
     max_tokens: int | None = None
     timeout_seconds: int | None = None
     api_key_env: str | None = None
+    # Azure OpenAI address. Not secret: the resource host, the api-version and the deployment name.
+    azure_endpoint: str | None = None
+    azure_api_version: str | None = None
+    azure_deployment: str | None = None
 
 
 class SettingsPatch(BaseModel):

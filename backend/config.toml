@@ -64,17 +64,32 @@ supported_locales = ["en", "zh", "ar", "fr"]
 # configures whichever adapter is selected.
 # ---------------------------------------------------------------------------
 [llm]
+# azure_openai       → Azure OpenAI (DEFAULT). Addresses a DEPLOYMENT on your own resource and
+#                      authenticates with an api-key header, so it needs azure_endpoint below —
+#                      there is no shared default host the way there is for OpenAI.
 # anthropic          → Anthropic Messages API (SDK)
 # openai / openai_compatible → OpenAI Chat Completions wire format (OpenAI, TokenRouter,
 #                      OpenRouter, vLLM, …); set base_url + a vendor/model id below
 # local | stub       → offline / no-op
-provider = "anthropic"
-model = "claude-opus-4-8"       # default model id for the selected provider
+#
+# Every value here is editable at run time from the Settings screen and persisted, so this file is
+# the starting point rather than the commitment: changing model, deployment, region or provider is
+# configuration. The KEY is the exception and is never stored — only the NAME of the env var it is
+# read from, so it cannot reach the database or a settings export.
+provider = "azure_openai"
+model = "gpt-5-mini"            # default model id for the selected provider
 temperature = 0.0               # deterministic output for structured extraction
 max_tokens = 4096
 timeout_seconds = 60
-base_url = ""                   # override for a self-hosted / gateway endpoint; empty = provider default
-api_key_env = "ANTHROPIC_API_KEY"   # env var the key is read from (the key itself is NOT stored here)
+base_url = ""                   # a gateway / private-link host in FRONT of the provider; empty = provider default
+api_key_env = "AZURE_OPENAI_API_KEY"   # env var the key is read from (the key itself is NOT stored here)
+
+# Azure OpenAI address (used when provider = "azure_openai"). Azure selects a deployment on your
+# resource, not a model on a shared endpoint, so all three are part of the URL:
+#   {azure_endpoint}/openai/deployments/{azure_deployment}/chat/completions?api-version=...
+azure_endpoint = ""             # https://<resource>.openai.azure.com
+azure_api_version = "2024-12-01-preview"
+azure_deployment = ""           # deployment name; empty = use `model` (common when they match)
 
 # ---------------------------------------------------------------------------
 # OCR (scanned-page recognition)

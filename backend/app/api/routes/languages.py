@@ -34,7 +34,7 @@ def list_languages(
     if ontology_version_id:
         row = session.get(OntologyVersion, ontology_version_id)
         if row:
-            ontology = load_ontology(row.definition)
+            ontology = load_ontology(row.definition, resolve=True)
 
     # No explicit config → evaluate parity against the latest seeded template + a matching
     # ontology, so the default call reports the real supported set (not an all-False collapse
@@ -52,7 +52,7 @@ def list_languages(
         # describe the aliases a real run would actually use.
         row = select_for_template(session, template.template_key)
         if row:
-            ontology = load_ontology(row.definition)
+            ontology = load_ontology(row.definition, resolve=True)
 
     parity = evaluate_parity(template, ontology)
     return {

@@ -1407,7 +1407,7 @@ def _netting_rules_for_run(session: Session, run) -> list:
     if row is None:
         return []
     try:
-        return load_ontology(row.definition).netting_rules
+        return load_ontology(row.definition, resolve=True).netting_rules
     except Exception:  # noqa: BLE001 — a malformed ontology must not break the statement
         return []
 

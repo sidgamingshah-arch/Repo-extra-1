@@ -66,15 +66,36 @@ class FeatureSettings(BaseModel):
 
 
 class LlmSettings(BaseModel):
-    """Configuration for the selected LLM adapter (used for mapping disambiguation)."""
+    """Configuration for the selected LLM adapter (used for mapping disambiguation).
 
-    provider: str = "stub"            # anthropic | openai | local | stub
-    model: str = "claude-opus-4-8"
+    The default is GPT-5 mini on Azure OpenAI. Every field here is editable at run time from the
+    Settings screen and persisted (see services.settings_state), so the default is a starting point
+    rather than a commitment — switching model, deployment, region or provider is configuration, not
+    a code change. The KEY is never configuration: only the NAME of the environment variable holding
+    it is stored, so a credential cannot end up in the database or in a settings export.
+    """
+
+    provider: str = "azure_openai"    # azure_openai | anthropic | openai | openai_compatible | stub
+    model: str = "gpt-5-mini"
     temperature: float = 0.0
     max_tokens: int = 4096
     timeout_seconds: int = 60
     base_url: str = ""                # empty = provider default
-    api_key_env: str = "ANTHROPIC_API_KEY"  # env var the key is read from (not the key)
+    api_key_env: str = "AZURE_OPENAI_API_KEY"  # env var the key is read from (not the key)
+
+    # Azure OpenAI only. Azure does not address a model by name on a shared endpoint the way OpenAI
+    # does — it addresses a DEPLOYMENT on your own resource, at
+    # {azure_endpoint}/openai/deployments/{deployment}/chat/completions?api-version=...
+    # so the resource and the api-version are part of the address and cannot be inferred.
+    azure_endpoint: str = ""          # e.g. https://<resource>.openai.azure.com
+    azure_api_version: str = "2024-12-01-preview"
+    # The deployment NAME, which an operator chooses when deploying and which is frequently not the
+    # model name. Left empty it falls back to `model`, which is the common case where someone named
+    # the deployment after the model it serves.
+    azure_deployment: str = ""
+
+    def azure_deployment_name(self) -> str:
+        return (self.azure_deployment or self.model or "").strip()
 
 
 class OcrSettings(BaseModel):

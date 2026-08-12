@@ -213,7 +213,7 @@ def get_template_detail(template_id: str, locale: str = "en",
     netting_rules: list[dict] = []
     if ont_row:
         try:
-            ont = load_ontology(ont_row.definition)
+            ont = load_ontology(ont_row.definition, resolve=True)
             for m in ont.mappings:
                 by_key[m.canonical_key] = m
             # Generic containment-netting policies (LLM-gated) — surfaced for the admin to review.
