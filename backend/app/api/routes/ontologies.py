@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -96,6 +97,67 @@ def list_ontologies(session: Session = Depends(db)) -> list[dict]:
     return [{"id": r.id, "ontology_key": r.ontology_key,
              "target_template_key": r.target_template_key, "version": r.version}
             for r in rows]
+
+
+def _slug(s: str) -> str:
+    """A template key safe to put in a Content-Disposition filename."""
+    return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_")
+
+
+# Both authoring aids are declared BEFORE ``/{ontology_id}``: routes match in declaration order,
+# so registered after it "schema" and "skeleton" would be read as ontology ids and answer 404
+# "Ontology not found" — a failure that looks like a missing record rather than a routing mistake.
+#
+# Gated on CONFIG_ONTOLOGY, the same permission as every ontology WRITE endpoint here. Serving the
+# schema leaks nothing, but authoring a rulebook is an admin job end to end, and a download that
+# an analyst can fetch yet not upload is an invitation to waste an afternoon.
+@router.get("/schema", dependencies=[Depends(require(Permission.CONFIG_ONTOLOGY))])
+def ontology_schema() -> dict:
+    """The shape an uploaded ontology must have, generated from the model the gate validates with.
+
+    ``json_schema`` is the machine-readable contract and ``field_help`` the flat index to read
+    it by. Both are derived, so neither can describe a rule the upload gate does not enforce.
+    """
+    from app.services.ontology_skeleton import CURRENT_SCHEMA_VERSION, field_help, json_schema
+
+    return {"schema_version": CURRENT_SCHEMA_VERSION,
+            "json_schema": json_schema(),
+            "field_help": field_help()}
+
+
+@router.get("/skeleton", dependencies=[Depends(require(Permission.CONFIG_ONTOLOGY))])
+def download_ontology_skeleton(template_id: str, session: Session = Depends(db)) -> Response:
+    """A complete, valid, ready-to-edit ontology for one template, as a .json download.
+
+    Every canonical_key the template declares is already a stub inside its section, so the author
+    fills in aliases and criteria instead of reverse-engineering the shape from 422s.
+    """
+    from app.db.models import TemplateVersion
+    from app.services.ontology_skeleton import SkeletonError, build_skeleton
+
+    row = session.get(TemplateVersion, template_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    try:
+        template = load_template(row.definition or {})
+    except Exception as exc:  # noqa: BLE001 — a stored definition the schema no longer accepts
+        raise HTTPException(
+            status_code=422,
+            detail=f"Template {row.template_key!r} v{row.version} cannot be read as a template "
+                   f"({exc}), so no ontology can be generated for it.") from exc
+    try:
+        skeleton = build_skeleton(template, template_version=row.version)
+    except SkeletonError as exc:
+        # A skeleton the gate would refuse is a defect in the generator, not in the request, and
+        # saying so beats handing over a file whose first upload fails.
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # ensure_ascii=False so the Chinese labels the template carries stay readable in the file the
+    # author edits; indented because it is edited by hand, not parsed by a machine.
+    body = json.dumps(skeleton, indent=2, ensure_ascii=False).encode("utf-8")
+    fname = f"{_slug(row.template_key) or 'ontology'}_v{row.version}_ontology_skeleton.json"
+    return Response(content=body, media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @router.get("/{ontology_id}")

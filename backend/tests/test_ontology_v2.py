@@ -1,0 +1,285 @@
+"""The v2.1 rulebook: it must load with NOTHING dropped, and its section layer must resolve.
+
+Two failure modes are covered here. The first is the one ``unknown_keys`` exists for: a block the
+schema does not declare is ignored by pydantic, so the rulebook publishes and simply is not the
+rulebook that was authored. The second is subtler and cannot be seen from the file at all —
+``section_scope``, ``statement``, ``temporality`` and ``face_only`` are authored on ZERO concepts,
+only in ``section_defaults``, so without the ``inherits`` fold every concept loads with no section
+at all and the section-first binding order the rulebook specifies has nothing to bind against.
+"""
+from __future__ import annotations
+
+import copy
+import json
+from pathlib import Path
+
+import pytest
+
+from app.schemas.loader import (
+    UnknownInheritsError,
+    load_ontology,
+    resolve_inherits,
+    unknown_keys,
+)
+from app.schemas.ontology import Equivalence, ResidualPolicy
+
+SAMPLES = Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
+V2 = SAMPLES / "hkfrs_hk_china_v2_ontology.json"
+V1 = SAMPLES / "hkfrs_hk_china_ontology.json"
+
+
+def _v2() -> dict:
+    return json.loads(V2.read_text())
+
+
+def _by_key(ont) -> dict:
+    return {m.canonical_key: m for m in ont.mappings}
+
+
+# --- the whole file survives the door ---------------------------------------------------------
+
+def test_v2_rulebook_loads_with_nothing_dropped():
+    raw = _v2()
+    ont = load_ontology(raw)
+    assert unknown_keys(raw, ont, limit=500) == []
+    assert len(ont.mappings) == 173
+    assert len(ont.section_defaults) == 18
+    # The six new top-level blocks are objects, not swallowed keys.
+    assert ont.normalisation and ont.normalisation.pipeline
+    assert ont.binding and ont.binding.order
+    assert ont.scope_selection and ont.scope_selection.entity_scope.default == "consolidated"
+    assert ont.residual_framework and ont.residual_framework.population == "sweep_only"
+    assert ont.validation and len(ont.validation.identities) == 14
+
+
+def test_v2_loads_resolved_with_nothing_dropped():
+    """Resolution must stay inside the declared schema: a folded key the concept model does not
+    declare would be dropped exactly as an undeclared authored one is."""
+    raw = _v2()
+    resolved = resolve_inherits(raw)
+    assert unknown_keys(resolved, load_ontology(raw, resolve=True), limit=500) == []
+
+
+def test_shipped_v1_rulebook_is_untouched_by_resolution():
+    """A v1 rulebook has no section layer at all; asking for resolution must be a no-op, not a
+    different definition — the same two loaders read every row already in the database."""
+    raw = json.loads(V1.read_text())
+    assert unknown_keys(raw, load_ontology(raw)) == []
+    assert resolve_inherits(raw) is raw
+    assert load_ontology(raw, resolve=True).model_dump() == load_ontology(raw).model_dump()
+
+
+# --- the field shapes, not just their presence -------------------------------------------------
+
+def test_residual_concepts_carry_typed_sweep_terms():
+    ont = load_ontology(_v2())
+    m = _by_key(ont)["bs_non_current_assets__others"]
+    # A string, not a bool and not a dict: the residuals are populated by the sweep only, and
+    # reading "disabled" as truthy would leave alias matching on for all 13 of them.
+    assert m.alias_matching == "disabled"
+    assert m.match_priority == 0                       # an int, so it can be ordered against 78
+    assert isinstance(m.residual_policy, ResidualPolicy)
+    assert m.residual_policy.plug is False and m.residual_policy.cross_section is False
+    assert m.residual_policy.section_scope == "bs_s1_non_current_assets"
+    assert m.never_sweep and all(isinstance(k, str) for k in m.never_sweep)
+    assert len(m.expected_components) == 5
+    residuals = [x for x in ont.mappings if x.value_scope == "exclusive_residual"]
+    assert len(residuals) == 13
+    assert all(x.alias_matching == "disabled" and x.residual_policy for x in residuals)
+
+
+def test_equivalence_keeps_its_authored_with_spelling():
+    """``with`` is a Python keyword, so the field is aliased — and the dump has to speak the
+    authored spelling, because that dump is what the upload gate diffs the submitted JSON
+    against. An un-aliased dump reports `equivalence.with` as an undeclared key."""
+    ont = load_ontology(_v2())
+    eq = _by_key(ont)["bs_equity__total_equity"].equivalence
+    assert isinstance(eq, Equivalence)
+    assert eq.with_ == "bs_net_assets"
+    assert eq.relation == "identical_reported_amount"
+    assert Equivalence(with_="x").model_dump() == {"with": "x", "relation": "", "rule": ""}
+
+
+def test_concept_level_prose_and_containment_fields_survive():
+    ont = load_ontology(_v2())
+    by_key = _by_key(ont)
+    reserves = by_key["bs_equity__reserves"]
+    assert reserves.is_gross_parent is True
+    assert len(reserves.children_if_decomposed) == 4
+    assert by_key["pl_income__total_income"].derivation.startswith("sum of")
+    assert by_key["bs_non_current_assets__land_of_use_rights"].section_disambiguation
+    assert by_key["cf_s4_effect_of_foreign_exchange_rate_changes"].template_note
+    assert by_key["pl_tax_expense__others"].notes_as_source_rationale
+    assert by_key["pl_expenses__employee_benefits_expense"].note_use == "evidence_only"
+    assert by_key["bs_equity__total_equity"].unit_of_account == "subtotal"
+    d_and_a = by_key["cf_cash_flow_from_operating_activities__depreciation_and_amortisation"]
+    assert d_and_a.aggregation_note
+
+
+def test_nested_blocks_are_modelled_not_free_dicts():
+    ont = load_ontology(_v2())
+    g = ont.global_rules
+    assert g.face_only_default and "face_only" in g.face_only_default
+    assert g.sign_convention["expenses_and_outflows"].startswith("Stored NEGATIVE")
+    groups = {grp.id: grp for grp in g.mutually_exclusive_groups}
+    assert set(groups) == {"equity_reserves", "associate_jv_share"}
+    assert groups["equity_reserves"].aggregate == "bs_equity__reserves"
+    assert len(groups["equity_reserves"].components) == 4
+
+    md = ont.metadata
+    assert md.supersedes == "hkfrs_hk_china_v1" and md.concept_count == 173
+    assert md.breaking_changes and md.retained_defects
+
+    netting = {n.id: n for n in ont.netting_rules}
+    assert netting["cogs_inclusive_of_opex"].evidence_required is True
+    assert netting["cogs_inclusive_of_opex"].on_apply
+    assert netting["gross_expense_note_split"].decompose_into == [
+        "pl_tax_expense__current_tax", "pl_tax_expense__deferred_tax"]
+
+    examples = {e.id: e for e in ont.worked_examples}
+    assert "residual_sweep_current_assets" in examples
+    assert examples["residual_sweep_current_assets"].resolution
+    assert examples["residual_sweep_current_assets"].reconciliation
+    assert examples["residual_must_not_plug"].id == "residual_must_not_plug"
+
+    ids = {i.id: i for i in ont.validation.identities}
+    assert ids["pl_tci_tie"].severity == "blocking"
+    assert ids["cf_to_bs_cash"].severity == "warning" and ids["cf_to_bs_cash"].note
+
+
+# --- extraction_mode ---------------------------------------------------------------------------
+
+def test_extraction_mode_accepts_derive_without_meaning_do_not_extract():
+    """The v2 file uses ``extract_or_derive`` (7 concepts) and ``derive`` (1) where v1 only had
+    ``extract``/``do_not_extract``. Both new values stay EXTRACTABLE: a subtotal the framework can
+    derive is still one a filing may print on the face, and refusing the printed row would sweep
+    it into the section residual instead of mapping it."""
+    from app.services.mapping import OntologyMatcher
+
+    ont = load_ontology(_v2())
+    modes = {m.canonical_key: m.extraction_mode for m in ont.mappings}
+    derived = [k for k, v in modes.items() if v == "extract_or_derive"]
+    assert modes["pl_profit_before_exceptional_items_and_tax"] == "derive"
+    assert "pl_income__total_income" in derived
+    assert not [k for k, v in modes.items() if v == "do_not_extract"]
+
+    extractable = set(OntologyMatcher(ont)._extractable_keys())
+    assert "pl_profit_before_exceptional_items_and_tax" in extractable
+    assert set(derived) <= extractable
+
+
+def test_do_not_extract_is_still_the_only_value_that_suppresses():
+    from app.schemas.ontology import OntologyDefinition, OntologyMapping
+    from app.services.mapping import OntologyMatcher
+
+    ont = OntologyDefinition(
+        ontology_key="k", target_template_key="t",
+        mappings=[OntologyMapping(canonical_key="a", extraction_mode="derive"),
+                  OntologyMapping(canonical_key="b", extraction_mode="do_not_extract")],
+    )
+    assert OntologyMatcher(ont)._extractable_keys() == ["a"]
+
+
+# --- the inherits resolver ---------------------------------------------------------------------
+
+def test_section_layer_reaches_every_concept_only_after_resolution():
+    raw = _v2()
+    unresolved = load_ontology(raw)
+    # The four section-only fields are authored on no concept whatsoever, which is what makes the
+    # fold load-bearing rather than a convenience.
+    assert not [m for m in unresolved.mappings if m.section_scope or m.statement]
+
+    ont = load_ontology(raw, resolve=True)
+    placed = [m for m in ont.mappings if m.section_scope and m.statement]
+    assert len(placed) == 173
+    assert all(m.temporality and m.face_only is True for m in placed)
+
+    m = _by_key(ont)["bs_current_assets__inventories"]
+    assert m.section_scope == ["bs_s2_current_assets"]
+    assert m.statement.value == "balance_sheet"
+    assert m.temporality == "instant" and m.unit_of_account == "balance"
+    assert m.note_use == "evidence_only" and m.sign_convention == "positive_expected"
+    # The section's generic criteria arrive too, for a concept that states none of its own.
+    assert m.include and m.include[0].startswith("The face amount")
+    # …including prose a section carries but no concept does: a key the fold produces has to be
+    # declared on the concept model or resolution loses it exactly as the gate says it would.
+    assert _by_key(ont)["pl_tax_expense__others"].note_use_rationale.startswith("HKEX filings")
+
+
+def test_a_key_declared_on_the_concept_beats_the_inherited_one():
+    ont = load_ontology(_v2(), resolve=True)
+    m = _by_key(ont)["bs_non_current_assets__others"]
+    # The section says every concept under it is an exclusive leaf, positive, priority 50. This
+    # one is the section's residual and says otherwise; if inheritance won, the residual would be
+    # alias-matchable at ordinary priority and its sign would be a review trigger on every filing.
+    assert m.value_scope == "exclusive_residual"     # section default: exclusive_leaf
+    assert m.sign_convention == "either"             # section default: positive_expected
+    assert m.match_priority == 0                     # section default: 50
+    # …while the keys it is silent about still arrive from the section.
+    assert m.section_scope == ["bs_s1_non_current_assets"]
+    assert m.temporality == "instant"
+
+    totals = _by_key(ont)["pl_income__total_income"]
+    assert totals.extraction_mode == "extract_or_derive"   # section default: extract
+    assert totals.unit_of_account == "subtotal"            # section default: flow
+
+    # An override is not a merge: the concept's own criteria REPLACE the section's generic ones.
+    ppe = _by_key(ont)["bs_non_current_assets__property_plant_and_equipment"]
+    assert not any("Section subtotals" in x for x in ppe.exclude)
+
+
+def test_unknown_inherits_is_a_clear_error_not_a_silent_no_op():
+    raw = _v2()
+    raw["mappings"][0]["inherits"] = "bs_s1_non_currrent_assets"     # one transposed letter
+    with pytest.raises(UnknownInheritsError) as exc:
+        resolve_inherits(raw)
+    msg = str(exc.value)
+    assert raw["mappings"][0]["canonical_key"] in msg
+    assert "bs_s1_non_currrent_assets" in msg
+    assert "bs_s1_non_current_assets" in msg          # names the sections that DO exist
+    with pytest.raises(UnknownInheritsError):
+        load_ontology(raw, resolve=True)
+    # The read path stays tolerant, by design: one bad stored row must not 500 the ontology
+    # editor, the language-parity page or an extraction run.
+    assert len(load_ontology(raw).mappings) == 173
+
+
+def test_resolution_does_not_mutate_the_definition_it_was_given():
+    """Callers pass the ``definition`` of a live DB row; folding in place would rewrite the row's
+    concepts with their section's values on the next flush."""
+    raw = _v2()
+    before = copy.deepcopy(raw)
+    resolve_inherits(raw)
+    assert raw == before
+
+
+# --- the gate still bites ----------------------------------------------------------------------
+
+def test_a_mistyped_key_in_the_v2_shape_is_still_reported():
+    raw = _v2()
+    raw["residual_framwork"] = {"note": "typo'd block name"}
+    raw["mappings"][0]["never_sweeep"] = ["x"]
+    raw["mappings"][1]["residual_policy"] = {"framework": "residual_framework", "plugg": False}
+    raw["section_defaults"]["bs_s1_non_current_assets"]["face_onlyy"] = True
+    raw["residual_framework"]["sweep"]["cross_sections"] = False
+    raw["worked_examples"][0]["reconcilliation"] = "x"
+    found = unknown_keys(raw, load_ontology(raw), limit=500)
+    assert "residual_framwork" in found
+    assert "mappings[0].never_sweeep" in found
+    assert "mappings[1].residual_policy.plugg" in found
+    assert "section_defaults.bs_s1_non_current_assets.face_onlyy" in found
+    assert "residual_framework.sweep.cross_sections" in found
+    assert "worked_examples[0].reconcilliation" in found
+
+
+def test_a_bad_value_in_a_section_default_is_refused_on_both_paths():
+    """A section default is inherited by every concept under it, so a misspelt value there is a
+    misspelt value on twelve concepts at once — one no downstream comparison will ever match.
+    Declaring the section vocabularies as closed sets is what turns that into a 422."""
+    from pydantic import ValidationError as PydanticValidationError
+
+    raw = _v2()
+    raw["section_defaults"]["pl_s2_expenses"]["sign_convention"] = "negative_expcted"
+    for kwargs in ({}, {"resolve": True}):
+        with pytest.raises(PydanticValidationError, match="sign_convention"):
+            load_ontology(raw, **kwargs)

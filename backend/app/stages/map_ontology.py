@@ -58,6 +58,12 @@ class MapOntologyStage:
                 li.confidence.method = result.method.value
                 if result.allocation_status:
                     li.confidence.flags.append(f"alloc:{result.allocation_status}")
+                if result.rerouted_from:
+                    # The concept whose caption matched is not the one the row was filed under: the
+                    # section banner named a different variant of the same fact. Recorded per row,
+                    # because a reviewer looking at the comprehensive-income bottom line needs to
+                    # see that the caption on the page said "loss for the year".
+                    li.confidence.flags.append(f"section_reroute_from:{result.rerouted_from}")
                 if result.needs_review:
                     li.confidence.flags.append("low_mapping_confidence")
                 return True
@@ -121,4 +127,10 @@ class MapOntologyStage:
                 matcher.usage.get("last_error")
                 or "llm provider resolved but made no successful calls")
         ctx.log(f"map_ontology:mapped={mapped}/{len(doc.line_items)} llm_calls={matcher.usage['calls']}")
+        # Named routes, not just a count: "the banner corrected 4 answers" is not reviewable, while
+        # "pl_profit_for_the_year -> pl_total_comprehensive_income_for_the_year" is the one line of
+        # the run record that says which figure moved and why.
+        if matcher.usage["family_resolved"]:
+            ctx.log(f"map_ontology:section_reroutes={matcher.usage['family_resolved']}"
+                    f" routes={','.join(matcher.usage['family_routes'])}")
         return doc

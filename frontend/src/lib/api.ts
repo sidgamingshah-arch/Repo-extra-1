@@ -92,6 +92,7 @@ import type {
   NotesResponse,
   OntologyEditResult,
   OntologyRef,
+  OntologySchema,
   PagesResponse,
   ProjectResponse,
   ReviewResponse,
@@ -285,6 +286,10 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ definition, target_template_key: targetTemplateKey ?? null }),
       }),
+  /** The shape an authored ontology must have, generated from the model the upload gate
+   *  validates with: the JSON Schema plus a flat, per-field index to read it by. Admin-only,
+   *  like every other ontology configuration call — gate the control on `config:ontology`. */
+  ontologySchema: () => req<OntologySchema>(`/ontologies/schema`),
   /** A stored ontology's full definition — for "download, edit, upload back". */
   ontologyDetail: (id: string) =>
     req<{ id: string; ontology_key: string; target_template_key: string; version: number;
@@ -357,10 +362,10 @@ export async function downloadExport(body: {
   URL.revokeObjectURL(url);
 }
 
-/** Download a template as the editable workbook (auth'd fetch → blob, like the exports).
- *  The filename comes from the server so the version is on the file the user edits. */
-export async function downloadTemplateXlsx(templateId: string, fallbackName: string): Promise<void> {
-  const res = await fetch(`${BASE}/templates/${templateId}/xlsx`, { headers: { ...authHeader() } });
+/** Save an authenticated download to disk, preferring the name the SERVER chose.
+ *  Shared by the authoring downloads: both put the source version in the filename, so the file
+ *  the user edits says which version it was generated from — a detail a client-side name loses. */
+async function saveAsFile(res: Response, fallbackName: string): Promise<void> {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new ApiError(res.status, `${res.status} ${res.statusText}`, errorDetail(text));
@@ -371,11 +376,33 @@ export async function downloadTemplateXlsx(templateId: string, fallbackName: str
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = named || `${fallbackName}.xlsx`;
+  a.download = named || fallbackName;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/** Download a template as the editable workbook (auth'd fetch → blob, like the exports). */
+export async function downloadTemplateXlsx(templateId: string, fallbackName: string): Promise<void> {
+  await saveAsFile(
+    await fetch(`${BASE}/templates/${templateId}/xlsx`, { headers: { ...authHeader() } }),
+    `${fallbackName}.xlsx`,
+  );
+}
+
+/** Download a ready-to-edit ontology for one template: every canonical_key already a stub inside
+ *  the section it is printed under. It is a COMPLETE, valid rulebook — it can be uploaded back
+ *  unmodified — so authoring means filling in aliases and criteria instead of discovering the
+ *  expected shape from a sequence of 422s. Admin-only (`config:ontology`). */
+export async function downloadOntologySkeleton(
+  templateId: string, fallbackName: string,
+): Promise<void> {
+  await saveAsFile(
+    await fetch(`${BASE}/ontologies/skeleton?template_id=${encodeURIComponent(templateId)}`,
+                { headers: { ...authHeader() } }),
+    `${fallbackName}_ontology_skeleton.json`,
+  );
 }
 
 /** GET a REAL document's export (built from its latest extraction) and download it. Excel

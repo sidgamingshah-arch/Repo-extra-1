@@ -36,6 +36,20 @@ async function resetThresholds(page: Page) {
   await expect(page.getByTestId("ex-save")).toBeDisabled({ timeout: 15_000 });
 }
 
+/** Open one template's detail page.
+ *
+ * Template & Ontology is two pages: an index of the templates that exist, and the structure tree
+ * plus the ontology editors on a detail raised over it. Anything that drives an editor has to
+ * click into a row first — and specifically into a row that HAS a rulebook, since a template no
+ * ontology targets yet is legitimately read-only. */
+async function openTemplateDetail(page: Page) {
+  await page.goto("/template", DCL);
+  const rows = page.getByTestId("tpl-row").filter({ hasNotText: "None yet" });
+  await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+  await rows.first().click();
+  await expect(page.getByTestId("template-detail")).toBeVisible({ timeout: 15_000 });
+}
+
 test.describe.configure({ mode: "serial" });
 
 test("greenfield: the app is empty before any project is loaded", async ({ page }) => {
@@ -186,9 +200,49 @@ test("analyst cannot reach the config template screen but can select a template"
   await expect(page.getByRole("button", { name: "Choose another" })).toBeVisible();
 });
 
-test("admin edits the ontology inline and the new version persists", async ({ page }) => {
+test("the template screen is an index first: a row opens the detail, which dismisses back",
+     async ({ page }) => {
   await loginAs(page, "admin");
   await page.goto("/template", DCL);
+
+  // PAGE 1 is a list of templates — the facts you pick between, not the structure of one of
+  // them. The tree and the editors must not be on this page at all.
+  const rows = page.getByTestId("tpl-row");
+  await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+  await expect(rows.first()).toContainText(/hkfrs/i);          // the template's name/key
+  // Published state is one of the columns. WHICH state the first row is in depends on history —
+  // a version published from an edited workbook is stored unpublished, and after any earlier run
+  // of this suite that draft is the newest version — so assert on the row that must be published,
+  // the seeded template, rather than on whichever version happens to sort first.
+  await expect(rows.filter({ hasText: "Published" }).first()).toBeVisible();
+  await expect(page.getByTestId("tpl-node")).toHaveCount(0);
+  await expect(page.getByTestId("template-detail")).toHaveCount(0);
+  // The line-item count is real: it is not in GET /templates, so the row has to go and get it.
+  await expect(page.getByTestId("tpl-row-lines").first()).toHaveText(/^\d+$/, { timeout: 15_000 });
+
+  // Filter the list. This is the list's own state — dismissing the detail must come back to the
+  // list as it was, not to a freshly mounted one.
+  await page.getByTestId("tpl-filter").fill("hkfrs");
+  await expect(rows.first()).toBeVisible();
+
+  // PAGE 2 opens on the row click, carrying the tree and the concept editor.
+  await rows.first().click();
+  await expect(page.getByTestId("template-detail")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("tpl-node").first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByPlaceholder("New alias")).toBeVisible();
+  await expect(page).toHaveURL(/[?&]template=/);              // reloadable / linkable
+
+  // Dismissed → back on the index, still filtered.
+  await page.getByTestId("tpl-detail-close").click();
+  await expect(page.getByTestId("template-detail")).toHaveCount(0);
+  await expect(page.getByTestId("tpl-filter")).toHaveValue("hkfrs");
+  await expect(rows.first()).toBeVisible();
+  await expect(page).not.toHaveURL(/[?&]template=/);
+});
+
+test("admin edits the ontology inline and the new version persists", async ({ page }) => {
+  await loginAs(page, "admin");
+  await openTemplateDetail(page);
 
   // The real configured template renders its tree; pick the first editable concept.
   const nodes = page.getByTestId("tpl-node");
@@ -218,7 +272,7 @@ test("admin edits the ontology inline and the new version persists", async ({ pa
 
 test("admin edits the mapping CRITERIA and the new version persists", async ({ page }) => {
   await loginAs(page, "admin");
-  await page.goto("/template", DCL);
+  await openTemplateDetail(page);
 
   const nodes = page.getByTestId("tpl-node");
   await expect(nodes.first()).toBeVisible({ timeout: 15_000 });
@@ -249,7 +303,7 @@ test("admin edits the mapping CRITERIA and the new version persists", async ({ p
 
 test("admin adds a netting rule and it persists; unknown keys are impossible", async ({ page }) => {
   await loginAs(page, "admin");
-  await page.goto("/template", DCL);
+  await openTemplateDetail(page);
   await expect(page.getByTestId("tpl-node").first()).toBeVisible({ timeout: 15_000 });
 
   await page.getByTestId("netting-add").click();

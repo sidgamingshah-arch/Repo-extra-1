@@ -695,6 +695,22 @@ export interface OntologyEditResult {
   version: number;
 }
 
+/** One field of the ontology schema, as the authoring index lists it. `path` is the dotted
+ *  location in the JSON (`mappings[].value_scope`), and `help` states the accepted values in
+ *  JSON spelling — the upload gate refuses undeclared keys, so a guess costs a 422. */
+export interface OntologyFieldHelp {
+  path: string;
+  required: boolean;
+  help: string;
+}
+/** The shape an uploaded ontology must have. Generated from the same model the upload gate
+ *  validates with, so it can never describe a rule the API has stopped enforcing. */
+export interface OntologySchema {
+  schema_version: number;
+  json_schema: Record<string, unknown>;
+  field_help: OntologyFieldHelp[];
+}
+
 export interface ExportOption {
   key: string;
   label: string;

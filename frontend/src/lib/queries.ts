@@ -3,7 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 
 import type { Basis, FxRateInput, Locale, SettingsPatch, StatementKey } from "../types";
 import { useUI } from "../store";
-import { api } from "./api";
+import { api, downloadOntologySkeleton } from "./api";
 
 // --- auth / identity ---
 /** Current principal — enabled only once a session token exists; no retry so a 401
@@ -340,6 +340,32 @@ export function useUploadOntology() {
       qc.invalidateQueries({ queryKey: ["ontologies"] });
       qc.invalidateQueries({ queryKey: ["template-detail"] });
     },
+  });
+}
+
+/** The shape an authored ontology must have (JSON Schema + the per-field index).
+ *
+ * `enabled` exists because the endpoint is admin-only: called without `config:ontology` it 403s,
+ * so the screen must gate it on the permission rather than let every viewer fire a doomed request.
+ * Generated from the models, so it cannot change between requests — fetched once and kept. */
+export const useOntologySchema = (enabled = true) =>
+  useQuery({
+    queryKey: ["ontology-schema"],
+    queryFn: api.ontologySchema,
+    enabled,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+/** Download a ready-to-edit ontology skeleton for a template.
+ *
+ * A mutation, not a query: it writes a file to the user's disk, so it must run when the button is
+ * pressed and never be replayed from cache — and its failure has to reach the screen, because a
+ * download that silently did nothing is indistinguishable from one the browser blocked. */
+export function useDownloadOntologySkeleton() {
+  return useMutation({
+    mutationFn: (vars: { templateId: string; fallbackName: string }) =>
+      downloadOntologySkeleton(vars.templateId, vars.fallbackName),
   });
 }
 

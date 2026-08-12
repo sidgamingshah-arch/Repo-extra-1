@@ -1,257 +1,27 @@
-/** Screen 7 — Template & Ontology. Left template tree + right node editor. */
+/** Screen 7 — Template & Ontology, in two pages.
+ *
+ * Page 1 is the index (see TemplateList.tsx): the templates that exist, one row each, and the
+ * authoring desk. Page 2 — everything below — is one template's detail: its structure tree, the
+ * node editor, the netting policies, the ontology editing. It is raised OVER the index rather
+ * than replacing it, so dismissing it puts the reader back on the list they were reading, filter
+ * and scroll intact, and `?template=` keeps a reloaded tab on the version it was open on.
+ */
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { Card } from "../components/ui";
+import { TemplateList, sortTemplates } from "./TemplateList";
 import { useAppLocale, useUI } from "../store";
 import { color, font, radius } from "../theme";
 import type {
   Locale, NettingRuleEdit, NettingRuleView, NodeConfig, TemplateRef, ValueScope,
 } from "../types";
-import {
-  useTemplateDetail, useTemplateXlsxColumns, useTemplates, useUploadOntology,
-  useUploadTemplateXlsx,
-} from "../lib/queries";
-import { ApiError, api, downloadTemplateXlsx } from "../lib/api";
+import { useTemplateDetail, useTemplates } from "../lib/queries";
+import { ApiError, api } from "../lib/api";
 import { useCan } from "../lib/rbac";
 import { NATIVE_NAME, useT } from "../i18n";
-
-/** Admin-only: the authoring desk for templates and ontologies.
- *
- * Deciding what a spread should contain is a spreadsheet job, so the primary path is the round
- * trip: download the active template as a workbook, mark each line extracted or calculated (and
- * for a calculated one, what it is calculated FROM), upload it back. That publishes a new
- * VERSION — nothing is overwritten, so an extraction that already ran still explains itself
- * against the template it actually used. The ontology (the extraction rulebook) is uploaded
- * against a named template and validated against it, so a rule for a line the template does not
- * define is refused with the key in the message rather than silently ignored.
- */
-function TemplateAuthoring({
-  templates,
-  selectedId,
-  onSelect,
-  t,
-}: {
-  templates: TemplateRef[];
-  selectedId: string | undefined;
-  onSelect: (id: string) => void;
-  t: (k: string) => string;
-}) {
-  const xlsxRef = useRef<HTMLInputElement>(null);
-  const ontRef = useRef<HTMLInputElement>(null);
-  const jsonRef = useRef<HTMLInputElement>(null);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  // Upload onto the selected template's key (a new version of it) or start a fresh template.
-  const [asNew, setAsNew] = useState(false);
-  const uploadXlsx = useUploadTemplateXlsx();
-  const uploadOnt = useUploadOntology();
-  const cols = useTemplateXlsxColumns();
-
-  const selected = templates.find((x) => x.id === selectedId);
-
-  const fail = (err: unknown) => {
-    const text = err instanceof ApiError ? (err.detail ?? err.message)
-      : err instanceof Error ? err.message : String(err);
-    setMsg({ ok: false, text: text.slice(0, 400) });
-  };
-
-  async function download() {
-    if (!selected) return;
-    setBusy("xlsx");
-    setMsg(null);
-    try {
-      await downloadTemplateXlsx(selected.id, selected.template_key);
-    } catch (err) {
-      fail(err);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function onXlsx(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setBusy("upload");
-    setMsg(null);
-    try {
-      const res = await uploadXlsx.mutateAsync({
-        file: f,
-        templateKey: asNew ? "" : (selected?.template_key ?? ""),
-        name: asNew ? f.name.replace(/\.(xlsx|xlsm)$/i, "") : (selected?.name ?? ""),
-      });
-      setMsg({ ok: true, text: t("tp.auth.publishedTemplate")
-        .replace("{key}", res.template_key).replace("{v}", String(res.version))
-        .replace("{n}", String(res.line_items)) });
-      onSelect(res.id);
-    } catch (err) {
-      fail(err);
-    } finally {
-      setBusy(null);
-      if (xlsxRef.current) xlsxRef.current.value = "";
-    }
-  }
-
-  async function onOntology(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setBusy("ontology");
-    setMsg(null);
-    try {
-      const definition = JSON.parse(await f.text());
-      const res = await uploadOnt.mutateAsync({
-        definition,
-        // Point the rulebook at the template on screen — that is the one it will be checked
-        // against, and checking it against something else would be the wrong answer quietly.
-        targetTemplateKey: selected?.template_key,
-      });
-      setMsg({ ok: true, text: t("tp.auth.publishedOntology")
-        .replace("{key}", res.ontology_key).replace("{v}", String(res.version))
-        .replace("{n}", String(res.mappings)).replace("{tpl}", res.target_template_key) });
-    } catch (err) {
-      fail(err);
-    } finally {
-      setBusy(null);
-      if (ontRef.current) ontRef.current.value = "";
-    }
-  }
-
-  async function onJson(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setBusy("json");
-    setMsg(null);
-    try {
-      const def = JSON.parse(await f.text());
-      const isOntology = "target_template_key" in def || "mappings" in def;
-      const res = isOntology ? await api.createOntology(def) : await api.createTemplate(def);
-      const key = "template_key" in res ? res.template_key : res.ontology_key;
-      setMsg({ ok: true, text: t("tp.importOk").replace("{key}", key)
-        .replace("{v}", String(res.version)) });
-      if ("template_key" in res) onSelect(res.id);
-    } catch (err) {
-      fail(err);
-    } finally {
-      setBusy(null);
-      if (jsonRef.current) jsonRef.current.value = "";
-    }
-  }
-
-  const btn = (primary: boolean): CSSProperties => ({
-    fontSize: 12, fontWeight: 600,
-    color: primary ? "#fff" : color.indigo,
-    background: primary ? color.indigo : "#fff",
-    border: primary ? "none" : `1px solid ${color.indigoBorder2}`,
-    borderRadius: radius.control, padding: "8px 14px",
-    cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap",
-  });
-
-  return (
-    <div
-      data-testid="template-authoring"
-      style={{
-        background: color.surface, border: `1px solid ${color.cardBorder}`,
-        borderRadius: radius.card, padding: 18, marginBottom: 22,
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "baseline", gap: 9, marginBottom: 4 }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{t("tp.auth.title")}</span>
-        <span style={{ fontSize: 11, color: color.muted }}>{t("tp.auth.versioned")}</span>
-      </div>
-      <p style={{ margin: "0 0 14px", fontSize: 12, color: color.sec, lineHeight: 1.55 }}>
-        {t("tp.auth.hint")}
-      </p>
-
-      <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12,
-                      fontSize: 12, color: color.sec }}>
-        <span style={{ color: color.muted }}>{t("tp.auth.active")}</span>
-        <select
-          value={selectedId ?? ""}
-          data-testid="template-picker"
-          onChange={(e) => onSelect(e.target.value)}
-          style={{ fontSize: 12, fontWeight: 600, fontFamily: font.sans, color: color.ink,
-                   border: `1px solid ${color.controlBorder}`, borderRadius: radius.controlSm,
-                   padding: "6px 9px", background: "#fff", cursor: "pointer", maxWidth: 420 }}
-        >
-          {templates.map((x) => (
-            <option key={x.id} value={x.id}>{`${x.name || x.template_key} · v${x.version}`}</option>
-          ))}
-        </select>
-      </label>
-
-      <input ref={xlsxRef} type="file" data-testid="tpl-xlsx-input" style={{ display: "none" }}
-             onChange={onXlsx}
-             accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
-      <input ref={ontRef} type="file" accept="application/json,.json" data-testid="tpl-ont-input"
-             style={{ display: "none" }} onChange={onOntology} />
-      <input ref={jsonRef} type="file" accept="application/json,.json" data-testid="tpl-json-input"
-             style={{ display: "none" }} onChange={onJson} />
-
-      <div style={{ display: "flex", gap: 9, flexWrap: "wrap", alignItems: "center" }}>
-        <button onClick={download} disabled={!!busy || !selected} data-testid="tpl-download-xlsx"
-                style={btn(false)}>
-          {busy === "xlsx" ? t("tp.auth.working") : t("tp.auth.download")}
-        </button>
-        <button onClick={() => xlsxRef.current?.click()} disabled={!!busy}
-                data-testid="tpl-upload-xlsx" style={btn(true)}>
-          {busy === "upload" ? t("tp.auth.working") : t("tp.auth.upload")}
-        </button>
-        <button onClick={() => ontRef.current?.click()} disabled={!!busy}
-                data-testid="tpl-upload-ontology" style={btn(false)}>
-          {busy === "ontology" ? t("tp.auth.working") : t("tp.auth.uploadOntology")}
-        </button>
-        <button onClick={() => jsonRef.current?.click()} disabled={!!busy}
-                data-testid="tpl-import-json"
-                style={{ ...btn(false), color: color.sec2,
-                         border: `1px solid ${color.controlBorder}` }}>
-          {busy === "json" ? t("tp.auth.working") : t("tp.importTemplate")}
-        </button>
-      </div>
-
-      <label style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 11,
-                      fontSize: 11.5, color: color.sec }}>
-        <input type="checkbox" checked={asNew} data-testid="tpl-as-new"
-               onChange={(e) => setAsNew(e.target.checked)} />
-        {t("tp.auth.asNew")}
-      </label>
-
-      {/* The workbook's contract, read from the reader that enforces it — so this screen can
-          never describe columns the API does not actually accept. */}
-      {cols.data && (
-        <div style={{ marginTop: 13, paddingTop: 12, borderTop: `1px solid ${color.hairline}`,
-                      fontSize: 11.5, color: color.sec, lineHeight: 1.6 }}>
-          <div style={{ fontWeight: 600, color: color.ink, marginBottom: 4 }}>
-            {t("tp.auth.columns")}
-          </div>
-          <div style={{ fontFamily: font.mono, fontSize: 10.5, color: color.sec2,
-                        marginBottom: 7 }}>
-            {cols.data.columns.map((c) => c.header).join(" · ")}
-          </div>
-          {cols.data.kinds.map((k) => (
-            <div key={k.value}>
-              <span style={{ fontFamily: font.mono, fontWeight: 600, color: color.ink }}>
-                {k.value}
-              </span>{" — "}{k.help}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {msg && (
-        <div
-          data-testid="tpl-auth-message"
-          style={{ marginTop: 12, padding: "8px 11px", borderRadius: radius.control,
-                   fontSize: 11.5, lineHeight: 1.55,
-                   background: msg.ok ? color.indigoTint : color.redBg,
-                   color: msg.ok ? color.indigo : color.redFg }}
-        >
-          {msg.text}
-        </div>
-      )}
-    </div>
-  );
-}
 
 const SIGN_OPTIONS: { key: string; labelKey: string }[] = [
   { key: "as_reported", labelKey: "tp.sign.asReported" },
@@ -1109,211 +879,304 @@ function NodeRules({ cfg, canonicalKey, ontologyId, concepts, locale, canEdit, t
   );
 }
 
+
+/** Page 2 — one template's detail, raised over the index.
+ *
+ * Everything that belongs to a single template is here: its structure tree, the concept editor,
+ * the netting policies. The way back to the list is rendered BEFORE the body and in every state,
+ * including the two states where there is nothing to show — a reader who followed a stale
+ * `?template=` link must not land on a screen with no exit.
+ */
+function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
+  id: string; tpl: TemplateRef | undefined; locale: Locale; canEdit: boolean;
+  onDismiss: () => void; t: (k: string) => string;
+}) {
+  const { data, isError } = useTemplateDetail(id, locale);
+  const tplSel = useUI((s) => s.tplSel);
+  const setTpl = useUI((s) => s.setTpl);
+
+  const cfg: NodeConfig | undefined = data
+    ? (data.node_config[tplSel] ?? data.node_config["trade_recv"]
+       ?? Object.values(data.node_config)[0])
+    : undefined;
+  // Every concept this template maps, in statement order — the only legal values for
+  // `confusable_with` and for a netting rule's keys, so both are picked from here.
+  const concepts: Concept[] = Object.entries(data?.node_config ?? {})
+    .map(([key, c]) => ({ key, label: c.label || key }));
+
+  function body() {
+    if (isError) {
+      return (
+        <div style={{ maxWidth: 520, margin: "60px auto", textAlign: "center", color: color.muted,
+                      padding: "0 24px", fontSize: 12.5, lineHeight: 1.6 }}>
+          {t("tp.detail.gone")}
+        </div>
+      );
+    }
+    if (!data) {
+      return (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+                      color: color.muted }}>
+          {t("empty.loading")}
+        </div>
+      );
+    }
+    // Greenfield (no project loaded yet): the template tree is empty. Show guidance rather
+    // than crashing on a missing node config.
+    if (!data.tree.length || !cfg) {
+      return (
+        <div style={{ maxWidth: 560, margin: "60px auto", textAlign: "center", color: color.muted,
+                      padding: "0 24px" }}>
+          <div style={{ fontSize: 28, marginBottom: 10 }}>◆</div>
+          <h1 style={{ fontSize: 18, fontWeight: 600, color: color.ink, marginBottom: 8 }}>
+            {t("tp.emptyTitle")}
+          </h1>
+          <p style={{ fontSize: 12.5, lineHeight: 1.6 }}>{t("tp.emptyHint")}</p>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        {/* LEFT: template tree */}
+        <div
+          style={{
+            width: 360,
+            flex: "0 0 360px",
+            borderRight: `1px solid ${color.cardBorder}`,
+            background: color.surface,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+          }}
+        >
+          <div style={{ padding: 16, flex: "0 0 auto", borderBottom: `1px solid ${color.hairline3}` }}>
+            <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 3 }}>{t("tp.structure")}</h2>
+            <div style={{ fontSize: 11.5, color: color.muted }}>
+              {data.template.line_items} {t("tp.lineItems")}
+            </div>
+          </div>
+
+          <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "8px 6px" }}>
+            {data.tree.map((node) => {
+              const sel = node.id === tplSel;
+              const head = !!node.head;
+              return (
+                <div
+                  key={node.id}
+                  // Only leaves map to a concept (headings carry no ontology rules to edit).
+                  data-testid={head ? undefined : "tpl-node"}
+                  onClick={() => setTpl(node.id)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "7px 10px",
+                    borderRadius: radius.controlSm,
+                    cursor: "pointer",
+                    background: sel ? color.indigoTint : "transparent",
+                    marginLeft: node.lvl * 16,
+                  }}
+                >
+                  <span style={{ fontSize: 10, color: color.faint, width: 10 }}>{head ? "▾" : ""}</span>
+                  <span
+                    style={{
+                      flex: 1,
+                      fontSize: 12,
+                      fontWeight: head ? 700 : sel ? 600 : 400,
+                      color: head ? color.viewerBg : sel ? color.indigo : color.ink2,
+                    }}
+                  >
+                    {node.label}
+                  </span>
+                  {node.rule && (
+                    <span
+                      style={{
+                        fontSize: 9.5,
+                        fontWeight: 600,
+                        padding: "1px 6px",
+                        borderRadius: 4,
+                        background: color.indigoTint2,
+                        color: color.indigo,
+                      }}
+                    >
+                      rule
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+        </div>
+
+        {/* RIGHT: node editor */}
+        <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 30px" }}>
+          <div style={{ maxWidth: 680 }}>
+            <div style={{ fontSize: 11, color: color.muted, marginBottom: 3 }}>{cfg.breadcrumb}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 3 }}>
+              <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>{cfg.label}</h1>
+              {!canEdit && (
+                <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: radius.pill,
+                               background: color.rowAltBg, color: color.muted, border: `1px solid ${color.hairline3}` }}>
+                  {t("tp.viewOnly")}
+                </span>
+              )}
+            </div>
+            <p style={{ margin: "0 0 20px", color: color.sec2, fontSize: 12.5 }}>
+              {canEdit ? t("tp.editorSubhead") : t("tp.viewOnlyHint")}
+            </p>
+
+            {/* Editable ontology rules for this concept (aliases + sign + mapping criteria),
+                saved as a new version */}
+            <NodeRules
+              cfg={cfg}
+              canonicalKey={cfg.canonical_key ?? tplSel}
+              ontologyId={data.ontology?.id}
+              concepts={concepts}
+              locale={locale}
+              canEdit={canEdit}
+              t={t}
+            />
+
+            {/* Note-to-face netting rule (flagship) */}
+            <div
+              style={{
+                background: color.surface,
+                border: `1px solid ${color.indigoBorder}`,
+                borderRadius: radius.card,
+                padding: 18,
+                borderLeft: `3px solid ${color.indigo}`,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{t("tp.nettingRule")}</span>
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    padding: "2px 7px",
+                    borderRadius: radius.pill,
+                    background: color.indigoTint2,
+                    color: color.indigo,
+                  }}
+                >
+                  {t("tp.key")}
+                </span>
+              </div>
+              <p style={{ margin: "0 0 12px", fontSize: 12, color: color.sec, lineHeight: 1.55 }}>
+                {cfg.netting.explain}
+              </p>
+              <NettingExpr expr={cfg.netting.expr} />
+            </div>
+
+            {/* Template-wide containment-netting policies (LLM-gated), admin-editable. */}
+            {data.netting_rules && (
+              <NettingRules rules={data.netting_rules} concepts={concepts}
+                            ontologyId={data.ontology?.id} canEdit={canEdit} t={t} />
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const name = tpl?.name || data?.template.name || tpl?.template_key || "";
+  return (
+    <div
+      data-testid="template-detail"
+      style={{
+        position: "absolute", inset: 0, zIndex: 5, background: color.pageBg,
+        display: "flex", flexDirection: "column", minHeight: 0,
+      }}
+    >
+      <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 12,
+                    padding: "11px 18px", background: color.surface,
+                    borderBottom: `1px solid ${color.cardBorder}` }}>
+        <button
+          data-testid="tpl-detail-close"
+          onClick={onDismiss}
+          style={{ fontSize: 12, fontWeight: 600, color: color.indigo, background: "#fff",
+                   border: `1px solid ${color.indigoBorder2}`, borderRadius: radius.control,
+                   padding: "7px 12px", cursor: "pointer", whiteSpace: "nowrap" }}
+        >
+          {t("tp.detail.back")}
+        </button>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: color.ink }}>{name}</div>
+          <div style={{ fontSize: 11, color: color.muted, fontFamily: font.mono }}>
+            {[tpl?.template_key ?? data?.template.key, tpl && `v${tpl.version}`]
+              .filter(Boolean).join(" · ")}
+          </div>
+        </div>
+      </div>
+      {body()}
+    </div>
+  );
+}
+
 export default function TemplateScreen() {
   const locale = useAppLocale();
   const t = useT();
-  // Render the REAL configured template(s), not the demo project. Admin picks among the
-  // templates that exist; the detail (tree + per-node config) comes from that template and
-  // its paired ontology.
+  // Render the REAL configured template(s), not the demo project: the index lists the templates
+  // that exist, and a row's detail (tree + per-node config) comes from that template and its
+  // paired ontology.
   const tplList = useTemplates();
-  const [selId, setSelId] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    if (!selId && tplList.data && tplList.data.length) setSelId(tplList.data[0].id);
-  }, [selId, tplList.data]);
-  const { data } = useTemplateDetail(selId, locale);
-  const tplSel = useUI((s) => s.tplSel);
-  const setTpl = useUI((s) => s.setTpl);
   const canEdit = useCan("config:template"); // authoring is admin-only
+  // Which template's detail is up lives in the URL, so a reload — and the browser's own Back
+  // button — return to what was on screen instead of resetting to the index.
+  const [params, setParams] = useSearchParams();
+  const openId = params.get("template") ?? undefined;
+  // The version the authoring buttons act on. It follows the last row opened or picked, and
+  // falls back to the first template so Download/Upload are never aimed at nothing.
+  const [picked, setPicked] = useState<string | undefined>(undefined);
 
-  // No templates configured yet → guidance (also covers the initial load).
-  if (tplList.data && tplList.data.length === 0) {
+  if (!tplList.data) {
     return (
-      <div style={{ maxWidth: 560, margin: "60px auto", textAlign: "center", color: color.muted, padding: "0 24px" }}>
-        <div style={{ fontSize: 28, marginBottom: 10 }}>◆</div>
-        <h1 style={{ fontSize: 18, fontWeight: 600, color: color.ink, marginBottom: 8 }}>{t("tp.emptyTitle")}</h1>
-        <p style={{ fontSize: 12.5, lineHeight: 1.6 }}>{t("tp.emptyHint")}</p>
-        {canEdit && (
-          <div style={{ maxWidth: 560, margin: "18px auto 0", textAlign: "left" }}>
-            <TemplateAuthoring templates={[]} selectedId={undefined} onSelect={setSelId} t={t} />
-          </div>
-        )}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center",
+                    height: "100%", color: color.muted }}>
+        {t("empty.loading")}
       </div>
     );
   }
 
-  if (!data) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: color.muted }}>
-        Loading…
-      </div>
-    );
-  }
+  const templates = tplList.data;
+  // Default the authoring target to the index's first row rather than the API's first record: the
+  // list shows the newest version of a template at the top, and that is the one an admin means by
+  // "the active template" when they download it to edit.
+  const activeId = picked ?? openId ?? sortTemplates(templates)[0]?.id;
 
-  const { tree, node_config, template } = data;
-  const cfg: NodeConfig | undefined =
-    node_config[tplSel] ?? node_config["trade_recv"] ?? Object.values(node_config)[0];
-  // Every concept this template maps, in statement order — the only legal values for
-  // `confusable_with` and for a netting rule's keys, so both are picked from here.
-  const concepts: Concept[] = Object.entries(node_config)
-    .map(([key, c]) => ({ key, label: c.label || key }));
-
-  // Greenfield (no project loaded yet): the template tree is empty. Show guidance rather
-  // than crashing on a missing node config.
-  if (!tree.length || !cfg) {
-    return (
-      <div style={{ maxWidth: 560, margin: "60px auto", textAlign: "center", color: color.muted, padding: "0 24px" }}>
-        <div style={{ fontSize: 28, marginBottom: 10 }}>◆</div>
-        <h1 style={{ fontSize: 18, fontWeight: 600, color: color.ink, marginBottom: 8 }}>{t("tp.emptyTitle")}</h1>
-        <p style={{ fontSize: 12.5, lineHeight: 1.6 }}>{t("tp.emptyHint")}</p>
-      </div>
-    );
+  function setOpen(id: string | undefined) {
+    const next = new URLSearchParams(params);
+    if (id) next.set("template", id);
+    else next.delete("template");
+    setParams(next);
   }
 
   return (
-    <div style={{ display: "flex", height: "100%", minHeight: 0 }}>
-      {/* LEFT: template tree */}
-      <div
-        style={{
-          width: 360,
-          flex: "0 0 360px",
-          borderRight: `1px solid ${color.cardBorder}`,
-          background: color.surface,
-          display: "flex",
-          flexDirection: "column",
-          minHeight: 0,
-        }}
-      >
-        <div style={{ padding: 16, flex: "0 0 auto", borderBottom: `1px solid ${color.hairline3}` }}>
-          <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 3 }}>{t("tp.structure")}</h2>
-          <div style={{ fontSize: 11.5, color: color.muted }}>
-            {template.name} · {template.line_items} {t("tp.lineItems")}
-          </div>
-        </div>
-
-        <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "8px 6px" }}>
-          {tree.map((node) => {
-            const sel = node.id === tplSel;
-            const head = !!node.head;
-            return (
-              <div
-                key={node.id}
-                // Only leaves map to a concept (headings carry no ontology rules to edit).
-                data-testid={head ? undefined : "tpl-node"}
-                onClick={() => setTpl(node.id)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "7px 10px",
-                  borderRadius: radius.controlSm,
-                  cursor: "pointer",
-                  background: sel ? color.indigoTint : "transparent",
-                  marginLeft: node.lvl * 16,
-                }}
-              >
-                <span style={{ fontSize: 10, color: color.faint, width: 10 }}>{head ? "▾" : ""}</span>
-                <span
-                  style={{
-                    flex: 1,
-                    fontSize: 12,
-                    fontWeight: head ? 700 : sel ? 600 : 400,
-                    color: head ? color.viewerBg : sel ? color.indigo : color.ink2,
-                  }}
-                >
-                  {node.label}
-                </span>
-                {node.rule && (
-                  <span
-                    style={{
-                      fontSize: 9.5,
-                      fontWeight: 600,
-                      padding: "1px 6px",
-                      borderRadius: 4,
-                      background: color.indigoTint2,
-                      color: color.indigo,
-                    }}
-                  >
-                    rule
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-      </div>
-
-      {/* RIGHT: node editor */}
-      <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 30px" }}>
-        <div style={{ maxWidth: 680 }}>
-          {canEdit && tplList.data && (
-            <TemplateAuthoring templates={tplList.data} selectedId={selId} onSelect={setSelId}
-                               t={t} />
-          )}
-          <div style={{ fontSize: 11, color: color.muted, marginBottom: 3 }}>{cfg.breadcrumb}</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 3 }}>
-            <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>{cfg.label}</h1>
-            {!canEdit && (
-              <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: radius.pill,
-                             background: color.rowAltBg, color: color.muted, border: `1px solid ${color.hairline3}` }}>
-                {t("tp.viewOnly")}
-              </span>
-            )}
-          </div>
-          <p style={{ margin: "0 0 20px", color: color.sec2, fontSize: 12.5 }}>
-            {canEdit ? t("tp.editorSubhead") : t("tp.viewOnlyHint")}
-          </p>
-
-          {/* Editable ontology rules for this concept (aliases + sign + mapping criteria),
-              saved as a new version */}
-          <NodeRules
-            cfg={cfg}
-            canonicalKey={cfg.canonical_key ?? tplSel}
-            ontologyId={data.ontology?.id}
-            concepts={concepts}
-            locale={locale}
-            canEdit={canEdit}
-            t={t}
-          />
-
-          {/* Note-to-face netting rule (flagship) */}
-          <div
-            style={{
-              background: color.surface,
-              border: `1px solid ${color.indigoBorder}`,
-              borderRadius: radius.card,
-              padding: 18,
-              borderLeft: `3px solid ${color.indigo}`,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{t("tp.nettingRule")}</span>
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 600,
-                  padding: "2px 7px",
-                  borderRadius: radius.pill,
-                  background: color.indigoTint2,
-                  color: color.indigo,
-                }}
-              >
-                {t("tp.key")}
-              </span>
-            </div>
-            <p style={{ margin: "0 0 12px", fontSize: 12, color: color.sec, lineHeight: 1.55 }}>
-              {cfg.netting.explain}
-            </p>
-            <NettingExpr expr={cfg.netting.expr} />
-          </div>
-
-          {/* Template-wide containment-netting policies (LLM-gated), admin-editable. */}
-          {data.netting_rules && (
-            <NettingRules rules={data.netting_rules} concepts={concepts}
-                          ontologyId={data.ontology?.id} canEdit={canEdit} t={t} />
-          )}
-        </div>
-      </div>
+    <div style={{ position: "relative", height: "100%", minHeight: 0, display: "flex",
+                  flexDirection: "column", overflow: "hidden" }}>
+      {/* The index stays MOUNTED under the detail: dismissing has to put the reader back on the
+          list they were reading, with its filter and scroll position, not on a fresh one. */}
+      <TemplateList
+        templates={templates}
+        activeId={activeId}
+        canEdit={canEdit}
+        locale={locale}
+        onPick={setPicked}
+        onOpen={(id) => { setPicked(id); setOpen(id); }}
+        t={t}
+      />
+      {openId && (
+        <TemplateDetail
+          id={openId}
+          tpl={templates.find((x) => x.id === openId)}
+          locale={locale}
+          canEdit={canEdit}
+          onDismiss={() => setOpen(undefined)}
+          t={t}
+        />
+      )}
     </div>
   );
 }

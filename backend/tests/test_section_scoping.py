@@ -199,6 +199,52 @@ def test_pl_section_keys_resolve_and_the_compound_wins():
     assert section_of_key("pl_profit_before_tax") is None
 
 
+# --- collision families: the banner scopes a key that carries no section namespace ---------------
+# `section_of_key` reads the section out of the "_<token>__" in a canonical key, so a
+# statement-level key (`pl_profit_for_the_year`) has no section and `_in_section` waves it through
+# under every banner. That is right for a subtotal, and wrong for one leaf of a pair the banner is
+# the only evidence between.
+
+@pytest.fixture(scope="module")
+def v2_matcher() -> OntologyMatcher:
+    definition = json.loads((TEMPLATES / "hkfrs_hk_china_v2_ontology.json").read_text())
+    return OntologyMatcher(load_ontology(definition, resolve=True), locale="zh")
+
+
+def test_the_two_bottom_lines_are_separated_only_by_the_banner(v2_matcher):
+    """Both P&L bottom lines are statement-level keys with no section namespace, and the caption
+    cannot tell them apart: a wrapped "TOTAL COMPREHENSIVE LOSS FOR THE YEAR" reaches the matcher as
+    "LOSS FOR THE YEAR", which is an alias of the profit line. The banner is the whole distinction,
+    so the profit line is refused under the comprehensive-income banner and nowhere else."""
+    assert not v2_matcher._in_section("pl_profit_for_the_year", "TOTAL COMPREHENSIVE")
+    assert v2_matcher._in_section("pl_total_comprehensive_income_for_the_year",
+                                  "TOTAL COMPREHENSIVE")
+    # Every other banner leaves both of them unconstrained, as any statement-level key must be —
+    # `section_hint` is the nearest PRECEDING banner, so a bottom line often carries a stale one.
+    for banner in ("EXPENSES", "REVENUE", "Profit attributable to", "SOMETHING WE DO NOT KNOW"):
+        assert v2_matcher._in_section("pl_profit_for_the_year", banner), banner
+        assert v2_matcher._in_section("pl_total_comprehensive_income_for_the_year", banner), banner
+
+
+def test_a_family_leaf_is_named_by_the_section_in_its_own_key(v2_matcher):
+    """Only the two bottom lines need naming by hand; every other family leaf is placed by the
+    section already in its canonical key, so the families cost no second copy of that mapping."""
+    from app.services.mapping import family_leaf_named_by
+
+    assert family_leaf_named_by("bs_non_current_liabilities__non_current_borrowings",
+                                "CURRENT LIABILITIES 流動負債") == (
+        "bs_current_liabilities__current_borrowings")
+    assert family_leaf_named_by("cf_cash_flow_from_operating_activities__interest_received",
+                                "CASH FLOWS FROM INVESTING ACTIVITIES 投資活動") == (
+        "cf_cash_flow_from_investing_activities__interest_received")
+    # A banner naming the leaf's own section settles nothing — there is nothing to correct.
+    assert family_leaf_named_by("bs_current_assets__properties_under_development",
+                                "CURRENT ASSETS 流動資產") is None
+    # Neither does a concept in no family, nor a banner that names no section.
+    assert family_leaf_named_by("bs_current_assets__inventories", "CURRENT LIABILITIES") is None
+    assert family_leaf_named_by("pl_profit_for_the_year", "EQUITY AND LIABILITIES") is None
+
+
 def test_a_balance_sheet_tax_caption_is_not_a_tax_section_banner():
     """"income tax" is excluded from the tax vocabulary on purpose: three BS captions contain it
     and are their own concepts, so matching it here would scope a balance-sheet row to tax_expense

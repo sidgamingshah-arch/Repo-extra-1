@@ -153,6 +153,10 @@ class Candidate:
     method: MappingMethod
     score: float
     allocation_status: str | None = None
+    # Set when the concept whose evidence matched is NOT the one being proposed: the caption
+    # matched one leaf of a collision family and the banner named another. Carried so the decision
+    # stays auditable instead of looking like an ordinary hit on the concept it was corrected to.
+    rerouted_from: str | None = None
 
 
 @dataclass
@@ -165,6 +169,7 @@ class MappingResult:
     scores: dict[str, float] = field(default_factory=dict)  # per-strategy best score
     allocation_status: str | None = None                    # how the value was derived
     agreement: list[str] = field(default_factory=list)      # methods that corroborated the pick
+    rerouted_from: str | None = None                        # see Candidate.rerouted_from
 
 
 # Canonical keys are namespaced by statement SECTION as well as by statement
@@ -304,6 +309,96 @@ def _names_a_different_class(canonical_key: str, caption: str) -> bool:
     return False
 
 
+# Concepts that a statement prints under ONE caption and that differ only in which section
+# variant of the same fact they are. The banner above the row is the only evidence that separates
+# them, so when a decision names the right kind of thing and the wrong variant the banner settles
+# it: the answer is corrected to the sibling the banner names instead of being discarded. Discarding
+# it drops the row to a weaker path, and for the P&L bottom line that loses the largest figure on
+# the statement — a wrapped bilingual "TOTAL COMPREHENSIVE / LOSS FOR THE YEAR" reaches the matcher
+# as the bare fragment "LOSS FOR THE YEAR", which is an alias of the OTHER bottom line.
+#
+# These are declared here and not read out of the rulebook, which is a compromise worth naming.
+# The v2 ontology describes every one of these collisions — `section_disambiguation` prose on 18
+# concepts, and `binding.order` step 6 nominating mutual `confusable_with` as the tie set — but
+# neither is usable as the declaration:
+#   * `confusable_with` is a confusion graph, not a family. Its mutual pairs connect into a single
+#     47-concept component in the shipped file (share capital → reserves → NCI → the tax lines →
+#     both bottom lines), so re-routing anywhere inside it would move an answer between concepts
+#     that are different facts — the opposite of conservative.
+#   * `section_disambiguation` is free-form prose, and only some of it names the sibling's key at
+#     all. Scraping keys out of it would make a wording edit a behaviour change, and prose cannot
+#     be told apart from "never confuse this with that", which means the opposite.
+# A typed family block on the schema is the right home; see the integrator note. Until it exists,
+# a rulebook that does not contain these keys simply has no families and nothing re-routes.
+CONCEPT_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("lease_liability", ("bs_current_liabilities__current_lease_liabilities",
+                         "bs_non_current_liabilities__non_current_lease_liabilities")),
+    ("borrowings", ("bs_current_liabilities__current_borrowings",
+                    "bs_non_current_liabilities__non_current_borrowings")),
+    # Three leaves, two of them non-current: "NON-CURRENT LIABILITIES" therefore identifies no
+    # single leaf and a wrong-variant answer under it stays refused. That is the intended outcome —
+    # a note/bond split the banner cannot make is a guess, and the current side still resolves.
+    ("notes_and_bonds", ("bs_current_liabilities__cuurent_notes_payable",
+                         "bs_non_current_liabilities__non_current_notes_payable",
+                         "bs_non_current_liabilities__non_current_bonds_payable")),
+    ("properties_under_development", ("bs_current_assets__properties_under_development",
+                                      "bs_non_current_assets__properties_under_development")),
+    ("deferred_income", ("bs_current_liabilities__current_deferred_revenue",
+                         "bs_non_current_liabilities__non_current_deferred_income")),
+    # HKAS 7.31 permits interest received in either activity, so the printed section is the whole
+    # answer and the caption is byte-identical in both.
+    ("interest_received", ("cf_cash_flow_from_operating_activities__interest_received",
+                           "cf_cash_flow_from_investing_activities__interest_received")),
+    ("nci_attribution", (
+        "bs_equity__non_controlling_interests",
+        "pl_profit_attributable_to__non_controlling_interests",
+        "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
+    )),
+    ("owners_of_parent", ("pl_profit_attributable_to__owners_of_the_parent",
+                          "pl_total_comprehensive_income_attributable_to__owners_of_the_parent")),
+    ("pl_bottom_line", ("pl_profit_for_the_year",
+                        "pl_total_comprehensive_income_for_the_year")),
+)
+
+# A leaf is normally identified by the section its own key is namespaced under (`section_of_key`).
+# The two P&L bottom lines are statement-level keys with no namespace at all, so the
+# comprehensive-income variant is named here. Nothing names the profit variant on purpose: it is
+# printed under no banner this module recognises, and a leaf identified by nothing is what stops a
+# re-route firing when there is no evidence to fire on.
+FAMILY_LEAF_SECTION: dict[str, str] = {
+    "pl_total_comprehensive_income_for_the_year": "total_comprehensive_income_attributable_to",
+}
+
+_FAMILY_MEMBERS: dict[str, tuple[str, ...]] = {
+    key: members for _name, members in CONCEPT_FAMILIES for key in members
+}
+
+
+def _leaf_section(canonical_key: str) -> str | None:
+    return FAMILY_LEAF_SECTION.get(canonical_key) or section_of_key(canonical_key)
+
+
+def family_leaf_named_by(canonical_key: str, banner: str | None) -> str | None:
+    """The sibling of ``canonical_key`` that ``banner`` identifies, or None.
+
+    None whenever the banner settles nothing — the key is in no family, the banner names no section
+    we recognise, that section identifies no leaf, or it identifies more than one — and None when
+    the leaf it identifies is the key itself, because then there is nothing to correct. Every one of
+    those is a refusal to guess: this function is the only thing that may overrule a decision, so it
+    answers only where the answer is forced.
+    """
+    members = _FAMILY_MEMBERS.get(canonical_key)
+    if not members:
+        return None
+    want = section_of_banner(banner)
+    if not want:
+        return None
+    named = [k for k in members if _leaf_section(k) == want]
+    if len(named) != 1 or named[0] == canonical_key:
+        return None
+    return named[0]
+
+
 class OntologyMatcher:
     """Runs the ensemble for one ontology + locale."""
 
@@ -331,7 +426,11 @@ class OntologyMatcher:
                       # Batch decisions thrown away, counted so the cost of the batch path is
                       # measurable: ids we never asked about, and answers the scoping gate
                       # refused. Both used to vanish on a bare `continue`.
-                      "batch_unknown_ids": 0, "batch_refused": 0}
+                      "batch_unknown_ids": 0, "batch_refused": 0,
+                      # Wrong-variant answers the banner corrected instead of discarding, and the
+                      # distinct routes taken. A silent correction is worse than a refusal: it puts
+                      # a figure on a different line of the face with nothing to point at.
+                      "family_resolved": 0, "family_routes": []}
         # System prompt = the base instruction + the ontology's own extraction policies and
         # worked examples, so the LLM follows one consistent, auditable rulebook.
         self._system = self._build_system()
@@ -352,8 +451,22 @@ class OntologyMatcher:
         self._by_key: dict[str, OntologyMapping] = {}
         # Alias embeddings, indexed by canonical key — computed lazily on first embedding use.
         self._alias_vecs: list[tuple[str, list[float]]] | None = None
+        # Concepts a v2 rulebook declares unreachable by MATCHING: the section "Others" buckets,
+        # populated by the residual sweep alone (a section's parent minus its confirmed children).
+        # Keyed on `alias_matching` alone, not on the conjunction with match_priority 0 /
+        # exclusive_residual / never_sweep that the shipped file also carries, because that field is
+        # the declared switch and a conjunction lets one omitted field silently unlock a bucket.
+        # Locking matters because a residual's caption is the most attractive one in the ontology:
+        # "Others" fuzzy-matches almost anything short, and a model offered a bucket will use it for
+        # a row it cannot place. Either way the figure lands in the bucket that is supposed to be
+        # the section's *unexplained* remainder, and the reconciliation that would have reported the
+        # gap now ties. The sweep still assigns them — it reads the template, not this index.
+        self._locked: set[str] = {m.canonical_key for m in ontology.mappings
+                                  if m.alias_matching == "disabled"}
         for m in ontology.mappings:
             self._by_key[m.canonical_key] = m
+            if m.canonical_key in self._locked:
+                continue
             # Index EVERY locale's aliases, not just the document's. A bilingual filing prints
             # both scripts on the same line, so restricting the index to the detected locale
             # makes a Chinese-only caption unmatchable in a document detected as English.
@@ -371,21 +484,46 @@ class OntologyMatcher:
 
     # -- individual tiers -------------------------------------------------
 
-    def _exact(self, norm: str, allowed=None) -> Candidate | None:
+    def _priority_of(self, canonical_key: str) -> int:
+        """The concept's declared ``match_priority``, or 0 when it declares none.
+
+        0 rather than a mid-scale guess: a v1 rulebook declares no priority anywhere, so every
+        concept ties and every ordering below degenerates to exactly the order it had before.
+        """
+        m = self._by_key.get(canonical_key)
+        return m.match_priority if (m is not None and m.match_priority is not None) else 0
+
+    def _by_priority(self, keys: list[str]) -> list[str]:
+        """Highest ``match_priority`` first, ties left in the order given (the sort is stable)."""
+        return sorted(keys, key=self._priority_of, reverse=True)
+
+    def _exact(self, norm: str, allowed=None, reroute=None) -> Candidate | None:
         """An exact alias hit, preferring one the caller's scoping allows.
 
         ``allowed`` is a predicate over canonical keys (the statement/section/exclusion gate).
-        When several concepts share the alias, the one that fits where the caption was printed
-        wins; with no predicate the first claimant does, as before.
+        When several concepts share the alias, the highest-``match_priority`` claimant that fits
+        where the caption was printed wins. The rulebook's binding order runs the alias tier in
+        descending priority and says in as many words never to pick by declaration order, which is
+        what taking the first claimant was: 83 aliases in the shipped file are claimed by more than
+        one concept, so for those the answer was decided by where an editor happened to add a row.
+
+        ``reroute`` is consulted ONLY when every claimant was refused — a caption that is an alias
+        of one leaf of a collision family, printed under the banner of another, is answered by the
+        banner instead of being left unmapped.
         """
         keys = self._alias_index.get(norm) or []
         if not keys:
             return None
-        if allowed is not None:
-            keys = [k for k in keys if allowed(k)] or []
-        if not keys:
-            return None
-        return Candidate(keys[0], MappingMethod.EXACT, 1.0)
+        if allowed is None:
+            return Candidate(max(keys, key=self._priority_of), MappingMethod.EXACT, 1.0)
+        ok = [k for k in keys if allowed(k)]
+        if ok:
+            return Candidate(max(ok, key=self._priority_of), MappingMethod.EXACT, 1.0)
+        for k in keys:
+            target = reroute(k) if reroute is not None else None
+            if target:
+                return Candidate(target, MappingMethod.EXACT, 1.0, rerouted_from=k)
+        return None
 
     def _vetoed(self, canonical_key: str, caption: str) -> bool:
         """Whether the concept's ``exclude_hints`` rule this caption out.
@@ -405,6 +543,10 @@ class OntologyMatcher:
         text = raw.lower()
         best: Candidate | None = None
         for m in self.ontology.mappings:
+            # A locked residual is unreachable by matching, and a regex or keyword hint authored on
+            # one would otherwise reopen the hole the alias index was closed for.
+            if m.canonical_key in self._locked:
+                continue
             if any(re.search(ex, text) for ex in m.exclude_hints):
                 continue
             hit = False
@@ -469,7 +611,10 @@ class OntologyMatcher:
             best = max((self._fuzzy_score(norm, a) for a in aliases), default=0.0)
             if best > 0:
                 out.append(Candidate(key, MappingMethod.FUZZY, best))
-        out.sort(key=lambda c: c.score, reverse=True)
+        # Score first, so priority can never outrank evidence; priority only settles a genuine tie,
+        # where the alternative was dict insertion order deciding which of two equally-scored
+        # concepts survives the shortlist cap below.
+        out.sort(key=lambda c: (c.score, self._priority_of(c.canonical_key)), reverse=True)
         return out
 
     def _fuzzy_accepts(self, norm_segments: list[str], cand: Candidate) -> bool:
@@ -564,6 +709,12 @@ class OntologyMatcher:
             m = self._by_key.get(k)
             if m is None or m.extraction_mode == "do_not_extract":
                 continue
+            # Also the choke point for the residual lock, not only `_extractable_keys`: the capped
+            # shortlist in `match` is assembled from fuzzy/embedding/rule keys rather than from that
+            # list, so a bucket kept out of one route has to be kept out of the other as well. A
+            # concept the model cannot see is a concept the model cannot pick.
+            if k in self._locked:
+                continue
             entry: dict = {
                 "canonical_key": k,
                 "label": m.label or k.replace("_", " "),
@@ -585,7 +736,14 @@ class OntologyMatcher:
         return out
 
     def _extractable_keys(self) -> list[str]:
-        return [k for k, m in self._by_key.items() if m.extraction_mode != "do_not_extract"]
+        """The concepts a caption may be MAPPED to.
+
+        Locked residuals are excluded even though they are extracted: they are extracted by the
+        section sweep, which reads the template and never comes through here. Leaving them in put
+        every section's "Others" bucket in front of the model on every call.
+        """
+        return [k for k, m in self._by_key.items()
+                if m.extraction_mode != "do_not_extract" and k not in self._locked]
 
     def _llm(self, raw: str, context: str | None, keys: list[str]) -> Candidate | None:
         """Description/criteria-based decision — the key driver in the ensemble."""
@@ -658,8 +816,42 @@ class OntologyMatcher:
             return True
         have = section_of_key(canonical_key)
         if have is None:
-            return True
+            # A key with no section namespace is normally unconstrained. The exception is one leaf
+            # of a collision family: both P&L bottom lines are statement-level keys, so without this
+            # arm "LOSS FOR THE YEAR" under a "TOTAL COMPREHENSIVE" banner is waved through onto
+            # `pl_profit_for_the_year` — the largest figure on the statement filed as the wrong fact
+            # at confidence 1.0, with the comprehensive-income line left empty. Only ever narrows:
+            # the banner must identify exactly one leaf, and a different one.
+            return family_leaf_named_by(canonical_key, section) is None
         return have == want
+
+    def _family_route(self, canonical_key: str, statement: str | None,
+                      section: str | None, caption: str) -> str | None:
+        """The sibling to re-route a REFUSED answer to, or None to let the refusal stand.
+
+        Called only where the gate has already said no, so an answer the gate accepts is never
+        rewritten. The destination goes through the same gate: re-routing may correct which variant
+        of a fact was chosen, never smuggle a concept past the statement, exclusion or
+        exclusive-vocabulary arms — and never into a locked residual, which no match may reach.
+        """
+        target = family_leaf_named_by(canonical_key, section)
+        if target is None or target not in self._by_key or target in self._locked:
+            return None
+        if not self._allowed(target, statement, section, caption):
+            return None
+        return target
+
+    def _record_route(self, from_key: str, to_key: str) -> None:
+        """Count a re-route and remember the route, following `batch_refused`/`batch_unknown_ids`.
+
+        Distinct routes only, and capped: what an auditor needs is which concepts were corrected,
+        not one entry per row of a three-hundred-row filing.
+        """
+        self.usage["family_resolved"] += 1
+        routes = self.usage["family_routes"]
+        route = f"{from_key}->{to_key}"
+        if route not in routes and len(routes) < 20:
+            routes.append(route)
 
     def _allowed(self, canonical_key: str, statement: str | None,
                  section: str | None, caption: str = "") -> bool:
@@ -720,10 +912,18 @@ class OntologyMatcher:
             # has to be the one returned.
             exact = self._exact(
                 normalize_label(seg),
-                allowed=lambda k: self._allowed(k, statement, section, raw_label))
+                allowed=lambda k: self._allowed(k, statement, section, raw_label),
+                # An alias of one family leaf printed under another's banner is corrected here too,
+                # not only on the batch path: the alias is real evidence of WHAT the row is, and
+                # dropping it would trade a confidently-wrong answer for an unmapped row rather than
+                # for the right one. The per-line path is also all there is when no LLM is running.
+                reroute=lambda k: self._family_route(k, statement, section, raw_label))
             if exact:
+                if exact.rerouted_from:
+                    self._record_route(exact.rerouted_from, exact.canonical_key)
                 return MappingResult(exact.canonical_key, exact.method, 1.0, [exact], False,
-                                     {"exact": 1.0}, allocation_status="direct_exclusive")
+                                     {"exact": 1.0}, allocation_status="direct_exclusive",
+                                     rerouted_from=exact.rerouted_from)
 
         # 2. Deterministic evidence from every method (each contributes; none forced out).
         #    Fuzzy/rule run per script segment and keep the best score per concept, so
@@ -755,7 +955,11 @@ class OntologyMatcher:
             cur = best_by_key.get(c.canonical_key)
             if cur is None or c.score > cur.score:
                 best_by_key[c.canonical_key] = c
-        ranked = sorted(best_by_key.values(), key=lambda c: c.score, reverse=True)
+        # Score first, then declared priority: priority is an ordering, not a score, so it may only
+        # settle a tie between two concepts the evidence rates equally. Which of those the shortlist
+        # cap kept, and which one `det_top` reported, was previously dict insertion order.
+        ranked = sorted(best_by_key.values(),
+                        key=lambda c: (c.score, self._priority_of(c.canonical_key)), reverse=True)
         det_top = ranked[0] if ranked else None
 
         # 3. LLM semantic decision — the key driver, shown the deterministic shortlist
@@ -770,6 +974,13 @@ class OntologyMatcher:
                     ([rule.canonical_key] if rule else [])
                     + [c.canonical_key for c in fuzzy[:8]] + [c.canonical_key for c in emb[:8]]
                 ))[: s.extraction.llm_candidate_cap]
+            # Offered in descending match_priority, so the long specific concept is read before the
+            # short generic one it collides with on token overlap ("Total assets less current
+            # liabilities", 86, ahead of "Total current liabilities", 82 — the pair the rulebook's
+            # own note on match_priority calls out). Applied AFTER the cap on purpose: priority
+            # decides what the model reads first, never which concepts it is allowed to see, so a
+            # high-priority concept with no evidence behind it cannot evict an evidenced one.
+            shortlist = self._by_priority(shortlist)
             llm = self._llm(raw_label, context, shortlist)
             if llm is not None:
                 scores["llm"] = llm.score
@@ -858,7 +1069,12 @@ class OntologyMatcher:
         then discarded, dropping the row to the weaker per-line path. Withholding the one piece of
         context the answer is graded on is how a caption that only its banner can disambiguate
         ("Others", the two "Non-controlling interests" of a comprehensive-income statement) got
-        decided wrong and then thrown away."""
+        decided wrong and then thrown away.
+
+        A refused answer inside a declared collision family (``CONCEPT_FAMILIES``) is now RE-ROUTED
+        rather than discarded, because the banner already says which sibling was meant. Every other
+        refusal — wrong statement, the concept's own exclusions, a caption naming a mutually
+        exclusive class — still stands and is still counted as ``batch_refused``."""
         sec = sections or {}
         if not self.llm_enabled or not items:
             return {iid: self.match(label, statement=statement, section=sec.get(iid))
@@ -867,8 +1083,11 @@ class OntologyMatcher:
         # Only concepts from THIS statement are offered, so the batch cannot place a caption
         # in another statement (see `match`). Section scoping is ALSO applied per decision
         # below, since one batch covers rows from several sections.
-        candidates = self._concept_payload(
-            [k for k in self._extractable_keys() if self._in_statement(k, statement)])
+        # Descending match_priority, for the reason the per-line shortlist is ordered that way: one
+        # batch offers the whole statement, so the order the model reads the list in is the only
+        # ranking it gets.
+        candidates = self._concept_payload(self._by_priority(
+            [k for k in self._extractable_keys() if self._in_statement(k, statement)]))
         # No candidate to choose from is not a question worth asking. `_llm` already guards this;
         # the batch path did not, so a statement the ontology covers no concepts for (changes in
         # equity against the shipped ontology) spent a real provider call on an empty candidate
@@ -941,17 +1160,29 @@ class OntologyMatcher:
             # that have nothing to do with sections: the concept's own exclusion criteria, and a
             # caption naming a mutually exclusive class.
             caption = caption_by_id[d.item_id]
-            if not self._allowed(key, statement, sec.get(d.item_id), caption):
-                self.usage["batch_refused"] += 1
-                continue
+            banner = sec.get(d.item_id)
+            rerouted_from: str | None = None
+            if not self._allowed(key, statement, banner, caption):
+                # Before discarding it: when the answer is right about WHAT KIND of thing the row is
+                # and wrong only about which section variant, the banner names the sibling and the
+                # answer is corrected rather than lost. Discarding drops the row to the per-line
+                # path, which sees one caption with no neighbours and is exactly why the batch call
+                # exists — and for a bottom line whose caption arrives as a wrapped fragment there
+                # is nothing left for that path to work from.
+                target = self._family_route(key, statement, banner, caption)
+                if target is None:
+                    self.usage["batch_refused"] += 1
+                    continue
+                self._record_route(key, target)
+                rerouted_from, key = key, target
             conf = max(0.0, min(1.0, d.confidence))
             alloc = (d.allocation_status or "").strip() or (
                 "direct_exclusive" if self._by_key[key].value_scope == "exclusive_leaf" else None)
             out[d.item_id] = MappingResult(
                 canonical_key=key, method=MappingMethod.LLM, confidence=conf,
-                candidates=[Candidate(key, MappingMethod.LLM, conf)],
+                candidates=[Candidate(key, MappingMethod.LLM, conf, rerouted_from=rerouted_from)],
                 needs_review=conf < acc, scores={"llm": conf},
-                allocation_status=alloc, agreement=["llm"],
+                allocation_status=alloc, agreement=["llm"], rerouted_from=rerouted_from,
             )
         # Per-line fallback for any items the batch omitted.
         for iid, label in items:
