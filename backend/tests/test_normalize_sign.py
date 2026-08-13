@@ -234,3 +234,154 @@ def test_a_statement_the_rulebook_says_nothing_about_yields_no_finding(raw_ontol
                    "equity_changes")
     _run(doc, _ontology(raw_ontology))
     assert li.canonical_key == "bs_equity__non_controlling_interests"
+
+
+# --- sign_convention.unsigned_source: the one transformation, and its boundary -------------------
+
+_E = "pl_expenses__"
+_UNSIGNED = {f"{_E}cost_of_goods_sold": 600, f"{_E}selling_and_marketing_expenses": 120,
+             f"{_E}depreciation_and_amortisation_expense": 30}
+
+
+def _statement(figures: dict, statement: str = "profit_and_loss") -> DocumentModel:
+    """A statement's worth of rows, so a cohort can be judged rather than a single row."""
+    doc = DocumentModel(filename="f.pdf", locale="en")
+    doc.pages = [PageSource(index=0, statement=statement)]
+    for key, num in figures.items():
+        li = LineItem(source_label=key, canonical_key=key)
+        li.set_value(ExtractedValue(value=Decimal(num), value_raw=Decimal(num),
+                                    basis=Basis.CONSOLIDATED, period_label="current",
+                                    provenance=Provenance(page_index=0)))
+        doc.line_items.append(li)
+    return doc
+
+
+def _by_key(doc: DocumentModel) -> dict[str, ExtractedValue]:
+    return {li.canonical_key: _value(li) for li in doc.line_items}
+
+
+def test_a_filing_that_prints_its_expenses_unsigned_is_negated_on_load(raw_ontology):
+    """``global_rules.sign_convention.unsigned_source``, which had no mechanism at all.
+
+    THE DEFECT THIS CLOSES: the rulebook declared "where a filing prints expenses as unsigned
+    positives in a by-nature list, negate on load and set sign_normalised: true on the fact so the
+    transformation is auditable", and nothing implemented it — a declaration with no mechanism, which
+    is the one thing this rulebook is not allowed to contain. Leaving such a filing alone is not
+    neutral: the template's subtotals are SIGNED sums, so ``pl_gross_profit = sum(revenue,
+    cost_of_goods_sold)`` came out as revenue PLUS cost, every subtotal above it was wrong by twice
+    the cost base, and every KPI built on one carried the error with it.
+
+    ``value_raw`` keeps what the page printed. That is what makes the flip auditable rather than
+    merely done — the two figures side by side, plus the flag and the log line.
+    """
+    doc = _statement(_UNSIGNED)
+    _run(doc, _ontology(raw_ontology))
+
+    for key, ev in _by_key(doc).items():
+        assert ev.value == -abs(ev.value_raw), key      # negated
+        assert ev.value_raw > 0, key                    # and the printed figure is untouched
+        assert ev.sign_normalised is True, key
+        assert any(f.startswith("sign_normalised:unsigned_source") for f in ev.confidence.flags)
+
+    # …and NOT then reported as carrying the wrong sign, because it no longer does.
+    for li in doc.line_items:
+        assert not [f for f in li.confidence.flags if f.startswith("sign_opposite_to_expected")]
+
+
+def test_one_positive_expense_among_negative_siblings_is_flagged_and_never_flipped(raw_ontology):
+    """The boundary between the rulebook's two sign sentences, which say opposite things.
+
+    ``validation`` — "a concept whose sign_convention is … but whose loaded value carries the
+    opposite sign is a review trigger, NOT an auto-correction" — governs the individual case, and it
+    has to keep governing it: one positive expense among negative siblings is the row that landed on
+    the wrong concept, and flipping it would hide the mis-mapping behind a plausible figure while
+    every subtotal went on tying. So the unsigned-source rule must not reach it.
+
+    Unanimity is what separates them, and the whole cohort is what is tested — not the row. So the
+    cohort here is deliberately WIDE ENOUGH to clear the size floor (four concepts, three of them
+    positive): the point is that a single negative expense proves the filing does use signs, which
+    makes a house style impossible however many positives sit beside it. Testing this with two rows
+    would have proved only that the floor works.
+    """
+    doc = _statement({f"{_E}cost_of_goods_sold": 600,
+                      f"{_E}selling_and_marketing_expenses": 120,
+                      f"{_E}depreciation_and_amortisation_expense": 30,
+                      f"{_E}general_and_administrative_expenses": -90})
+    _run(doc, _ontology(raw_ontology))
+
+    values = _by_key(doc)
+    assert all(ev.sign_normalised is False for ev in values.values())
+    assert values[f"{_E}cost_of_goods_sold"].value == 600      # left exactly as reported
+    for key in (f"{_E}cost_of_goods_sold", f"{_E}selling_and_marketing_expenses",
+                f"{_E}depreciation_and_amortisation_expense"):
+        assert "sign_opposite_to_expected:negative_expected" in values[key].confidence.flags
+
+
+def test_too_few_concepts_to_be_a_convention_are_left_alone_and_said_so(raw_ontology):
+    """Two positive expenses are two rows to look at, not a house style.
+
+    Three independent mis-mappings that all fall the same way is a far weaker explanation than one
+    presentation convention; two is not. The decision is LOGGED either way — "we saw two positive
+    expenses and left them alone" is what a reviewer chasing a failing subtotal needs to find.
+    """
+    doc = _statement({f"{_E}cost_of_goods_sold": 600,
+                      f"{_E}selling_and_marketing_expenses": 120})
+    ctx = _run(doc, _ontology(raw_ontology))
+
+    assert all(ev.sign_normalised is False for ev in _by_key(doc).values())
+    assert any("unsigned_source" in line and "not applied" in line for line in ctx.logs)
+
+
+def test_deleting_the_sentence_deletes_the_transformation(raw_ontology):
+    """The rulebook drives it. A transformation the engine performs whatever the rulebook says is
+    not a specification, and this one changes a reported number's sign — the last place to keep a
+    behaviour the rulebook cannot switch off."""
+    edited = copy.deepcopy(raw_ontology)
+    del edited["global_rules"]["sign_convention"]["unsigned_source"]
+
+    doc = _statement(_UNSIGNED)
+    _run(doc, _ontology(edited))
+
+    values = _by_key(doc)
+    assert all(ev.sign_normalised is False for ev in values.values())
+    assert all(ev.value > 0 for ev in values.values())
+    # Still reported, though: the figures are as-printed and the expectation check says so.
+    assert all("sign_opposite_to_expected:negative_expected" in ev.confidence.flags
+               for ev in values.values())
+
+
+def test_a_sign_indeterminate_concept_is_never_negated(raw_ontology):
+    """"Subtotals, working-capital movements, fair-value changes, OCI and net cash flows are
+    sign-indeterminate. Retain the reported sign; never coerce." A positive fair-value change on a
+    statement whose expenses ARE being negated keeps its sign, because it is not an expense."""
+    doc = _statement({**_UNSIGNED, "pl_exceptional_items__fair_value_change_gains": 45,
+                      "pl_income__revenue_from_operations": 1000})
+    _run(doc, _ontology(raw_ontology))
+
+    values = _by_key(doc)
+    assert values[f"{_E}cost_of_goods_sold"].value == -600          # the cohort was negated
+    assert values["pl_exceptional_items__fair_value_change_gains"].value == 45
+    assert values["pl_exceptional_items__fair_value_change_gains"].sign_normalised is False
+    assert values["pl_income__revenue_from_operations"].value == 1000
+
+
+def test_the_transformation_reaches_the_served_row_so_a_reviewer_can_see_it(raw_ontology):
+    """"…so the transformation is auditable" — which means auditable by the person reviewing the
+    spread, not only in a log line.
+
+    The flip is the one place this pipeline changes a reported number's sign, so a reviewer looking
+    at -600 has to be able to find out that the page said 600. Three things carry it: ``value_raw``
+    on the fact, ``sign_normalised`` beside it, and the flag — and the flag is what actually travels,
+    on the value and on the row, through the same payload the Workspace colours each number from.
+    """
+    from app.api.routes.extractions import _serialize_rows
+
+    doc = _statement(_UNSIGNED)
+    _run(doc, _ontology(raw_ontology))
+    served = {r["canonical_key"]: r for r in _serialize_rows(doc)}
+
+    row = served[f"{_E}cost_of_goods_sold"]
+    assert row["values"][0]["value"] == "-600"
+    assert any(f.startswith("sign_normalised:unsigned_source")
+               for f in row["values"][0]["confidence"]["flags"])
+    assert "sign_normalised:unsigned_source" in row["flags"]

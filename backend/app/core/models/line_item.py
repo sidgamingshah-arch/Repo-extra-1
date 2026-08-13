@@ -50,6 +50,13 @@ class ValueKey(BaseModel, frozen=True):
 class ExtractedValue(BaseModel):
     value_raw: Decimal | None = None      # exactly as printed (paren-negatives applied)
     value: Decimal | None = None          # sign-normalized (units NOT applied)
+    # True when the sign of ``value`` was FLIPPED away from ``value_raw`` by the rulebook's
+    # ``global_rules.sign_convention.unsigned_source`` rule — a filing that prints its expenses as
+    # unsigned positives. The rulebook asks for the transformation to be recorded on the fact ("set
+    # sign_normalised: true on the fact so the transformation is auditable") precisely because it is
+    # the one place the engine changes a reported number's sign: ``value_raw`` still holds what the
+    # page said, so the two together are the audit trail.
+    sign_normalised: bool = False
     reconciled: Decimal | None = None     # after §20 subtraction; always derived from raw
     basis: Basis
     period_end: date | None = None

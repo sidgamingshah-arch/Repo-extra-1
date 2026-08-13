@@ -33,6 +33,18 @@ like, and both are checked here because this is the stage that finishes the numb
   ``sign_rule`` keeps doing the normalising — the two are different jobs on purpose, since a
   concept can legitimately want a targeted flip AND an expected sign.
 
+  ONE EXCEPTION, and the rulebook states it as a separate rule beside that one:
+  ``sign_convention.unsigned_source`` — "where a filing prints expenses as unsigned positives in a
+  by-nature list, negate on load and set sign_normalised: true on the fact so the transformation is
+  auditable". That is a different claim about a different thing. The expectation sentence is about
+  ONE row disagreeing with its siblings, which is a mis-mapping and must not be papered over by a
+  flip. This one is about a whole statement's expenses being printed without signs, which is a house
+  style with no row to suspect — and leaving it alone is not neutral, because the template's
+  subtotals are signed sums (``pl_gross_profit = sum(revenue, cost_of_goods_sold)``), so every
+  subtotal on such a filing comes out wrong and every ratio built on one with it.
+  ``_negate_unsigned_expenses`` implements it, and the test that separates the two cases is
+  unanimity across the statement — see that method and ``_UNSIGNED_COHORT_MIN``.
+
 * ``temporality`` (instant / duration) and ``unit_of_account`` (balance / flow / subtotal) say
   whether the concept is a position at a date or a movement over a period. The balance-sheet
   non-controlling-interests BALANCE and the profit-attribution FLOW share their caption exactly,
@@ -146,6 +158,38 @@ def _detect_units(ctx: PipelineContext, fmt: str, doc: DocumentModel | None = No
 
 _SIGN_EXPECTED = ("positive_expected", "negative_expected")
 
+# ``global_rules.sign_convention.unsigned_source``: "Where a filing prints expenses as unsigned
+# positives in a by-nature list, negate on load and set sign_normalised: true on the fact so the
+# transformation is auditable." Matched on the instruction rather than the whole sentence, so an
+# author may reword the explanation; delete the instruction and the transformation goes with it,
+# which is the only way the sentence can be read as a specification.
+_NEGATE_ON_LOAD = "negate on load"
+# The row-level flag, one per line item however many columns were flipped.
+_NORMALISED_FLAG = "sign_normalised:unsigned_source"
+
+# How many DISTINCT expense concepts must agree before an all-positive cohort is read as the
+# filing's presentation rather than as mis-mapped rows.
+#
+# This is the number that keeps ``unsigned_source`` from swallowing ``validation`` — the sentence
+# beside it, which says the opposite for the individual case: "a concept whose sign_convention is
+# positive_expected or negative_expected but whose loaded value carries the opposite sign is a
+# review trigger, NOT an auto-correction". Both are true, of different things. One expense row
+# positive among negative siblings is the mis-mapped row that sentence is about, and flipping it
+# would hide the defect behind a plausible figure. Every expense on the statement positive is not a
+# row at all, it is a house style, and there is no sibling to suspect.
+#
+# Three, because the competing explanation has to be three independent mapping errors that all
+# happen to fall the same way — far less likely than one presentation convention. Distinct
+# CONCEPTS, not values: three rows summing into one "Others" bucket is one signal, not three.
+_UNSIGNED_COHORT_MIN = 3
+
+
+def _negate_on_load_declared(ontology) -> bool:
+    """Whether the rulebook asks for an unsigned expense list to be negated as it loads."""
+    rules = getattr(ontology, "global_rules", None)
+    sentence = str((getattr(rules, "sign_convention", None) or {}).get("unsigned_source") or "")
+    return _NEGATE_ON_LOAD in sentence.lower()
+
 
 def _statement_shape(ontology) -> dict[str, tuple[str | None, frozenset[str]]]:
     """Per statement, the ``temporality`` and the units of account its concepts declare.
@@ -228,8 +272,80 @@ class NormalizeStage:
                     changed += 1
 
         ctx.log(f"normalize:sign_adjusted={changed}")
+        # AFTER the per-row adjustments above, so a "less:" prefix or a sign_rule flip has already
+        # had its say and the cohort is judged on finished figures. BEFORE `_check_expectations`, so
+        # a statement this negates is not then reported as carrying the wrong sign — the whole point
+        # is that it no longer does.
+        if _negate_on_load_declared(ontology):
+            self._negate_unsigned_expenses(doc, ctx, expected_sign)
         self._check_expectations(doc, ctx, ontology, expected_sign, temporality, unit_of_account)
         return doc
+
+    @staticmethod
+    def _negate_unsigned_expenses(doc: DocumentModel, ctx: PipelineContext,
+                                  expected_sign: dict[str, str]) -> int:
+        """Negate a statement's expenses where the filing printed all of them unsigned.
+
+        ``global_rules.sign_convention.unsigned_source``. The one place this pipeline changes the
+        sign of a reported figure, so what licenses it matters:
+
+        * The decision is per STATEMENT, because printing costs unsigned is a presentational choice
+          a filing makes for a statement — not per row (which is the mis-mapping case the
+          ``validation`` sentence governs) and not per column (one filing does not print this year's
+          costs in parentheses and last year's without).
+        * The cohort must be UNANIMOUS. A single negative among the positives means the filing does
+          use signs, and the positives are then rows to look at rather than a convention to follow.
+          The same reasoning ``_statement_shape`` applies to temporality: a statement whose concepts
+          disagree cannot say anything about a row printed on it.
+        * The cohort must be ``_UNSIGNED_COHORT_MIN`` distinct concepts wide. See that constant.
+
+        What it does NOT touch: ``positive_expected`` concepts (the rule speaks only of expenses and
+        outflows), ``either`` concepts (subtotals, working-capital movements, fair-value changes — the
+        rulebook says "retain the reported sign; never coerce"), and ``value_raw``, which keeps what
+        the page printed so the flip can be audited against it.
+        """
+        stmt_by_page = {p.index: p.statement for p in doc.pages if p.statement}
+
+        def statement_of(li) -> str | None:
+            for ev in li.values.values():
+                if ev.provenance is not None and ev.provenance.page_index in stmt_by_page:
+                    return stmt_by_page[ev.provenance.page_index]
+            return None
+
+        cohorts: dict[str, list[tuple[object, object, Decimal]]] = {}
+        for li in doc.line_items:
+            if expected_sign.get(li.canonical_key or "") != "negative_expected":
+                continue
+            statement = statement_of(li)
+            if statement is None:
+                continue
+            for ev in li.values.values():
+                figure = ev.value if ev.value is not None else ev.value_raw
+                if figure is None or figure == 0:
+                    continue
+                cohorts.setdefault(statement, []).append((li, ev, figure))
+
+        negated = 0
+        for statement, members in sorted(cohorts.items()):
+            concepts = {li.canonical_key for li, _ev, _v in members}
+            if not all(figure > 0 for _li, _ev, figure in members):
+                continue                    # the filing uses signs; `validation` governs each row
+            if len(concepts) < _UNSIGNED_COHORT_MIN:
+                # Logged rather than silent: "we saw two positive expenses and left them alone" is a
+                # decision a reviewer chasing a failing subtotal needs to be able to find.
+                ctx.log(f"normalize:unsigned_source({statement}) not applied — "
+                        f"{len(concepts)} concept(s), below the {_UNSIGNED_COHORT_MIN} needed")
+                continue
+            for li, ev, figure in members:
+                ev.value = -figure
+                ev.sign_normalised = True
+                ev.confidence.flags.append(f"{_NORMALISED_FLAG}:{statement}")
+                if _NORMALISED_FLAG not in li.confidence.flags:
+                    li.confidence.flags.append(_NORMALISED_FLAG)
+            negated += len(members)
+            ctx.log(f"normalize:unsigned_source({statement}) negated={len(members)} value(s) "
+                    f"across {len(concepts)} concept(s): {sorted(concepts)[:4]}")
+        return negated
 
 
     @staticmethod
