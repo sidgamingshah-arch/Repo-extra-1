@@ -2187,17 +2187,22 @@ def get_document_analysis(document_id: str, locale: str = Query("en"),
         return {"ratios": [], "disclosures": [], "notes": [],
                 "credit": build_credit_analysis([], [], locale=locale)}
     rows = run.result.get("rows", [])
+    # The run's own template, so this screen's ratios, credit factors and notes are computed from
+    # the figures the spread shows — including calculated lines the filing does not print. Passing
+    # None here is what left the Analysis screen reading a different set of numbers from the KPI
+    # view beside it (see rollups.figures_as_shown).
+    template_def = _template_for_run(session, run)
     disclosures = localize_disclosures(run.result.get("disclosures", []), locale)
-    credit = build_credit_analysis(rows, disclosures, locale=locale)
+    credit = build_credit_analysis(rows, disclosures, locale=locale, template_def=template_def)
     # Fold in the cached LLM narrative (auto-generated at extraction when a provider is
     # configured, or produced on demand) so the Analysis screen shows it without a click.
     narrative = run.result.get("credit_narrative")
     if narrative and narrative.get("text"):
         credit = {**credit, "narrative": narrative}
     return {
-        "ratios": compute_ratios(rows, locale=locale),
+        "ratios": compute_ratios(rows, locale=locale, template_def=template_def),
         "disclosures": disclosures,
-        "notes": build_free_notes(rows, locale=locale),
+        "notes": build_free_notes(rows, locale=locale, template_def=template_def),
         # Credit view combines the extracted ratios with the report's narrative disclosures.
         "credit": credit,
     }
@@ -2225,7 +2230,8 @@ def run_credit_narrative_endpoint(document_id: str, locale: str = Query("en"),
 
     rows = run.result.get("rows", [])
     disclosures = localize_disclosures(run.result.get("disclosures", []), locale)
-    credit = build_credit_analysis(rows, disclosures, locale=locale)
+    credit = build_credit_analysis(rows, disclosures, locale=locale,
+                                   template_def=_template_for_run(session, run))
     if not credit.get("factors") and not credit.get("flags"):
         raise HTTPException(status_code=422,
                             detail="Insufficient extracted data for a credit narrative")
@@ -3367,31 +3373,14 @@ def _calculated(rows: list[dict], template_def: dict | None, basis: str, period:
     figures the grid shows for its components — including an analyst's manual correction to one of
     them, and any netting restatement, which is the point: whatever a component shows is what its
     subtotal is built from.
+
+    A pass-through to ``rollups.evaluate_rows``, which the export and the KPI layer also call. The
+    plumbing used to be written out again here; two spellings of "what a subtotal is" is how the
+    screen and everything reading beside it come to differ.
     """
-    from app.services.rollups import evaluate, node_labels
+    from app.services.rollups import evaluate_rows
 
-    groups: dict[str, list[dict]] = {}
-    for r in rows:
-        k = r.get("canonical_key")
-        if k:
-            groups.setdefault(k, []).append(r)
-
-    def reported(key: str):
-        if netted and key in netted:
-            return netted[key]
-        return _concept_value(groups.get(key, []), basis, period)
-
-    def overridden(key: str) -> bool:
-        """Whether this concept carries a MANUAL value for this (basis, period).
-
-        A rollup must stop preferring its own computation at a line an analyst has answered for:
-        the typed value is the figure the grid shows, so it is the figure every total above it has
-        to be built from.
-        """
-        return any(_edited_for(x, basis, period) for x in groups.get(key, []))
-
-    return evaluate(template_def, reported, labels=node_labels(template_def, locale),
-                    overridden=overridden)
+    return evaluate_rows(template_def, rows, basis, period, locale, netted=netted)
 
 
 _KPI_CATEGORY_I18N = {

@@ -1688,6 +1688,16 @@
               }
             },
             {
+              "node_id": "pl_oci__others",
+              "canonical_key": "pl_oci__others",
+              "label": "Other comprehensive income items",
+              "role": "line",
+              "label_i18n": {
+                "en": "Other comprehensive income items",
+                "zh": "其他综合收益项目"
+              }
+            },
+            {
               "node_id": "pl_other_comprehensive_income_for_the_year",
               "canonical_key": "pl_other_comprehensive_income_for_the_year",
               "label": "Other comprehensive income/(loss) for the year",
@@ -1700,7 +1710,8 @@
                 "op": "sum",
                 "children": [
                   "pl_oci__items_not_reclassified",
-                  "pl_oci__items_may_be_reclassified"
+                  "pl_oci__items_may_be_reclassified",
+                  "pl_oci__others"
                 ]
               }
             }

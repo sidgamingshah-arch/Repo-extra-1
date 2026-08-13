@@ -211,14 +211,12 @@ def node_labels(template_def: dict | None, locale: str = "en") -> dict[str, str]
     return out
 
 
-def evaluate_rows(template_def: dict | None, rows: list[dict], basis: str, period: str,
-                  locale: str = "en") -> dict[str, "Calculated"]:
-    """Evaluate the calculated lines directly from a run's extracted rows.
+def _readers(rows: list[dict], basis: str, period: str, netted: dict[str, float] | None):
+    """``(reported, overridden)`` over a run's rows — the two callbacks :func:`evaluate` needs.
 
-    The single entry point for both the statement API and the Excel export, so the workbook cannot
-    disagree with the screen about what a subtotal is. Inputs are read through
-    ``periods.concept_value``, which means a component's manual correction flows straight into
-    every subtotal above it.
+    ``netted`` restates a component's figure under a netting rule and is applied HERE, before any
+    rollup reads it: a subtotal computed from the un-netted component no longer equals the
+    components printed beneath it, and the spread would contradict itself on its own face.
     """
     from app.services.periods import concept_value, edited_for
 
@@ -229,13 +227,66 @@ def evaluate_rows(template_def: dict | None, rows: list[dict], basis: str, perio
             groups.setdefault(key, []).append(r)
 
     def reported(key: str):
+        if netted and key in netted:
+            return netted[key]
         return concept_value(groups.get(key, []), basis, period)
 
     def overridden(key: str) -> bool:
         return any(edited_for(x, basis, period) for x in groups.get(key, []))
 
+    return groups, reported, overridden
+
+
+def evaluate_rows(template_def: dict | None, rows: list[dict], basis: str, period: str,
+                  locale: str = "en",
+                  netted: dict[str, float] | None = None) -> dict[str, "Calculated"]:
+    """Evaluate the calculated lines directly from a run's extracted rows.
+
+    The single entry point for the statement API, the Excel export and the KPI layer, so none of
+    the three can disagree with the others about what a subtotal is. Inputs are read through
+    ``periods.concept_value``, which means a component's manual correction flows straight into
+    every subtotal above it.
+    """
+    _, reported, overridden = _readers(rows, basis, period, netted)
     return evaluate(template_def, reported, labels=node_labels(template_def, locale),
                     overridden=overridden)
+
+
+def figures_as_shown(template_def: dict | None, rows: list[dict], basis: str, period: str,
+                     locale: str = "en",
+                     netted: dict[str, float] | None = None) -> dict[str, float]:
+    """Every concept's figure AS THE GRID SHOWS IT, for one (basis, period).
+
+    Precedence per period, the same three tests the Workspace row builder applies: an analyst's
+    MANUAL value outranks the arithmetic, then the COMPUTED figure where the template says the line
+    is made of others and they were extracted, then the PRINTED figure for a line with nothing to
+    compute from.
+
+    WHY THIS EXISTS, and it is the whole point. Everything that reasons about a filing's numbers has
+    to reason about the same numbers. The statement grid and the export already shared one resolver;
+    the KPI layer did not — it read printed figures only (``derived._value`` →
+    ``periods.concept_value``). So a calculated line the filing does not print had a figure on screen
+    and none in the ratios: with the income statement's operating profit gaining a formula, the grid
+    showed a computed EBIT while EBIT interest coverage, EBIT margin and EBITDA all reported the
+    input missing. One quantity, two answers, and no screen that could show them disagreeing.
+
+    Per period on purpose. An analyst who corrects the current column has said nothing about last
+    year, and a period whose components were not extracted is not made computable by the other
+    period's being so.
+    """
+    groups, reported, overridden = _readers(rows, basis, period, netted)
+    calc = evaluate(template_def, reported, labels=node_labels(template_def, locale),
+                    overridden=overridden)
+    out: dict[str, float] = {}
+    for key in groups:
+        value = reported(key)
+        if value is not None:
+            out[key] = float(value)
+    for key, c in calc.items():
+        # An answered line is settled; the arithmetic does not get to overrule it.
+        if c.computable and not overridden(key):
+            out[key] = float(c.value)
+    return out
 
 
 def _order(nodes: dict[str, dict]) -> tuple[list[str], set[str]]:

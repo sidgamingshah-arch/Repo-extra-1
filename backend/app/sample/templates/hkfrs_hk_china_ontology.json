@@ -142,7 +142,7 @@
     ]
   },
   "residual_framework": {
-    "note": "One definition governing all 13 residual concepts. This replaces the v1 others_policy, which stated intent but gave the engine no mechanism.",
+    "note": "One definition governing all 14 residual concepts. This replaces the v1 others_policy, which stated intent but gave the engine no mechanism.",
     "applies_to": "every concept with value_scope: exclusive_residual",
     "alias_matching": "disabled",
     "population": "sweep_only",
@@ -5596,6 +5596,41 @@
       ]
     },
     {
+      "canonical_key": "pl_oci__others",
+      "label": "Other comprehensive income items (face, unmapped)",
+      "definition": "Sweep bucket for value rows printed on the face of the statement of profit or loss inside the other-comprehensive-income section that neither IAS 1 category claimed. Governed entirely by residual_framework.",
+      "inherits": "pl_s8_other_comprehensive_income",
+      "alias_matching": "disabled",
+      "match_priority": 0,
+      "sign_convention": "either",
+      "residual_policy": {
+        "framework": "residual_framework",
+        "section_scope": "pl_s8_other_comprehensive_income",
+        "population": "sweep_only",
+        "cross_section": false,
+        "notes_as_source": false,
+        "plug": false,
+        "itemise": true
+      },
+      "never_sweep": [
+        "pl_other_comprehensive_income_for_the_year",
+        "pl_total_comprehensive_income_for_the_year",
+        "any row printed in the income, expenses, non-operating, exceptional or tax sections",
+        "the total comprehensive income attribution captions"
+      ],
+      "expected_components": [
+        "Exchange differences on translation of foreign operations, where the filing prints them without an IAS 1 category heading",
+        "Movements in a hedging or revaluation reserve presented as their own face line",
+        "Share of other comprehensive income of associates and joint ventures"
+      ],
+      "value_scope": "exclusive_residual",
+      "aliases": [],
+      "aliases_i18n": {
+        "en": [],
+        "zh": []
+      }
+    },
+    {
       "canonical_key": "pl_profit_attributable_to__owners_of_the_parent",
       "label": "Profit attributable to owners of the parent",
       "inherits": "pl_s6_profit_attributable_to",
@@ -8137,6 +8172,6 @@
     "name": "HKFRS / IFRS Hong Kong-China Extraction Ontology",
     "framework": "HKFRS",
     "version": "1.0",
-    "concept_count": 185
+    "concept_count": 186
   }
 }

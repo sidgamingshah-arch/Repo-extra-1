@@ -535,13 +535,17 @@ def test_a_kpi_input_that_resolves_differently_per_period_still_reports_both():
     rows = [
         # DIO: inventories / cost base, where the cost base has candidate keys tried in order.
         _row("bs_current_assets__inventories", "Inventories", 100, 80),
-        _row("pl_expenses__cost_of_goods_sold", "Cost of goods sold", 500, None),
-        _row("pl_expenses__total_operating_cost", "Total operating cost", None, 400),
+        # Negative, per global_rules.sign_convention: "expenses and outflows are stored NEGATIVE".
+        _row("pl_expenses__cost_of_goods_sold", "Cost of goods sold", -500, None),
+        _row("pl_expenses__total_operating_cost", "Total operating cost", None, -400),
     ]
     d = _build_statement(rows, None, "kpi", "f.pdf")
     row = _row_of(d, "kpi_dio")
     den = row["contributions"][-1]
-    # Current resolved to cost of goods sold, prior to total operating cost — both reported.
+    # Current resolved to cost of goods sold, prior to total operating cost — both reported, and
+    # both as the POSITIVE magnitude: the day cycles divide by the cost incurred, so the term
+    # carries sign -1 against a negative-stored expense and the contribution shown is what the
+    # ratio actually divided by.
     assert den["v1"] == 500 and den["v2"] == 400
 
 

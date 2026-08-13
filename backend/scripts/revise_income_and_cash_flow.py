@@ -91,6 +91,14 @@ WHAT THE SPEC ASKS FOR THAT IS NOT ENCODED, and what happens instead:
   severity enum is blocking|warning. Both land as ``warning`` on the shared tolerance, with the
   reason for the looser one written into the note where a reviewer reads it.
 
+* ONE ROW BEYOND THE SPEC'S 59, at the user's request after this was reported: ``pl_oci__others``,
+  the other-comprehensive-income section's sweep bucket. Every other section on every statement owns
+  one; OCI did not, and ``stages/residual`` resolves a row's section by walking to the nearest
+  section that HAS a bucket — backwards, when nothing below it does. So an OCI line neither IAS 1
+  category claimed (an exchange-translation movement, a hedging reserve movement) was swept into
+  ``pl_tax_expense__others``, inside Total tax expense, which then moved profit for the year. The
+  income statement is 60 rows.
+
 * ``warn`` FOR THE OCI COMPOSITION (CHECK 8). Same as the balance sheet's reserves composition: the
   rollup asserts it and a rollup has no severity field, so it is blocking. Skip-when-absent already
   matches ``skip_if_either_side_absent``.
@@ -99,6 +107,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -174,6 +183,11 @@ OCI_ITEMS = [
      "不会重分类进损益的项目"),
     ("items_may_be_reclassified",
      "Items that may be reclassified subsequently to profit or loss", "将重分类进损益的项目"),
+    # The section's sweep bucket. Without one, an OCI line neither IAS 1 category claimed had no
+    # home in its own section and the sweep walked BACKWARDS to the nearest section that did have
+    # one — the tax section — so an exchange-translation reserve movement landed inside Total tax
+    # expense and moved the P&L bottom line. See `_oci_residual`.
+    ("others", "Other comprehensive income items", "其他综合收益项目"),
 ]
 ATTRIBUTION = [
     ("owners_of_the_parent", "Owners of the parent", "母公司拥有人"),
@@ -551,6 +565,46 @@ NEW_CONCEPTS = [
         "rulebook": {"inherits": "pl_s8_other_comprehensive_income", "match_priority": 66},
     },
     {
+        "canonical_key": "pl_oci__others",
+        "label": "Other comprehensive income items (face, unmapped)",
+        "after": "pl_oci__items_may_be_reclassified",
+        "definition": ("Sweep bucket for value rows printed on the face of the statement of profit "
+                       "or loss inside the other-comprehensive-income section that neither IAS 1 "
+                       "category claimed. Governed entirely by residual_framework."),
+        "value_scope": "exclusive_residual",
+        "aliases": [],
+        "aliases_zh": [],
+        "exclude": [],
+        "rulebook": {
+            "inherits": "pl_s8_other_comprehensive_income",
+            "alias_matching": "disabled",
+            "match_priority": 0,
+            "sign_convention": "either",
+            "residual_policy": {
+                "framework": "residual_framework",
+                "section_scope": "pl_s8_other_comprehensive_income",
+                "population": "sweep_only",
+                "cross_section": False,
+                "notes_as_source": False,
+                "plug": False,
+                "itemise": True,
+            },
+            "never_sweep": [
+                "pl_other_comprehensive_income_for_the_year",
+                "pl_total_comprehensive_income_for_the_year",
+                "any row printed in the income, expenses, non-operating, exceptional or tax "
+                "sections",
+                "the total comprehensive income attribution captions",
+            ],
+            "expected_components": [
+                "Exchange differences on translation of foreign operations, where the filing "
+                "prints them without an IAS 1 category heading",
+                "Movements in a hedging or revaluation reserve presented as their own face line",
+                "Share of other comprehensive income of associates and joint ventures",
+            ],
+        },
+    },
+    {
         "canonical_key": "cf_cash_flow_from_operating_activities__profit_for_the_year",
         "label": "Profit for the year",
         "after": "cf_cash_flow_from_operating_activities__profit_before_tax",
@@ -831,7 +885,8 @@ def _concept(spec: dict) -> dict:
              "value_scope": spec["value_scope"]}
     entry["aliases"] = aliases
     entry["aliases_i18n"] = {"en": aliases, "zh": list(spec["aliases_zh"])}
-    entry["exclude"] = list(spec["exclude"])
+    if spec["exclude"]:
+        entry["exclude"] = list(spec["exclude"])
     if spec.get("confusable_with"):
         entry["confusable_with"] = list(spec["confusable_with"])
     if spec.get("exclude_hints"):
@@ -968,6 +1023,27 @@ def apply_sign_conventions(data: dict) -> list[str]:
 
 
 
+def sync_residual_count(data: dict) -> str | None:
+    """Hold ``residual_framework.note``'s count to the number of residuals actually declared.
+
+    The sentence reads "One definition governing all N residual concepts", and it is served on the
+    ontology screen. Adding the other-comprehensive-income bucket makes N wrong, and a block whose
+    own first sentence miscounts what it governs is the same defect class as ``metadata.concept_count``
+    disagreeing with the mappings — a number nobody derived from what it sits above.
+    """
+    framework = data.get("residual_framework")
+    if not isinstance(framework, dict) or not isinstance(framework.get("note"), str):
+        return None
+    actual = sum(1 for m in data.get("mappings") or []
+                 if isinstance(m.get("residual_policy"), dict))
+    note = re.sub(r"all \d+ residual concepts", f"all {actual} residual concepts",
+                  framework["note"])
+    if note == framework["note"]:
+        return None
+    framework["note"] = note
+    return f"residual_framework.note now says {actual} residual concepts"
+
+
 def revise_validation(data: dict) -> list[str]:
     rules = data.get("validation")
     if not isinstance(rules, dict) or "identities" not in rules:
@@ -1014,6 +1090,8 @@ def revise_ontologies() -> list[str]:
         notes += apply_sign_conventions(data)
         if counted := sync_declared_count(data):
             notes.append(counted)
+        if swept := sync_residual_count(data):
+            notes.append(swept)
         notes += revise_validation(data)
         if notes:
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")

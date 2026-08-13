@@ -42,7 +42,7 @@ def test_v2_rulebook_loads_with_nothing_dropped():
     raw = _v2()
     ont = load_ontology(raw)
     assert unknown_keys(raw, ont, limit=500) == []
-    assert len(ont.mappings) == 185
+    assert len(ont.mappings) == 186
     assert len(ont.section_defaults) == 19
     # The six new top-level blocks are objects, not swallowed keys.
     assert ont.normalisation and ont.normalisation.pipeline
@@ -91,7 +91,11 @@ def test_residual_concepts_carry_typed_sweep_terms():
     assert m.never_sweep and all(isinstance(k, str) for k in m.never_sweep)
     assert len(m.expected_components) == 5
     residuals = [x for x in ont.mappings if x.value_scope == "exclusive_residual"]
-    assert len(residuals) == 13
+    # 14: every section on every statement owns a sweep bucket, other comprehensive income
+    # included. It was the one section without one, and the sweep resolves a row's section by
+    # walking to the nearest section that HAS a bucket — so an unrecognised OCI line was swept
+    # backwards into Total tax expense.
+    assert len(residuals) == 14
     assert all(x.alias_matching == "disabled" and x.residual_policy for x in residuals)
 
 
@@ -151,7 +155,7 @@ def test_nested_blocks_are_modelled_not_free_dicts():
     # still live — `test_an_uploaded_replacement_supersedes_the_shipped_rulebook` uploads one that
     # uses it — and a value naming a key that ships nowhere would be a declaration pointing at
     # nothing.
-    assert md.supersedes == "" and md.concept_count == 185
+    assert md.supersedes == "" and md.concept_count == 186
     # ``retained_defects`` is deliberately NOT asserted non-empty: its only entry recorded the two
     # canonical-key typos, which the balance-sheet revision fixed, and a list that keeps a fixed
     # defect in it is how a reader comes to distrust the block.
@@ -224,7 +228,7 @@ def test_section_layer_reaches_every_concept_only_after_resolution():
 
     ont = load_ontology(raw, resolve=True)
     placed = [m for m in ont.mappings if m.section_scope and m.statement]
-    assert len(placed) == 185
+    assert len(placed) == 186
     assert all(m.temporality and m.face_only is True for m in placed)
 
     m = _by_key(ont)["bs_current_assets__inventories"]
@@ -274,7 +278,7 @@ def test_unknown_inherits_is_a_clear_error_not_a_silent_no_op():
         load_ontology(raw, resolve=True)
     # The read path stays tolerant, by design: one bad stored row must not 500 the ontology
     # editor, the language-parity page or an extraction run.
-    assert len(load_ontology(raw).mappings) == 185
+    assert len(load_ontology(raw).mappings) == 186
 
 
 def test_resolution_does_not_mutate_the_definition_it_was_given():

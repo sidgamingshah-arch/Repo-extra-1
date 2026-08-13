@@ -35,13 +35,24 @@ _CASH = [
     ("bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents", 1, "opt"),
 ]
 # EBITDA = EBIT (required anchor) + depreciation & amortisation (optional add-back).
-_EBITDA = [("pl_operating_profit_ebit", 1), ("pl_expenses__depreciation_and_amortisation_expense", 1, "opt")]
+#
+# The add-back's sign is -1 BECAUSE EXPENSES ARE STORED NEGATIVE (global_rules.sign_convention:
+# "expenses and outflows are stored NEGATIVE"). `_side` computes a signed sum, so +1 on a D&A of
+# -30 SUBTRACTED the charge a second time and returned an EBITDA below EBIT — arithmetically
+# impossible, and it shipped as +1. It only fired on a filing that printed an operating-profit
+# line, which IFRS does not require; now that EBIT is computed from the template it fires on
+# almost every filing, which is how it was found.
+_EBITDA = [("pl_operating_profit_ebit", 1),
+           ("pl_expenses__depreciation_and_amortisation_expense", -1, "opt")]
 _CFO = "cf_cash_flow_from_operating_activities__net_cash_from_operating_activities"
 _CAPEX = "cf_cash_flow_from_investing_activities__purchase_of_property_plant_and_equipment"
 _INTEREST_PAID = "cf_cash_flow_from_financing_activities__interest_paid"
 _REPAYMENT = "cf_cash_flow_from_financing_activities__repayment_of_borrowings"
 _EQUITY = "bs_equity__total_equity"
 _TCL = "bs_current_liabilities__total_current_liabilities"
+# Interest expense, stored NEGATIVE like every other expense. Every coverage ratio divides by it,
+# so each one carries sign -1 to divide by the CHARGE rather than its negation: at +1 a profitable,
+# comfortably-covered company was served an interest coverage of -6.25x.
 _INTEREST = "pl_non_operating_expenses__interest_expense"
 # Cost base for the inventory/payables day-cycle: prefer the explicit cost-of-goods-sold line,
 # but many statement formats don't break it out — fall back to the total operating cost
@@ -123,19 +134,19 @@ _RATIOS = [
     {"key": "interest_coverage", "label": "EBIT interest coverage", "unit": "x", "category": "Coverage",
      "label_i18n": {"zh": "利息保障倍数（EBIT）", "ar": "تغطية الفائدة (EBIT)",
                     "fr": "Couverture des intérêts (EBIT)"},
-     "num": [("pl_operating_profit_ebit", 1)], "den": [(_INTEREST, 1)],
+     "num": [("pl_operating_profit_ebit", 1)], "den": [(_INTEREST, -1)],
      "formula": "Operating profit (EBIT) / Interest expense"},
     {"key": "ebitda_interest_coverage", "label": "EBITDA interest coverage", "unit": "x",
      "category": "Coverage",
      "label_i18n": {"zh": "利息保障倍数（EBITDA）", "ar": "تغطية الفائدة (EBITDA)",
                     "fr": "Couverture des intérêts (EBITDA)"},
-     "num": list(_EBITDA), "den": [(_INTEREST, 1)],
+     "num": list(_EBITDA), "den": [(_INTEREST, -1)],
      "formula": "EBITDA / Interest expense"},
     {"key": "debt_service_coverage", "label": "Debt-service coverage (DSCR)", "unit": "x",
      "category": "Coverage",
      "label_i18n": {"zh": "偿债保障倍数", "ar": "تغطية خدمة الدين", "fr": "Couverture du service de la dette"},
      "num": list(_EBITDA),
-     "den": [(_INTEREST, 1),
+     "den": [(_INTEREST, -1),
              ("bs_current_liabilities__current_portion_of_long_term_debt", 1, "opt"),
              ("bs_current_liabilities__current_borrowings", 1, "opt")],
      "formula": "EBITDA / (Interest expense + current portion of long-term debt + current borrowings)"},
@@ -148,27 +159,27 @@ _RATIOS = [
      "category": "Coverage",
      "label_i18n": {"zh": "现金流利息保障倍数", "ar": "تغطية الفائدة من التدفق النقدي",
                     "fr": "Couverture des intérêts par les flux de trésorerie"},
-     "num": [(_CFO, 1)], "den": [(_INTEREST, 1)],
+     "num": [(_CFO, 1)], "den": [(_INTEREST, -1)],
      "formula": "Net cash from operating activities / Interest expense"},
     {"key": "fcf_to_total_debt", "label": "Free cash flow to total debt", "unit": "%",
      "category": "Coverage",
      "label_i18n": {"zh": "自由现金流/总债务", "ar": "التدفق النقدي الحر إلى إجمالي الدين",
                     "fr": "Flux de trésorerie disponible / Dette totale"},
-     "num": [(_CFO, 1), (_CAPEX, -1, "opt")], "den": list(_DEBT),
+     "num": [(_CFO, 1), (_CAPEX, 1, "opt")], "den": list(_DEBT),
      "formula": "(Net cash from operations − Capex) / Total debt"},
     {"key": "ffo_to_total_debt", "label": "Funds from operations to debt (FFO/debt)", "unit": "%",
      "category": "Coverage",
      "label_i18n": {"zh": "经营资金/总债务", "ar": "الأموال من العمليات إلى الدين",
                     "fr": "Fonds provenant de l'exploitation / Dette totale"},
      "num": [("pl_profit_for_the_year", 1),
-             ("pl_expenses__depreciation_and_amortisation_expense", 1, "opt")],
+             ("pl_expenses__depreciation_and_amortisation_expense", -1, "opt")],
      "den": list(_DEBT),
      "formula": "(Profit for the year + depreciation & amortisation) / Total debt"},
     {"key": "cash_debt_service_coverage", "label": "Cash debt-service coverage", "unit": "x",
      "category": "Coverage",
      "label_i18n": {"zh": "现金偿债保障倍数", "ar": "تغطية خدمة الدين النقدية",
                     "fr": "Couverture du service de la dette par la trésorerie"},
-     "num": [(_CFO, 1)], "den": [(_INTEREST_PAID, 1), (_REPAYMENT, 1, "opt")],
+     "num": [(_CFO, 1)], "den": [(_INTEREST_PAID, -1), (_REPAYMENT, -1, "opt")],
      "formula": "Net cash from operating activities / (Interest paid + repayment of borrowings)"},
 
     # ---- Efficiency (working-capital cycle) ------------------------------------------
@@ -188,13 +199,13 @@ _RATIOS = [
     {"key": "dio", "label": "Days inventory outstanding (DIO)", "unit": "days", "category": "Efficiency",
      "label_i18n": {"zh": "存货周转天数", "ar": "أيام بقاء المخزون", "fr": "Délai d'écoulement des stocks (jours)"},
      "num": [("bs_current_assets__inventories", 1)],
-     "den": [(_COST_BASE, 1)],
+     "den": [(_COST_BASE, -1)],
      "formula": "Inventories / Cost of goods sold (or total operating cost) × 365"},
     {"key": "dpo", "label": "Days payables outstanding (DPO)", "unit": "days", "category": "Efficiency",
      "label_i18n": {"zh": "应付账款周转天数", "ar": "أيام سداد الذمم الدائنة",
                     "fr": "Délai de paiement fournisseurs (jours)"},
      "num": [("bs_current_liabilities__current_trade_payables", 1)],
-     "den": [(_COST_BASE, 1)],
+     "den": [(_COST_BASE, -1)],
      "formula": "Trade payables / Cost of goods sold (or total operating cost) × 365"},
 
     # ---- Profitability ---------------------------------------------------------------
@@ -347,7 +358,7 @@ def _value(by_key: dict, key: str, basis: str, period: str) -> float | None:
     return concept_value(group if isinstance(group, list) else [group], basis, period)
 
 
-def _term_value(by_key, keyspec, basis, period, derived=None) -> float | None:
+def _term_value(by_key, keyspec, basis, period, derived=None, shown=None) -> float | None:
     """Resolve a term's value. ``keyspec`` is a single canonical key, or a tuple/list of
     candidate keys tried in order (first one present wins) — used for a graceful fallback,
     e.g. cost of goods sold → total operating cost when a filing doesn't break out COGS.
@@ -357,16 +368,27 @@ def _term_value(by_key, keyspec, basis, period, derived=None) -> float | None:
     extracted rows, so a candidate list may mix the two; an intermediate that came out unavailable
     is absent exactly like an unextracted line, which is what keeps a ratio built on it unavailable
     rather than partial.
+
+    ``shown`` is every concept's figure as the STATEMENT SHOWS IT (``rollups.figures_as_shown``):
+    manual, else computed from the template, else printed. It is consulted before the raw rows, and
+    it is what stops a KPI disagreeing with the spread it is computed from — a calculated line the
+    filing does not print has a figure on the face and, before this, none in the ratios. Absent when
+    no template was passed, and then a term resolves off the printed rows exactly as it used to.
     """
     keys = keyspec if isinstance(keyspec, (tuple, list)) else (keyspec,)
     for k in keys:
-        v = derived.get(k) if derived and k in derived else _value(by_key, k, basis, period)
+        if derived and k in derived:
+            v = derived[k]
+        elif shown is not None and k in shown:
+            v = shown[k]
+        else:
+            v = _value(by_key, k, basis, period)
         if v is not None:
             return v
     return None
 
 
-def _side(by_key, terms, basis, period, derived=None) -> float | None:
+def _side(by_key, terms, basis, period, derived=None, shown=None) -> float | None:
     """Sum one side of a ratio. Each term is ``(key, sign)`` — required, missing => whole side
     None — or ``(key, sign, "opt")`` — optional component, missing => treated as 0 (so an
     aggregate like 'total debt' still computes when a company reports only some components).
@@ -382,7 +404,7 @@ def _side(by_key, terms, basis, period, derived=None) -> float | None:
     for term in terms:
         key, sign = term[0], term[1]
         mode = term[2] if len(term) > 2 else "req"
-        val = _term_value(by_key, key, basis, period, derived)
+        val = _term_value(by_key, key, basis, period, derived, shown)
         if val is None:
             if mode == "opt":
                 continue                     # optional component absent → contributes 0
@@ -428,7 +450,7 @@ def _resolved_key(by_key, keyspec, basis, period) -> str:
     return str(keys[0]) if keys else ""
 
 
-def _side_inputs(by_key, terms, basis, period, derived=None) -> list[dict]:
+def _side_inputs(by_key, terms, basis, period, derived=None, shown=None) -> list[dict]:
     """Every input that went into one side of a ratio, with the value actually used.
 
     A ratio the analyst cannot take apart is a number to be taken on trust. Listing the inputs —
@@ -439,7 +461,7 @@ def _side_inputs(by_key, terms, basis, period, derived=None) -> list[dict]:
     for term in terms:
         key, sign = term[0], term[1]
         mode = term[2] if len(term) > 2 else "req"
-        val = _term_value(by_key, key, basis, period, derived)
+        val = _term_value(by_key, key, basis, period, derived, shown)
         out.append({
             "canonical_key": _resolved_key(by_key, key, basis, period),
             "label": _term_label(by_key, key), "sign": sign, "value": val,
@@ -506,6 +528,13 @@ def compute_ratios(rows: list[dict], *, basis: str = "consolidated", period: str
     and never quietly reported as 0. Which KPIs a filing cannot support is itself a finding.
     """
     by_key = _group_by_key(rows)
+    # Every figure as the statement shows it, so a ratio is a ratio OF the spread on screen. None
+    # without a template: there is nothing to compute a calculated line from, and a term then
+    # resolves off the printed rows as before.
+    from app.services.rollups import figures_as_shown
+
+    shown = (figures_as_shown(template_def, rows, basis, period, locale)
+             if template_def else None)
     block = template_kpis(template_def)
     catalog = _catalog_of(block) if block is not None else _RATIOS
     source = "template" if block is not None else "built-in"
@@ -518,7 +547,8 @@ def compute_ratios(rows: list[dict], *, basis: str = "consolidated", period: str
     if block is not None:
         defs = {i.key: _terms_of(i.terms) for i in block.intermediates}
         for key in _intermediate_order(defs):
-            derived_vals[key] = _side(by_key, defs[key], basis, period, derived_vals)
+            derived_vals[key] = _side(by_key, defs[key], basis, period, derived_vals,
+                                      shown)
         for i in block.intermediates:
             inter_labels[i.key] = ((i.label_i18n.get(locale) if locale != "en" else None)
                                    or i.label)
@@ -527,8 +557,8 @@ def compute_ratios(rows: list[dict], *, basis: str = "consolidated", period: str
     out: list[dict] = []
     for d in catalog:
         label = (d.get("label_i18n", {}).get(locale) if locale != "en" else None) or d["label"]
-        num = _side(by_key, d["num"], basis, period, derived_vals)
-        den = _side(by_key, d["den"], basis, period, derived_vals)
+        num = _side(by_key, d["num"], basis, period, derived_vals, shown)
+        den = _side(by_key, d["den"], basis, period, derived_vals, shown)
         unit = d["unit"]
         available = num is not None and den not in (None, 0)
         value = round((num / den) * _UNIT_SCALE[unit], 2) if available else None
@@ -542,8 +572,9 @@ def compute_ratios(rows: list[dict], *, basis: str = "consolidated", period: str
             "value": value, "source": source,
             "display": _display(value, unit), "available": available,
             # The arithmetic, openable: which extracted figures were used, and with what sign.
-            "inputs": {"numerator": _side_inputs(by_key, d["num"], basis, period, derived_vals),
-                       "denominator": _side_inputs(by_key, d["den"], basis, period, derived_vals)},
+            "inputs": {
+                "numerator": _side_inputs(by_key, d["num"], basis, period, derived_vals, shown),
+                "denominator": _side_inputs(by_key, d["den"], basis, period, derived_vals, shown)},
         })
 
     # Cash conversion cycle is a combination of the day-based ratios (DSO + DIO − DPO), so it is
@@ -734,7 +765,8 @@ def _loc_map(table: dict, key: str, locale: str) -> str:
 
 
 def build_credit_analysis(rows: list[dict], disclosures: list[dict] | None = None, *,
-                          basis: str = "consolidated", locale: str = "en") -> dict:
+                          basis: str = "consolidated", locale: str = "en",
+                          template_def: dict | None = None) -> dict:
     """Detailed credit assessment from the extracted values PLUS the report narrative.
 
     Numeric factors (leverage / coverage / liquidity / profitability) are bucketed against
@@ -742,7 +774,11 @@ def build_credit_analysis(rows: list[dict], disclosures: list[dict] | None = Non
     concern, qualified opinion, contingents, guarantees, litigation). The overall stance
     blends both — a going-concern or qualified-opinion signal caps an otherwise-strong read.
     """
-    ratios = {r["key"]: r for r in compute_ratios(rows, basis=basis)}
+    # The template travels with the rows so the credit factors are bucketed against the SAME
+    # figures the KPI screen and the spread show. Without it a calculated line the filing does not
+    # print was missing here while present there, and the two surfaces read the same filing
+    # differently.
+    ratios = {r["key"]: r for r in compute_ratios(rows, basis=basis, template_def=template_def)}
     factors: list[dict] = []
     tone_score = 0
     pos = neg = 0
@@ -937,7 +973,8 @@ def _fmt(n: float | None) -> str:
     return "—" if n is None else f"{n:,.0f}"
 
 
-def build_free_notes(rows: list[dict], *, basis: str = "consolidated", locale: str = "en") -> list[dict]:
+def build_free_notes(rows: list[dict], *, basis: str = "consolidated", locale: str = "en",
+                     template_def: dict | None = None) -> list[dict]:
     """Plain-language notes generated strictly from the extracted numbers: period movements
     for headline lines, and a one-line read on liquidity/profitability from the ratios."""
     by_key = _group_by_key(rows)
@@ -961,7 +998,7 @@ def build_free_notes(rows: list[dict], *, basis: str = "consolidated", locale: s
             notes.append({"title": label,
                           "text": _tr("flat", locale).format(label=label, cur=_fmt(cur))})
 
-    ratios = {r["key"]: r for r in compute_ratios(rows, basis=basis)}
+    ratios = {r["key"]: r for r in compute_ratios(rows, basis=basis, template_def=template_def)}
     cr = ratios.get("current_ratio")
     if cr and cr["available"]:
         stance = _tr("stance_comfortable" if cr["value"] >= 1.5

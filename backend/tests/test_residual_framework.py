@@ -1,4 +1,4 @@
-"""``residual_framework``: one block governs all 13 residual concepts, and the engine obeys it.
+"""``residual_framework``: one block governs all 14 residual concepts, and the engine obeys it.
 
 Every test here edits the rulebook (or leaves it alone) and watches the extraction change, because
 that is the only property worth having: a residual block that states a sweep policy the stage does
