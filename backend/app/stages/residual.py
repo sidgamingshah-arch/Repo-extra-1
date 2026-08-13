@@ -154,6 +154,46 @@ _PER_SHARE = re.compile(r"per share|per ordinary share|每股|hk cents|rmb cents
 # "Note 12", "附註12", "(a)", "" — a row whose caption identifies nothing at all.
 _NOTE_REF_ONLY = re.compile(r"^\W*(?:note|notes|附注|附註)?\s*[\d.]*\s*[\w.()]{0,3}\W*$",
                             re.IGNORECASE)
+# The bare sub-captions of a per-share block. An HKEX income statement prints
+#
+#     LOSS PER SHARE
+#        Basic                          (1.23)
+#        Diluted                        (1.23)
+#
+# so the only row whose CAPTION says "per share" is the heading, which carries no value and is
+# dropped as a header anyway. The two rows that carry the figures are captioned "Basic" and
+# "Diluted" — matched by nothing, swept into whatever section was nearest, and a per-share figure in
+# cents added into the tax charge moves profit for the year by a rounding error nobody can find. This
+# is what put "loss per share" inside Total tax expense on a real filing.
+#
+# Matched only UNDER a per-share heading (see ``_per_share_rows``), never on the caption alone:
+# "Basic" is too generic a word to veto a row on by itself.
+_PER_SHARE_SUB = re.compile(
+    r"^\W*(basic|diluted)(\s*(?:and|/|,|&)\s*(?:basic|diluted))?\s*(\([^)]*\))?\W*$",
+    re.IGNORECASE)
+
+
+def _per_share_rows(ordered: list) -> set:
+    """Row ids inside a per-share block: the heading, and the sub-captions beneath it.
+
+    The block ends at the first row that is neither — a per-share heading scopes its own
+    "Basic"/"Diluted" pair and nothing further down the page.
+    """
+    out: set = set()
+    in_block = False
+    for row in ordered:
+        label = _label(row)
+        if _PER_SHARE.search(label):
+            in_block = True
+            out.add(row.id)
+            continue
+        if in_block and _PER_SHARE_SUB.match(label):
+            out.add(row.id)
+            continue
+        if label:
+            in_block = False
+    return out
+
 # Prose arrives as a row because it carries a figure. Routed into a section it moves that
 # section's subtotal by whatever the sentence happened to contain.
 _NARRATIVE = re.compile(r"comprise|as follows|the following|include[sd]? in|如下|包括以下",
@@ -185,6 +225,11 @@ _EXCLUSIONS: tuple[tuple[str, object], ...] = (
     ("narrative row", lambda row: _is_narrative(_label(row))),
     ("note-reference-only row", lambda row: bool(_NOTE_REF_ONLY.match(_label(row)))),
 )
+
+# Entry 5 of the framework's eligibility list, which needs the TARGET section and so cannot be a
+# row-only test like the ones above: "the row's sign agrees with the section's sign_convention,
+# where the section states one". Read the same way — delete the sentence and the veto goes.
+_SIGN_AGREES = "sign agrees with the section"
 
 
 # Phrase in the framework's ``prohibitions`` list -> the guard it switches on. Read the same way
@@ -235,6 +280,8 @@ class _Terms:
     require_unclaimed: bool = True
     inside_section_only: bool = True
     exclusions: tuple[str, ...] = ()
+    # Eligibility 5: the row's sign must agree with the section it would be swept into.
+    sign_must_agree: bool = False
     cross_section: bool = False
     notes_as_source: bool = False
     plug_forbidden: bool = True
@@ -298,6 +345,7 @@ def _read_terms(fw) -> _Terms:
         # ``cross_section`` because the two forbid different things — see `_sweep`.
         inside_section_only="printed inside this section" in elig,
         exclusions=tuple(phrase for phrase, _ in _EXCLUSIONS if phrase in elig),
+        sign_must_agree=_SIGN_AGREES in elig,
         cross_section=bool(sweep.cross_section),
         notes_as_source=bool(sweep.notes_as_source),
         plug_forbidden="forbidden" in (sweep.plug_behaviour or "").lower(),
@@ -435,6 +483,28 @@ def _token_of(section: str, canonical_key: str) -> str | None:
     when a rulebook renames a section the key is the one that still says what the section is.
     """
     return section_token_of_scope(section) or section_of_key(canonical_key)
+
+
+def _sign_contradicts_section(res: _Residual, row) -> str | None:
+    """The section's sign expectation this row would violate, or None.
+
+    Only where the section states one: ``either`` sections (the cash flow's activities, whose
+    lines genuinely go both ways) expect nothing and veto nothing. Only where the row is
+    UNANIMOUS too — a row with a positive current year and a negative prior is a real movement,
+    not a mis-section, and refusing it would drop a figure the statement needs.
+    """
+    want = res.section_sign
+    if want not in ("positive_expected", "negative_expected"):
+        return None
+    figures = [v for ev in row.values.values()
+               if (v := (ev.value if ev.value is not None else ev.value_raw)) is not None and v != 0]
+    if not figures:
+        return None
+    if want == "positive_expected" and all(f < 0 for f in figures):
+        return f"{res.section} expects positive"
+    if want == "negative_expected" and all(f > 0 for f in figures):
+        return f"{res.section} expects negative"
+    return None
 
 
 def _vetoed_by_never_sweep(res: _Residual, label: str) -> str | None:
@@ -741,6 +811,15 @@ class ResidualStage:
                 closing[stmt] = max(closing.get(stmt, li.ordinal), li.ordinal)
 
         ordered = sorted(doc.line_items, key=lambda li: li.ordinal)
+        # The first position at which each section's OWN subtotal is printed. A banner naming a
+        # section whose subtotal is already above this row is spent — see `_section_of_row`.
+        closed_at: dict[str, int] = {}
+        for position, row in enumerate(ordered):
+            section = subtotal_of.get(row.canonical_key or "")
+            if section is not None and section not in closed_at:
+                closed_at[section] = position
+        per_share = (_per_share_rows(ordered) if "per-share figure" in terms.exclusions else set())
+
         swept = ineligible = unresolved = 0
         for idx, li in enumerate(ordered):
             if terms.require_unclaimed and li.canonical_key:
@@ -750,6 +829,8 @@ class ResidualStage:
             stmt = statement_of(li)
             reason = next((phrase for phrase, test in _EXCLUSIONS
                            if phrase in terms.exclusions and test(li)), None)
+            if reason is None and li.id in per_share:
+                reason = "per-share figure"
             if reason is None and "narrative row" in terms.exclusions:
                 end = closing.get(stmt or "")
                 if end is not None and li.ordinal > end:
@@ -762,7 +843,7 @@ class ResidualStage:
                 continue
 
             section = self._section_of_row(idx, ordered, li, placeable, section_by_key,
-                                           subtotal_of, stmt, statement_of)
+                                           subtotal_of, stmt, statement_of, closed_at)
             target = by_section.get(section or "")
             if target is not None and target.statement and stmt and target.statement != stmt:
                 target = None
@@ -791,6 +872,26 @@ class ResidualStage:
             if veto is not None:
                 ineligible += 1
                 li.confidence.flags.append(f"residual_never_sweep:{veto}")
+                continue
+
+            wrong_way = (_sign_contradicts_section(target, li) if terms.sign_must_agree else None)
+            if wrong_way is not None:
+                # Review trigger 5 — "residual sign is opposite to the section's sign_convention" —
+                # applied to the ROW before it is absorbed rather than to the bucket's total after.
+                #
+                # Measured on a real HKEX filing: a stale banner put cost of sales in the INCOME
+                # section, whose sign_convention is positive_expected, and an 814,645 COST swept into
+                # "Other income items". Total income came out at 32,097 against revenue of 868,375
+                # and every total below it inherited the error. Checking the finished bucket cannot
+                # prevent that — by then the figure is in the statement, and the trigger fires on a
+                # number the analyst is already reading.
+                #
+                # A row whose sign contradicts the section it would be swept into is evidence that
+                # the SECTION is wrong, not that the amount is. So it goes to review with its own
+                # reason, which is the outcome the framework prefers everywhere else: no figure is
+                # better than a plausible wrong one.
+                ineligible += 1
+                li.confidence.flags.append(f"residual_sign_contradicts_section:{wrong_way}")
                 continue
 
             # Prohibition 4: this caption IS a dedicated concept of the section, so the concept
@@ -839,7 +940,8 @@ class ResidualStage:
 
     @staticmethod
     def _section_of_row(idx: int, ordered: list, li, placeable: dict, section_by_key: dict,
-                        subtotal_of: dict, statement: str | None, statement_of) -> str | None:
+                        subtotal_of: dict, statement: str | None, statement_of,
+                        closed_at: dict[str, int]) -> str | None:
         """The rulebook section a row was printed inside, by the three signals in the docstring.
 
         ``placeable`` is every section a row can be printed inside — including the ones with no
@@ -850,13 +952,28 @@ class ResidualStage:
         Every signal stops at the statement boundary. A row at the foot of the balance sheet must
         not be placed by the income statement's first subtotal: the structure of a different
         statement says nothing about where this row was printed.
+
+        A BANNER THE STATEMENT HAS ALREADY CLOSED is not used, and ``closed_at`` is what says so.
+        ``section_hint`` is STICKY — ``row_reconstruct`` carries the last recognised heading down the
+        page until another replaces it — so a filing whose next heading is not recognised (printed
+        with a figure on the same line, or as a running header on a continuation page) leaves every
+        row below it wearing the previous section's banner. Signal 1 then answered with a section the
+        row is demonstrably not in, and did it FIRST, so the accounting structure that contradicted it
+        was never consulted: measured on a real HKEX filing, current assets swept into the
+        non-current-asset bucket under a stale "NON-CURRENT ASSETS" banner.
+
+        A section's own subtotal is the end of it. Once ``Total non-current assets`` is above this
+        row, no banner can put the row back inside that section, and the structure below decides.
         """
         if li.section_hint:
             token = section_of_banner(li.section_hint)
             if token:
                 for section, (sec_token, sec_stmt) in placeable.items():
-                    if sec_token == token and (not statement or sec_stmt == statement):
-                        return section
+                    if sec_token != token or (statement and sec_stmt != statement):
+                        continue
+                    if closed_at.get(section, len(ordered)) < idx:
+                        break                   # spent: fall through to the structure below
+                    return section
         for nxt in ordered[idx + 1:]:
             if statement and statement_of(nxt) not in (None, statement):
                 break

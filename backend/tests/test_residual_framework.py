@@ -348,6 +348,10 @@ def test_a_per_share_row_is_ineligible_until_the_eligibility_list_stops_saying_s
     raw = copy.deepcopy(raw_ontology)
     elig = raw["residual_framework"]["sweep"]["eligibility"]
     elig[2] = elig[2].replace("per-share figure, ", "")
+    # Eligibility 5 comes off with it. A positive earnings-per-share figure ALSO contradicts the
+    # sign the tax section expects, so leaving that entry in place would refuse the row for the
+    # other reason and prove nothing about this one.
+    del elig[4]
     doc = _doc("profit_and_loss", [
         _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
             LineRole.SUBTOTAL),
@@ -426,6 +430,10 @@ def test_a_row_printed_inside_another_section_is_ineligible_while_the_list_says_
     raw = copy.deepcopy(raw_ontology)
     elig = raw["residual_framework"]["sweep"]["eligibility"]
     elig[3] = elig[3].replace("The row was printed INSIDE this section. ", "")
+    # Eligibility 5 comes off with it, or it refuses the same row for its own reason: a positive
+    # share of results contradicts the sign the tax section expects. Only one entry at a time can be
+    # the thing under test.
+    del elig[4]
     doc = statement()
     _run(doc, _ontology(raw))
     assert doc.line_items[2].canonical_key == "pl_tax_expense__others"
@@ -627,9 +635,29 @@ def test_a_component_a_dedicated_concept_was_vetoed_from_claiming_is_a_review_tr
 def test_a_residual_signed_against_its_section_is_a_review_trigger(raw_ontology):
     """The section's ``sign_convention`` is the one that counts: a residual declares "either" on
     itself because its own sign is indeterminate, so reading the concept would make this
-    unfireable."""
-    doc = _current_liabilities("Other taxes payable", unclaimed=-25, subtotal=75)
+    unfireable.
+
+    Reached through a row signed one way in the current column and the other way in the prior,
+    because that is the case eligibility 5 leaves for it. Eligibility 5 refuses a row whose signs
+    are UNANIMOUSLY against the section before it can be swept — that is the corruption it exists
+    to stop — and a movement that legitimately turns over between periods is not that row. Its prior
+    column still leaves the bucket signed against the section, which is what this trigger is for:
+    the row was admissible, the resulting residual is still worth a look.
+    """
+    row = LineItem(source_label="Other taxes payable", ordinal=1, role=LineRole.LINE)
+    for period, value in (("current", 25), ("prior", -25)):
+        row.set_value(ExtractedValue(
+            value=Decimal(value), value_raw=Decimal(value), basis=Basis.CONSOLIDATED,
+            period_label=period, provenance=Provenance(page_index=0)))
+    doc = _doc("balance_sheet", [
+        _li(0, "Trade and bills payables", "bs_current_liabilities__current_trade_payables", 100),
+        row,
+        _li(2, "Total current liabilities",
+            "bs_current_liabilities__total_current_liabilities", 125, LineRole.SUBTOTAL),
+    ])
     _run(doc, _ontology(raw_ontology))
+
+    assert doc.line_items[1].canonical_key == "bs_current_liabilities__others"   # admitted
     assert ("residual_review:sign_opposite_to_section:positive_expected"
             in doc.line_items[1].confidence.flags)
 
@@ -740,3 +768,118 @@ def test_the_sweep_does_not_run_before_the_dedicated_concepts_are_resolved(raw_o
 
     assert doc.line_items[1].canonical_key is None
     assert any("no mapping has run" in line for line in ctx.logs)
+
+
+# --- what a real HKEX filing broke ---------------------------------------------------------------
+
+def test_the_bare_sub_captions_of_a_per_share_block_are_per_share_figures(raw_ontology):
+    """"LOSS PER SHARE / Basic / Diluted" — only the heading says "per share", and it carries no value.
+
+    THE DEFECT THIS CLOSES, reported off a real HKEX filing: loss per share inside Total tax expense.
+    An income statement prints the per-share block as a heading over two rows captioned only "Basic"
+    and "Diluted", and those are the rows carrying the figures. The heading is dropped as a header,
+    the sub-captions matched nothing, and the sweep put a figure in CENTS into the tax charge — too
+    small for any rollup to notice and enough to make profit for the year wrong.
+
+    Matched only under the heading. "Basic" on its own is far too generic a caption to veto a row on.
+    """
+    doc = _doc("profit_and_loss", [
+        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100, LineRole.SUBTOTAL),
+        _li(1, "LOSS PER SHARE", None, None, LineRole.HEADER),
+        _li(2, "Basic", None, -12),
+        _li(3, "Diluted", None, -12),
+    ])
+    _run(doc, _ontology(raw_ontology))
+
+    for row in doc.line_items[2:]:
+        assert row.canonical_key is None, row.source_label
+        assert "residual_ineligible:per-share figure" in row.confidence.flags
+
+    # …and the same captions with no per-share heading above them are NOT vetoed by this rule: the
+    # block ends at the first row that is neither the heading nor one of its sub-captions.
+    plain = _doc("profit_and_loss", [
+        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100, LineRole.SUBTOTAL),
+        _li(1, "Basic", None, -12),
+    ])
+    _run(plain, _ontology(raw_ontology))
+    assert "residual_ineligible:per-share figure" not in plain.line_items[1].confidence.flags
+
+
+def test_a_banner_the_statement_has_already_closed_does_not_place_a_row(raw_ontology):
+    """A stale sticky banner beat the accounting structure, and the structure was never consulted.
+
+    THE DEFECT THIS CLOSES, reported off a real HKEX filing: "a lot of current assets moved to others
+    of non-current assets". ``section_hint`` is STICKY — ``row_reconstruct`` carries the last
+    recognised heading down the page — so when the next heading is not recognised (printed with a
+    figure on the same line, or as a running header on a continuation page) every row below it wears
+    the previous section's banner. Signal 1 answered from that banner and returned FIRST, so signal 2
+    — the next section subtotal below, which is the statement's own structure — never ran.
+
+    A section's own subtotal is the end of it: once ``Total non-current assets`` is above this row,
+    no banner can put the row back inside that section.
+    """
+    rows = [
+        _li(0, "Property, plant and equipment",
+            "bs_non_current_assets__property_plant_and_equipment", 500),
+        _li(1, "Total non-current assets",
+            "bs_non_current_assets__total_non_current_assets", 500, LineRole.SUBTOTAL),
+        # Printed in current assets, still wearing the non-current banner.
+        _li(2, "Deposits paid to suppliers", None, 40),
+        _li(3, "Total current assets", "bs_current_assets__total_current_assets", 40,
+            LineRole.SUBTOTAL),
+    ]
+    for row in rows:
+        row.section_hint = "NON-CURRENT ASSETS"
+    doc = _doc("balance_sheet", rows)
+    _run(doc, _ontology(raw_ontology))
+
+    assert doc.line_items[2].canonical_key == "bs_current_assets__others"
+
+    # The same banner still places a row printed BEFORE its subtotal — it is only spent afterwards.
+    rows = [
+        _li(0, "Deposits paid to suppliers", None, 40),
+        _li(1, "Total non-current assets",
+            "bs_non_current_assets__total_non_current_assets", 40, LineRole.SUBTOTAL),
+    ]
+    for row in rows:
+        row.section_hint = "NON-CURRENT ASSETS"
+    doc = _doc("balance_sheet", rows)
+    _run(doc, _ontology(raw_ontology))
+    assert doc.line_items[0].canonical_key == "bs_non_current_assets__others"
+
+
+def test_a_row_signed_against_its_section_goes_to_review_not_into_the_bucket(raw_ontology):
+    """Eligibility 5, and the number it exists to stop appearing on a statement.
+
+    THE DEFECT THIS CLOSES, measured off a real HKEX filing: a stale banner put cost of sales in the
+    INCOME section, whose sign_convention is positive_expected, and an 814,645 COST swept into "Other
+    income items". Total income came out at 32,097 against revenue of 868,375, and every total below
+    it inherited the error.
+
+    Review trigger 5 could not prevent it — that fires on the finished bucket, by which point the
+    figure is in the statement and the analyst is reading it. A row whose sign contradicts the section
+    it would be swept into is evidence the SECTION is wrong, not the amount, so it goes to review.
+    """
+    doc = _doc("profit_and_loss", [
+        _li(0, "Revenue", "pl_income__revenue_from_operations", 868_375),
+        _li(1, "Cost of sales", None, -814_645),          # a cost, in the income section
+        _li(2, "Total income", "pl_income__total_income", 868_375, LineRole.SUBTOTAL),
+    ])
+    for row in doc.line_items:
+        row.section_hint = "REVENUE"
+    _run(doc, _ontology(raw_ontology))
+
+    swept = doc.line_items[1]
+    assert swept.canonical_key is None
+    assert any(f.startswith("residual_sign_contradicts_section") for f in swept.confidence.flags)
+
+    # A row whose sign AGREES is still swept: this refuses the contradiction, not the sweep.
+    doc = _doc("profit_and_loss", [
+        _li(0, "Revenue", "pl_income__revenue_from_operations", 868_375),
+        _li(1, "Sundry income", None, 5_000),
+        _li(2, "Total income", "pl_income__total_income", 873_375, LineRole.SUBTOTAL),
+    ])
+    for row in doc.line_items:
+        row.section_hint = "REVENUE"
+    _run(doc, _ontology(raw_ontology))
+    assert doc.line_items[1].canonical_key == "pl_income__others"
