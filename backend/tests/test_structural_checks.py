@@ -391,7 +391,12 @@ def test_balance_identity_is_not_reported_twice():
     structural = [{"rule_id": "identity:bs_balances", "kind": "identity", "status": "fail",
                    "scope_key": "consolidated/current", "expected": "90", "actual": "100",
                    "difference": "10",
-                   "details": {"target": "bs_total_assets",
+                   # basis/period_label as services/structural_checks.py:716 writes them for every
+                   # relation. They were absent here, and suppression compares the COLUMN now (a
+                   # consolidated card must not delete a standalone break), so a fixture missing
+                   # them describes a relation the evaluator never produces.
+                   "details": {"target": "bs_total_assets", "basis": "consolidated",
+                               "period_label": "current",
                                "components": ["bs_total_equity_and_liabilities"],
                                "op": "sum", "component_values": {}}}]
     types = [c["type"] for c in _accounting_checks(rows, [], "en", structural)]

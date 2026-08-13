@@ -1067,7 +1067,68 @@ def _guard_check(res: dict, d: dict, locale: str) -> dict:
     }
 
 
-def _suppression_targets(checks: list[dict]) -> set[str]:
+# ONE assertion a served card makes: this target, in this scope, is out by this much. Suppression
+# compares ASSERTIONS and never bare targets, because "a card mentions this target" and "a card
+# already tells the reader about this difference" are different facts, and only the second one makes
+# a second card a duplicate.
+#
+# `covered` used to be a set of bare target strings, and that cost two blocking findings on the
+# shipped rulebook. An equity-closing card whose target is bs_equity__total_equity — asserting a
+# 1,000 break between the equity statement's closing row and the balance sheet — suppressed
+# rollup:bs_equity__total_equity and section_reconciliation:bs_s3_equity, which assert a 2,500 break
+# between total equity and its own components. Same target, a different statement about it, and the
+# 2,500 was then reported NOWHERE while `failed_reported_elsewhere` counted it as raised above. The
+# key also carried no scope, so the consolidated balance card — hardcoded to consolidated/current —
+# deleted a 900 break in the STANDALONE column it makes no claim about at all.
+_Assertion = tuple[str, str, str, int]
+
+# Where each card kind keeps the difference it prints. A kind absent from this map declares NO
+# assertion and therefore suppresses nothing, which is the safe default and a real case rather than
+# a hypothetical one: `uncomputed`'s delta is the literal "—" because none of the components could
+# be computed, so it makes no claim about a difference and cannot be the duplicate of a relation
+# that found one. A card type added later without a key here over-reports; it cannot lose a finding.
+_ASSERTED_DIFF_KEY = {
+    "balance": "diff",
+    "equity_tie": "diff",
+    "calculated_mismatch": "diff",
+    # The sum of the ABSOLUTE per-face residuals, which is what the card's delta prints.
+    "note_tie": "total_break",
+}
+
+
+def _assertion_of(check: dict) -> _Assertion | None:
+    """What this card tells the reader, or None when it does not say all of it.
+
+    None is not a failure — it means this card may not stand in for anything else. Every part has
+    to be present and comparable: a card that cannot name its scope cannot be shown to be about the
+    same column as the relation it would silence.
+    """
+    subject = check.get("subject") or {}
+    # A guard asserts a CONDITION rather than an equality, so it is not the duplicate of any
+    # arithmetic relation — and its own `target` is derived from the violations for several
+    # predicates, which must never decide whether another card exists.
+    if subject.get("k") == "guard":
+        return None
+    diff_key = _ASSERTED_DIFF_KEY.get(str(subject.get("k") or ""))
+    target, basis, period = check.get("target"), subject.get("basis"), subject.get("period")
+    if not (diff_key and target and basis and period):
+        return None
+    diff = (check.get("evidence") or {}).get(diff_key)
+    if diff is None:
+        return None
+    # Magnitude, not sign: a rollup computes target − sum where the balance identity computes
+    # assets − (equity + liabilities), so one break legitimately reaches the two cards with
+    # opposite signs. Matching on magnitude suppresses that true duplicate; it cannot merge two
+    # DIFFERENT differences, which is the failure this function exists to prevent.
+    return (str(target), str(basis), str(period), abs(int(diff)))
+
+
+def _reported_assertions(checks: list[dict]) -> set[_Assertion]:
+    """Everything the cards above already tell the reader — the only grounds for dropping a card."""
+    return {a for a in (_assertion_of(c) for c in checks) if a is not None}
+
+
+def _keys_with_a_card(checks: list[dict]) -> set[str]:
     """The targets served cards OWN — the only ones that may suppress a second card about one figure.
 
     A GUARD OWNS NOTHING HERE, and that is the whole point of the function. A guard card's ``target``
@@ -1086,7 +1147,7 @@ def _suppression_targets(checks: list[dict]) -> set[str]:
             if c.get("target") and (c.get("subject") or {}).get("k") != "guard"}
 
 
-def _relation_reported_elsewhere(res: dict, covered: set[str]) -> bool:
+def _relation_reported_elsewhere(res: dict, reported: set[_Assertion]) -> bool:
     """True when this failed ARITHMETIC relation's difference is already raised by a card above it.
 
     ONE spelling of the suppression, read by the emitter (``_structural_checks``) and by the count
@@ -1095,29 +1156,43 @@ def _relation_reported_elsewhere(res: dict, covered: set[str]) -> bool:
     guard whose figure-derived ``details.target`` collided with a target the balance card owned,
     while the count reported that guard as "reported elsewhere" when NOTHING reported it.
 
-    A GUARD IS NEVER SUPPRESSED. `covered` exists to stop an arithmetic relation restating the
-    difference the balance / equity / note card already prints; a guard asserts a condition rather
-    than an equality, so it is not a duplicate of any of them — and its ``target`` is derived from
-    the violations for several predicates, which may not decide whether a card exists (see
-    ``_structural_checks``).
+    A GUARD IS NEVER SUPPRESSED — it asserts a condition rather than an equality, so it is not a
+    duplicate of any arithmetic card.
+
+    Suppression requires the SAME difference about the SAME target in the SAME column, and anything
+    short of that shows the card. That default is the point: a duplicate card is noise a reader can
+    see past, while a dropped one is a blocking finding reported nowhere — and if this relation's
+    scope is spelled in a vocabulary the cards do not use, "no match" is the answer that keeps it on
+    screen. ``period_label`` is the slot name (services/periods.py CURRENT/PRIOR), the same
+    vocabulary the card subjects carry, so the comparison is between like and like today.
     """
     d = res.get("details") or {}
     if res.get("status") != "fail":
         return False
     if res.get("kind") == "guard" or d.get("guard"):
         return False
-    return (d.get("target") or "") in covered
+    target, basis, period = d.get("target"), d.get("basis"), d.get("period_label")
+    difference = res.get("difference")
+    if not (target and basis and period) or difference is None:
+        return False
+    try:
+        magnitude = abs(int(round(float(difference))))
+    except (TypeError, ValueError):
+        return False
+    return (str(target), str(basis), str(period), magnitude) in reported
 
 
-def _structural_checks(structural: list[dict], locale: str, covered: set[str],
+def _structural_checks(structural: list[dict], locale: str, covered: set[_Assertion],
                        rows: list[dict] | None = None,
                        template_def: dict | None = None) -> list[dict]:
     """Failed template-structure relations as review items (from the structural stage).
 
     Only ``fail`` rows become checks: a ``skipped`` row means the relation could not be
     evaluated because a participant was never extracted, which is a coverage fact, not a
-    defect. Relations whose total already has its own check (the balance identity) are left to
-    it so the analyst doesn't see the same difference twice.
+    defect. A relation is left out only when a card above ALREADY REPORTS THE SAME DIFFERENCE
+    about the same target in the same column, so the analyst does not see one break twice —
+    never merely because some card mentions the same target, which silenced two blocking
+    breaks and a whole standalone column (see ``_relation_reported_elsewhere``).
 
     The fix action and the edited-inputs note are derived HERE rather than by the caller because
     the relation's ``details`` dict is what both need: carrying it out on the payload just so a
@@ -1419,8 +1494,11 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
             "evidence": {"entries": entries, "entry_count": len(entries),
                          "total_break": judgement.q(total_break)},
         })
-    covered = _suppression_targets(checks)
-    checks += _structural_checks(structural or [], locale, covered=covered,
+    # What the cards above ALREADY TELL THE READER, not merely which targets they mention. The two
+    # are different questions and were answered by one bare-string set, which is how a 2,500 break
+    # came to be silenced by a card asserting 1,000 about the same line.
+    reported = _reported_assertions(checks)
+    checks += _structural_checks(structural or [], locale, covered=reported,
                                  rows=rows, template_def=template_def)
     if stats is not None:
         # Derived from the SAME `covered` set AND the same predicate the emitter used, in the same
@@ -1430,9 +1508,14 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
         # starts lying, and it did: this sum counted a dropped GUARD as reported elsewhere while no
         # card anywhere reported it.
         stats["failed_reported_elsewhere"] = sum(
-            1 for res in (structural or []) if _relation_reported_elsewhere(res, covered))
+            1 for res in (structural or []) if _relation_reported_elsewhere(res, reported))
+    # A DIFFERENT question, deliberately kept a different function: not "is this difference already
+    # reported" but "does this template key already have a card at all". A calculated line whose key
+    # is already spoken for should not get a second card about the same key, whatever the figures —
+    # so this one is target-keyed by design. Sharing one `covered` set between the two questions is
+    # what let a bare string answer both.
     checks += _calculated_checks(rows, template_def, locale,
-                                 covered=_suppression_targets(checks))
+                                 covered=_keys_with_a_card(checks))
     return checks
 
 

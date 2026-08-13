@@ -477,7 +477,11 @@ def test_failed_relations_reported_by_a_card_above_are_counted_once(client):
              "values": [{"basis": "consolidated", "period_label": "current", "value": "100"}]},
             {"canonical_key": "bs_total_equity_and_liabilities",
              "values": [{"basis": "consolidated", "period_label": "current", "value": "90"}]}]
-    structural = [{"rule_id": "tpl:bs_total_assets", "status": "fail",
+    # `difference` as services/structural_checks.py:713 always sets it for an arithmetic relation
+    # (`difference=diff`). It was omitted here, and suppression now compares the DIFFERENCE — a card
+    # reporting 10 about this line does not stand in for a relation reporting 2,500 about it — so a
+    # fixture without one describes a relation the evaluator never produces.
+    structural = [{"rule_id": "tpl:bs_total_assets", "status": "fail", "difference": 10,
                    "scope_key": "consolidated/current", "expected": 90, "actual": 100,
                    "details": {"target": "bs_total_assets", "components": [],
                                "statement": "balance_sheet", "basis": "consolidated",

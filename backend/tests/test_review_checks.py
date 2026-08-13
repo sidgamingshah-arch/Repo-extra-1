@@ -448,3 +448,89 @@ def test_the_lines_with_no_finding_tile_counts_subtotals_and_totals_but_not_capt
     # THE ASSERTION THAT FAILS WITH THE ITEM-ONLY DEFINITION RESTORED: the two named lines are
     # TOTALS, so a population of plain lines only would answer 1 and count neither of them.
     assert review["summary"]["passed"] != len([r for r in rows if r.get("role") == "line"])
+
+
+from app.api.routes.documents import (  # noqa: E402
+    _relation_reported_elsewhere, _reported_assertions)
+
+
+def _fail(target, *, difference, basis="consolidated", period="current", kind="rollup",
+          rule_id=None, components=("bs_a", "bs_b")):
+    """One FAILED arithmetic relation, shaped as the structural stage serializes it.
+
+    Written from `details` outwards because that is what `_relation_reported_elsewhere` reads:
+    target/basis/period_label decide which column the break is in, and `difference` is the break.
+    """
+    return {"status": "fail", "kind": kind, "rule_id": rule_id or f"{kind}:{target}",
+            "scope_key": f"{basis}/{period}", "expected": 0.0, "actual": float(difference),
+            "difference": float(difference),
+            "details": {"target": target, "basis": basis, "period_label": period,
+                        "op": "sum", "components": list(components),
+                        "component_values": {c: "0" for c in components}}}
+
+
+def _balance_card_review(structural):
+    """A run whose BALANCE card is real, plus whatever relations we hand it.
+
+    The balance card is produced by the real builder here, not hand-shaped: 1,000 of assets against
+    900 of equity and liabilities makes it assert a 100 break on target `bs_total_assets`, in
+    consolidated/current. That card is the thing that used to silence relations, so it has to be
+    genuine — an earlier version of these tests supplied fixtures that produced NO suppressing card
+    at all, and passed with the defect fully restored.
+    """
+    from app.api.routes.documents import _build_review
+
+    rows = [_row("bs_total_assets", 1000), _row("bs_total_equity_and_liabilities", 900)]
+    review = _build_review(rows, "doc.pdf", "en", [], structural=structural)
+    balance = next(c for c in review["checks"] if c["type"] == "balance")
+    assert balance["target"] == "bs_total_assets"
+    assert abs(int((balance.get("evidence") or {})["diff"])) == 100
+    return review
+
+
+def test_a_relation_asserting_a_different_break_is_not_silenced_by_one_sharing_its_target():
+    """Suppression matched a bare `details.target` and ignored what the card SAYS.
+
+    Same target, a different statement about it: the balance card reports a 100 break between the
+    two sides of the identity, while this relation reports a 2,500 break between total assets and
+    its own components. The second was dropped from the queue and counted as "reported by a finding
+    above", so a blocking break was reported nowhere at all.
+    """
+    rel = _fail("bs_total_assets", difference=2500)
+    review = _balance_card_review([rel])
+    assert any(c["type"] == "structural" and c.get("target") == "bs_total_assets"
+               for c in review["checks"]), \
+        "a 2,500 break must not be silenced by a card reporting 100 about the same line"
+    assert not _relation_reported_elsewhere(rel, _reported_assertions(review["checks"]))
+
+
+def test_a_consolidated_card_does_not_delete_a_break_in_the_standalone_column():
+    """The suppression key carried no scope, while the balance card is hardcoded to
+    consolidated/current — so it silenced a relation in a column it makes no statement about.
+
+    The difference is deliberately the SAME 100 as the balance card's, so the column is the only
+    thing that distinguishes them and the test cannot pass for any other reason.
+    """
+    rel = _fail("bs_total_assets", difference=100, basis="standalone")
+    review = _balance_card_review([rel])
+    assert any(c["type"] == "structural" and c.get("target") == "bs_total_assets"
+               for c in review["checks"]), \
+        "a standalone break must not be deleted by a consolidated card"
+    assert not _relation_reported_elsewhere(rel, _reported_assertions(review["checks"]))
+
+
+def test_one_break_reported_twice_is_still_suppressed():
+    """The other half of the contract: suppression must keep WORKING, or the fix is just a revert.
+
+    Same target, same column, same magnitude — a duplicate, and the analyst should not see one break
+    twice. Sign is not part of the comparison: a rollup computes target − sum where the balance
+    identity computes assets − (equity + liabilities), so one break legitimately reaches the two
+    cards with opposite signs, and this relation carries −100 against the card's +100.
+    """
+    rel = _fail("bs_total_assets", difference=-100)
+    review = _balance_card_review([rel])
+    assert not any(c["type"] == "structural" for c in review["checks"]), \
+        "a relation restating the balance card's own 100 break should not get a second card"
+    # Suppressed AND accounted for: the coverage band's "reported by a finding above" count reads
+    # this same predicate, so a dropped relation is never silently unaccounted for.
+    assert _relation_reported_elsewhere(rel, _reported_assertions(review["checks"]))

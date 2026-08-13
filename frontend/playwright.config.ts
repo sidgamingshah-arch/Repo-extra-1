@@ -13,6 +13,11 @@ export default defineConfig({
     baseURL: "http://localhost:5173",
     headless: true,
     navigationTimeout: 20_000,
+    // Kept on for diagnosis: the suite failed at a DIFFERENT test on two consecutive runs of one
+    // tree, both times waiting for a screen to settle, and the page snapshot alone did not say
+    // why. A trace carries the network timeline and the console, which is what distinguishes "the
+    // server was slow" from "the dev server reloaded the page under us".
+    trace: "retain-on-failure",
     launchOptions: { executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome" },
   },
   webServer: [
