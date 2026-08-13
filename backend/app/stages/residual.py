@@ -168,8 +168,14 @@ _NOTE_REF_ONLY = re.compile(r"^\W*(?:note|notes|附注|附註)?\s*[\d.]*\s*[\w.(
 #
 # Matched only UNDER a per-share heading (see ``_per_share_rows``), never on the caption alone:
 # "Basic" is too generic a word to veto a row on by itself.
+# Bilingual, because an HKEX statement prints both halves on one row: the real filing this was
+# found on reads "– Basic －基本" and "– Diluted －攤薄". Matching only the English left both rows
+# unrecognised and swept, which is the whole defect. Either language alone also matches, so a
+# Chinese-only or English-only filing is covered by the same pattern.
+_PER_SHARE_WORD = r"(?:basic|diluted|基本|攤薄|摊薄|稀釋|稀释)"
 _PER_SHARE_SUB = re.compile(
-    r"^\W*(basic|diluted)(\s*(?:and|/|,|&)\s*(?:basic|diluted))?\s*(\([^)]*\))?\W*$",
+    rf"^\W*{_PER_SHARE_WORD}(?:\s*(?:and|/|,|&|－|-|—)?\s*{_PER_SHARE_WORD})*"
+    rf"\s*(?:\([^)]*\)|（[^）]*）)?\W*$",
     re.IGNORECASE)
 
 
@@ -216,12 +222,13 @@ def _is_narrative(label: str) -> bool:
 
 # Phrase in the framework's eligibility list -> the test it switches on. The row is the argument;
 # ``role`` and the caption are all that is needed.
+_PER_SHARE_PHRASE = "per-share figure"
 _EXCLUSIONS: tuple[tuple[str, object], ...] = (
     ("section subtotal", lambda row: row.role is LineRole.SUBTOTAL),
     ("statement total", lambda row: row.role is LineRole.TOTAL),
     ("section header", lambda row: row.role in (LineRole.HEADER, LineRole.SPACER)),
     ("attribution caption", lambda row: bool(_ATTRIBUTION.search(_label(row)))),
-    ("per-share figure", lambda row: bool(_PER_SHARE.search(_label(row)))),
+    (_PER_SHARE_PHRASE, lambda row: bool(_PER_SHARE.search(_label(row)))),
     ("narrative row", lambda row: _is_narrative(_label(row))),
     ("note-reference-only row", lambda row: bool(_NOTE_REF_ONLY.match(_label(row)))),
 )
@@ -818,7 +825,7 @@ class ResidualStage:
             section = subtotal_of.get(row.canonical_key or "")
             if section is not None and section not in closed_at:
                 closed_at[section] = position
-        per_share = (_per_share_rows(ordered) if "per-share figure" in terms.exclusions else set())
+        per_share = (_per_share_rows(ordered) if _PER_SHARE_PHRASE in terms.exclusions else set())
 
         swept = ineligible = unresolved = 0
         for idx, li in enumerate(ordered):
@@ -827,10 +834,15 @@ class ResidualStage:
             if terms.require_value and not _has_value(li):
                 continue
             stmt = statement_of(li)
+            # Membership of a per-share BLOCK is tested at the per-share position in the ordering,
+            # not after every other phrase: a bare "基本" is two characters, so the
+            # note-reference-only catch-all matches it too, and a per-share row sent to review as an
+            # unreadable caption tells the analyst to go and read a caption that was perfectly clear.
+            # It is the same exclusion either way, so this only decides which reason is reported.
             reason = next((phrase for phrase, test in _EXCLUSIONS
-                           if phrase in terms.exclusions and test(li)), None)
-            if reason is None and li.id in per_share:
-                reason = "per-share figure"
+                           if phrase in terms.exclusions
+                           and (test(li)
+                                or (phrase == _PER_SHARE_PHRASE and li.id in per_share))), None)
             if reason is None and "narrative row" in terms.exclusions:
                 end = closing.get(stmt or "")
                 if end is not None and li.ordinal > end:
@@ -999,9 +1011,10 @@ class ResidualStage:
         """Sweep a cited note's unclaimed rows into the one residual whose section permits it.
 
         The framework's ``notes_as_source`` is false, and ``face_only``/``note_use`` say why: a note
-        is evidence for a face amount, not an independent source of one. Exactly one section here
-        overrides that (the tax note, which really does split the face charge), and only for the
-        note tables the section's own rows cite — a note nobody cites is not part of this section.
+        is evidence for a face amount, not an independent source of one. The shipped rulebook
+        overrides that NOWHERE — the tax note used to, and lost its residual when the tax bucket was
+        removed — so this runs only for a rulebook that turns it on, and then only for the note
+        tables the section's own rows cite: a note nobody cites is not part of this section.
         """
         sourcing = [r for r in usable if r.may_source_from_note]
         if not sourcing or not doc.notes:

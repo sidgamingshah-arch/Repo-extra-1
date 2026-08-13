@@ -142,7 +142,7 @@
     ]
   },
   "residual_framework": {
-    "note": "One definition governing all 14 residual concepts. This replaces the v1 others_policy, which stated intent but gave the engine no mechanism.",
+    "note": "One definition governing all 13 residual concepts. This replaces the v1 others_policy, which stated intent but gave the engine no mechanism.",
     "applies_to": "every concept with value_scope: exclusive_residual",
     "alias_matching": "disabled",
     "population": "sweep_only",
@@ -4153,7 +4153,9 @@
         "Cost of sales and services",
         "Cost of services",
         "Cost of properties sold",
-        "Cost of revenue"
+        "Cost of revenue",
+        "Direct costs",
+        "Direct cost"
       ],
       "aliases_i18n": {
         "en": [
@@ -4162,14 +4164,17 @@
           "Cost of sales and services",
           "Cost of services",
           "Cost of properties sold",
-          "Cost of revenue"
+          "Cost of revenue",
+          "Direct costs",
+          "Direct cost"
         ],
         "zh": [
           "销售成本",
           "销货成本",
           "已售物业成本",
           "服务成本",
-          "主营业务成本"
+          "主营业务成本",
+          "直接成本"
         ]
       },
       "exclude": [
@@ -5406,42 +5411,6 @@
         "bs_non_current_assets__deferred_income_tax_assets",
         "bs_non_current_liabilities__non_current_deferred_tax_liabilities_net"
       ]
-    },
-    {
-      "canonical_key": "pl_tax_expense__others",
-      "label": "Other tax lines (face, unmapped)",
-      "inherits": "pl_s5_tax_expense",
-      "value_scope": "exclusive_residual",
-      "alias_matching": "disabled",
-      "match_priority": 0,
-      "sign_convention": "either",
-      "definition": "Sweep bucket for value rows printed inside the tax section that neither current tax nor deferred tax claimed. Governed entirely by residual_framework.",
-      "residual_policy": {
-        "framework": "residual_framework",
-        "section_scope": "pl_s5_tax_expense",
-        "population": "sweep_only",
-        "cross_section": false,
-        "notes_as_source": true,
-        "plug": false,
-        "itemise": true
-      },
-      "notes_as_source_rationale": "Uniquely among the residuals this section permits the tax note as a source, mirroring the section's note_use: decomposition_allowed. A note-sourced component must carry the note reference in its source_fact_id.",
-      "never_sweep": [
-        "pl_tax_expense__total_tax_expense",
-        "pl_profit_for_the_year",
-        "the tax rate reconciliation in the tax note, which is a rate analysis and not a charge",
-        "any row printed in another section"
-      ],
-      "expected_components": [
-        "Land appreciation tax presented separately from corporate income tax",
-        "Withholding tax on dividends from PRC subsidiaries",
-        "Under- or over-provision in respect of prior years"
-      ],
-      "aliases": [],
-      "aliases_i18n": {
-        "en": [],
-        "zh": []
-      }
     },
     {
       "canonical_key": "pl_tax_expense__total_tax_expense",
@@ -8173,6 +8142,6 @@
     "name": "HKFRS / IFRS Hong Kong-China Extraction Ontology",
     "framework": "HKFRS",
     "version": "1.0",
-    "concept_count": 186
+    "concept_count": 185
   }
 }

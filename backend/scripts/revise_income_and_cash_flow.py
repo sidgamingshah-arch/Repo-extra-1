@@ -173,10 +173,14 @@ EXCEPTIONAL = [
     ("asset_impairment_losses", "Asset impairment losses", "资产减值损失"),
     ("others", "Other exceptional items", "其他特殊项目"),
 ]
+# No sweep bucket. Removed at the user's request after a real filing swept loss-per-share into it:
+# below-the-line rows kept arriving in the tax charge, where a figure in cents is too small for any
+# rollup to notice. A tax row nothing claims now reaches REVIEW instead — eligibility 4 makes a row
+# resolved to a section with no bucket ineligible rather than walking it on to the nearest section
+# that has one, so removing the bucket does not push those rows into exceptional items.
 TAX = [
     ("current_tax", "Current tax", "当期所得税"),
     ("deferred_tax", "Deferred tax", "递延所得税"),
-    ("others", "Others", "其他"),
 ]
 OCI_ITEMS = [
     ("items_not_reclassified", "Items that will not be reclassified to profit or loss",

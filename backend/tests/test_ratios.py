@@ -160,7 +160,7 @@ _SPREAD = dict(
     pl_non_operating_expenses__interest_income=0.0,
     pl_non_operating_expenses__investment_income=0.0, pl_non_operating_expenses__others=0.0,
     pl_tax_expense__current_tax=-25.0, pl_tax_expense__deferred_tax=0.0,
-    pl_tax_expense__others=0.0, pl_exceptional_items__others=0.0,
+    pl_exceptional_items__others=0.0,
     bs_current_assets__inventories=150.0, bs_current_liabilities__current_trade_payables=90.0,
     bs_current_liabilities__current_borrowings=200.0,
     cf_cash_flow_from_operating_activities__net_cash_from_operating_activities=300.0,

@@ -66,6 +66,11 @@ COVERAGE = [
     ("Prepaid income tax 預付稅項", "balance_sheet", None, "bs_current_assets__prepaid_income_tax"),
     # a P&L line of its own — its absence had let administrative expenses absorb it
     ("Other expenses 其他開支", "profit_and_loss", None, "pl_expenses__other_expenses"),
+    # A developer's own wording for cost of sales. Measured on a real filing: "Direct costs 直接成本
+    # (814,645)" matched nothing, was swept into a bucket under a stale banner, and gross profit came
+    # out of the wrong number. The template is fixed, so an unrecognised cost of sales does not go
+    # missing quietly — it turns up somewhere it changes a subtotal.
+    ("Direct costs 直接成本", "profit_and_loss", None, "pl_expenses__cost_of_goods_sold"),
     # associates and joint ventures: balance-sheet investments ...
     ("Investments in associates 於聯營公司的投資", "balance_sheet", None, "bs_non_current_assets__interests_in_associates"),
     ("Investments in joint ventures 於合營公司的投資", "balance_sheet", None, "bs_non_current_assets__interests_in_joint_ventures"),

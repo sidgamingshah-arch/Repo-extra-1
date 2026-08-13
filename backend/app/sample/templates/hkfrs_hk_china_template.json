@@ -1579,16 +1579,6 @@
               }
             },
             {
-              "node_id": "pl_tax_expense__others",
-              "canonical_key": "pl_tax_expense__others",
-              "label": "Others",
-              "role": "line",
-              "label_i18n": {
-                "en": "Others",
-                "zh": "其他"
-              }
-            },
-            {
               "node_id": "pl_tax_expense__total_tax_expense",
               "canonical_key": "pl_tax_expense__total_tax_expense",
               "label": "Total tax expense",
@@ -1601,8 +1591,7 @@
                 "op": "sum",
                 "children": [
                   "pl_tax_expense__current_tax",
-                  "pl_tax_expense__deferred_tax",
-                  "pl_tax_expense__others"
+                  "pl_tax_expense__deferred_tax"
                 ]
               }
             }

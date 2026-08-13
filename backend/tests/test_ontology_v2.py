@@ -42,7 +42,7 @@ def test_v2_rulebook_loads_with_nothing_dropped():
     raw = _v2()
     ont = load_ontology(raw)
     assert unknown_keys(raw, ont, limit=500) == []
-    assert len(ont.mappings) == 186
+    assert len(ont.mappings) == 185
     assert len(ont.section_defaults) == 19
     # The six new top-level blocks are objects, not swallowed keys.
     assert ont.normalisation and ont.normalisation.pipeline
@@ -91,11 +91,13 @@ def test_residual_concepts_carry_typed_sweep_terms():
     assert m.never_sweep and all(isinstance(k, str) for k in m.never_sweep)
     assert len(m.expected_components) == 5
     residuals = [x for x in ont.mappings if x.value_scope == "exclusive_residual"]
-    # 14: every section on every statement owns a sweep bucket, other comprehensive income
-    # included. It was the one section without one, and the sweep resolves a row's section by
-    # walking to the nearest section that HAS a bucket — so an unrecognised OCI line was swept
-    # backwards into Total tax expense.
-    assert len(residuals) == 14
+    # 13: every section owns a sweep bucket EXCEPT the tax charge, which deliberately has none. A
+    # tax figure is small enough that no rollup notices what lands beside it, so a row nothing
+    # claimed there reaches review instead — measured on a real filing, loss per share was being
+    # swept into Total tax expense. Other comprehensive income gained one for the opposite reason:
+    # it was the section without a bucket, and the sweep used to walk an unrecognised OCI line
+    # backwards into the nearest section that had one.
+    assert len(residuals) == 13
     assert all(x.alias_matching == "disabled" and x.residual_policy for x in residuals)
 
 
@@ -125,7 +127,13 @@ def test_concept_level_prose_and_containment_fields_survive():
     # field still has to survive a load, which is what the model assertion below holds.
     assert [m for m in ont.mappings if m.template_note] == []
     assert OntologyMapping(canonical_key="x", template_note="t").template_note == "t"
-    assert by_key["pl_tax_expense__others"].notes_as_source_rationale
+    # ``notes_as_source_rationale`` was on the tax residual, which the tax-bucket removal retired
+    # with it: no shipped concept sources from a note now, so none carries the rationale for doing
+    # so. Held the same way as ``template_note`` above — the field survives a load, and a rulebook
+    # that turns note sourcing back on has somewhere to say why.
+    assert [m for m in ont.mappings if m.notes_as_source_rationale] == []
+    assert OntologyMapping(canonical_key="x", notes_as_source_rationale="r"
+                           ).notes_as_source_rationale == "r"
     assert by_key["pl_expenses__employee_benefits_expense"].note_use == "evidence_only"
     assert by_key["bs_equity__total_equity"].unit_of_account == "subtotal"
     d_and_a = by_key["cf_cash_flow_from_operating_activities__depreciation_and_amortisation"]
@@ -155,7 +163,7 @@ def test_nested_blocks_are_modelled_not_free_dicts():
     # still live — `test_an_uploaded_replacement_supersedes_the_shipped_rulebook` uploads one that
     # uses it — and a value naming a key that ships nowhere would be a declaration pointing at
     # nothing.
-    assert md.supersedes == "" and md.concept_count == 186
+    assert md.supersedes == "" and md.concept_count == 185
     # ``retained_defects`` is deliberately NOT asserted non-empty: its only entry recorded the two
     # canonical-key typos, which the balance-sheet revision fixed, and a list that keeps a fixed
     # defect in it is how a reader comes to distrust the block.
@@ -228,7 +236,7 @@ def test_section_layer_reaches_every_concept_only_after_resolution():
 
     ont = load_ontology(raw, resolve=True)
     placed = [m for m in ont.mappings if m.section_scope and m.statement]
-    assert len(placed) == 186
+    assert len(placed) == 185
     assert all(m.temporality and m.face_only is True for m in placed)
 
     m = _by_key(ont)["bs_current_assets__inventories"]
@@ -240,7 +248,8 @@ def test_section_layer_reaches_every_concept_only_after_resolution():
     assert m.include and m.include[0].startswith("The face amount")
     # …including prose a section carries but no concept does: a key the fold produces has to be
     # declared on the concept model or resolution loses it exactly as the gate says it would.
-    assert _by_key(ont)["pl_tax_expense__others"].note_use_rationale.startswith("HKEX filings")
+    assert _by_key(ont)["pl_tax_expense__current_tax"].note_use_rationale.startswith(
+        "HKEX filings")
 
 
 def test_a_key_declared_on_the_concept_beats_the_inherited_one():
@@ -278,7 +287,7 @@ def test_unknown_inherits_is_a_clear_error_not_a_silent_no_op():
         load_ontology(raw, resolve=True)
     # The read path stays tolerant, by design: one bad stored row must not 500 the ontology
     # editor, the language-parity page or an extraction run.
-    assert len(load_ontology(raw).mappings) == 186
+    assert len(load_ontology(raw).mappings) == 185
 
 
 def test_resolution_does_not_mutate_the_definition_it_was_given():

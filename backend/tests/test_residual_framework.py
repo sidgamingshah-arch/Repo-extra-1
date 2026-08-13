@@ -1,4 +1,4 @@
-"""``residual_framework``: one block governs all 14 residual concepts, and the engine obeys it.
+"""``residual_framework``: one block governs all 13 residual concepts, and the engine obeys it.
 
 Every test here edits the rulebook (or leaves it alone) and watches the extraction change, because
 that is the only property worth having: a residual block that states a sweep policy the stage does
@@ -11,8 +11,8 @@ The failures being guarded are all failures of ARITHMETIC that nothing downstrea
   so a row extraction missed is absorbed into a plausible number instead of reported as a gap;
 * a subtotal caption the mapper failed to claim, swept into that section's Others, double-counts
   the whole section and the section still ties;
-* a P&L attribution caption swept into a tax residual merges a flow into a different section's
-  arithmetic;
+* a P&L attribution caption swept into the operating-expense residual merges a flow into a different
+  section's arithmetic;
 * a narrative sentence or a per-share figure in Others moves the subtotal by whatever it contained.
 
 Three sentences in the block are PROSE and stay prose, because each states in one line what several
@@ -336,11 +336,14 @@ def test_a_subtotal_caption_the_mapper_missed_is_refused_by_never_sweep(raw_onto
 def test_a_per_share_row_is_ineligible_until_the_eligibility_list_stops_saying_so(raw_ontology):
     """Earnings per share is a ratio in cents. Added into a section subtotal it is nonsense, and
     it is far too small for any rollup to notice."""
-    doc = _doc("profit_and_loss", [
-        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
-            LineRole.SUBTOTAL),
-        _li(1, "Basic earnings per share (HK cents)", None, 12),
-    ])
+    def statement() -> DocumentModel:
+        return _doc("profit_and_loss", [
+            _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+                LineRole.SUBTOTAL),
+            _li(1, "Basic earnings per share (HK cents)", None, 12),
+        ])
+
+    doc = statement()
     _run(doc, _ontology(raw_ontology))
     assert doc.line_items[1].canonical_key is None
     assert "residual_ineligible:per-share figure" in doc.line_items[1].confidence.flags
@@ -349,24 +352,20 @@ def test_a_per_share_row_is_ineligible_until_the_eligibility_list_stops_saying_s
     elig = raw["residual_framework"]["sweep"]["eligibility"]
     elig[2] = elig[2].replace("per-share figure, ", "")
     # Eligibility 5 comes off with it. A positive earnings-per-share figure ALSO contradicts the
-    # sign the tax section expects, so leaving that entry in place would refuse the row for the
-    # other reason and prove nothing about this one.
+    # sign the operating-expense section expects, so leaving that entry in place would refuse the
+    # row for the other reason and prove nothing about this one.
     del elig[4]
-    doc = _doc("profit_and_loss", [
-        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
-            LineRole.SUBTOTAL),
-        _li(1, "Basic earnings per share (HK cents)", None, 12),
-    ])
+    doc = statement()
     _run(doc, _ontology(raw))
-    assert doc.line_items[1].canonical_key == "pl_tax_expense__others"
+    assert doc.line_items[1].canonical_key == "pl_expenses__others"
 
 
 def test_an_attribution_caption_is_not_merged_into_the_section_above_it(raw_ontology):
     """"Non-controlling interests" printed under the profit-attribution heading is a FLOW belonging
-    to its own concept. Left eligible it resolves to the nearest section with a residual — the tax
-    section — and a period flow lands inside another section's arithmetic."""
+    to its own concept. Left eligible it resolves to the nearest section with a residual — the
+    operating expenses — and a period flow lands inside another section's arithmetic."""
     doc = _doc("profit_and_loss", [
-        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
+        _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
             LineRole.SUBTOTAL),
         _li(1, "Attributable to non-controlling interests:", None, 40),
     ])
@@ -408,13 +407,13 @@ def test_a_row_printed_inside_another_section_is_ineligible_while_the_list_says_
     """Eligibility 4: "The row was printed INSIDE this section … there is no cross-section rescue".
 
     The profit-attribution section prints no subtotal and has no residual of its own, so a row
-    printed under it used to be handed to the nearest section that HAS one — the tax charge. That is
-    the cross-section rescue under another name: a share of profit inside the tax section, which
-    still ties afterwards because the tax subtotal never mentioned it.
+    printed under it used to be handed to the nearest section that HAS one — the operating expenses.
+    That is the cross-section rescue under another name: a share of profit inside the expense
+    section, which still ties afterwards because the expense subtotal never mentioned it.
     """
     def statement() -> DocumentModel:
         return _doc("profit_and_loss", [
-            _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
+            _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
                 LineRole.SUBTOTAL),
             _li(1, "Profit attributable to owners of the parent",
                 "pl_profit_attributable_to__owners_of_the_parent", 300),
@@ -431,12 +430,12 @@ def test_a_row_printed_inside_another_section_is_ineligible_while_the_list_says_
     elig = raw["residual_framework"]["sweep"]["eligibility"]
     elig[3] = elig[3].replace("The row was printed INSIDE this section. ", "")
     # Eligibility 5 comes off with it, or it refuses the same row for its own reason: a positive
-    # share of results contradicts the sign the tax section expects. Only one entry at a time can be
-    # the thing under test.
+    # share of results contradicts the sign the expense section expects. Only one entry at a time can
+    # be the thing under test.
     del elig[4]
     doc = statement()
     _run(doc, _ontology(raw))
-    assert doc.line_items[2].canonical_key == "pl_tax_expense__others"
+    assert doc.line_items[2].canonical_key == "pl_expenses__others"
 
 
 def test_cross_section_true_on_one_residual_is_what_enables_the_rescue(raw_ontology):
@@ -615,20 +614,22 @@ def test_the_residual_share_trigger_stops_firing_when_the_rulebook_drops_it(raw_
 
 def test_a_component_a_dedicated_concept_was_vetoed_from_claiming_is_a_review_trigger(
         raw_ontology):
-    """"Income tax payable" scores against the tax total, whose ``exclude_hints`` veto "payable".
-    The veto is right — this is a balance, not a charge — but the reviewer has to be told that a
-    concept nearly claimed the row, or the residual looks like an ordinary unmatched caption."""
+    """"Accumulated depreciation" scores against the depreciation charge, whose ``exclude_hints``
+    veto "accumulated". The veto is right — this is a balance, not a charge — but the reviewer has to
+    be told that a concept nearly claimed the row, or the residual looks like an ordinary unmatched
+    caption."""
     doc = _doc("profit_and_loss", [
-        _li(0, "Income tax payable", None, -20),
-        _li(1, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
+        _li(0, "Accumulated depreciation", None, -20),
+        _li(1, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
             LineRole.SUBTOTAL),
     ])
     ctx = _run(doc, _ontology(raw_ontology))
     row = doc.line_items[0]
-    assert row.canonical_key == "pl_tax_expense__others"
+    assert row.canonical_key == "pl_expenses__others"
     assert "residual_review:vetoed_dedicated_match" in row.confidence.flags
-    rejected = _report(ctx, "pl_tax_expense__others")["components"][0]["rejected_candidates"]
-    assert rejected and rejected[0]["canonical_key"] == "pl_tax_expense__total_tax_expense"
+    rejected = _report(ctx, "pl_expenses__others")["components"][0]["rejected_candidates"]
+    assert rejected and rejected[0]["canonical_key"] == (
+        "pl_expenses__depreciation_and_amortisation_expense")
     assert rejected[0]["reason"].startswith("exclude_hints:")
 
 
@@ -664,17 +665,17 @@ def test_a_residual_signed_against_its_section_is_a_review_trigger(raw_ontology)
 
 # --- notes as a source -------------------------------------------------------------------------
 
-def _tax_doc_with_note() -> DocumentModel:
-    """The tax section as HKEX filings print it: one face charge citing the tax note, which splits
-    it into current and deferred plus a land-appreciation-tax line no concept covers."""
+def _expenses_doc_with_note() -> DocumentModel:
+    """The expense section as HKEX filings print it: one face subtotal citing the expenses note,
+    which splits it by nature — including an auditor's-remuneration line no concept covers."""
     doc = _doc("profit_and_loss", [
-        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100,
-            LineRole.SUBTOTAL, note="9"),
-        _li(1, "Current tax", "pl_tax_expense__current_tax", -60, note="9"),
-        _li(2, "Deferred tax", "pl_tax_expense__deferred_tax", -10, note="9"),
+        _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+            LineRole.SUBTOTAL, note="8"),
+        _li(1, "Other expenses", "pl_expenses__other_expenses", -60, note="8"),
+        _li(2, "Staff costs", "pl_expenses__employee_benefits_expense", -10, note="8"),
     ])
-    table = NotesTable(note_number="9", title="Income tax expense")
-    for label, value in (("Land appreciation tax", -30), ("Total", -100)):
+    table = NotesTable(note_number="8", title="Operating expenses")
+    for label, value in (("Auditor's remuneration", -30), ("Total", -100)):
         item = NoteItem(raw_label=label, ordinal=0,
                         role=LineRole.TOTAL if label == "Total" else LineRole.LINE)
         item.set_value(ExtractedValue(
@@ -685,72 +686,94 @@ def _tax_doc_with_note() -> DocumentModel:
     return doc
 
 
-def test_only_a_section_whose_note_use_permits_it_may_source_from_a_note(raw_ontology):
-    doc = _tax_doc_with_note()
-    ctx = _run(doc, _ontology(raw_ontology))
+def _note_sourcing_granted(raw_ontology) -> dict:
+    """The rulebook edited to permit ONE residual to source from a note it cites.
 
-    sourced = [li for li in doc.line_items if li.canonical_key == "pl_tax_expense__others"]
-    assert [li.source_label for li in sourced] == ["Land appreciation tax"]
-    assert "residual_note_sourced:9" in sourced[0].confidence.flags
+    The shipped rulebook permits this nowhere: ``sweep.notes_as_source`` is false, and the only
+    section whose ``note_use`` allows decomposition (the tax charge) lost its residual when the tax
+    bucket was removed — a single line in the tax charge is now inferred, not swept. So every test
+    below grants the permission it is about, and this function is the record of the two terms a
+    rulebook has to state to turn note sourcing on.
+    """
+    raw = copy.deepcopy(raw_ontology)
+    raw["section_defaults"]["pl_s2_expenses"]["note_use"] = "decomposition_allowed"
+    for m in raw["mappings"]:
+        if m["canonical_key"] == "pl_expenses__others":
+            m["residual_policy"]["notes_as_source"] = True
+    return raw
+
+
+def test_only_a_section_whose_note_use_permits_it_may_source_from_a_note(raw_ontology):
+    # As shipped: no section permits it, so the note row is left where it was printed.
+    doc = _expenses_doc_with_note()
+    _run(doc, _ontology(raw_ontology))
+    assert not [li for li in doc.line_items if li.canonical_key == "pl_expenses__others"]
+
+    doc = _expenses_doc_with_note()
+    ctx = _run(doc, _ontology(_note_sourcing_granted(raw_ontology)))
+
+    sourced = [li for li in doc.line_items if li.canonical_key == "pl_expenses__others"]
+    assert [li.source_label for li in sourced] == ["Auditor's remuneration"]
+    assert "residual_note_sourced:8" in sourced[0].confidence.flags
     # The note's own total is not a component — that would count the whole charge twice.
-    entry = _report(ctx, "pl_tax_expense__others")
-    assert [c["source"] for c in entry["components"]] == ["note:9"]
+    entry = _report(ctx, "pl_expenses__others")
+    assert [c["source"] for c in entry["components"]] == ["note:8"]
     assert entry["reconciliation"][0]["status"] == "tied"
 
 
 def test_the_frameworks_notes_as_source_is_what_a_silent_concept_inherits(raw_ontology):
-    """``sweep.notes_as_source`` was never shown inert — only unproven, because the one section
-    whose ``note_use`` permits a note declares the term on itself. With that concept silent, the
-    framework value is what decides, and it decides both ways."""
+    """``sweep.notes_as_source`` is inert only while no concept declares it. With the section
+    permitting a note and the concept silent about it, the framework value is what decides — and it
+    decides both ways."""
     def silent(value: bool) -> dict:
-        raw = copy.deepcopy(raw_ontology)
+        raw = _note_sourcing_granted(raw_ontology)
         raw["residual_framework"]["sweep"]["notes_as_source"] = value
         for m in raw["mappings"]:
-            if m["canonical_key"] == "pl_tax_expense__others":
+            if m["canonical_key"] == "pl_expenses__others":
                 del m["residual_policy"]["notes_as_source"]
         return raw
 
-    doc = _tax_doc_with_note()
+    doc = _expenses_doc_with_note()
     _run(doc, _ontology(silent(False)))
-    assert not [li for li in doc.line_items if li.canonical_key == "pl_tax_expense__others"]
+    assert not [li for li in doc.line_items if li.canonical_key == "pl_expenses__others"]
 
-    doc = _tax_doc_with_note()
+    doc = _expenses_doc_with_note()
     _run(doc, _ontology(silent(True)))
     assert [li.source_label for li in doc.line_items
-            if li.canonical_key == "pl_tax_expense__others"] == ["Land appreciation tax"]
+            if li.canonical_key == "pl_expenses__others"] == ["Auditor's remuneration"]
 
 
 def test_note_use_evidence_only_closes_the_note_as_a_source(raw_ontology):
-    raw = copy.deepcopy(raw_ontology)
-    raw["section_defaults"]["pl_s5_tax_expense"]["note_use"] = "evidence_only"
-    doc = _tax_doc_with_note()
+    raw = _note_sourcing_granted(raw_ontology)
+    raw["section_defaults"]["pl_s2_expenses"]["note_use"] = "evidence_only"
+    doc = _expenses_doc_with_note()
     ctx = _run(doc, _ontology(raw))
 
-    assert not [li for li in doc.line_items if li.canonical_key == "pl_tax_expense__others"]
+    assert not [li for li in doc.line_items if li.canonical_key == "pl_expenses__others"]
     # A residual asking for the note while its section forbids it is a contradiction, reported.
     assert any("notes_as_source_without_note_use" in line for line in ctx.logs)
 
 
 def test_a_residual_that_does_not_ask_for_the_note_never_gets_it(raw_ontology):
-    raw = copy.deepcopy(raw_ontology)
+    raw = _note_sourcing_granted(raw_ontology)
     for m in raw["mappings"]:
-        if m["canonical_key"] == "pl_tax_expense__others":
+        if m["canonical_key"] == "pl_expenses__others":
             m["residual_policy"]["notes_as_source"] = False
-    doc = _tax_doc_with_note()
+    doc = _expenses_doc_with_note()
     _run(doc, _ontology(raw))
-    assert not [li for li in doc.line_items if li.canonical_key == "pl_tax_expense__others"]
+    assert not [li for li in doc.line_items if li.canonical_key == "pl_expenses__others"]
 
 
 def test_face_only_false_also_opens_the_note(raw_ontology):
     """``face_only`` and ``note_use`` are two statements of one policy — "notes are evidence for a
     face amount, never an independent source of one" — and either one may lift it."""
-    raw = copy.deepcopy(raw_ontology)
-    raw["section_defaults"]["pl_s5_tax_expense"]["note_use"] = "evidence_only"
-    raw["section_defaults"]["pl_s5_tax_expense"]["face_only"] = False
-    doc = _tax_doc_with_note()
+    raw = _note_sourcing_granted(raw_ontology)
+    raw["section_defaults"]["pl_s2_expenses"]["note_use"] = "evidence_only"
+    raw["section_defaults"]["pl_s2_expenses"]["face_only"] = False
+    doc = _expenses_doc_with_note()
     _run(doc, _ontology(raw))
     assert [li.source_label for li in doc.line_items
-            if li.canonical_key == "pl_tax_expense__others"] == ["Land appreciation tax"]
+            if li.canonical_key == "pl_expenses__others"] == ["Auditor's remuneration"]
 
 
 # --- when the sweep may run --------------------------------------------------------------------
@@ -784,7 +807,8 @@ def test_the_bare_sub_captions_of_a_per_share_block_are_per_share_figures(raw_on
     Matched only under the heading. "Basic" on its own is far too generic a caption to veto a row on.
     """
     doc = _doc("profit_and_loss", [
-        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100, LineRole.SUBTOTAL),
+        _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+            LineRole.SUBTOTAL),
         _li(1, "LOSS PER SHARE", None, None, LineRole.HEADER),
         _li(2, "Basic", None, -12),
         _li(3, "Diluted", None, -12),
@@ -798,11 +822,46 @@ def test_the_bare_sub_captions_of_a_per_share_block_are_per_share_figures(raw_on
     # …and the same captions with no per-share heading above them are NOT vetoed by this rule: the
     # block ends at the first row that is neither the heading nor one of its sub-captions.
     plain = _doc("profit_and_loss", [
-        _li(0, "Income tax expense", "pl_tax_expense__total_tax_expense", -100, LineRole.SUBTOTAL),
+        _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+            LineRole.SUBTOTAL),
         _li(1, "Basic", None, -12),
     ])
     _run(plain, _ontology(raw_ontology))
     assert "residual_ineligible:per-share figure" not in plain.line_items[1].confidence.flags
+    assert plain.line_items[1].canonical_key == "pl_expenses__others"   # it really would be swept
+
+
+def test_a_bilingual_per_share_sub_caption_is_recognised_in_either_language(raw_ontology):
+    """The captions the real filing prints, verbatim: "– Basic －基本" and "– Diluted －攤薄".
+
+    An HKEX statement prints both languages on ONE row, so the sub-caption is never the bare English
+    word the pattern was first written for. Matching English only left both rows unrecognised and
+    swept — which is the defect the test above describes, still live for every filing that prints a
+    Chinese column. Simplified and Traditional both appear in the wild, and a mainland filing prints
+    the Chinese alone, so each half has to stand on its own.
+    """
+    captions = ["– Basic －基本", "– Diluted －攤薄", "基本", "－稀释", "Diluted (restated)"]
+    items = [_li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+                 LineRole.SUBTOTAL),
+             _li(1, "LOSS PER SHARE 每股虧損", None, None, LineRole.HEADER)]
+    items += [_li(i + 2, caption, None, -12) for i, caption in enumerate(captions)]
+    doc = _doc("profit_and_loss", items)
+    _run(doc, _ontology(raw_ontology))
+
+    for row in doc.line_items[2:]:
+        assert row.canonical_key is None, row.source_label
+        assert "residual_ineligible:per-share figure" in row.confidence.flags, row.source_label
+
+    # A caption that merely CONTAINS one of those words is an ordinary row and is swept as one: the
+    # pattern anchors on the whole caption, or "Basic salary" would go to review on every filing.
+    ordinary = _doc("profit_and_loss", [
+        _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+            LineRole.SUBTOTAL),
+        _li(1, "LOSS PER SHARE 每股虧損", None, None, LineRole.HEADER),
+        _li(2, "Basic salary of directors", None, -12),
+    ])
+    _run(ordinary, _ontology(raw_ontology))
+    assert ordinary.line_items[2].canonical_key == "pl_expenses__others"
 
 
 def test_a_banner_the_statement_has_already_closed_does_not_place_a_row(raw_ontology):

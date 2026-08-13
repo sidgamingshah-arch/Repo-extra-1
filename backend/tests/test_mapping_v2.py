@@ -75,7 +75,7 @@ def test_the_thirteen_residual_buckets_are_locked_out_of_every_matching_index(v2
     m = _matcher(v2)
     locked = {c.canonical_key for c in v2.mappings if c.alias_matching == "disabled"}
 
-    assert len(locked) == 14, sorted(locked)
+    assert len(locked) == 13, sorted(locked)
     assert all(k.endswith("__others") for k in locked)
     assert m._locked == locked
     # Out of the normalised alias index entirely — both directions of it.
