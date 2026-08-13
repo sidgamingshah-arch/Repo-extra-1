@@ -2946,9 +2946,19 @@ def _cur_prior(r: dict, basis: str = "consolidated") -> tuple[dict | None, dict 
 
 def _inspector(r: dict, cur: dict | None) -> dict:
     prov = (cur or {}).get("provenance")
-    return {"tag": "machine", "src": _prov_label(prov) if prov else "",
+    # A figure the pipeline INFERRED must not read as one it matched. The row carrying a subtotal's
+    # sole component (stages.map_ontology) has method "rule", so "Mapped by rule" would tell the
+    # analyst a caption on the page said "Current tax" when no such caption exists — the figure is
+    # the total, filed here because nothing evidenced a sibling. Say that instead.
+    flags = ((cur or {}).get("confidence") or {}).get("flags") or []
+    inferred = next((f.split(":", 1)[1] for f in flags
+                     if f.startswith("inferred_sole_component:")), "")
+    return {"tag": "inferred" if inferred else "machine",
+            "src": _prov_label(prov) if prov else "",
             "formula": "", "result": str((cur or {}).get("value") or ""),
-            "note": f"Mapped by {r.get('mapping_method') or 'ensemble'}"}
+            "note": (f"Inferred: the face printed {inferred} alone and no sibling component was "
+                     "evidenced on the face or in its note"
+                     if inferred else f"Mapped by {r.get('mapping_method') or 'ensemble'}")}
 
 
 def _netting_rules_for_run(session: Session, run) -> list:

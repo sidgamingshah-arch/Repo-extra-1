@@ -167,6 +167,12 @@ class OntologyMapping(BaseModel):
     # Containment: a gross parent must never be loaded additively with the children it contains.
     is_gross_parent: bool = False
     children_if_decomposed: list[str] = Field(default_factory=list)
+    # The mirror image of containment: this concept is the child a subtotal collapses to when the
+    # face prints the subtotal ALONE. Names the subtotal. Nothing is divided — the whole
+    # undifferentiated figure is this child — and the inference is refused as soon as any sibling
+    # child is evidenced on the face or in the subtotal's own note, so
+    # ``global_rules.no_fabricated_split`` still holds. See ``decomposition_rule`` for the wording.
+    sole_component_of: str | None = None
     # Residual concepts: the sweep terms, what the residual is expected to pick up (prose, for
     # the LLM), and the keys it must never absorb however similar the wording.
     residual_policy: ResidualPolicy | None = None

@@ -21,9 +21,11 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.core.models import DocumentModel
-from app.core.models.enums import AllocationStatus, LineRole
+from app.core.models.enums import AllocationStatus, LineRole, MappingMethod
+from app.core.models.line_item import LineItem
 from app.core.stage import PipelineContext
-from app.services.mapping import OntologyMatcher
+from app.services.mapping import OntologyMatcher, normalize_label
+from app.services.rollups import section_members
 
 
 def _columns_of(li) -> set[tuple[str, str]]:
@@ -97,6 +99,69 @@ def _pairs_to_keep_apart(ontology) -> list[tuple[str, list[str], str]]:
                 continue
             out.append((m.canonical_key, list(m.children_if_decomposed), "is_gross_parent"))
     return out
+
+
+def _cited_notes(parents: list) -> set[str]:
+    """The note numbers the subtotal's own rows cite — read the way ``stages.residual`` reads them,
+    because ``link_notes`` has not run yet at this point in the pipeline."""
+    out: set[str] = set()
+    for li in parents:
+        out.update(n for ref in li.note_refs for n in ref.numbers if n)
+        if li.note_number:
+            out.add(li.note_number)
+    return out
+
+
+def _sibling_evidence(doc: DocumentModel, ontology, parents: list,
+                      siblings: list[str]) -> str:
+    """Why a ``sole_component_of`` inference must be refused, or "" when nothing contradicts it.
+
+    A sibling is EVIDENCED by its own captions — the rulebook's aliases for it, which is the only
+    place those words are written down — appearing either on the face of the same statement or in a
+    note the subtotal cites. The mapper having failed to claim such a row is exactly the case that
+    matters: an unrecognised "Deferred taxation" line means the split exists and was missed, so
+    asserting the whole charge is current would publish a figure the page contradicts.
+    """
+    by_key = {m.canonical_key: m for m in ontology.mappings}
+    captions: list[tuple[str, str]] = []
+    for key in siblings:
+        m = by_key.get(key)
+        if m is None:
+            continue
+        for caption in [m.label or "", *m.aliases_for(None)]:
+            norm = normalize_label(caption)
+            if norm:
+                captions.append((norm, key))
+    if not captions:
+        return ""
+
+    def hit(label: str) -> str:
+        norm = normalize_label(label or "")
+        return next((key for cap, key in captions if cap and cap in norm), "")
+
+    pages = {p.index for p in doc.pages if p.statement and any(
+        ev.provenance is not None and ev.provenance.page_index == p.index
+        for li in parents for ev in li.values.values())}
+    statements = {p.statement for p in doc.pages if p.index in pages}
+    for li in doc.line_items:
+        page = next((ev.provenance.page_index for ev in li.values.values()
+                     if ev.provenance is not None), None)
+        stmt = next((p.statement for p in doc.pages if p.index == page), None)
+        if stmt not in statements:
+            continue
+        found = hit(li.source_label or "")
+        if found:
+            return f"{found} is printed on the face as {li.source_label!r}"
+    cited = _cited_notes(parents)
+    for table in doc.notes:
+        if str(table.note_number) not in cited:
+            continue
+        for item in table.items:
+            found = hit(getattr(item, "raw_label", "") or "")
+            if found:
+                return (f"{found} is disclosed in note {table.note_number} as "
+                        f"{item.raw_label!r}")
+    return ""
 
 
 class MapOntologyStage:
@@ -228,6 +293,7 @@ class MapOntologyStage:
         # Whole-document rules, which need every row to have a concept first.
         mapped -= self._enforce_containment(doc, ontology, ctx)
         self._check_equivalence(doc, ontology, ctx)
+        mapped += self._infer_sole_components(doc, ontology, ctx)
 
         # Roll the mapper's LLM usage up onto the context for the audit log.
         ctx.llm_input_tokens += matcher.usage["input_tokens"]
@@ -365,6 +431,72 @@ class MapOntologyStage:
             ctx.log(f"map_ontology:containment({why}):{aggregate}"
                     f" unfiled_rows={len(filed)} components={','.join(present)}")
         return unfiled
+
+    @staticmethod
+    def _infer_sole_components(doc: DocumentModel, ontology, ctx: PipelineContext) -> int:
+        """A subtotal printed ALONE collapses onto the child the rulebook names, if nothing else is
+        evidenced. The mirror image of containment above. Returns rows added.
+
+        ``sole_component_of`` on a concept names the subtotal it is the sole component of. An HKEX
+        income statement routinely prints one undifferentiated tax line — "Income tax
+        credit/(expenses) 3,159" on the filing this was measured against — and splits current from
+        deferred only in the tax note, or not at all. Left as the subtotal alone, the template's two
+        tax children stay empty and the analyst has a total with nothing under it.
+
+        Nothing is divided here, which is why ``global_rules.no_fabricated_split`` still holds and
+        says so: the whole figure goes to one child, and it is refused the moment any SIBLING child
+        is evidenced — mapped on the face, printed on the face under its own caption whether the
+        mapper claimed it or not, or named in the subtotal's own cited note. That last one matters
+        because the note is where the split usually is: a filing that discloses deferred tax in the
+        note has a split, and asserting the whole charge is current would be a fabrication.
+
+        The inferred row carries the subtotal's own figures and provenance, so click-to-source lands
+        on the printed line it came from, and it is flagged ``inferred_sole_component`` — never
+        mistakable for a caption the filing printed.
+        """
+        declared = [(m, m.sole_component_of) for m in ontology.mappings if m.sole_component_of]
+        if not declared:
+            return 0
+        members = section_members(ontology)
+        added = 0
+        for concept, aggregate in declared:
+            section = concept.section_scope[0] if concept.section_scope else ""
+            siblings = [k for k in (members[section].dedicated if section in members else [])
+                        if k != concept.canonical_key]
+            parents = [li for li in doc.line_items if li.canonical_key == aggregate]
+            if not parents:
+                continue
+            if any(li.canonical_key in (concept.canonical_key, *siblings)
+                   for li in doc.line_items):
+                ctx.log(f"map_ontology:sole_component_declined({concept.canonical_key}):"
+                        " a child of the subtotal is already filed")
+                continue
+            evidence = _sibling_evidence(doc, ontology, parents, siblings)
+            if evidence:
+                ctx.log(f"map_ontology:sole_component_declined({concept.canonical_key}):"
+                        f" {evidence}")
+                continue
+            if len(parents) > 1:
+                # Two rows filed on one subtotal is a mapping problem of its own, reported
+                # elsewhere; inferring a child from an ambiguous total would compound it.
+                ctx.log(f"map_ontology:sole_component_declined({concept.canonical_key}):"
+                        f" {len(parents)} rows carry {aggregate}")
+                continue
+            parent = parents[0]
+            row = LineItem(source_label=concept.label or concept.canonical_key,
+                           canonical_key=concept.canonical_key,
+                           ordinal=parent.ordinal, role=LineRole.LINE,
+                           note_number=parent.note_number)
+            for ev in parent.values.values():
+                row.set_value(ev.model_copy(deep=True))
+            row.confidence.mapping = min(parent.confidence.mapping or 0.75, 0.75)
+            row.confidence.method = MappingMethod.RULE.value
+            row.confidence.flags.append(f"inferred_sole_component:{aggregate}")
+            doc.line_items.append(row)
+            added += 1
+            ctx.log(f"map_ontology:sole_component({concept.canonical_key}) from {aggregate}"
+                    f" columns={len(row.values)}")
+        return added
 
     @staticmethod
     def _check_equivalence(doc: DocumentModel, ontology, ctx: PipelineContext) -> int:
