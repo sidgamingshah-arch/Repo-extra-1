@@ -453,9 +453,12 @@ def test_the_printed_sum_is_never_published_as_a_re_evaluatable_formula():
     """
     from app.services.formula import evaluate
 
-    rows = [_row("bs_x__others", "Sundry A", 100, 90),
-            _row("bs_x__others", "Sundry B", 50, 40)]
-    row = _row_of(_stmt(rows), "bs_x__others")
+    # On the template's own "Others" line: the grid renders the template's lines and nothing else,
+    # so a concept TEMPLATE does not declare now reaches no row at all (it is raised as an
+    # `off_template` review finding instead). The grouping this test is about is unchanged.
+    rows = [_row("bs_ca__others", "Sundry A", 100, 90),
+            _row("bs_ca__others", "Sundry B", 50, 40)]
+    row = _row_of(_stmt(rows), "bs_ca__others")
     assert row["v1"] == 150
     assert row["arithmetic"] == "100 + 50"      # readable
     assert row["formula"] is None               # and NOT re-evaluatable
