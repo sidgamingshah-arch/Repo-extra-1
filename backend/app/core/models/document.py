@@ -34,6 +34,14 @@ class PageSource(BaseModel):
     # changes_in_equity), when the classifier could tell. Constrains ontology mapping so a
     # caption cannot resolve to a concept from a different statement. None = undetermined.
     statement: str | None = None
+    # Whose figures the page presents: consolidated / company / mixed (a Group column and a Company
+    # column side by side, which HK balance sheets print routinely). None = the title said nothing.
+    scope: str | None = None
+    # The scopes found as COLUMN headers in the top band, when the page carries more than one.
+    scope_columns: list[str] = Field(default_factory=list)
+    # Why the classifier decided what it did: the title it matched, whether that title was
+    # ambiguous, and the decode margin. Diagnostic — nothing downstream branches on it.
+    evidence: dict[str, object] = Field(default_factory=dict)
 
 
 class DocumentModel(BaseModel):
@@ -59,6 +67,11 @@ class DocumentModel(BaseModel):
     # routing is visible and auditable rather than an unexplained change of mapping.
     gap_routings: list[dict] = Field(default_factory=list)
     unit_context: UnitContext | None = None    # detected source currency + scale ("in ₹ crore")
+    # Headings that LOOKED like a statement title and resolved to nothing. The lexicon's coverage is
+    # otherwise unmeasurable — you cannot tell a filing whose titles are all recognised from one
+    # whose titles are all missed, since both produce silence. Review these across a corpus and fold
+    # the real vocabulary back into the lexicon.
+    unmapped_titles: list[str] = Field(default_factory=list)
 
     def face_pages(self) -> list[PageSource]:
         return [p for p in self.pages if p.kind == PageKind.FACE]
