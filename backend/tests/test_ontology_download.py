@@ -241,7 +241,7 @@ def test_both_rulebook_generations_are_seeded_and_selectable(client):
 
     d2 = client.get(f"{API}/ontologies/{v2['id']}").json()["definition"]
     assert d2["schema_version"] == 2 and len(d2["section_defaults"]) == 18
-    assert len(d2["mappings"]) == 173
+    assert len(d2["mappings"]) == 174
 
 
 def test_seeding_v2_does_not_displace_the_v1_rulebook(client):

@@ -12,7 +12,7 @@
     "framework": "HKFRS",
     "version": "2.0",
     "supersedes": "hkfrs_hk_china_v1",
-    "concept_count": 173,
+    "concept_count": 174,
     "breaking_changes": [
       "schema_version 2. New concept keys: statement, section_scope, temporality, unit_of_account, face_only, note_use, sign_convention, match_priority, alias_matching, extraction_mode (extended), is_gross_parent, children_if_decomposed, expected_components, section_disambiguation, equivalence, inherits.",
       "Concepts now inherit from section_defaults via 'inherits'. A loader must resolve inheritance before matching. Any key declared on the concept overrides the inherited value.",
@@ -20,11 +20,10 @@
       "Removed 'Net assets' / 資產淨值 from bs_equity__total_equity aliases; the caption now binds to bs_net_assets, and the two are linked by an equivalence rule rather than a shared alias.",
       "Removed 'Contract in progress' / 在建工程合同 from bs_non_current_assets__construction_in_progress aliases; it collided byte-for-byte with bs_non_current_assets__contract_in_progress in the same section.",
       "aliases_i18n.zh is now a single array relying on the Trad↔Simp folding rule in the normalisation block. Both scripts are retained only where the wording genuinely differs (營業額 vs 主營業務收入), not for script variants.",
-      "Adopted as the rulebook in force, superseding hkfrs_hk_china_v1 via metadata.supersedes. unbound_row_policy resolved in favour of sweeping an unclaimed in-section face row into that section's residual rather than emitting it for review, so the section subtotal continues to tie; ineligible rows (subtotals, headers, narrative, per-share, attribution captions) and rows with no resolvable section are unchanged and still go to review."
+      "Adopted as the rulebook in force, superseding hkfrs_hk_china_v1 via metadata.supersedes. unbound_row_policy resolved in favour of sweeping an unclaimed in-section face row into that section's residual rather than emitting it for review, so the section subtotal continues to tie; ineligible rows (subtotals, headers, narrative, per-share, attribution captions) and rows with no resolvable section are unchanged and still go to review.",
+      "Balance-sheet revision: sections reordered to the HK ladder and renumbered accordingly (bs_s3_current_liabilities, bs_s5_equity); the misspelt canonical keys bs_current_liabilities__cuurent_notes_payable and bs_current_liabilities__current_potion_of_long_term_debt corrected, with NO key-alias table, so a run stored against either resolves to no template node and reads as unmapped until re-extracted; bs_current_assets__contract_assets added; equity restructured so reserves absorbs share premium, treasury shares and shares held for award schemes and total equity is reached through equity_attributable_to_owners."
     ],
-    "retained_defects": [
-      "canonical_key 'bs_current_liabilities__current_potion_of_long_term_debt' retains the 'potion' typo and 'bs_current_liabilities__cuurent_notes_payable' retains 'cuurent'. Keys are load-bearing for the existing loader; only the human-readable labels are corrected. Rename with a key-alias table in v3."
-    ],
+    "retained_defects": [],
     "changes": []
   },
   "normalisation": {
@@ -117,13 +116,17 @@
     "mutually_exclusive_groups": [
       {
         "id": "equity_reserves",
-        "note": "The template's bs_equity__total_equity rollup lists bs_equity__reserves alongside capital_reserve, share_premium, general_reserve and other_comprehensive_income_reserve. Loading the aggregate and its components together double-counts.",
+        "note": "The template's bs_equity__reserves rollup lists all of these. Loading the aggregate and its components together double-counts, and the rulebook's bs_reserves_composition identity reports the disagreement when a filing prints both.",
         "aggregate": "bs_equity__reserves",
         "components": [
-          "bs_equity__capital_reserve",
           "bs_equity__share_premium",
+          "bs_equity__capital_reserve",
           "bs_equity__general_reserve",
-          "bs_equity__other_comprehensive_income_reserve"
+          "bs_equity__other_comprehensive_income_reserve",
+          "bs_equity__retained_earnings",
+          "bs_equity__treasury_shares",
+          "bs_equity__shares_held_for_share_award_schemes",
+          "bs_equity__others"
         ],
         "rule": "Populate the aggregate only when the face prints a single undifferentiated 'Reserves' line. If any component is printed, populate components and leave the aggregate null."
       },
@@ -239,10 +242,10 @@
         "Section subtotals and statement totals."
       ]
     },
-    "bs_s3_equity": {
+    "bs_s5_equity": {
       "statement": "balance_sheet",
       "section_scope": [
-        "bs_s3_equity"
+        "bs_s5_equity"
       ],
       "temporality": "instant",
       "unit_of_account": "balance",
@@ -283,10 +286,10 @@
         "Section subtotals and statement totals."
       ]
     },
-    "bs_s5_current_liabilities": {
+    "bs_s3_current_liabilities": {
       "statement": "balance_sheet",
       "section_scope": [
-        "bs_s5_current_liabilities"
+        "bs_s3_current_liabilities"
       ],
       "temporality": "instant",
       "unit_of_account": "balance",
@@ -624,11 +627,6 @@
   "validation": {
     "identities": [
       {
-        "id": "bs_balance",
-        "expr": "bs_total_assets = bs_total_equity_and_liabilities",
-        "severity": "blocking"
-      },
-      {
         "id": "bs_net_assets_equals_equity",
         "expr": "bs_net_assets = bs_equity__total_equity",
         "severity": "blocking",
@@ -637,7 +635,7 @@
       {
         "id": "bs_capital_employed",
         "expr": "bs_total_assets_less_current_liabilities = bs_non_current_assets__total_non_current_assets + bs_net_current_assets_liabilities",
-        "severity": "warning"
+        "severity": "blocking"
       },
       {
         "id": "bs_net_current",
@@ -697,6 +695,12 @@
         "id": "cf_pbt_agreement",
         "expr": "cf_cash_flow_from_operating_activities__profit_before_tax = pl_profit_before_tax",
         "severity": "warning"
+      },
+      {
+        "id": "bs_derived_consistency",
+        "expr": "bs_net_assets = bs_total_assets - bs_current_liabilities__total_current_liabilities - bs_non_current_liabilities__total_non_current_liabilities",
+        "severity": "blocking",
+        "note": "An independent route to net assets: the ladder reaches it through net current assets, this reaches it through total assets, so a figure double-counted between the two sections breaks one and not the other. The equity attribution and the reserves composition are NOT here — the revised rollups on bs_equity__total_equity and bs_equity__reserves already assert exactly those two sums."
       }
     ],
     "section_reconciliation": "Every section with a reported subtotal must satisfy the residual_framework reconciliation identity. Failure emits unallocated_gap and blocks auto-approval of that section.",
@@ -1847,6 +1851,53 @@
       ]
     },
     {
+      "canonical_key": "bs_current_assets__contract_assets",
+      "label": "Contract assets",
+      "definition": "HKFRS 15 right to consideration for work performed but not yet billed — recognised revenue that has not become an unconditional receivable.",
+      "inherits": "bs_s2_current_assets",
+      "match_priority": 64,
+      "exclude": [
+        "Trade receivables, which are unconditional rights to consideration and have their own concept.",
+        "Contract costs capitalised as an asset under HKFRS 15.95, which are not contract assets.",
+        "Contract liabilities, which are the mirror balance on the liability side."
+      ],
+      "aliases": [
+        "Contract assets",
+        "Contract asset",
+        "Amounts due from customers for contract work",
+        "Gross amounts due from customers for contract works",
+        "Unbilled receivables",
+        "Accrued revenue"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Contract assets",
+          "Contract asset",
+          "Amounts due from customers for contract work",
+          "Gross amounts due from customers for contract works",
+          "Unbilled receivables",
+          "Accrued revenue"
+        ],
+        "zh": [
+          "合同资产",
+          "合約資產",
+          "应收客户合同工程款",
+          "未开票应收款"
+        ]
+      },
+      "confusable_with": [
+        "bs_current_assets__trade_receivables",
+        "bs_current_liabilities__contract_liabilities"
+      ],
+      "exclude_hints": [
+        "liabilit",
+        "负债",
+        "負債",
+        "payable",
+        "应付"
+      ]
+    },
+    {
       "canonical_key": "bs_current_assets__prepayments_other_receivables_and_other_assets",
       "label": "Prepayments, other receivables and other assets",
       "inherits": "bs_s2_current_assets",
@@ -2312,7 +2363,7 @@
     {
       "canonical_key": "bs_equity__share_capital",
       "label": "Share capital",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 62,
       "sign_convention": "positive_expected",
       "definition": "Nominal or stated capital of shares issued and fully paid.",
@@ -2351,7 +2402,7 @@
     {
       "canonical_key": "bs_equity__other_equity_instruments",
       "label": "Other equity instruments",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 64,
       "sign_convention": "positive_expected",
       "definition": "Instruments classified as equity rather than liabilities under HKAS 32 — perpetual capital securities, convertible preference shares and similar.",
@@ -2387,7 +2438,7 @@
     {
       "canonical_key": "bs_equity__capital_reserve",
       "label": "Capital reserve",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 60,
       "sign_convention": "either",
       "definition": "Reserve arising from capital transactions — reorganisations, common-control combinations, deemed contributions and equity-settled transactions with owners.",
@@ -2424,7 +2475,7 @@
     {
       "canonical_key": "bs_equity__share_premium",
       "label": "Share premium",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 62,
       "sign_convention": "positive_expected",
       "definition": "Consideration received for shares issued in excess of their nominal value.",
@@ -2451,7 +2502,7 @@
     {
       "canonical_key": "bs_equity__treasury_shares",
       "label": "Treasury shares",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 64,
       "sign_convention": "negative_expected",
       "definition": "The group's own equity instruments reacquired and held, deducted from equity (HKAS 32.33). Carried as a negative amount.",
@@ -2481,7 +2532,7 @@
     {
       "canonical_key": "bs_equity__shares_held_for_share_award_schemes",
       "label": "Shares held for share award schemes",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 68,
       "sign_convention": "negative_expected",
       "definition": "Own shares acquired and held by a trust to satisfy awards under a share award or option scheme, deducted from equity.",
@@ -2509,7 +2560,7 @@
     {
       "canonical_key": "bs_equity__retained_earnings",
       "label": "Retained earnings",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 62,
       "sign_convention": "either",
       "definition": "Cumulative undistributed profits or accumulated losses attributable to owners of the parent.",
@@ -2546,7 +2597,7 @@
     {
       "canonical_key": "bs_equity__general_reserve",
       "label": "General reserve",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 62,
       "sign_convention": "positive_expected",
       "definition": "Statutory surplus reserve or general reserve appropriated out of the profits of PRC subsidiaries as required by PRC company law, not distributable as dividends.",
@@ -2579,7 +2630,7 @@
     {
       "canonical_key": "bs_equity__other_comprehensive_income_reserve",
       "label": "Other comprehensive income reserve",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 66,
       "sign_convention": "either",
       "definition": "Cumulative balance of items recognised in other comprehensive income — exchange translation, FVOCI fair-value and hedging reserves.",
@@ -2622,7 +2673,7 @@
     {
       "canonical_key": "bs_equity__non_controlling_interests",
       "label": "Non-controlling interests (equity balance)",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 66,
       "sign_convention": "either",
       "definition": "The CLOSING BALANCE of equity in subsidiaries not attributable, directly or indirectly, to the parent (HKAS 1.54(q) / HKFRS 10.22), presented within total equity.",
@@ -2657,12 +2708,12 @@
         "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests",
         "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests"
       ],
-      "section_disambiguation": "Three concepts share this exact caption. Section_scope (bs_s3_equity vs pl_s6 vs pl_s7) plus unit_of_account (balance vs flow) resolves all three with no wording test."
+      "section_disambiguation": "Three concepts share this exact caption. Section_scope (bs_s5_equity vs pl_s6 vs pl_s7) plus unit_of_account (balance vs flow) resolves all three with no wording test."
     },
     {
       "canonical_key": "bs_equity__reserves",
       "label": "Reserves (undifferentiated aggregate)",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "match_priority": 52,
       "sign_convention": "either",
       "is_gross_parent": true,
@@ -2701,7 +2752,7 @@
     {
       "canonical_key": "bs_equity__others",
       "label": "Other equity lines (face, unmapped)",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "value_scope": "exclusive_residual",
       "alias_matching": "disabled",
       "match_priority": 0,
@@ -2709,7 +2760,7 @@
       "definition": "Sweep bucket for value rows printed on the face of the balance sheet inside the equity section that no dedicated equity concept claimed. Governed entirely by residual_framework.",
       "residual_policy": {
         "framework": "residual_framework",
-        "section_scope": "bs_s3_equity",
+        "section_scope": "bs_s5_equity",
         "population": "sweep_only",
         "cross_section": false,
         "notes_as_source": false,
@@ -2739,7 +2790,7 @@
     {
       "canonical_key": "bs_equity__total_equity",
       "label": "Total equity",
-      "inherits": "bs_s3_equity",
+      "inherits": "bs_s5_equity",
       "value_scope": "not_applicable",
       "unit_of_account": "subtotal",
       "match_priority": 78,
@@ -2824,7 +2875,7 @@
       },
       "confusable_with": [
         "bs_current_liabilities__current_borrowings",
-        "bs_current_liabilities__current_potion_of_long_term_debt",
+        "bs_current_liabilities__current_portion_of_long_term_debt",
         "bs_non_current_liabilities__non_current_bonds_payable"
       ],
       "section_disambiguation": "Shares the aliases 'Interest-bearing bank and other borrowings' and 'Bank and other borrowings' byte-for-byte with the current-liability concept. Resolution is by printed section only. Never split a single printed amount across the two."
@@ -2857,7 +2908,7 @@
       },
       "confusable_with": [
         "bs_non_current_liabilities__non_current_notes_payable",
-        "bs_current_liabilities__cuurent_notes_payable",
+        "bs_current_liabilities__current_notes_payable",
         "bs_equity__other_equity_instruments"
       ],
       "section_disambiguation": "Where a filing prints a combined 'Senior notes and domestic bonds' caption, it maps to the notes-payable concept in the printed section; do not fabricate a bond/note split."
@@ -2890,7 +2941,7 @@
       },
       "confusable_with": [
         "bs_non_current_liabilities__non_current_bonds_payable",
-        "bs_current_liabilities__cuurent_notes_payable"
+        "bs_current_liabilities__current_notes_payable"
       ],
       "section_disambiguation": "Same aliases as the current-liability notes concept. Bind by printed section."
     },
@@ -3125,7 +3176,7 @@
     {
       "canonical_key": "bs_current_liabilities__current_borrowings",
       "label": "Borrowings (current)",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 60,
       "definition": "Interest-bearing bank and other loans repayable within twelve months.",
       "aliases": [
@@ -3159,14 +3210,14 @@
       ],
       "confusable_with": [
         "bs_non_current_liabilities__non_current_borrowings",
-        "bs_current_liabilities__current_potion_of_long_term_debt"
+        "bs_current_liabilities__current_portion_of_long_term_debt"
       ],
       "section_disambiguation": "Byte-identical aliases with the non-current borrowings concept. Bind by printed section only."
     },
     {
-      "canonical_key": "bs_current_liabilities__current_potion_of_long_term_debt",
+      "canonical_key": "bs_current_liabilities__current_portion_of_long_term_debt",
       "label": "Current portion of long-term debt",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 68,
       "definition": "The instalment of long-term borrowings, bonds or notes falling due within twelve months, where separately captioned. Note: the canonical_key retains a legacy 'potion' typo for loader compatibility.",
       "aliases": [
@@ -3202,7 +3253,7 @@
     {
       "canonical_key": "bs_current_liabilities__other_current_financial_liabilities",
       "label": "Other current financial liabilities",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 54,
       "definition": "Printed caption for current financial liabilities that no more specific current-liability concept covers.",
       "aliases": [
@@ -3232,7 +3283,7 @@
     {
       "canonical_key": "bs_current_liabilities__current_trade_payables",
       "label": "Trade payables (current)",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 62,
       "definition": "Amounts payable to third-party suppliers, subcontractors and contractors for goods and services received.",
       "aliases": [
@@ -3266,7 +3317,7 @@
       "confusable_with": [
         "bs_current_liabilities__due_to_related_parties",
         "bs_current_liabilities__other_payables_and_accruals",
-        "bs_current_liabilities__cuurent_notes_payable"
+        "bs_current_liabilities__current_notes_payable"
       ],
       "exclude_hints": [
         "related",
@@ -3277,11 +3328,11 @@
       ]
     },
     {
-      "canonical_key": "bs_current_liabilities__cuurent_notes_payable",
+      "canonical_key": "bs_current_liabilities__current_notes_payable",
       "label": "Notes payable (current)",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 62,
-      "definition": "Senior notes, domestic bonds and similar debt instruments repayable within twelve months. Note: the canonical_key retains a legacy 'cuurent' typo for loader compatibility.",
+      "definition": "Senior notes, domestic bonds and similar debt instruments repayable within twelve months.",
       "aliases": [
         "Current notes payable",
         "Senior notes",
@@ -3318,7 +3369,7 @@
     {
       "canonical_key": "bs_current_liabilities__current_income_tax_liabilities",
       "label": "Current income tax liabilities",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 64,
       "definition": "Unpaid current tax for the period and prior periods (HKAS 12.12), including PRC corporate income tax and land appreciation tax payable.",
       "aliases": [
@@ -3373,7 +3424,7 @@
     {
       "canonical_key": "bs_current_liabilities__current_lease_liabilities",
       "label": "Lease liabilities (current)",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 62,
       "definition": "Present value of lease payments falling due within twelve months (HKFRS 16).",
       "aliases": [
@@ -3398,7 +3449,7 @@
     {
       "canonical_key": "bs_current_liabilities__current_deferred_revenue",
       "label": "Deferred revenue (current)",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 60,
       "definition": "Income received in advance recognisable within twelve months, where the filing uses a deferred-revenue rather than a contract-liability caption.",
       "aliases": [
@@ -3432,7 +3483,7 @@
     {
       "canonical_key": "bs_current_liabilities__due_to_related_parties",
       "label": "Due to related parties",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 68,
       "definition": "Balances payable to related parties as defined by HKAS 24 — joint ventures, associates, non-controlling shareholders of subsidiaries and entities controlled by the controlling shareholder or directors. Typically unsecured, interest-free and repayable on demand.",
       "include": [
@@ -3486,7 +3537,7 @@
     {
       "canonical_key": "bs_current_liabilities__other_payables_and_accruals",
       "label": "Other payables and accruals",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 56,
       "definition": "Printed caption grouping non-trade current payables, accrued expenses, accrued staff costs and other sundry current obligations.",
       "aliases": [
@@ -3526,7 +3577,7 @@
     {
       "canonical_key": "bs_current_liabilities__contract_liabilities",
       "label": "Contract liabilities",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "match_priority": 64,
       "definition": "Obligation to transfer goods or services for which consideration has been received or is due (HKFRS 15.106). For a PRC developer this is chiefly pre-sale proceeds on undelivered units.",
       "aliases": [
@@ -3563,7 +3614,7 @@
     {
       "canonical_key": "bs_current_liabilities__others",
       "label": "Other current liability lines (face, unmapped)",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "value_scope": "exclusive_residual",
       "alias_matching": "disabled",
       "match_priority": 0,
@@ -3571,7 +3622,7 @@
       "definition": "Sweep bucket for value rows printed on the face of the balance sheet inside the current liabilities section that no dedicated current-liability concept claimed. Governed entirely by residual_framework.",
       "residual_policy": {
         "framework": "residual_framework",
-        "section_scope": "bs_s5_current_liabilities",
+        "section_scope": "bs_s3_current_liabilities",
         "population": "sweep_only",
         "cross_section": false,
         "notes_as_source": false,
@@ -3601,7 +3652,7 @@
     {
       "canonical_key": "bs_current_liabilities__total_current_liabilities",
       "label": "Total current liabilities",
-      "inherits": "bs_s5_current_liabilities",
+      "inherits": "bs_s3_current_liabilities",
       "value_scope": "not_applicable",
       "unit_of_account": "subtotal",
       "match_priority": 82,

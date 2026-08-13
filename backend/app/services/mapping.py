@@ -423,7 +423,7 @@ CONCEPT_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # payable — and a row printed "Bonds payable" was re-routed onto a different instrument at
     # confidence 1.0, replacing an honest residual with a specific wrong line that the subtotal
     # still ties to. A bond is not a note in the wrong section.
-    ("notes_payable", ("bs_current_liabilities__cuurent_notes_payable",
+    ("notes_payable", ("bs_current_liabilities__current_notes_payable",
                        "bs_non_current_liabilities__non_current_notes_payable")),
     ("properties_under_development", ("bs_current_assets__properties_under_development",
                                       "bs_non_current_assets__properties_under_development")),
@@ -471,9 +471,10 @@ _FAMILY_MEMBERS: dict[str, tuple[str, ...]] = {
 }
 
 # The words that distinguish one SECTION VARIANT of a concept from another. Stripping them leaves
-# the thing itself, which is what two members of a family must have in common. ("cuurent" is a typo
-# retained in a shipped canonical key — keys are load-bearing, so it is matched rather than fixed.)
-_VARIANT_PREFIX = re.compile(r"^(non[_-]?current|current|cuurent)_")
+# the thing itself, which is what two members of a family must have in common. ("cuurent" used to
+# be matched here too, for a typo in a shipped canonical key; the balance-sheet revision fixed the
+# key, so matching the misspelling would now only hide a fresh one.)
+_VARIANT_PREFIX = re.compile(r"^(non[_-]?current|current)_")
 
 
 def _the_thing_itself(canonical_key: str) -> str | None:

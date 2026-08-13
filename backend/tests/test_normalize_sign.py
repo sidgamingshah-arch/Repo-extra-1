@@ -195,8 +195,8 @@ def test_the_finding_follows_the_declared_temporality_and_unit(raw_ontology):
     """Declare the equity section a duration flow and the same row stops being a confusion — the
     engine is reading the rulebook, not a built-in table of which statement is which."""
     raw = copy.deepcopy(raw_ontology)
-    raw["section_defaults"]["bs_s3_equity"]["temporality"] = "duration"
-    raw["section_defaults"]["bs_s3_equity"]["unit_of_account"] = "flow"
+    raw["section_defaults"]["bs_s5_equity"]["temporality"] = "duration"
+    raw["section_defaults"]["bs_s5_equity"]["unit_of_account"] = "flow"
     doc, li = _row("Non-controlling interests", "bs_equity__non_controlling_interests", 40,
                    "profit_and_loss")
     _run(doc, _ontology(raw))
@@ -208,7 +208,7 @@ def test_the_finding_follows_the_declared_temporality_and_unit(raw_ontology):
 def test_unit_of_account_alone_is_enough_to_refuse_the_merge(raw_ontology):
     """With the temporality agreeing, the balance-versus-flow difference is the whole finding."""
     raw = copy.deepcopy(raw_ontology)
-    raw["section_defaults"]["bs_s3_equity"]["temporality"] = "duration"
+    raw["section_defaults"]["bs_s5_equity"]["temporality"] = "duration"
     doc, li = _row("Non-controlling interests", "bs_equity__non_controlling_interests", 40,
                    "profit_and_loss")
     _run(doc, _ontology(raw))

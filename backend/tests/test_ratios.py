@@ -22,7 +22,7 @@ def _credit_rows():
         _row("bs_current_assets__cash_and_cash_equivalents", 1204),
         _row("bs_current_liabilities__total_current_liabilities", 3300),
         _row("bs_current_liabilities__current_borrowings", 800),
-        _row("bs_current_liabilities__current_potion_of_long_term_debt", 200),
+        _row("bs_current_liabilities__current_portion_of_long_term_debt", 200),
         _row("bs_current_liabilities__current_trade_payables", 1500),
         _row("bs_non_current_liabilities__total_non_current_liabilities", 4200),
         _row("bs_non_current_liabilities__non_current_borrowings", 3000),

@@ -42,7 +42,7 @@ def test_v2_rulebook_loads_with_nothing_dropped():
     raw = _v2()
     ont = load_ontology(raw)
     assert unknown_keys(raw, ont, limit=500) == []
-    assert len(ont.mappings) == 173
+    assert len(ont.mappings) == 174
     assert len(ont.section_defaults) == 18
     # The six new top-level blocks are objects, not swallowed keys.
     assert ont.normalisation and ont.normalisation.pipeline
@@ -124,11 +124,17 @@ def test_nested_blocks_are_modelled_not_free_dicts():
     groups = {grp.id: grp for grp in g.mutually_exclusive_groups}
     assert set(groups) == {"equity_reserves", "associate_jv_share"}
     assert groups["equity_reserves"].aggregate == "bs_equity__reserves"
-    assert len(groups["equity_reserves"].components) == 4
+    # Eight, not four: the balance-sheet revision moved share premium, treasury shares and shares
+    # held for award schemes into the reserves rollup, and the exclusivity group has to cover every
+    # component the rollup lists or three of them can be loaded alongside the aggregate.
+    assert len(groups["equity_reserves"].components) == 8
 
     md = ont.metadata
-    assert md.supersedes == "hkfrs_hk_china_v1" and md.concept_count == 173
-    assert md.breaking_changes and md.retained_defects
+    assert md.supersedes == "hkfrs_hk_china_v1" and md.concept_count == 174
+    # ``retained_defects`` is deliberately NOT asserted non-empty: its only entry recorded the two
+    # canonical-key typos, which the balance-sheet revision fixed, and a list that keeps a fixed
+    # defect in it is how a reader comes to distrust the block.
+    assert md.breaking_changes and md.retained_defects == []
 
     netting = {n.id: n for n in ont.netting_rules}
     assert netting["cogs_inclusive_of_opex"].evidence_required is True
@@ -191,7 +197,7 @@ def test_section_layer_reaches_every_concept_only_after_resolution():
 
     ont = load_ontology(raw, resolve=True)
     placed = [m for m in ont.mappings if m.section_scope and m.statement]
-    assert len(placed) == 173
+    assert len(placed) == 174
     assert all(m.temporality and m.face_only is True for m in placed)
 
     m = _by_key(ont)["bs_current_assets__inventories"]
@@ -241,7 +247,7 @@ def test_unknown_inherits_is_a_clear_error_not_a_silent_no_op():
         load_ontology(raw, resolve=True)
     # The read path stays tolerant, by design: one bad stored row must not 500 the ontology
     # editor, the language-parity page or an extraction run.
-    assert len(load_ontology(raw).mappings) == 173
+    assert len(load_ontology(raw).mappings) == 174
 
 
 def test_resolution_does_not_mutate_the_definition_it_was_given():

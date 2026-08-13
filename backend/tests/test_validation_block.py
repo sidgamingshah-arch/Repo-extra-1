@@ -88,8 +88,14 @@ def test_every_declared_identity_is_read_and_evaluated(template, raw_ontology):
     assert {r.statement for r in built} == {"balance_sheet", "profit_and_loss", "cash_flow"}
     # The severities are the rulebook's own, not a default.
     by_id = {r.id: r for r in built}
-    assert by_id["ontology_identity:bs_balance"].severity == "blocking"
-    assert by_id["ontology_identity:bs_capital_employed"].severity == "warning"
+    # bs_balance used to be the blocking example and is gone: it asserted
+    # bs_total_assets = bs_total_equity_and_liabilities, which is exactly the TEMPLATE's own
+    # bs_balances identity, so the footing was declared in both files and counted twice.
+    assert by_id["ontology_identity:bs_derived_consistency"].severity == "blocking"
+    # A warning-severity example, so the field is shown to round-trip rather than every relation
+    # arriving blocking. bs_capital_employed used to be the example and is now blocking: the revised
+    # ladder makes it the ROUTE to net assets rather than a commentary on it.
+    assert by_id["ontology_identity:pl_pbt_tie"].severity == "warning"
     # A signed expression keeps its signs: net current assets SUBTRACTS current liabilities.
     assert by_id["ontology_identity:bs_net_current"].signs == (1, -1)
 

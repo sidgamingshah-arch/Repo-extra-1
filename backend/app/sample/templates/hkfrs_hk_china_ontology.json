@@ -815,6 +815,56 @@
       }
     },
     {
+      "canonical_key": "bs_current_assets__contract_assets",
+      "label": "Contract assets",
+      "definition": "HKFRS 15 right to consideration for work performed but not yet billed — recognised revenue that has not become an unconditional receivable.",
+      "description": "Contract assets: under 'Current assets' in the balance sheet.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "aliases": [
+        "Contract assets",
+        "Contract asset",
+        "Amounts due from customers for contract work",
+        "Gross amounts due from customers for contract works",
+        "Unbilled receivables",
+        "Accrued revenue"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Contract assets",
+          "Contract asset",
+          "Amounts due from customers for contract work",
+          "Gross amounts due from customers for contract works",
+          "Unbilled receivables",
+          "Accrued revenue"
+        ],
+        "zh": [
+          "合同资产",
+          "合約資產",
+          "应收客户合同工程款",
+          "未开票应收款"
+        ]
+      },
+      "confusable_with": [
+        "bs_current_assets__trade_receivables",
+        "bs_current_liabilities__contract_liabilities"
+      ],
+      "exclude_hints": [
+        "liabilit",
+        "负债",
+        "負債",
+        "payable",
+        "应付"
+      ]
+    },
+    {
       "canonical_key": "bs_current_assets__prepayments_other_receivables_and_other_assets",
       "label": "Prepayments, other receivables and other assets",
       "definition": "Prepayments, other receivables and other assets: under 'Current assets' in the balance sheet (HKFRS/IFRS).",
@@ -1907,7 +1957,7 @@
       }
     },
     {
-      "canonical_key": "bs_current_liabilities__current_potion_of_long_term_debt",
+      "canonical_key": "bs_current_liabilities__current_portion_of_long_term_debt",
       "label": "Current potion of long term debt",
       "definition": "Current potion of long term debt: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Current potion of long term debt: under 'Current liabilities' in the balance sheet.",
@@ -1996,7 +2046,7 @@
       }
     },
     {
-      "canonical_key": "bs_current_liabilities__cuurent_notes_payable",
+      "canonical_key": "bs_current_liabilities__current_notes_payable",
       "label": "Cuurent Notes Payable",
       "definition": "Cuurent Notes Payable: under 'Current liabilities' in the balance sheet (HKFRS/IFRS).",
       "description": "Cuurent Notes Payable: under 'Current liabilities' in the balance sheet.",

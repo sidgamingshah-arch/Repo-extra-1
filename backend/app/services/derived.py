@@ -26,8 +26,8 @@ _DEBT = [
     ("bs_non_current_liabilities__non_current_notes_payable", 1, "opt"),
     ("bs_non_current_liabilities__non_current_lease_liabilities", 1, "opt"),
     ("bs_current_liabilities__current_borrowings", 1, "opt"),
-    ("bs_current_liabilities__current_potion_of_long_term_debt", 1, "opt"),
-    ("bs_current_liabilities__cuurent_notes_payable", 1, "opt"),
+    ("bs_current_liabilities__current_portion_of_long_term_debt", 1, "opt"),
+    ("bs_current_liabilities__current_notes_payable", 1, "opt"),
     ("bs_current_liabilities__current_lease_liabilities", 1, "opt"),
 ]
 _CASH = [
@@ -136,7 +136,7 @@ _RATIOS = [
      "label_i18n": {"zh": "偿债保障倍数", "ar": "تغطية خدمة الدين", "fr": "Couverture du service de la dette"},
      "num": list(_EBITDA),
      "den": [(_INTEREST, 1),
-             ("bs_current_liabilities__current_potion_of_long_term_debt", 1, "opt"),
+             ("bs_current_liabilities__current_portion_of_long_term_debt", 1, "opt"),
              ("bs_current_liabilities__current_borrowings", 1, "opt")],
      "formula": "EBITDA / (Interest expense + current portion of long-term debt + current borrowings)"},
     {"key": "cfo_to_total_debt", "label": "Cash flow to total debt", "unit": "%", "category": "Coverage",

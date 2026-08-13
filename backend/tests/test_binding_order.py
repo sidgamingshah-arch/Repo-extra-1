@@ -106,7 +106,7 @@ def test_the_batch_offers_only_the_sections_the_chunk_was_printed_under(v2):
 
     offered = spy.offered()
     whole_statement = [k for k in m._mappable_keys() if m._in_statement(k, "balance_sheet")]
-    assert len(whole_statement) == 72 and len(offered) == 17, (len(whole_statement), len(offered))
+    assert len(whole_statement) == 73 and len(offered) == 17, (len(whole_statement), len(offered))
     for k in offered:
         scope = m._sections_of(k)
         assert not scope or "current_liabilities" in scope, k

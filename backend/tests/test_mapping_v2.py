@@ -92,7 +92,7 @@ def test_a_balance_sheet_batch_stops_offering_the_five_asset_and_liability_bucke
     bs = [c.canonical_key for c in v2.mappings if c.canonical_key.startswith("bs_")]
     offered = {e["canonical_key"] for e in m._concept_payload(bs)}
 
-    assert len(bs) == 77 and len(offered) == 72
+    assert len(bs) == 78 and len(offered) == 73
     assert {k for k in bs if k not in offered} == {
         "bs_non_current_assets__others", "bs_current_assets__others", "bs_equity__others",
         "bs_non_current_liabilities__others", "bs_current_liabilities__others",
@@ -388,20 +388,20 @@ def test_a_banner_naming_two_leaves_of_a_family_refuses_rather_than_guessing(v2)
     naming a section no leaf of the family sits in.
     """
     spy = Spy(items=[LlmBatchItem(
-        item_id="a", canonical_key="bs_current_liabilities__cuurent_notes_payable",
+        item_id="a", canonical_key="bs_current_liabilities__current_notes_payable",
         confidence=0.95)])
     m = _matcher(v2, spy)
     out = m.match_batch([("a", "Senior notes 優先票據")], statement="balance_sheet",
                         sections={"a": "NON-CURRENT ASSETS 非流動資產"})
     # The banner names a section the family has no leaf in, so nothing is corrected and the
     # answer is refused rather than moved somewhere the evidence does not point.
-    assert out["a"].canonical_key != "bs_current_liabilities__cuurent_notes_payable"
+    assert out["a"].canonical_key != "bs_current_liabilities__current_notes_payable"
     assert m.usage["family_resolved"] == 0 and m.usage["batch_refused"] == 1
 
     # And with bonds out of the family, the non-current NOTES leaf is now unambiguous, so the
     # ordinary current/non-current correction this family exists for does fire.
     ok = Spy(items=[LlmBatchItem(
-        item_id="a", canonical_key="bs_current_liabilities__cuurent_notes_payable",
+        item_id="a", canonical_key="bs_current_liabilities__current_notes_payable",
         confidence=0.95)])
     m3 = _matcher(v2, ok)
     out3 = m3.match_batch([("a", "Senior notes 優先票據")], statement="balance_sheet",
@@ -416,7 +416,7 @@ def test_a_banner_naming_two_leaves_of_a_family_refuses_rather_than_guessing(v2)
     out2 = m2.match_batch([("a", "Senior notes and domestic bonds 優先票據及境內債券")],
                           statement="balance_sheet",
                           sections={"a": "CURRENT LIABILITIES 流動負債"})
-    assert out2["a"].canonical_key == "bs_current_liabilities__cuurent_notes_payable"
+    assert out2["a"].canonical_key == "bs_current_liabilities__current_notes_payable"
     assert m2.usage["family_resolved"] == 1
 
 

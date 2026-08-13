@@ -156,7 +156,7 @@ def test_the_residual_is_the_sum_of_its_components_not_a_plug(raw_ontology):
     assert recon["residual"] == 25.0 and recon["diff"] == 75.0
     assert recon["status"] == "unallocated_gap"
 
-    gap = "unallocated_gap:bs_s5_current_liabilities:consolidated|current=75"
+    gap = "unallocated_gap:bs_s3_current_liabilities:consolidated|current=75"
     assert gap in swept.confidence.flags
     subtotal_row = doc.line_items[2]
     # …and the section is routed to review: the subtotal row is the section's own claim about
@@ -174,7 +174,7 @@ def test_a_section_that_prints_no_subtotal_is_itemised_but_unreconciled(raw_onto
     assert swept.canonical_key == "bs_current_liabilities__others"
     recon = _report(ctx, "bs_current_liabilities__others")["reconciliation"][0]
     assert recon["status"] == "no_reported_subtotal"
-    assert "residual_unreconciled:bs_s5_current_liabilities" in swept.confidence.flags
+    assert "residual_unreconciled:bs_s3_current_liabilities" in swept.confidence.flags
     assert swept.confidence.mapping == pytest.approx(0.4)
 
 

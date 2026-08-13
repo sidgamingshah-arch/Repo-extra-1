@@ -33,7 +33,7 @@ def matcher() -> OntologyMatcher:
      "NON-CURRENT LIABILITIES 非流動負債",
      "bs_non_current_liabilities__non_current_borrowings"),
     ("Senior notes and domestic bonds 優先票據及境內債券",
-     "CURRENT LIABILITIES 流動負債", "bs_current_liabilities__cuurent_notes_payable"),
+     "CURRENT LIABILITIES 流動負債", "bs_current_liabilities__current_notes_payable"),
     ("Senior notes and domestic bonds 優先票據及境內債券",
      "NON-CURRENT LIABILITIES 非流動負債",
      "bs_non_current_liabilities__non_current_notes_payable"),
@@ -302,7 +302,7 @@ def test_only_the_same_thing_in_another_section_may_be_rerouted():
                           "pl_total_comprehensive_income_attributable_to__non_controlling_interests")
     # Different things that merely resemble a sibling.
     assert not _is_variant_of("bs_non_current_liabilities__non_current_bonds_payable",
-                              "bs_current_liabilities__cuurent_notes_payable")
+                              "bs_current_liabilities__current_notes_payable")
     assert not _is_variant_of("bs_current_liabilities__current_deferred_revenue",
                               "bs_non_current_liabilities__non_current_deferred_income")
     # A statement-level key has no section variant to be confused with.
@@ -402,7 +402,7 @@ def test_editing_the_declared_statement_moves_the_concept_the_gate_will_accept()
     PAYABLES = "bs_current_liabilities__current_trade_payables"
 
     def move_current_liabilities_to_the_pl(d):
-        d["section_defaults"]["bs_s5_current_liabilities"]["statement"] = "profit_and_loss"
+        d["section_defaults"]["bs_s3_current_liabilities"]["statement"] = "profit_and_loss"
 
     shipped = _matcher_with(lambda _d: None)
     assert shipped._statement_of(PAYABLES) == "balance_sheet"
