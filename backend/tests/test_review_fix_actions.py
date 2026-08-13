@@ -141,7 +141,11 @@ def test_no_other_check_type_offers_a_fix(template_def):
         _row(_SUSPECT, 2200), _row(_OTHER, 1310), _row(_TARGET, 9999),
         {"source_label": "Unplaceable", "canonical_key": None,
          "values": [{"basis": "consolidated", "period_label": "current", "value": "5"}]},
-        {"source_label": "A shaky match", "canonical_key": "bs_cash",
+        # A template line, weakly matched. The key has to be one the template DECLARES: a
+        # low-confidence mapping onto a concept the template puts on no statement is raised as
+        # `off_template` instead, which is a different card about a different problem.
+        {"source_label": "A shaky match",
+         "canonical_key": "bs_current_assets__cash_and_cash_equivalents",
          "mapping_confidence": 0.2, "flags": ["low_mapping_confidence"],
          "values": [{"basis": "consolidated", "period_label": "current", "value": "7"}]},
     ]

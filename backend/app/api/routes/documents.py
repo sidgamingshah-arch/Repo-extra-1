@@ -382,6 +382,49 @@ _TR.update({
 })
 
 
+# The off-template finding: a mapped row whose concept the run's own template does not put on any
+# statement. The statement grid no longer shows such a row (see `_build_statement`), so the card is
+# the ONLY place its figure appears — an untranslated string here is a zh/ar/fr reader given English
+# on the one card standing between a real extracted figure and silence.
+#
+# "Mapped, but not on any statement in this template" is reused verbatim from the deleted
+# Additional-items view rather than re-worded: it is the same claim about the same row, already
+# carried in all four locales, and a second wording would be a second name for one condition.
+_TR.update({
+    "Off template": {"zh": "不在模板中", "ar": "خارج القالب", "fr": "Hors modèle"},
+    # Why a statement is serving no rows — see `_statement_refusal`. Translated because this sentence
+    # replaces the grid, so an English-only version is a zh/ar/fr reader given a blank spread and no
+    # readable reason for it.
+    "This run's template declares no statement of this type, so none is shown. Extracted figures "
+    "that reach no statement are reported in the review queue; re-extract against a template that "
+    "declares it to see it here.":
+        {"zh": "本次运行所用模板未声明此类报表，因此不予显示。未进入任何报表的已提取数字会在复核队列中列出；如需在此查看，请使用声明了该报表的模板重新提取。",
+         "ar": "لا يعلن قالب هذا التشغيل أي قائمة من هذا النوع، لذا لا تُعرض. الأرقام المستخرجة التي لا تصل إلى أي قائمة تُدرج في قائمة المراجعة؛ أعِد الاستخراج مقابل قالب يعلنها لعرضها هنا.",
+         "fr": "Le modèle de cette exécution ne déclare aucun état de ce type : aucun n'est affiché. Les montants extraits qui n'atteignent aucun état sont signalés dans la file de revue ; relancez l'extraction sur un modèle qui le déclare pour le voir ici."},
+    "This run's template declares this statement but no line items under it, so there is nothing to "
+    "render. Fix the template and re-extract; the figures themselves are unaffected.":
+        {"zh": "本次运行所用模板声明了该报表，但其下没有任何项目，因此无内容可显示。请修正模板后重新提取；已提取的数字本身不受影响。",
+         "ar": "يعلن قالب هذا التشغيل هذه القائمة لكن دون أي بنود تحتها، فلا يوجد ما يُعرض. أصلِح القالب وأعِد الاستخراج؛ الأرقام نفسها غير متأثرة.",
+         "fr": "Le modèle de cette exécution déclare cet état mais aucun poste en dessous : il n'y a rien à afficher. Corrigez le modèle et relancez l'extraction ; les montants eux-mêmes ne sont pas affectés."},
+    "No figures were extracted for this statement on this basis. Check the page scope, or the other "
+    "basis.":
+        {"zh": "本报表在此基础下未提取到任何数字。请检查页面范围，或改用另一基础。",
+         "ar": "لم تُستخرج أي أرقام لهذه القائمة على هذا الأساس. راجع نطاق الصفحات، أو الأساس الآخر.",
+         "fr": "Aucun montant n'a été extrait pour cet état sur cette base. Vérifiez la portée des pages, ou l'autre base."},
+    "Line mapped off the template": {"zh": "映射到模板之外的行",
+                                     "ar": "سطر مُعيَّن خارج القالب",
+                                     "fr": "Ligne rattachée hors du modèle"},
+    "Not on this template": {"zh": "不在此模板中", "ar": "ليس في هذا القالب",
+                             "fr": "Absent de ce modèle"},
+    "This figure was mapped to a concept the run's template does not put on any statement, so it "
+    "appears on no spread. Re-map it to a template line item, or un-map it to record that it "
+    "belongs on none — or re-extract against the current template, which may already declare it.":
+        {"zh": "该数值被映射到本次运行所用模板未列入任何报表的概念，因此不会出现在任何报表上。请将其重新映射到某个模板项目，或取消映射以记录它不属于任何项目——也可以按当前模板重新提取，当前模板可能已经声明了它。",
+         "ar": "عُيِّن هذا الرقم إلى مفهوم لا يضعه قالب هذا التشغيل في أي قائمة، فلا يظهر في أي جدول. أعِد تعيينه إلى بند من القالب، أو ألغِ تعيينه لتسجيل أنه لا ينتمي إلى أي بند — أو أعِد الاستخراج مقابل القالب الحالي، فقد يكون يعلنه بالفعل.",
+         "fr": "Ce montant a été rattaché à un concept que le modèle de cette exécution ne place sur aucun état : il n'apparaît sur aucun tableau. Réattribuez-le à un poste du modèle, ou dé-rattachez-le pour enregistrer qu'il n'appartient à aucun — ou relancez l'extraction sur le modèle courant, qui le déclare peut-être déjà."},
+})
+
+
 def _t(s: str, locale: str) -> str:
     if not s or locale == "en":
         return s
@@ -1792,6 +1835,11 @@ _EVIDENCE_LABELS: dict[str, dict[str, str]] = {
                             "diff": "Difference", "components": "Components"},
     "uncomputed": {"reported": "Printed", "components": "Components"},
     "unmapped": {"value": "Value"},
+    # The off-template card carries the figure, and the mapping's band and method too when it also
+    # printed them (it pre-empts the low-confidence card, so it inherits that card's subject matter —
+    # see where it is built). The template's own version is deliberately not fingerprinted; its
+    # identity lives in the SUBJECT, not here.
+    "off_template": {"value": "Value", "confidence_band": "Confidence band", "method": "Method"},
     # `confidence_band` is the printed confidence quantized (`_confidence_evidence`), so it is shown
     # under a label that says BAND — a reader of an accepted card must not read "40-49%" as the score.
     "low_confidence": {"value": "Value", "confidence_band": "Confidence band",
@@ -1867,6 +1915,11 @@ def _subject_label(subject: dict, locale: str) -> str:
         return f"{L('Unverified subtotal')} · {subject.get('key') or ''}"
     if kind == "unmapped":
         return f"{L('Unmapped line')} · {subject.get('label') or ''}"
+    if kind == "off_template":
+        # Both halves, because either alone leaves the orphaned row unreadable: the caption says
+        # which printed line, and the key says which concept the template would not carry.
+        return f"{L('Line mapped off the template')} · {subject.get('label') or ''} → " \
+               f"{subject.get('key') or ''}"
     if kind == "low_confidence":
         return f"{L('Low-confidence mapping')} · {subject.get('label') or ''}"
     return L("A finding that is no longer raised")
@@ -1908,9 +1961,16 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                   run_id: str = "",
                   coverage_block: dict | None = None) -> dict:
     """Derive the human-in-the-loop review queue from a real extraction: failed accounting
-    checks (balance identity, note ties, template structure) plus unmapped and low-confidence
-    line items become review items (the QA the analyst works before export). No demo data
-    involved.
+    checks (balance identity, note ties, template structure) plus the three ROW-shaped findings —
+    unmapped, off-template and low-confidence line items — become review items (the QA the analyst
+    works before export). No demo data involved.
+
+    The row-shaped three are the queue's account of every printed figure the spread does not simply
+    show. Two of them mean the figure is absent from the grid entirely: an unmapped row was placed
+    nowhere, and an off-template row was placed on a concept the run's own template puts on no
+    statement. The grid does not add either one — it renders the template's lines and nothing else —
+    so this queue is where those figures are reported, and all three end at the same ``remap``
+    control, which is what makes the report an action rather than a complaint.
 
     ``judgements`` are the in-force ACCEPTED judgement rows for this document; each check comes
     back carrying its ``status`` (open / accepted / stale) so the queue distinguishes "nobody has
@@ -1949,6 +2009,10 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                      "line item, or add an alias so future runs map it automatically.")
     _LOWCONF_FIX = ("The mapping is uncertain. Confirm the concept is correct or reassign it; "
                     "the value and its source location are shown so you can verify against the document.")
+    _OFFTPL_FIX = ("This figure was mapped to a concept the run's template does not put on any "
+                   "statement, so it appears on no spread. Re-map it to a template line item, or "
+                   "un-map it to record that it belongs on none — or re-extract against the "
+                   "current template, which may already declare it.")
     stats: dict = {}
     accounting = _accounting_checks(rows, reconciliation or [], locale, structural or [],
                                     template_def, stats=stats)
@@ -1956,7 +2020,17 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
     # The extracted lines the accounting findings NAME, each contributed by the builder that knows
     # which lines its card indicts. The header's third tile counts the rows in none of them.
     named = {k for c in accounting for k in (c.get("names") or []) if k}
-    unmapped = low_conf = 0
+    unmapped = low_conf = off_template = 0
+    # WHETHER THIS RUN HAS A TEMPLATE AT ALL is `template_def is None` and nothing else — the same
+    # spelling `_build_statement` gates its no-template fallback on, so the grid and the queue cannot
+    # disagree about it. It is deliberately not "are there any declared keys": a pinned definition
+    # with an empty `statements` list is valid (the schema defaults it, and the publish gate does not
+    # demand one), and reading emptiness as "no template" made the grid refuse every statement while
+    # the queue raised nothing — every extracted figure then appearing nowhere and named by nothing,
+    # under a refusal promising they were in the review queue.
+    templated = template_def is not None
+    declared_keys = _declared_line_keys(template_def)
+    on_a_matrix = _rows_on_a_matrix_face(rows, template_def)
     # Row POSITIONS with a finding against them, not keys: an unmapped row has no canonical key,
     # and two rows can legitimately print the same caption, so matching those by label would credit
     # one row's finding to another.
@@ -1971,6 +2045,10 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
         val = first.get("value")
         where = f"{filename} · {_prov_label(first.get('provenance'))}"
         pct = f"{round(conf * 100)}%" if isinstance(conf, (int, float)) else "—"
+        # Whether the MAPPING is weak, spelled once. The off-template card pre-empts the
+        # low-confidence one and has to carry the same subject matter when both hold — see there.
+        weak = ("low_mapping_confidence" in flags
+                or (isinstance(conf, (int, float)) and conf < _low_conf_threshold()))
 
         if not key:
             unmapped += 1
@@ -2007,7 +2085,82 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                 # correct template line item"; until this there was nothing on the card that could.
                 "remap": _remap_offer(r, locale),
             })
-        elif "low_mapping_confidence" in flags or (isinstance(conf, (int, float)) and conf < _low_conf_threshold()):
+        elif key and templated and key not in declared_keys and i not in on_a_matrix:
+            # A MAPPING ONTO A CONCEPT THIS RUN'S TEMPLATE DOES NOT CARRY. The grid used to
+            # render these under an "Other extracted items" heading appended after every template
+            # section — lines the template does not define, on a spread whose whole value is that its
+            # shape is the template's, and (against a superseded pinned template) the very lines
+            # whose position a revision had just corrected, back at the end again.
+            #
+            # Removing that heading would have made a real extracted figure invisible, which this
+            # codebase does not do. So the figure is reported HERE instead, as the finding it always
+            # was: the mapper placed it somewhere the spread cannot show it, and the analyst either
+            # re-maps it onto a line the template does declare, un-maps it, or re-extracts against a
+            # template that declares it. All three are stated on the card and the first two are one
+            # `remap` call away.
+            #
+            # RAISED BEFORE the low-confidence card, and instead of it, when a row qualifies for
+            # both. "Confirm the concept is correct or reassign it" is advice that cannot be taken
+            # about a concept the template does not have, and it says nothing about the figure being
+            # absent from every spread — which is the fact the reader needs first. Both cards resolve
+            # through the same re-map control, so raising both would put one row in the queue twice
+            # under one action. An acceptance recorded against the low-confidence subject is not lost
+            # by the swap: it orphans, and `judgements.orphaned` says so by name.
+            #
+            # PRE-EMPTING IT MEANS INHERITING WHAT IT WAS ABOUT. When the mapping is also weak the
+            # card prints the method and the score and fingerprints the quantized band, exactly as the
+            # low-confidence card does — otherwise swallowing that card would have swallowed the one
+            # property `_confidence_evidence` exists for: an acceptance made at 0.41 'fuzzy' surviving
+            # a re-run at 0.02 'llm' with `changed == []`, the reviewer never shown the collapse.
+            off_template += 1
+            indicted.add(i)
+            checks.append({
+                "id": f"chk-offtpl-{i}", "type": "off_template", "icon": "⌖",
+                "title": r.get("source_label", "Line item"), "where": where,
+                # Tone `med`, not `low`: an unmapped row is a figure nobody could place, while this is
+                # a figure the mapper DID place and the spread still cannot show — a disagreement
+                # between the rulebook and the template, which is a configuration defect.
+                # `delta` collapses to the score when there is a weak one to warn about, as the
+                # low-confidence card's does, and to "—" when the mapping was confident.
+                "severity": L("Off template"), "tone": "med", "delta": pct if weak else "—",
+                "target": r.get("source_label", ""),
+                "calc": [
+                    [L("Source label"), r.get("source_label", ""), False],
+                    [L("Mapped to"), key, True],
+                    [L("Not on this template"),
+                     L("Mapped, but not on any statement in this template"), True],
+                    *([[L("Method"), r.get("mapping_method") or "—", False],
+                       [L("Confidence"), pct, False]] if weak else []),
+                    [L("Value"), str(val) if val is not None else "—", False],
+                ],
+                "fix": L(_OFFTPL_FIX),
+                # `i` is a render key only, as on the two cards above. The MAPPED CONCEPT is in the
+                # subject for the same reason it is in the low-confidence one: the claim being judged
+                # is about this caption landing on this concept, and a re-run that files the row under
+                # a different off-template concept is a different claim, not the same one re-confirmed.
+                "subject": {"k": "off_template", "label": judgement.norm(r.get("source_label")),
+                            "anchor": _prov_anchor(first.get("provenance")), "key": key},
+                # The figure, plus the mapping's strength and method WHEN THE CARD PRINTS THEM — the
+                # rule everywhere here is that identity turns on what was displayed, and quantized so
+                # jitter does not withdraw a sound acceptance (`_confidence_evidence`).
+                #
+                # The template's own version is deliberately NOT in here: publishing a new template
+                # version would then withdraw every acceptance on this card, including for rows the
+                # new version still does not declare — churn carrying no new information. When a
+                # revision DOES declare the key the finding stops being raised at all, which the
+                # judgement layer already reports as orphaned rather than as accepted.
+                "evidence": {"value": str(val) if val is not None else None,
+                             **(_confidence_evidence(conf, r.get("mapping_method")) if weak
+                                else {})},
+                # The RAW score beside the banded digest, only when there is one the reviewer was
+                # shown — the same division of labour as on the low-confidence card.
+                **({"context": {"confidence": r.get("mapping_confidence"),
+                                "method": r.get("mapping_method") or ""}} if weak else {}),
+                # The control the fix text names. Un-mapping ("") is offered by the same endpoint and
+                # is the honest answer for a row that belongs on no line at all.
+                "remap": _remap_offer(r, locale),
+            })
+        elif weak:
             low_conf += 1
             indicted.add(i)
             checks.append({
@@ -2058,15 +2211,15 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
         # inputs behind an un-recomputed relation. Every other card is explicit about having
         # neither rather than leaving the key absent for the client to guess at.
         c.setdefault("fix_action", None)
-        # `names` — the extracted lines a card indicts — is EMPTY on the two row-shaped findings
-        # rather than absent: an unmapped card is about the row it was built from and nothing else,
-        # and naming that row by its caption would match a second row printed under the same
-        # caption. The header's tile counts those two by row POSITION instead (see `indicted`).
+        # `names` — the extracted lines a card indicts — is EMPTY on the row-shaped findings rather
+        # than absent: an unmapped card is about the row it was built from and nothing else, and
+        # naming that row by its caption would match a second row printed under the same caption.
+        # The header's tile counts those by row POSITION instead (see `indicted`).
         c.setdefault("names", [])
         c.setdefault("inputs_edited", False)
         c.setdefault("inputs_edited_keys", [])
         c.setdefault("inputs_edited_note", "")
-        # Only the two ROW-shaped findings are about a single printed line, so only they can be
+        # Only the three ROW-shaped findings are about a single printed line, so only they can be
         # re-mapped. An accounting finding is about a relation between several concepts; offering to
         # re-map it would have to guess which of them the analyst meant.
         c.setdefault("remap", None)
@@ -2123,6 +2276,12 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
             {"label": L("Checks"), "count": len(accounting), "types": accounting_types},
             {"label": L("Unmapped"), "count": unmapped, "types": ["unmapped"]},
             {"label": L("Low confidence"), "count": low_conf, "types": ["low_confidence"]},
+            # Its own bucket rather than folded into one of the others: the tabs PARTITION the list,
+            # so a type with no tab of its own is a finding invisible under every filter, and this
+            # one is a different question from the two beside it — not "which concept is this line?"
+            # but "why does a mapped line reach no spread?", answered by fixing the rulebook or the
+            # template rather than by reading the page again.
+            {"label": L("Off template"), "count": off_template, "types": ["off_template"]},
         ],
         # `open` is outstanding work, so it includes the stale cards — someone vouched for figures
         # that have since moved, which is more urgent than an untouched finding, not less — and the
@@ -3110,6 +3269,116 @@ def _stmt_node(template_def: dict | None, statement_type: str) -> dict | None:
                  if s.get("type") == statement_type), None)
 
 
+# Why a statement is serving no rows, keyed by the code the payload publishes so the code and the
+# sentence cannot drift apart.
+_STATEMENT_REFUSALS = {
+    "statement_not_in_template":
+        "This run's template declares no statement of this type, so none is shown. Extracted "
+        "figures that reach no statement are reported in the review queue; re-extract against a "
+        "template that declares it to see it here.",
+    "template_declares_no_lines":
+        "This run's template declares this statement but no line items under it, so there is "
+        "nothing to render. Fix the template and re-extract; the figures themselves are unaffected.",
+    "basis_not_extracted":
+        "No figures were extracted for this statement on this basis. Check the page scope, or the "
+        "other basis.",
+}
+
+
+def _statement_refusal(reason: str, locale: str) -> dict:
+    """Why a statement is serving no rows, as a machine-readable code and the reader's sentence.
+
+    THE EMPTY GRID IS NOT SELF-EXPLANATORY, and it has two causes that need telling apart: the run's
+    template declares no statement of this type at all, or it declares one and nothing was extracted
+    for the requested basis. "Nothing here" reads as "the extraction found nothing", which sends an
+    analyst back to the document after figures that were never going to be shown.
+
+    ``viewer.callout`` carries the same sentence and is NOT a second spelling of it: the callout is
+    defined as the one line of prose a spread prints about itself, and when the spread is refused the
+    refusal is that line. This block exists because only one of the Workspace's three viewer branches
+    renders the callout — the paper preview, which a real uploaded PDF or workbook never takes — so a
+    client showing the grid area has to be able to read the reason where the rows would have been.
+
+    An unrecognised reason is a ``KeyError`` rather than a blank message: a refusal that cannot say
+    why is the very state this exists to remove.
+    """
+    return {"reason": reason, "message": _t(_STATEMENT_REFUSALS[reason], locale)}
+
+
+def _template_skeleton(stmt: dict | None) -> list[tuple[str, dict]]:
+    """One statement's skeleton as the grid lays it out: ``("section", node)`` headings and
+    ``("line", node)`` figure rows, in template order.
+
+    A section with keyed children is a HEADING followed by those children. A section with none is
+    itself a single figure row — that is how the template declares a statement-level total (gross
+    profit, profit before tax, total assets, net assets, closing cash), and skipping those left a
+    P&L with no "Profit for the year" on it.
+
+    ONE walk, because the grid and the review queue ask the same question from opposite ends: the
+    grid emits these keys and nothing else, and the queue raises a finding for every mapped row
+    whose key is not among them. Two walks would let a key count as declared for one and undeclared
+    for the other — the grid dropping a figure the queue never reported, which is precisely the
+    silent disappearance this layer exists to prevent.
+    """
+    out: list[tuple[str, dict]] = []
+    for sec in (stmt or {}).get("sections") or []:
+        children = [c for c in sec.get("children") or [] if c.get("canonical_key")]
+        if not children:
+            if sec.get("canonical_key"):
+                out.append(("line", sec))
+            continue
+        out.append(("section", sec))
+        out.extend(("line", c) for c in children)
+    return out
+
+
+# Statement types served as a MATRIX — component columns, movement rows — rather than as the
+# template's skeleton. ONE list, because three places turn on the same fact and any disagreement
+# between them loses a figure: `_build_statement` dispatches these to `_build_matrix_statement`,
+# `_declared_line_keys` must not count their template lines as grid keys (the matrix renders none of
+# them), and `_rows_on_a_matrix_face` exempts the rows the matrix does show.
+_MATRIX_STATEMENTS = ("changes_in_equity",)
+
+
+def _rows_on_a_matrix_face(rows: list[dict], template_def: dict | None) -> set[int]:
+    """Positions of rows that a MATRIX statement shows, when the template declares one.
+
+    The off-template finding says a mapped row "appears on no spread", and for these rows that would
+    be false: a matrix renders its movements as printed, so a movement whose concept the template
+    puts on no LINE still reaches a face. Left out, one payload would render a row on the equity
+    matrix and simultaneously report it as reaching nothing — the self-contradiction the shared
+    ``_template_skeleton`` walk exists to prevent, arriving by the one door that walk cannot cover,
+    because a matrix has no skeleton to walk.
+
+    Identity rather than equality: two movements can print the same caption and the same figures, and
+    ``_matrix_rows`` hands back the very dicts it filtered out of ``rows``.
+    """
+    if not any(_stmt_node(template_def, t) for t in _MATRIX_STATEMENTS):
+        return set()
+    shown = {id(r) for basis in ("consolidated", "standalone")
+             for r, _cells in _matrix_rows(rows, basis)}
+    return {i for i, r in enumerate(rows) if id(r) in shown}
+
+
+def _declared_line_keys(template_def: dict | None) -> set[str]:
+    """Every canonical key this template puts on a statement GRID, across all of its statements.
+
+    Deliberately NOT ``_remap_targets``: that list excludes calculated subtotals and headers because
+    a printed figure must not be written ONTO them, which is a different question from whether the
+    template declares the line at all. A row mapped to ``bs_total_assets`` does reach the grid, so it
+    is not off-template — treating it as one would raise a finding against a row the reader can see.
+
+    And deliberately NOT every declared node either: a matrix statement's lines are skipped, because
+    ``_build_matrix_statement`` renders movement rows and never consults the skeleton. Counting them
+    made a row mapped to a declared equity line reach no face and raise no finding at once — declared
+    enough to be silent, rendered nowhere.
+    """
+    return {node["canonical_key"]
+            for stmt in (template_def or {}).get("statements", [])
+            if stmt.get("type") not in _MATRIX_STATEMENTS
+            for kind, node in _template_skeleton(stmt) if kind == "line"}
+
+
 def _stmt_prefix(template_def: dict | None, statement_type: str) -> str:
     """The canonical-key prefix for a statement (e.g. 'bs'), read from the template's own
     keys so it isn't limited to the three reference statements."""
@@ -3218,6 +3487,43 @@ def _template_for_run(session: Session, run) -> dict | None:
         return None
     tv = session.get(TemplateVersion, tid)
     return tv.definition if tv else None
+
+
+def _superseded_template(session: Session, run) -> dict | None:
+    """This run's PINNED template version against the newest one stored under the same key.
+
+    Stated because a run cannot be un-pinned. ``_template_for_run`` resolves the template the run was
+    launched against and there is no fallback, so a document extracted before a template revision
+    goes on rendering the old shape for as long as that run is the latest one — which is exactly how
+    a corrected line order still looks wrong on screen, and how a reader comparing two documents can
+    be reading two different spreads without anything saying so. The two are indistinguishable
+    otherwise: nothing else in the payload names the template's version.
+
+    STATED, NOT ACTED ON. Re-extracting is a new run against the current template, and it discards
+    every manual value, comment and re-map recorded on this one — a decision for the analyst, not a
+    side effect of opening a statement. ``POST /documents/{id}/extractions`` already starts that run.
+
+    ``latest_version`` is the highest version STORED for the key, not the highest ``is_published``
+    one: ``routes/templates.py::_publish`` writes each new version with ``is_published`` defaulting
+    to False and nothing ever flips it, so filtering on that flag would report a genuinely superseded
+    run as current — the seeded reference template is the only published row in the table.
+
+    None when the run named no template (nothing to be superseded) or when the pinned row is gone.
+    """
+    from sqlalchemy import func
+
+    from app.db.models import TemplateVersion
+
+    tid = _run_template_id(run)
+    tv = session.get(TemplateVersion, tid) if tid else None
+    if tv is None:
+        return None
+    latest = session.execute(
+        select(func.max(TemplateVersion.version))
+        .where(TemplateVersion.template_key == tv.template_key)
+    ).scalar() or tv.version
+    return {"superseded": int(latest) > int(tv.version), "run_version": int(tv.version),
+            "latest_version": int(latest), "template_key": tv.template_key}
 
 
 _BASIS_LABEL_I18N = {
@@ -3360,10 +3666,27 @@ def _build_matrix_statement(rows: list[dict], statement_type: str, filename: str
     there is no section skeleton to slot it into — so the printed order is the statement's order,
     and every parsed row appears. ``cells`` is keyed by column name; ``v1``/``v2`` stay null so
     nothing downstream mistakes a component for a period.
+
+    THE STATEMENT IS THE UNIT OF THE TEMPLATE'S PERMISSION HERE, not the row. Everywhere else "no
+    line the template does not define may reach a statement" is decided per line, because a
+    comparative's rows ARE template line items. A matrix's rows are movements through the year, and
+    the template declares no movements — so filtering row by row would have to invent a
+    correspondence between "Acquisition of a subsidiary" and some template line that the template
+    never states, and would delete the statement's real content on the strength of that invention.
+    The one thing the template can honestly declare about a matrix is whether it carries the
+    statement at all. So: declared, and every parsed movement shows as printed; not declared, and
+    the statement is refused outright rather than rendering a face nothing asked for.
+
+    Refused loudly and with nothing lost. The tab is out of the nav but the route, this builder and
+    the ``StatementKey`` are all live, so a deep link still arrives here — it now arrives at an empty
+    grid carrying ``refused``, which says why in a code and a sentence, instead of at rows no template
+    declares. A movement row that mapped to no concept is already an ``unmapped`` finding in the
+    review queue, with the re-map offer that resolves it, so refusing the face hides no figure.
     """
-    columns = _matrix_columns(rows, basis)
+    declared = template_def is None or _stmt_node(template_def, statement_type) is not None
+    columns = _matrix_columns(rows, basis) if declared else []
     out: list[dict] = []
-    for r, raw_cells in _matrix_rows(rows, basis):
+    for r, raw_cells in (_matrix_rows(rows, basis) if declared else []):
         cells = {name: _to_num(v.get("value")) for name, v in raw_cells.items()}
         prov = next((v.get("provenance") for v in raw_cells.values() if v.get("provenance")), None)
         cat, pct = _conf_cat(r.get("mapping_confidence"))
@@ -3384,6 +3707,12 @@ def _build_matrix_statement(rows: list[dict], statement_type: str, filename: str
             "v1": None, "v2": None, "source": prov, "source2": None,
         })
 
+    # Why the matrix is empty, when it is — the same two-cause answer the comparative grid gives, for
+    # the same reason: a blank grid reads as "the extraction found nothing" and sends the analyst
+    # after movements that were never going to be shown. A declared statement with nothing
+    # matrix-shaped on this basis is a filing/scope question, not a template one.
+    refused = None if declared and out else _statement_refusal(
+        "statement_not_in_template" if not declared else "basis_not_extracted", locale)
     basis_label = _t("Consolidated" if basis == "consolidated" else "Standalone", locale)
     return {
         "statement": statement_type,
@@ -3398,11 +3727,14 @@ def _build_matrix_statement(rows: list[dict], statement_type: str, filename: str
         "units_scale_factor": _to_num((units_ctx or {}).get("scale_factor")) or 1.0,
         "format": doc_format, "page_count": page_count,
         "rows": out,
+        # Null when the statement is being served. See `_statement_refusal`.
+        "refused": refused,
         "viewer": {
             "company": company or filename, "subtitle": _t("Extracted statement", locale),
             "chips": [{"label": basis_label, "active": True}],
             "callout": _t("Columns are equity components as printed, not periods. Click a row "
-                          "to see it in the document.", locale),
+                          "to see it in the document.", locale) if refused is None
+                       else refused["message"],
         },
     }
 
@@ -3625,6 +3957,10 @@ def _build_kpi_statement(rows: list[dict], filename: str, *, basis: str, locale:
         "presentation": "raw",
         "format": doc_format, "page_count": page_count,
         "rows": out,
+        # Explicit rather than absent, as on the two face shapes: the KPI view serves the catalog it
+        # declares whatever the filing yielded — a ratio whose inputs are missing is a row saying so
+        # — so there is no state in which it refuses, and the client needs no special case for it.
+        "refused": None,
         "viewer": {
             "company": company or filename, "subtitle": _t("Computed KPIs", locale),
             "chips": [{"label": _t("Consolidated" if basis == "consolidated" else "Standalone",
@@ -3638,7 +3974,17 @@ def _build_kpi_statement(rows: list[dict], filename: str, *, basis: str, locale:
 
 def _face_prefixes(template_def: dict | None) -> set[str]:
     """The canonical-key prefixes that DO reach a face statement, so anything else can be
-    recognised as not being on one."""
+    recognised as not being on one.
+
+    A PREFIX TEST, AND NOW AN OVER-APPROXIMATION. Its one caller (services/gap_closing.py::leftovers)
+    treats a row whose key carries a face prefix as already placed, which held while the grid rendered
+    off-template keys under an "Other extracted items" heading. It no longer does: ``_build_statement``
+    emits the template's declared lines only, so a row keyed ``bs_something_the_template_omits`` is on
+    no face while this still calls its prefix a face. The consequence is bounded — gap closing offers
+    one candidate fewer, and the row is raised as an ``off_template`` review finding whose re-map
+    offer is the same remedy by hand — but the honest predicate is ``_declared_line_keys``, and
+    ``leftovers`` should move to it.
+    """
     out = {p for p in _STMT_PREFIX.values()}
     for stmt in (template_def or {}).get("statements", []):
         t = stmt.get("type")
@@ -3663,7 +4009,7 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     # COMPONENTS (issued capital, each reserve, retained profits, non-controlling interests,
     # total equity) and its rows are movements through the year. Forcing it into current/prior
     # columns files a component under a period that does not exist, so it gets its own shape.
-    if statement_type == "changes_in_equity":
+    if statement_type in _MATRIX_STATEMENTS:
         return _build_matrix_statement(
             rows, statement_type, filename, basis=basis, locale=locale, units_ctx=units_ctx,
             company=company, doc_format=doc_format, page_count=page_count,
@@ -3926,8 +4272,7 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
 
     out: list[dict] = []
     seen: set[str] = set()
-    stmt = next((s for s in (template_def or {}).get("statements", [])
-                 if s.get("type") == statement_type), None)
+    stmt = _stmt_node(template_def, statement_type)
     def emit(key: str, label: str, kind: str) -> None:
         seen.add(key)
         group = [r for r in by_key.get(key, []) if has_basis(r)]
@@ -3935,35 +4280,57 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                    else blank_row(key, label, kind))
 
     if stmt and basis_present:
-        for sec in stmt.get("sections") or []:
-            children = [c for c in sec.get("children") or [] if c.get("canonical_key")]
-            if not children:
-                # A statement-level total — gross profit, profit before tax, total assets, net
-                # assets, closing cash — is declared as a section with no children of its own.
-                # These were being skipped, which left a P&L with no "Profit for the year" on it:
-                # exactly the calculated lines a reader looks for first. They are single rows.
-                if sec.get("canonical_key"):
-                    emit(sec["canonical_key"], _loc(sec, locale), _kind_for(sec.get("role")))
-                continue
-            # Show every section and every template line (extracted or not) so the whole
-            # template is represented, not only the lines that happened to be extracted.
-            out.append({"id": f"sec_{sec.get('node_id', '')}", "label": _loc(sec, locale),
-                        "kind": "section", "v1": None, "v2": None})
-            for c in children:
-                emit(c["canonical_key"], _loc(c, locale), _kind_for(c.get("role")))
+        # THE TEMPLATE IS THE WHOLE STATEMENT. Every declared section and line appears (extracted or
+        # not, so a gap is visible and fillable), in the order the template declares them, and
+        # nothing else appears at all.
+        #
+        # What used to follow this loop was an "Other extracted items" section: any row whose
+        # canonical_key carried this statement's prefix but was not one of the template's declared
+        # children, rendered as real statement rows and appended AFTER every template section. It was
+        # the in-statement successor of `_build_additional_items_statement`, removed for exactly this
+        # reason, and it did two kinds of damage. It ADDED lines the template does not define, which
+        # the spread is not allowed to do — a spread is only comparable across filings if its shape
+        # is the template's. And against a run pinned to a superseded template it appended the very
+        # lines whose position a template revision had corrected, so a fixed line order still
+        # rendered with the totals at the end.
+        #
+        # A mapped figure still never vanishes in silence: an off-template row is raised as an
+        # `off_template` review finding carrying a re-map offer (see `_build_review`), which both
+        # says the figure reaches no spread and offers the control that fixes it.
+        for kind, node in _template_skeleton(stmt):
+            if kind == "section":
+                out.append({"id": f"sec_{node.get('node_id', '')}", "label": _loc(node, locale),
+                            "kind": "section", "v1": None, "v2": None})
+            else:
+                emit(node["canonical_key"], _loc(node, locale), _kind_for(node.get("role")))
+    elif template_def is None:
+        # NO TEMPLATE WAS PINNED to this run — `ExtractionOptions.template_version_id` defaults to
+        # None and the upload screen allows it — so there is no declared shape to render and no
+        # declaration for a row to be outside of. `_template_for_run` documents this fallback: the
+        # statement is the extracted concepts themselves, under their own printed captions, in the
+        # order they were read. No "Other" heading, because with no skeleton nothing is other.
+        for r in rows:
+            k = r.get("canonical_key") or ""
+            if k.startswith(f"{prefix}_") and k not in seen and has_basis(r):
+                emit(k, r.get("source_label") or "", "item")
 
-    # Concepts this statement extracted that the template has no node for — shown so a mapped
-    # figure is never invisible just because the template skeleton omits its line.
-    extra: dict[str, list[dict]] = {}
-    for r in rows:
-        k = r.get("canonical_key") or ""
-        if k.startswith(f"{prefix}_") and k not in seen and has_basis(r):
-            extra.setdefault(k, []).append(r)
-    if extra:
-        out.append({"id": "sec_other", "label": _t("Other extracted items", locale),
-                    "kind": "section", "v1": None, "v2": None})
-        for k, group in extra.items():
-            out.append(item_row(k, group[0].get("source_label", ""), group))
+    # WHY THE GRID IS EMPTY, when it is. Both causes used to be one indistinguishable blank, under a
+    # callout ("Values are read deterministically from the source") that asserts figures are being
+    # shown — so an analyst went back to the filing hunting for lines that were never going to
+    # appear. Stated in the order they are decided: a template declaring no statement of this type
+    # answers the question completely, and only then does the basis matter.
+    # WHY THE GRID IS EMPTY, when it is. The causes used to be one indistinguishable blank, under a
+    # callout ("Values are read deterministically from the source") that asserts figures are being
+    # shown — so an analyst went back to the filing hunting for lines that were never going to
+    # appear. Ordered most-specific first, because each earlier cause makes the later ones moot and
+    # naming the wrong one sends the reader to the wrong place: a template defect is not fixed by
+    # widening the page scope.
+    refused = None
+    if not out:
+        refused = _statement_refusal(
+            "statement_not_in_template" if stmt is None and template_def is not None
+            else "template_declares_no_lines" if stmt is not None and not _template_skeleton(stmt)
+            else "basis_not_extracted", locale)
 
     # Face-line containment netting: reduce a target line by the lines already included in it
     # (e.g. cost of sales inclusive of admin / S&M), showing the net value + formula. Signed and
@@ -4010,12 +4377,14 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         # Document shape so the Workspace picks the right live viewer (PDF pages vs Excel cells).
         "format": doc_format, "page_count": page_count,
         "rows": out,
+        # Null when the statement is being served. See `_statement_refusal`.
+        "refused": refused,
         "viewer": {
             "company": company or filename, "subtitle": _t("Extracted statement", locale),
             "chips": [{"label": basis_label, "active": True}],
             "callout": _t("Values are read deterministically from the source; mapping is by the "
                           "ensemble. Open the extraction view for click-to-source provenance.",
-                          locale),
+                          locale) if refused is None else refused["message"],
         },
     }
 
@@ -4041,14 +4410,20 @@ def get_document_statement(
     template_def = _template_for_run(session, run)
     # Consolidated and standalone are extracted in one pass; the grid shows the requested
     # basis (empty if the source didn't present that basis).
-    return _build_statement(run.result.get("rows", []), template_def, statement,
-                            doc.filename or "document", basis, locale,
-                            run.result.get("units"), company=run.result.get("entity"),
-                            doc_format=run.result.get("format") or doc.fmt or "",
-                            page_count=run.result.get("page_count") or doc.page_count or 0,
-                            # Apply only the netting the LLM confirmed for this document (cached at
-                            # extraction); the raw ontology policies are candidates, not results.
-                            netting_rules=run.result.get("netting") or [])
+    spread = _build_statement(run.result.get("rows", []), template_def, statement,
+                              doc.filename or "document", basis, locale,
+                              run.result.get("units"), company=run.result.get("entity"),
+                              doc_format=run.result.get("format") or doc.fmt or "",
+                              page_count=run.result.get("page_count") or doc.page_count or 0,
+                              # Apply only the netting the LLM confirmed for this document (cached at
+                              # extraction); the raw ontology policies are candidates, not results.
+                              netting_rules=run.result.get("netting") or [])
+    # Which template version this spread's SHAPE came from, and whether a newer one exists. Added
+    # here rather than inside `_build_statement`, which is a pure function of a definition and has no
+    # session to ask the question with — and the question is about the row in the table, not about
+    # the definition. See `_superseded_template`: stated, never acted on.
+    spread["superseded_template"] = _superseded_template(session, run)
+    return spread
 
 
 def _note_no(raw) -> int | None:

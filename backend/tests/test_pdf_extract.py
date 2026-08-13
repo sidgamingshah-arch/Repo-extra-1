@@ -480,9 +480,10 @@ def test_review_and_run_404_before_extraction(client):
     rev = client.get(f"/api/v1/documents/{doc_id}/review").json()
     assert rev["summary"] == {"open": 0, "accepted": 0, "stale": 0, "conflict": 0,
                               "passed": 0}
-    # The empty queue is the SAME shape as a real one — four tabs, not the one-tab literal this
+    # The empty queue is the SAME shape as a real one — every tab, not the one-tab literal this
     # branch used to hand-write — so the screen has no second empty-state to render.
-    assert [t["label"] for t in rev["tabs"]] == ["All", "Checks", "Unmapped", "Low confidence"]
+    assert [t["label"] for t in rev["tabs"]] == ["All", "Checks", "Unmapped", "Low confidence",
+                                                 "Off template"]
     assert rev["coverage"] == {"available": False, "reason": "not_extracted",
                                "reason_label": rev["coverage"]["reason_label"]}
     assert rev["coverage"]["reason_label"]

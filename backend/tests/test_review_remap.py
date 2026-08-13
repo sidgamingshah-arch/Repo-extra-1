@@ -60,8 +60,12 @@ def _lowconf(label, key, value, y=0.3):
 # --- what the card offers -----------------------------------------------------------------------
 
 def test_both_row_shaped_cards_carry_a_remap_offer_and_no_other_card_does(template):
+    # The low-confidence key must be one the template DECLARES: a weak mapping onto a concept the
+    # template puts on no statement is raised as `off_template` instead — a third row-shaped card,
+    # covered in tests/test_no_template_additions.py, which carries the same offer.
     rows = [_unmapped("Deposits paid for acquisition of land", 60),
-            _lowconf("Sundry receivables", "bs_current_assets__other_receivables", 25)]
+            _lowconf("Sundry receivables",
+                     "bs_current_assets__prepayments_other_receivables_and_other_assets", 25)]
     review = _build_review(rows, "d.pdf", "en", template_def=template)
     by_type = {c["type"]: c for c in review["checks"]}
 
@@ -71,10 +75,10 @@ def test_both_row_shaped_cards_carry_a_remap_offer_and_no_other_card_does(templa
         assert offer["label"] == by_type[kind]["title"]
     assert by_type["unmapped"]["remap"]["current_key"] == ""
     assert by_type["low_confidence"]["remap"]["current_key"] == \
-        "bs_current_assets__other_receivables"
+        "bs_current_assets__prepayments_other_receivables_and_other_assets"
     # Every other builder is explicit about having no offer rather than leaving the key absent.
     for c in review["checks"]:
-        if c["type"] not in ("unmapped", "low_confidence"):
+        if c["type"] not in ("unmapped", "low_confidence", "off_template"):
             assert c["remap"] is None, c["type"]
 
 
@@ -234,7 +238,10 @@ def test_re_mapping_a_low_confidence_row_clears_the_flag_that_raised_the_finding
     the same card back on the next fetch — re-mapped and still flagged — which reads as the action
     having failed, and the row would stay out of auto-accept forever on a mapping a human chose."""
     doc_id = _extracted(client)
-    row = _lowconf("Sundry receivables", "bs_current_assets__other_receivables", 25, y=0.71)
+    # A key the shipped template declares, so the card raised is the low-confidence one this test is
+    # about rather than the `off_template` card a mapping onto an undeclared concept now raises.
+    row = _lowconf("Sundry receivables",
+                   "bs_current_assets__prepayments_other_receivables_and_other_assets", 25, y=0.71)
     _inject([row])
     ref = _row_ref(row)
 
