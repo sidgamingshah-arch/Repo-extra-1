@@ -786,6 +786,8 @@ export interface ReviewCheck {
    *  un-removable. */
   judgement_withheld: boolean;
   fix_action: FixAction | null;
+  /** Row-shaped findings only (unmapped / low confidence) — see `RemapOffer`. */
+  remap: RemapOffer | null;
   /** Structural checks only. `run.result["structural"]` is written once by the pipeline and is
    *  never recomputed on an edit, so the relation is not re-evaluated until the next extraction:
    *  the card does NOT vanish after its own fix, and the note says so. */
@@ -794,6 +796,35 @@ export interface ReviewCheck {
   inputs_edited_note: string;
   judgement: CheckJudgement | null;
 }
+/** A template line a printed row may be re-mapped onto. Served ONCE per review payload
+ *  (`remap_targets`), never per card: it is the same 180-odd concepts for every finding.
+ *  Calculated subtotals and section headers are excluded server-side — writing a printed figure
+ *  onto a rollup produces a subtotal its own components contradict. */
+export interface RemapTarget {
+  canonical_key: string;
+  label: string;
+  statement: string;
+  /** The section's label, for grouping the select. A flat list of 180 options is unusable. */
+  section: string;
+}
+
+/** The re-map offer on a ROW-shaped finding (unmapped / low confidence). Null on every other
+ *  card: an accounting finding is about a relation between several concepts, so offering to
+ *  re-map it would have to guess which one the analyst meant. */
+export interface RemapOffer {
+  /** The handle the POST carries. Derived from the row's normalised caption plus the caption's
+   *  own geometry, so it does not move when the figure does — and deliberately NOT the subject
+   *  key, which folds in the finding's kind and the concept it was mapped to. */
+  row_ref: string;
+  label: string;
+  /** "" for an unmapped row. */
+  current_key: string;
+  /** Set once a human has moved this row, so the decision is visible after the finding it
+   *  answered has left the queue. */
+  remapped: { from: string; to: string; reason: string; by: string; at: string } | null;
+  remapped_note: string;
+}
+
 export interface ReviewResponse {
   /** The run the findings were derived from — printed by the coverage band so a screenshot is
    *  traceable. "" when the document has no run. */
@@ -818,6 +849,9 @@ export interface ReviewResponse {
   summary: { open: number; accepted: number; stale: number; conflict: number; passed: number };
   judgements: { orphaned: OrphanedJudgement[] };
   coverage: CoverageBlock;
+  /** Empty when the run named no template — which is also when no card carries an offer, because
+   *  a select with no options is worse than no control. */
+  remap_targets: RemapTarget[];
 }
 
 export interface NoteIndexItem {

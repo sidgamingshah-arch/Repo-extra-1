@@ -210,6 +210,19 @@ export const api = {
     req<{ ok: boolean; subject_key: string; withdrawn: boolean }>(
       `/documents/${documentId}/review/judgements/${subjectKey}`, { method: "DELETE" },
     ),
+  /** Re-map one printed row onto a different template line — the way a row-shaped review finding
+   *  is RESOLVED. `canonicalKey: ""` un-maps the row, which is the only route back from a re-map
+   *  that started from unmapped. Errors are meaningful and must reach the card: 409 means the row
+   *  reference is ambiguous or the row already carries that concept, 422 that the target is not a
+   *  line this run's template offers. */
+  remapReviewRow: (documentId: string, rowRef: string, canonicalKey: string, reason: string,
+                   locale: Locale = "en") =>
+    req<{ ok: boolean; row_ref: string; label: string; from: string; to: string;
+          remap: { from: string; to: string; reason: string; by: string; at: string } }>(
+      `/documents/${documentId}/review/remap?locale=${locale}`,
+      { method: "POST", body: JSON.stringify({ row_ref: rowRef, canonical_key: canonicalKey,
+                                               reason }) },
+    ),
   /** Derived analysis for a document: computed ratios, disclosure scan, free-form notes. */
   documentAnalysis: (documentId: string, locale: Locale = "en") =>
     req<AnalysisResponse>(`/documents/${documentId}/analysis?locale=${locale}`),

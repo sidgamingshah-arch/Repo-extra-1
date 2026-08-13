@@ -738,6 +738,86 @@ def _prov_anchor(prov: dict | None) -> str:
     return f"p{page}#" + (f"y{band}" if band else "nobox")
 
 
+def _row_ref(r: dict) -> str:
+    """A stable handle on ONE extracted row, for an action that has to find it again.
+
+    A run's rows carry no id, and the two handles already in the payload cannot serve: the check id
+    embeds the row's INDEX (a render key that moves whenever extraction composition changes) and the
+    canonical key is exactly what an unmapped row does not have. So the handle is the identity the
+    judgement layer already established for a row — its normalised caption plus ``_prov_anchor``, the
+    caption's own geometry — and nothing else. Deliberately NOT the subject key: that one folds in the
+    finding's KIND and the concept it was mapped to, so re-mapping a row would change the key of the
+    thing being re-mapped, and one row wearing two findings would have two handles.
+
+    Value-independent by construction, which is the property that matters: the analyst reads a figure,
+    picks a concept, and the row the server writes to must be the row they were looking at even if a
+    concurrent edit changed the amount.
+    """
+    from app.services import judgement
+
+    first = (r.get("values") or [{}])[0]
+    return judgement.subject_key({"k": "row",
+                                  "label": judgement.norm(r.get("source_label")),
+                                  "anchor": _prov_anchor(first.get("provenance"))})
+
+
+def _remap_targets(template_def: dict | None, locale: str = "en") -> list[dict]:
+    """Every template line a printed row may be re-mapped ONTO, in template order.
+
+    Two kinds of node are left out, and both would be a defect rather than a choice:
+
+    * a CALCULATED line (one declaring a ``rollup``). Mapping a printed row onto a computed subtotal
+      writes a figure the rollup then contradicts — the same reason ``_flip_sign_action`` refuses to
+      flip one;
+    * a section HEADER, which holds no figure at all.
+
+    ``section`` is carried so the client can group the list. 180-odd concepts in one flat select is a
+    list nobody can find anything in, and the section is the only grouping an analyst reads the
+    statement by.
+    """
+    from app.services.rollups import calculated_nodes, node_labels
+
+    labels = node_labels(template_def, locale)
+    computed = set(calculated_nodes(template_def))
+    out: list[dict] = []
+    for stmt in (template_def or {}).get("statements", []):
+        st = stmt.get("type", "")
+        for sec in stmt.get("sections") or []:
+            section = labels.get(sec.get("canonical_key") or "") or sec.get("label") or ""
+            for node in sec.get("children") or []:
+                key = node.get("canonical_key")
+                if not key or key in computed or node.get("role") in ("header", "spacer"):
+                    continue
+                out.append({"canonical_key": key, "label": labels.get(key, key),
+                            "statement": st, "section": section})
+    return out
+
+
+def _remap_offer(r: dict, locale: str = "en") -> dict:
+    """What a row-shaped finding needs to offer "map this to a different line item".
+
+    The candidate list is NOT in here — it is served once per payload as ``remap_targets``, because
+    it is the same 180-odd concepts for every card. What is per card is the handle on the row, the
+    caption the analyst is looking at, and where it is filed now.
+
+    A row already re-mapped by hand says so, with who and when: the finding it answered is gone from
+    the queue on the next fetch, so without this the only trace of a human decision would be the
+    absence of a card.
+    """
+    prior = r.get("remap") or {}
+    note = ""
+    if prior:
+        was = prior.get("from") or _t("unmapped", locale)
+        note = _t("Re-mapped by hand", locale) + f" — {was} → {prior.get('to') or ''}"
+        if prior.get("by"):
+            note += f" ({prior['by']})"
+    return {"row_ref": _row_ref(r),
+            "label": r.get("source_label") or "",
+            "current_key": r.get("canonical_key") or "",
+            "remapped": prior or None,
+            "remapped_note": note}
+
+
 def _low_conf_threshold() -> float:
     """Mapping confidence below which a line routes to review — the same threshold the mapper
     uses to auto-accept, so the two never disagree."""
@@ -1923,6 +2003,9 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                 # The card prints str(val), so string equality invents no rounding the screen
                 # never applied.
                 "evidence": {"value": str(val) if val is not None else None},
+                # …and the fix the sentence above promises. `_UNMAPPED_FIX` has always said "Pick the
+                # correct template line item"; until this there was nothing on the card that could.
+                "remap": _remap_offer(r, locale),
             })
         elif "low_mapping_confidence" in flags or (isinstance(conf, (int, float)) and conf < _low_conf_threshold()):
             low_conf += 1
@@ -1964,6 +2047,9 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                 # shown. The evidence carries the band, which is what identity turns on.
                 "context": {"confidence": r.get("mapping_confidence"),
                             "method": r.get("mapping_method") or ""},
+                # `_LOWCONF_FIX` says "Confirm the concept is correct or reassign it". Reassigning is
+                # this, and it is the half the card could not previously do.
+                "remap": _remap_offer(r, locale),
             })
     for c in checks:
         c["subject_key"] = judgement.subject_key(c["subject"])
@@ -1980,6 +2066,10 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
         c.setdefault("inputs_edited", False)
         c.setdefault("inputs_edited_keys", [])
         c.setdefault("inputs_edited_note", "")
+        # Only the two ROW-shaped findings are about a single printed line, so only they can be
+        # re-mapped. An accounting finding is about a relation between several concepts; offering to
+        # re-map it would have to guess which of them the analyst meant.
+        c.setdefault("remap", None)
     applied = judgement.apply_judgements(
         checks, judgements or [],
         label_fn=lambda subj: _subject_label(subj, locale),
@@ -2043,6 +2133,11 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                     "conflict": counts["conflict"], "passed": passed},
         "judgements": {"orphaned": applied["orphaned"]},
         "coverage": cov_block,
+        # The template lines a row-shaped finding may be re-mapped onto. ONCE per payload, not per
+        # card: 180-odd concepts repeated on every unmapped row is the same list served forty times.
+        # Empty when the run named no template, which is also when the offer is refused — there is
+        # nothing to map onto and a select with no options is worse than no control.
+        "remap_targets": _remap_targets(template_def, locale),
     }
 
 
@@ -2467,6 +2562,125 @@ def withdraw_review_judgement(document_id: str, subject_key: str,
     flag_modified(row, "history")
     session.commit()
     return {"ok": True, "subject_key": subject_key, "withdrawn": True}
+
+
+class RemapBody(BaseModel):
+    """A row re-mapped by hand onto a different template line.
+
+    ``row_ref`` travels in the BODY for the same reason a subject key does: it is a hash, and the
+    thing it identifies is a row rather than a resource with a URL of its own.
+    """
+
+    row_ref: str
+    # "" un-maps the row: the analyst's judgement that this printed line belongs to no template
+    # concept at all, which is the exact inverse of the action and the only way back from a re-map
+    # that started from unmapped.
+    canonical_key: str = ""
+    reason: str = ""
+
+
+@router.post("/{document_id}/review/remap",
+             dependencies=[Depends(require(Permission.EXTRACTION_EDIT)),
+                           Depends(authorized_document)])
+def remap_review_row(document_id: str, body: RemapBody, locale: str = Query("en"),
+                     session: Session = Depends(db),
+                     principal: Principal = Depends(current_principal)) -> dict:
+    """Re-file one printed row onto a different template line — resolving a review finding.
+
+    The queue's two row-shaped findings both END here. An unmapped row's fix text has always read
+    "Pick the correct template line item" and a low-confidence row's "Confirm the concept is correct
+    or reassign it", and until this there was nothing on either card that could do it: the only write
+    the screen offered was the sign flip, and the only value endpoint is keyed on the canonical key an
+    unmapped row does not have.
+
+    THE ROW IS FOUND BY ``_row_ref``, and an ambiguous ref is REFUSED rather than resolved to the
+    first match. Two rows can share an anchor — the fallback for a page with no label geometry is the
+    printed line's vertical band, and two sub-tables on one baseline collide — and writing a concept
+    onto the wrong one of those would move a real figure onto a concept nobody chose, invisibly,
+    because the card the analyst was reading would disappear either way. ``apply_judgements`` refuses
+    to attribute an acceptance in exactly this case; so does this.
+
+    The target must be a line the RUN'S OWN template defines and must not be a calculated subtotal —
+    the same two conditions ``_remap_targets`` applies to what the card offers, checked again here
+    because a client is not a gate.
+
+    Recorded, not silent: the row keeps ``remap`` naming where it came from, who moved it and why, its
+    method becomes ``manual_remap``, and its confidence goes to 1.0 — a human decision is the
+    strongest evidence in the system, and leaving the old score would leave the low-confidence finding
+    on screen after the analyst answered it. The previous key is kept, so re-mapping back (or to "")
+    is the way out and no state is lost.
+    """
+    from app.db.models import Document
+
+    doc = session.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        raise HTTPException(status_code=404, detail="No extraction run yet for this document")
+    ref = (body.row_ref or "").strip()
+    if not ref:
+        raise HTTPException(status_code=422, detail="row_ref is required")
+
+    result = dict(run.result)
+    rows = result.get("rows", [])
+    matches = [r for r in rows if _row_ref(r) == ref]
+    if not matches:
+        raise HTTPException(status_code=404,
+                            detail="No extracted row matches that reference. Reload the queue: the "
+                                   "document may have been re-extracted since it was rendered.")
+    if len(matches) > 1:
+        # Honest refusal over a coin flip — see the docstring.
+        raise HTTPException(
+            status_code=409,
+            detail=f"{len(matches)} extracted rows share that reference, so which one to re-map "
+                   "cannot be decided. Re-map from the Workspace, where the rows are listed "
+                   "separately.")
+
+    key = (body.canonical_key or "").strip()
+    template_def = _template_for_run(session, run)
+    if key:
+        allowed = {t["canonical_key"] for t in _remap_targets(template_def, locale)}
+        if key not in allowed:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{key}' is not a line this run's template offers as a re-map target. "
+                       "Calculated subtotals and section headers are excluded.")
+
+    target = matches[0]
+    prior = target.get("canonical_key") or ""
+    if prior == key:
+        raise HTTPException(status_code=409,
+                            detail=f"That row is already mapped to '{key}'." if key
+                                   else "That row is already unmapped.")
+    target["canonical_key"] = key or None
+    target["mapping_method"] = "manual_remap" if key else "manual_unmap"
+    target["mapping_confidence"] = 1.0 if key else None
+    target["remap"] = {"from": prior, "to": key, "reason": body.reason.strip()[:2000],
+                       "by": getattr(principal, "username", "") or "", "at": _now_iso()}
+    # On the ROW's flags, not only in the payload: the export and the statement inspector both read
+    # row flags, so a figure moved by hand says so wherever it is read.
+    flags = [f for f in (target.get("flags") or []) if not f.startswith("remapped_by_reviewer:")]
+    flags.append(f"remapped_by_reviewer:{prior or 'unmapped'}->{key or 'unmapped'}")
+    # The findings the old mapping raised are answered by the analyst's decision, so the flags that
+    # raise them go with it. Left behind, the row would arrive at the queue re-mapped AND still
+    # low-confidence, which reads as the action having failed.
+    if key:
+        flags = [f for f in flags if f != "low_mapping_confidence"]
+    target["flags"] = flags
+    for v in target.get("values") or []:
+        conf = v.get("confidence")
+        if isinstance(conf, dict):
+            v["confidence"] = {**conf, "mapping": 1.0 if key else conf.get("mapping"),
+                               "flags": [f for f in (conf.get("flags") or [])
+                                         if not (key and f == "low_mapping_confidence")]}
+
+    result["rows"] = rows
+    run.result = result
+    flag_modified(run, "result")
+    session.commit()
+    return {"ok": True, "row_ref": ref, "label": target.get("source_label") or "",
+            "from": prior, "to": key, "remap": target["remap"]}
 
 
 class LineItemEdit(BaseModel):

@@ -343,6 +343,26 @@ export function useWithdrawAcceptance(documentId: string | undefined) {
   });
 }
 
+/** Re-map one printed row onto a different template line — how a row-shaped finding is resolved.
+ *
+ *  Invalidated like an EDIT, not like a judgement: moving a row moves the figure into a different
+ *  concept, so the statement grid, the KPIs, the commentary and the export all change with it.
+ *  Refreshing only the queue would leave every other screen showing the pre-remap mapping.
+ *
+ *  Errors are NOT swallowed — a 409 means the row reference is ambiguous or already carries the
+ *  concept, a 422 that the target is not one this run's template offers, and the card has to say
+ *  so rather than leave the analyst believing the row moved. */
+export function useRemapReviewRow(documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { rowRef: string; canonicalKey: string; reason?: string;
+                         locale?: Locale }) =>
+      api.remapReviewRow(documentId as string, vars.rowRef, vars.canonicalKey,
+                         vars.reason ?? "", vars.locale ?? "en"),
+    onSuccess: () => invalidateAfterEdit(qc, documentId),
+  });
+}
+
 /** Derived analysis (ratios / disclosures / notes) for a document. */
 export const useDocumentAnalysis = (documentId: string | undefined, locale: Locale = "en") =>
   useQuery({

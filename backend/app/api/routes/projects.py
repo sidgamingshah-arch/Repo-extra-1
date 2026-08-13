@@ -313,6 +313,9 @@ _SAMPLE_JUDGEMENT_FIELDS = {
     # than being absent for the client to guess at.
     "conflict": False, "conflict_count": 0, "conflict_note": "", "judgement_withheld": False,
     "inputs_edited": False, "inputs_edited_keys": [], "inputs_edited_note": "",
+    # `remap: None` for the same reason as `fix_action`: the sample has no run whose rows a re-map
+    # could write to, so the control is absent here rather than rendered and dead.
+    "remap": None,
 }
 
 
@@ -324,7 +327,7 @@ def get_review(project_id: str, locale: str = Query("en")) -> dict:
                 # the empty inputs rather than being written out as four zeros.
                 "summary": _demo_review_summary([], statements={}),
                 "judgements": {"orphaned": []},
-                "coverage": _sample_coverage(locale)}
+                "coverage": _sample_coverage(locale), "remap_targets": []}
     checks = [_sample_check(c) for c in deepcopy(DEMO["review"])]
     tabs = _demo_review_tabs(checks)
     if locale != "en":
@@ -339,7 +342,9 @@ def get_review(project_id: str, locale: str = Query("en")) -> dict:
     return {"run_id": "", "checks": checks, "tabs": tabs,
             "summary": _demo_review_summary(checks),
             "judgements": {"orphaned": []},
-            "coverage": _sample_coverage(locale)}
+            # No run means no rows to re-map, so the sample offers no targets — the same reason
+            # every sample check carries `remap: None`.
+            "coverage": _sample_coverage(locale), "remap_targets": []}
 
 
 def _sample_coverage(locale: str) -> dict:

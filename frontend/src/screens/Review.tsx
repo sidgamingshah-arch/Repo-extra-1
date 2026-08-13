@@ -17,6 +17,15 @@
  * one row to flip. Every other card gets a sentence saying the fix is manual instead of a button
  * that would either do nothing or invent a mapping.
  *
+ * THE ROW-SHAPED FINDINGS HAVE A THIRD CONTROL, and it is the one that RESOLVES them: re-map the
+ * printed row onto a different template line (`RemapPanel`, extraction:edit — the same gate as the
+ * flip, because moving a row is an extraction edit). Both cards' own prose had always instructed
+ * the analyst to do exactly this — "Pick the correct template line item", "Confirm the concept is
+ * correct or reassign it" — and there was nothing on the screen that could, which is a card telling
+ * the reader to do something the product cannot do. The offer is per card (`check.remap`) while the
+ * candidate list is served once per payload (`remap_targets`), and the accounting findings carry no
+ * offer at all: a relation between several concepts gives no answer to WHICH one to re-map.
+ *
  * A finding the server serves as `conflict` — its identity is shared with another finding that
  * printed DIFFERENT figures — gets no ACCEPT path at all: no Accept, no reason box, no stored
  * verdict shown, and a sentence saying the queue cannot tell the two apart. Attributing the one
@@ -62,8 +71,8 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "../components/ui";
 import { CoverageBand } from "../components/CoverageBand";
 import {
-  useAcceptFinding, useDocumentReview, useEditDocumentLineItem, useReview, useProjectLoaded,
-  useWithdrawAcceptance,
+  useAcceptFinding, useDocumentReview, useEditDocumentLineItem, useRemapReviewRow, useReview,
+  useProjectLoaded, useWithdrawAcceptance,
 } from "../lib/queries";
 import { ApiError } from "../lib/api";
 import { EmptyState } from "../components/EmptyState";
@@ -72,7 +81,7 @@ import { useAppLocale, useUI } from "../store";
 import { useT } from "../i18n";
 import { useCan } from "../lib/rbac";
 import { color, font } from "../theme";
-import type { ReviewCheck } from "../types";
+import type { RemapTarget, ReviewCheck } from "../types";
 
 /** The judgement states this build knows how to render, and the subset a control may be offered
  *  on. A WHITELIST, deliberately: the server grew `conflict` (two findings sharing one identity
@@ -154,6 +163,116 @@ function FigureRows({ rows, accent }: { rows: [string, string, boolean?][]; acce
   );
 }
 
+/** The re-map control on a row-shaped finding: pick a template line, say why, apply.
+ *
+ *  WHY IT IS A SELECT AND NOT A FREE-TEXT KEY. The list is the server's `remap_targets` — the lines
+ *  THIS RUN'S template defines, with calculated subtotals and headers already excluded — so a
+ *  concept the run cannot hold is not offerable. The endpoint checks the same thing again; this is
+ *  what stops the analyst discovering it through a 422.
+ *
+ *  Grouped by statement and section with `<optgroup>`: 180-odd flat options is a list nobody can
+ *  find a line in, and the section is how an analyst reads a statement.
+ *
+ *  The empty option is a REAL choice, not a placeholder — "" un-maps the row, which is the only
+ *  route back from a re-map that started from unmapped. So the placeholder is a separate disabled
+ *  option and the button is gated on a pick having been MADE, not on the pick being non-empty.
+ */
+function RemapPanel({
+  offer, targets, picked, onPick, reason, onReason, onApply, busy, canEdit, t,
+}: {
+  offer: NonNullable<ReviewCheck["remap"]>;
+  targets: RemapTarget[];
+  picked: string | undefined;
+  onPick: (key: string) => void;
+  reason: string;
+  onReason: (text: string) => void;
+  onApply: () => void;
+  busy: boolean;
+  canEdit: boolean;
+  t: (k: string) => string;
+}) {
+  const groups: { label: string; items: RemapTarget[] }[] = [];
+  for (const tgt of targets) {
+    const label = `${tgt.statement} · ${tgt.section}`;
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(tgt);
+    else groups.push({ label, items: [tgt] });
+  }
+  const head = { fontSize: 10.5, fontWeight: 600, letterSpacing: 0.4, color: color.muted } as const;
+  return (
+    <div data-testid="rv-remap" style={{ marginBottom: 13 }}>
+      <div style={{ ...head, marginBottom: 8 }}>{t("r.remapHead")}</div>
+      {/* Where the row sits now, so the pick is made against a known starting point rather than
+          against a caption alone. */}
+      <div style={{ fontSize: 11.5, color: color.sec2, marginBottom: 8, fontFamily: font.mono }}>
+        {t("r.remapCurrent")}: {offer.current_key || t("r.remapNowUnmapped")}
+      </div>
+      {offer.remapped_note && (
+        <div
+          data-testid="rv-remapped-note"
+          style={{ fontSize: 11, color: color.greenFg, marginBottom: 8, lineHeight: 1.5 }}
+        >
+          {offer.remapped_note}
+        </div>
+      )}
+      {targets.length === 0 ? (
+        <div style={{ fontSize: 11, color: color.muted, lineHeight: 1.5 }}>
+          {t("r.remapNoTargets")}
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap" }}>
+          <select
+            data-testid="rv-remap-select"
+            value={picked ?? "__none__"}
+            disabled={!canEdit || busy}
+            onChange={(e) => onPick(e.target.value)}
+            style={{
+              fontSize: 11.5, fontFamily: font.sans, color: color.ink, padding: "7px 9px",
+              border: `1px solid ${color.controlBorder}`, borderRadius: 8, background: "#fff",
+              maxWidth: 360,
+            }}
+          >
+            <option value="__none__" disabled>{t("r.remapPick")}</option>
+            <option value="">{t("r.remapUnmap")}</option>
+            {groups.map((g) => (
+              <optgroup key={g.label} label={g.label}>
+                {g.items.map((tgt) => (
+                  <option key={tgt.canonical_key} value={tgt.canonical_key}>{tgt.label}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          <Button
+            variant="primary"
+            testid="rv-remap-apply"
+            disabled={!canEdit || busy || picked === undefined || picked === offer.current_key}
+            onClick={onApply}
+            style={{ fontSize: 12, padding: "8px 15px", borderRadius: 8 }}
+          >
+            {t("r.remapApply")}
+          </Button>
+        </div>
+      )}
+      {targets.length > 0 && canEdit && (
+        <textarea
+          data-testid="rv-remap-reason"
+          value={reason}
+          maxLength={2000}
+          rows={2}
+          placeholder={t("r.remapReasonPlaceholder")}
+          onChange={(e) => onReason(e.target.value)}
+          style={{
+            width: "100%", boxSizing: "border-box", marginTop: 8, fontSize: 11.5,
+            fontFamily: font.sans, color: color.ink, resize: "vertical",
+            border: `1px solid ${color.controlBorder}`, borderRadius: 8, padding: "7px 9px",
+            outline: "none", lineHeight: 1.5,
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 export default function ReviewScreen() {
   const t = useT();
   const locale = useAppLocale();
@@ -175,6 +294,10 @@ export default function ReviewScreen() {
   // The flip lands on the ordinary edit endpoint, so it reuses the ordinary edit hook: the edit
   // is snapshotted (revertible), its reason is stored, and every value-driven check re-derives.
   const fixMut = useEditDocumentLineItem(activeDocumentId ?? undefined);
+  // Re-mapping a row is the OTHER write the queue offers, and the only one that resolves a
+  // row-shaped finding. Its own hook, because it invalidates the same set an edit does — the
+  // figure moves into a different concept, so the grid, the KPIs and the export all change.
+  const remapMut = useRemapReviewRow(activeDocumentId ?? undefined);
   // Which tab is selected. It was hardcoded to 0 and the chips had no onClick, so five filters
   // that looked clickable — cursor: pointer and all — did nothing.
   const [tab, setTab] = useState(0);
@@ -192,6 +315,12 @@ export default function ReviewScreen() {
   // Why the last action on a card was refused. Per card, because a rejected acceptance that
   // silently vanishes looks exactly like one that was recorded.
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // The concept picked in a card's re-map select, keyed on the ROW HANDLE the POST carries — not on
+  // the card id, for the same reason the reason box is keyed on the subject: a card id embeds the
+  // row's index and moves when extraction composition does, so a pick still on screen after a
+  // refetch would be submitted for a different row. Absent means "nothing picked yet", which is
+  // distinct from "" — the analyst's deliberate choice to leave the row unmapped.
+  const [picks, setPicks] = useState<Record<string, string>>({});
 
   // No real document and no admin-seeded demo → greenfield guidance.
   if (!usingReal && !loaded) return <EmptyState />;
@@ -392,6 +521,11 @@ export default function ReviewScreen() {
         const acceptBusy = acceptMut.isPending
                            && acceptMut.variables?.subjectKey === c.subject_key;
         const withdrawBusy = withdrawMut.isPending && withdrawMut.variables === c.subject_key;
+        // The row handle this card's re-map submits under, and whether THIS card's re-map is the
+        // one in flight — the same per-card reasoning as `acceptBusy`: one mutation per screen, so
+        // asking `remapMut.isPending` would disable every other card's control at once.
+        const rr = c.remap?.row_ref ?? "";
+        const remapBusy = remapMut.isPending && !!rr && remapMut.variables?.rowRef === rr;
         const fa = c.fix_action;
         const fixBusy = fixMut.isPending && !!fa && fixMut.variables?.key === fa.canonical_key
                         && fixMut.variables?.basis === fa.basis
@@ -641,7 +775,7 @@ export default function ReviewScreen() {
                         sides, and overwriting a computed subtotal with the printed figure would
                         hide the component that caused it. Said in a sentence: a greyed-out button
                         still advertises a capability that does not exist. */}
-                    {!c.fix_action && (
+                    {!c.fix_action && !c.remap && (
                       <div style={{ fontSize: 11, color: color.muted, marginTop: 7, lineHeight: 1.5 }}>
                         {t("r.manualFixOnly")}
                       </div>
@@ -659,6 +793,40 @@ export default function ReviewScreen() {
                     )}
                   </div>
                 </div>
+
+                {/* THE FIX FOR A ROW-SHAPED FINDING. Both cards' prose has always told the analyst
+                    to pick the right line ("Pick the correct template line item", "Confirm the
+                    concept is correct or reassign it"); this is the control that does it. Rendered
+                    for anyone, disabled without extraction:edit — the same gate as the endpoint. */}
+                {c.remap && (
+                  <RemapPanel
+                    offer={c.remap}
+                    targets={data.remap_targets}
+                    picked={picks[c.remap.row_ref]}
+                    onPick={(key) => setPicks((s) => ({ ...s, [rr]: key }))}
+                    reason={reason}
+                    onReason={(text) => setReasons((s) => ({ ...s, [sk]: text }))}
+                    busy={remapBusy}
+                    canEdit={canEdit}
+                    t={t}
+                    onApply={() => {
+                      setErrors((s) => ({ ...s, [sk]: "" }));
+                      remapMut.mutate(
+                        { rowRef: rr, canonicalKey: picks[rr] ?? "", reason: reason.trim(),
+                          locale },
+                        {
+                          // The row moves, so the card goes; the typed text must not survive onto
+                          // whatever card the refetch puts in its place.
+                          onSuccess: () => {
+                            setPicks((s) => { const n = { ...s }; delete n[rr]; return n; });
+                            setReasons((s) => ({ ...s, [sk]: "" }));
+                          },
+                          onError: (e) => failed(sk, e),
+                        },
+                      );
+                    }}
+                  />
+                )}
 
                 {/* The judgement on the record, for an accepted card: what was said, and the
                     figures it was said about. Read-only for a role that cannot resolve. */}
