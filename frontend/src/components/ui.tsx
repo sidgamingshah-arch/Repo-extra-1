@@ -161,6 +161,7 @@ export function Button({
   style,
   disabled = false,
   title,
+  ariaLabel,
   testid,
   data,
 }: {
@@ -170,6 +171,12 @@ export function Button({
   style?: CSSProperties;
   disabled?: boolean;
   title?: string;
+  /** Overrides the accessible name. For a DESTRUCTIVE control repeated down a list, the visible
+   *  label is the same on every copy ("Withdraw acceptance") — `title` cannot fix that, because a
+   *  button with text content takes its name from the text and the tooltip is only a hint. The
+   *  caller names the row the press acts on here, so "which one am I taking back" is answerable
+   *  without sight of the surrounding row. */
+  ariaLabel?: string;
   /** Rendered as `data-testid`. A test cannot read a localized label, and the review actions
    *  (accept / withdraw / flip sign) each need naming from outside the component. */
   testid?: string;
@@ -194,7 +201,7 @@ export function Button({
   };
   return (
     <button onClick={disabled ? undefined : onClick} disabled={disabled} title={title}
-            data-testid={testid}
+            aria-label={ariaLabel} data-testid={testid}
             {...Object.fromEntries(
               Object.entries(data ?? {}).map(([k, v]) => [`data-${k}`, v]))}
             style={{ ...base, ...variants[variant], ...style }}>

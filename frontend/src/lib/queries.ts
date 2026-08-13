@@ -139,7 +139,16 @@ export function useRunAnalysis() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["audit"] }),
   });
 }
-export const useProject = () => useQuery({ queryKey: ["project"], queryFn: api.project });
+/** The SEEDED SAMPLE project — its title, its filename/pages/standard, and its own progress
+ *  counts. It is never a real uploaded document's data, so a caller that has a real document
+ *  active has no use for it.
+ *
+ *  `enabled` exists for exactly that case: the shell (nav rail, top bar) renders on EVERY screen,
+ *  and it was issuing this request on every one of them even while a real document was being
+ *  worked — then labelling the sample's answers as the active extraction's. Gated off, the shell
+ *  makes no request it has nothing to say with, and reads nothing it must not print. */
+export const useProject = (enabled = true) =>
+  useQuery({ queryKey: ["project"], queryFn: api.project, enabled });
 /** Whether a project's data is loaded (false in greenfield until a sample/real run exists). */
 export const useProjectLoaded = () => useProject().data?.loaded ?? false;
 export const useDocuments = () => useQuery({ queryKey: ["documents"], queryFn: api.documents });

@@ -206,6 +206,17 @@ export default function ReviewScreen() {
 
   const { checks, tabs, summary } = data;
   const orphaned = data.judgements?.orphaned ?? [];
+  // How many orphan rows would print THE SAME name. Each of those rows carries its own destructive
+  // Withdraw, and two byte-identical rows with a Withdraw each is a reviewer being asked which of
+  // two standing verdicts to destroy without being told which is which. The server names the
+  // finding (documents.py::_subject_label) and the fix there is what makes these names distinct —
+  // but the screen must not DEPEND on that holding for every subject kind now and forever, so
+  // where a name is shared the row also prints, and the control also names, the identity the
+  // DELETE addresses. Keyed on the served LABEL, never on the row's position in this list.
+  const orphanLabelCount = orphaned.reduce<Record<string, number>>((acc, o) => {
+    acc[o.subject_label] = (acc[o.subject_label] ?? 0) + 1;
+    return acc;
+  }, {});
   // Each tab names the check types it selects (`types: null` = everything), so a chip filters by
   // what it MEANS. Picking by chip position instead is how the Page Scope chips came to filter by
   // the wrong page kind. A tab index that no longer exists (a refetch returning fewer tabs) falls
@@ -868,11 +879,26 @@ export default function ReviewScreen() {
             // Keyed on the subject key, the same key the card errors use: it IS the identity the
             // DELETE carries, so a refusal cannot surface against another row's judgement.
             const oerr = errors[o.subject_key];
+            // Another row in this list prints the same name, so the name alone cannot say which
+            // verdict a Withdraw here takes back. The subject key is distinct by construction —
+            // the payload is built one row per key — so it is what separates them. Abbreviated for
+            // a 11.5px row; the full key is on the row's `data-subject-key`, in this chip's
+            // tooltip and in the control's accessible name, so the short form is never the only
+            // copy of it on the page.
+            const shared = (orphanLabelCount[o.subject_label] ?? 0) > 1;
+            // The name a screen reader announces for THIS row's Withdraw. Every copy of the button
+            // shows the same words, so without this the control is "Withdraw acceptance" eleven
+            // times over eleven different standing verdicts.
+            const withdrawName = shared
+              ? `${t("r.withdrawAcceptance")} — ${o.subject_label} · `
+                + `${t("r.orphanIdentity")} ${o.subject_key}`
+              : `${t("r.withdrawAcceptance")} — ${o.subject_label}`;
             return (
               <div
                 key={o.subject_key}
                 data-testid="rv-orphan"
                 data-subject-key={o.subject_key}
+                data-shared-label={shared ? "true" : "false"}
                 style={{
                   fontSize: 11.5, color: color.sec, lineHeight: 1.6,
                   borderTop: `1px dashed ${color.hairline2}`, padding: "6px 0",
@@ -880,7 +906,20 @@ export default function ReviewScreen() {
                 }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ fontWeight: 600 }}>{o.subject_label}</span> · {o.actor}{" "}
+                  <span style={{ fontWeight: 600 }}>{o.subject_label}</span>
+                  {shared && (
+                    <>
+                      {" "}
+                      <span
+                        data-testid="rv-orphan-identity"
+                        title={`${t("r.orphanIdentityHelp")} ${o.subject_key}`}
+                        style={{ fontFamily: font.mono, fontSize: 10.5, color: color.muted }}
+                      >
+                        {t("r.orphanIdentity")} {o.subject_key.slice(0, 12)}
+                      </span>
+                    </>
+                  )}{" "}
+                  · {o.actor}{" "}
                   ({o.actor_role}) · {o.at} · {o.reason}
                   {oerr && (
                     <div

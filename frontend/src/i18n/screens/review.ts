@@ -48,6 +48,9 @@ export const review: Record<Locale, Record<string, string>> = {
     "r.reasonPlaceholder": "Why do these figures stand? Recorded with your name against the figures shown.",
     "r.reasonRequired": "A reason is required — an acceptance with nothing stated is an unsigned claim.",
     "r.withdrawAcceptance": "Withdraw acceptance",
+    // Shown only where two orphan rows print the same name: the identity the Withdraw addresses.
+    "r.orphanIdentity": "identity",
+    "r.orphanIdentityHelp": "Another standing verdict shares this name. Full identity:",
     "r.withheldWithdrawable":
       "An acceptance is on record for this identity and is being withheld from every card in the group, so none of them shows it. Withdrawing takes it out of force — the record of who accepted what is kept, and the finding stays raised.",
     "r.staleStrip": "accepted findings rest on figures that have changed since",
@@ -108,6 +111,8 @@ export const review: Record<Locale, Record<string, string>> = {
     "r.reasonPlaceholder": "这些数字为何成立？理由将连同您的姓名，一并记录在所示数字之上。",
     "r.reasonRequired": "必须填写理由——未说明理由的认可等于未署名的主张。",
     "r.withdrawAcceptance": "撤回认可",
+    "r.orphanIdentity": "标识",
+    "r.orphanIdentityHelp": "另有一条留存判定与此名称相同。完整标识：",
     "r.withheldWithdrawable":
       "本身份已有一条认可记录，但该记录对本组中的每张卡片均予保留而不予归属，因此各卡片均不显示。撤回后该认可即失效——认可人及认可内容的记录仍会保留，且该发现仍继续提出。",
     "r.staleStrip": "项已认可的发现，其所依据的数字此后已发生变化",
@@ -168,6 +173,8 @@ export const review: Record<Locale, Record<string, string>> = {
     "r.reasonPlaceholder": "لماذا تصح هذه الأرقام؟ يُسجَّل السبب باسمك مقابل الأرقام المعروضة.",
     "r.reasonRequired": "السبب مطلوب — القبول دون بيان سبب هو ادعاء غير موقَّع.",
     "r.withdrawAcceptance": "سحب القبول",
+    "r.orphanIdentity": "المعرّف",
+    "r.orphanIdentityHelp": "يشترك حكم قائم آخر في هذا الاسم. المعرّف الكامل:",
     "r.withheldWithdrawable":
       "يوجد قبول مسجَّل على هذه الهوية، ويُحجب عن كل بطاقة في المجموعة فلا تُظهره أي منها. السحب يُنهي سريانه — ويُحفظ سجل مَن قبِل وماذا قال، وتبقى الملاحظة مُثارة.",
     "r.staleStrip": "ملاحظات مقبولة تستند إلى أرقام تغيّرت بعد قبولها",
@@ -230,6 +237,8 @@ export const review: Record<Locale, Record<string, string>> = {
     "r.reasonRequired":
       "Un motif est obligatoire — une acceptation sans rien d'énoncé est une affirmation non signée.",
     "r.withdrawAcceptance": "Retirer l'acceptation",
+    "r.orphanIdentity": "identifiant",
+    "r.orphanIdentityHelp": "Un autre verdict en vigueur porte ce même nom. Identifiant complet :",
     "r.withheldWithdrawable":
       "Une acceptation est enregistrée pour cette identité et elle est retenue sur toutes les fiches du groupe : aucune ne l'affiche. Le retrait la met hors d'effet — la trace de qui a accepté quoi est conservée, et le constat reste soulevé.",
     "r.staleStrip": "constats acceptés reposent sur des chiffres qui ont changé depuis",
