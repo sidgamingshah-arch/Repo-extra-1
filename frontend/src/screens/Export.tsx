@@ -91,111 +91,6 @@ function PresField({ label, value }: { label: string; value: string }) {
   );
 }
 
-const EXCEL_ROWS: string[][] = [
-  ["1", "Property, plant and equipment", "4,23,180", "N3", "96%"],
-  ["2", "Trade receivables", "84,500", "N12", "78%"],
-  ["3", "Cash and cash equivalents", "39,100", "N13", "96%"],
-  ["4", "Total current assets", "3,30,800", "", "ƒ"],
-  ["5", "TOTAL ASSETS", "12,68,100", "", "ƒ"],
-];
-const GRID_COLS = "30px 1fr 80px 46px 62px";
-
-const JSON_TEXT = `{
-  "entity": "Reliance Industries Ltd",
-  "period": "FY2024-25",
-  "dataset": "consolidated",
-  "units": "INR_crore",
-  "balance_sheet": [
-    {
-      "item": "Trade receivables",
-      "value": 84500,
-      "note_ref": "12",
-      "confidence": 0.78,
-      "sign": "positive",
-      "formula": "Note12.total - Note12.3",
-      "source": { "page": 142, "note_page": 171 }
-    }
-  ]
-}`;
-
-function ExcelPreview() {
-  const t = useT();
-  const head = ["", t("e.col.lineitem"), "FY25", t("e.col.note"), t("e.col.conf")];
-  return (
-    <div style={{ fontFamily: font.mono, fontSize: 11 }}>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: GRID_COLS,
-          background: color.excelGreen,
-          color: "#fff",
-          fontWeight: 600,
-        }}
-      >
-        {head.map((h, i) => (
-          <div
-            key={i}
-            style={{
-              padding: "6px 8px",
-              borderRight: "1px solid #1a5c37",
-              textAlign: i > 1 ? "right" : "left",
-            }}
-          >
-            {h}
-          </div>
-        ))}
-      </div>
-      {EXCEL_ROWS.map((row, ri) => {
-        const isTotal = row[0] === "5";
-        return (
-          <div
-            key={ri}
-            style={{
-              display: "grid",
-              gridTemplateColumns: GRID_COLS,
-              background: ri % 2 ? "#f6f8f6" : "#fff",
-              borderBottom: "1px solid #e6ebe6",
-            }}
-          >
-            {row.map((c, ci) => (
-              <div
-                key={ci}
-                style={{
-                  padding: "6px 8px",
-                  borderRight: "1px solid #eef1ee",
-                  textAlign: ci > 1 ? "right" : "left",
-                  fontWeight: isTotal ? 700 : 400,
-                  color: ci === 4 ? color.amberFg : "#333",
-                }}
-              >
-                {c}
-              </div>
-            ))}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function JsonPreview() {
-  return (
-    <pre
-      style={{
-        margin: 0,
-        padding: "14px 16px",
-        fontFamily: font.mono,
-        fontSize: 11,
-        lineHeight: 1.6,
-        color: color.ink,
-        whiteSpace: "pre-wrap",
-      }}
-    >
-      {JSON_TEXT}
-    </pre>
-  );
-}
-
 function provStr(r: ExtractionRow): string {
   const p = r.values?.[0]?.provenance;
   if (!p) return "";
@@ -434,13 +329,16 @@ export default function ExportScreen() {
             <span style={{ fontSize: 11, color: color.muted }}>{t("e.previewMeta")}</span>
           </div>
           <div style={{ flex: 1, overflow: "auto", background: isExcel ? "#fff" : "#fbfcfd" }}>
-            {usingReal ? (
-              <RealPreview rows={realRows} isExcel={isExcel} />
-            ) : isExcel ? (
-              <ExcelPreview />
-            ) : (
-              <JsonPreview />
-            )}
+            {/* One preview, of the loaded extraction. The sample path used to render a mock built
+                from five hardcoded Reliance rows under an "FY25" header — figures, note refs and
+                confidences belonging to no extraction this product has ever produced, on the screen
+                whose whole job is showing what the file will contain. There is nothing to preview
+                without a document, and saying so is the honest answer. */}
+            {usingReal
+              ? <RealPreview rows={realRows} isExcel={isExcel} />
+              : <div style={{ padding: 22, fontSize: 12, color: color.muted, lineHeight: 1.6 }}>
+                  {t("e.previewNeedsDoc")}
+                </div>}
           </div>
           <div
             style={{

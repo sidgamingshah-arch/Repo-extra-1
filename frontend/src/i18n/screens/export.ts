@@ -55,6 +55,10 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.both": "Both",
     "e.preview": "Preview —",
     "e.previewMeta": "Consolidated · ₹ Crore",
+    // Shown where a mock of five hardcoded rows used to be. There is nothing to preview until a
+    // document is loaded, and inventing a filing to fill the panel is what this replaced.
+    "e.previewNeedsDoc":
+      "Upload and extract a document to preview the file it will produce. This panel shows that extraction's own rows — it never shows sample figures.",
     "e.col.lineitem": "Line item",
     "e.col.value": "Value",
     "e.col.note": "Note",
@@ -97,6 +101,8 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.both": "两者",
     "e.preview": "预览 —",
     "e.previewMeta": "合并 · ₹ 千万卢比",
+    "e.previewNeedsDoc":
+      "请先上传并提取文档，以预览将生成的文件。此面板仅显示该次提取自身的数据行，不会显示示例数字。",
     "e.col.lineitem": "项目",
     "e.col.value": "数值",
     "e.col.note": "附注",
@@ -139,6 +145,8 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.both": "كلاهما",
     "e.preview": "معاينة —",
     "e.previewMeta": "موحّد · ₹ كرور",
+    "e.previewNeedsDoc":
+      "حمِّل مستندًا واستخرجه لمعاينة الملف الذي سيُنتَج. تُظهر هذه اللوحة صفوف ذلك الاستخراج وحدها، ولا تعرض أرقامًا توضيحية أبدًا.",
     "e.col.lineitem": "البند",
     "e.col.value": "القيمة",
     "e.col.note": "إيضاح",
@@ -181,6 +189,8 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.both": "Les deux",
     "e.preview": "Aperçu —",
     "e.previewMeta": "Consolidé · ₹ Crore",
+    "e.previewNeedsDoc":
+      "Importez et extrayez un document pour prévisualiser le fichier produit. Ce panneau affiche les lignes de cette extraction — jamais des chiffres d'exemple.",
     "e.col.lineitem": "Poste",
     "e.col.value": "Valeur",
     "e.col.note": "Note",

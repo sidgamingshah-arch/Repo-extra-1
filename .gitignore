@@ -39,3 +39,7 @@ playwright-report/
 
 # Claude Code local state + agent worktrees (never tracked)
 .claude/
+
+# Generated on demand by backend/scripts/template_output_structure.py for template review — a
+# snapshot of one run's output shape, not source.
+/template_output_structure.xlsx
