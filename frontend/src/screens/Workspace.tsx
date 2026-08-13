@@ -10,14 +10,15 @@ import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { ConfidencePill, NoteChip, Segmented, StatusIcon, confReadout } from "../components/ui";
+import { Button, ConfidencePill, NoteChip, Segmented, StatusIcon, confReadout } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { ExcelGrid, PageStack, toPicked, type Picked } from "../components/SourceViewer";
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
 import { DERIVED_STATEMENTS } from "../types";
-import type { Basis, FxRateResolution, StatementColumn, StatementKey, StatementResponse, StatementRow } from "../types";
+import type { Basis, FxRateResolution, StatementColumn, StatementKey, StatementResponse, StatementRow, SupersededTemplate } from "../types";
 import { ApiError } from "../lib/api";
-import { useDocumentStatement, useEditDocumentLineItem, useFxRateResolution, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded } from "../lib/queries";
+import { ontologyInForce, useDocumentStatement, useEditDocumentLineItem, useExtraction, useFxRateResolution, useOntologies, useReextract, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded, useTemplates } from "../lib/queries";
+import { useCan } from "../lib/rbac";
 import { useUI } from "../store";
 import { useT } from "../i18n";
 import { SCREENS } from "./config";
@@ -710,6 +711,186 @@ function InspectorEditor({
   );
 }
 
+/** The rulebook and template a fresh run defaults to: the one in force for the template selected on
+ *  the Upload screen, and failing that the one in force among everything stored — decided by the ONE
+ *  shared rule (`ontologyInForce`), never by a version comparison of this screen's own.
+ *
+ *  Both users of it in this screen need the same pair. Reading the run the Extraction screen started
+ *  needs it because the start query is KEYED on (document, rulebook, template), and launching a new
+ *  run needs it because a POST that names neither records `engine_default` and maps against no
+ *  rulebook at all — a spread offered as "rebuilt against the current template" would come back
+ *  with nothing mapped to it. */
+function useRunDefaults() {
+  const ontQ = useOntologies();
+  const tplQ = useTemplates();
+  const selectedTemplateKey = useUI((s) => s.selectedTemplateKey);
+  const ont = ontologyInForce(ontQ.data, (o) => o.target_template_key === selectedTemplateKey)
+    ?? ontologyInForce(ontQ.data);
+  // The template list serves the CURRENT version per key, which is exactly what a re-extract is
+  // for: the run being replaced is pinned to the version it was launched against.
+  const tpl = ont ? tplQ.data?.find((tt) => tt.template_key === ont.target_template_key) : undefined;
+  return { ont, tpl };
+}
+
+/* ---- a document that is uploaded but has no spread to show yet ----
+ *
+ * This branch rendered <EmptyState /> — "No project yet … Upload a source document on the Documents
+ * screen to start an extraction. This workspace stays empty until a document is processed" — WHILE A
+ * REAL EXTRACTION WAS MID-FLIGHT: `GET /documents/{id}/statement` 404s until a run has produced a
+ * RESULT, so a running job and an account with nothing in it were the same screen, and the sentence
+ * was false in the one case a reader most needed the truth. The genuine greenfield state still
+ * belongs to <EmptyState /> and is decided by the caller (no active document at all).
+ *
+ * What this can say is bounded by what it can know. The run is READ from the one the Extraction
+ * screen started — the same start key, with the start DISABLED, because opening the Workspace must
+ * never POST a run of its own just by being looked at — so after a hard reload there is no cached
+ * run and the state falls back to what the 404 alone proves: nothing has been extracted yet.
+ *
+ * No stage, percentage or elapsed time is repeated here. The Extraction screen derives those from
+ * the run once (`RunProgress`), and a second derivation is a second chance to disagree with it;
+ * this states WHICH situation holds and links to the screen that reports it. */
+function AwaitingExtraction({ documentId, statementError, reloadStatement, t }: {
+  documentId: string | undefined;
+  statementError: unknown;
+  /** Ask for the spread again. The statement query does not retry (`retry: false`), so without
+   *  this the reader would sit on "the spread appears here when the run finishes" after it had. */
+  reloadStatement: () => void;
+  t: (k: string) => string;
+}) {
+  const navigate = useNavigate();
+  // The same three values the Extraction screen keys its start query on: a different key is a
+  // different cache entry, which would make this read a run that does not exist. A reader who
+  // PINNED a rulebook there (`?rulebook=`) is one such miss — the pin lives in that screen's URL, so
+  // this falls through to "not extracted yet", which the 404 does still prove.
+  const { ont, tpl } = useRunDefaults();
+  // `enabled: false` — read the run, never start one.
+  const { data: run, runId, status, isError: runFailed } =
+    useExtraction(documentId, ont?.id, tpl?.id, false);
+  // `runId` decides first, because `status` cannot be trusted without it: with the start query
+  // disabled the hook answers "queued" for a document nobody has started anything for. Once a run
+  // exists the status is the RUN's own, so it is what says the pipeline is still working — a run
+  // that ended without a usable result must not be described as still going.
+  const running = !!runId && (status === "running" || status === "queued");
+
+  // The poll is what learns the run finished, so it is what asks for the spread. The statement is
+  // fetched once and never retried, so a run that succeeded while the reader waited here would
+  // otherwise leave this state on screen indefinitely under a promise it had already kept.
+  useEffect(() => { if (run) reloadStatement(); }, [run, reloadStatement]);
+
+  // A statement that failed for any reason other than "not extracted yet" is its own fact, and
+  // saying "not extracted" over a 403 or a 500 would send the reader to run an extraction that is
+  // not what is wrong.
+  const notExtracted = statementError instanceof ApiError && statementError.status === 404;
+  const state = !notExtracted ? "error"
+    : runFailed ? "failed"
+      : running ? "running"
+        : "none";
+  const title = state === "error" ? t("ex.pending.errorTitle")
+    : state === "failed" ? t("ex.failed")
+      : state === "running" ? t("ex.running")
+        : t("ex.pending.noneTitle");
+  const body = state === "error" ? t("ex.pending.errorBody")
+    : state === "failed" ? t("ex.pending.failedBody")
+      : state === "running" ? t("ex.pending.runningBody")
+        : t("ex.pending.noneBody");
+
+  return (
+    <div data-testid="ws-awaiting" data-state={state}
+         style={{ maxWidth: 560, margin: "72px auto", textAlign: "center", padding: "0 24px" }}>
+      <div style={{ fontSize: 40, color: color.faint, marginBottom: 14 }}>
+        {SCREENS.extraction.icon}
+      </div>
+      <h2 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 8px" }}>{title}</h2>
+      <p style={{ fontSize: 13, color: color.sec2, lineHeight: 1.6, margin: "0 auto 20px",
+                  maxWidth: 440 }}>
+        {body}
+      </p>
+      {/* The server's own words for a refusal that is not a missing extraction — it names the
+          concept or the status, which "something went wrong" never did. */}
+      {state === "error" && (
+        <p style={{ fontFamily: font.mono, fontSize: 11, color: color.muted,
+                    margin: "0 auto 20px", maxWidth: 440, wordBreak: "break-word" }}>
+          {statementError instanceof ApiError
+            ? (statementError.detail ?? statementError.message)
+            : statementError instanceof Error ? statementError.message : ""}
+        </p>
+      )}
+      <Button testid="ws-awaiting-open" onClick={() => navigate(SCREENS.extraction.path)}>
+        {t("ex.pending.open")}
+      </Button>
+    </div>
+  );
+}
+
+/* ---- the run's template has since been revised ----
+ *
+ * A run is PINNED to the template version it was launched against, so a spread extracted before a
+ * template revision keeps rendering the old shape — which is how a corrected line order can still
+ * look wrong on screen with nothing on the page to explain it. The server states the mismatch
+ * (`SupersededTemplate`); this says it out loud, names both versions, and offers the only thing that
+ * changes it: another run.
+ *
+ * The button is gated on the permission the POST needs (`pipeline:run`): a reviewer can read the
+ * spread and cannot launch a run, and a button that returns 403 is worse than no button. */
+function SupersededBanner({ info, documentId, t }: {
+  info: SupersededTemplate;
+  documentId: string | undefined;
+  t: (k: string) => string;
+}) {
+  const canRun = useCan("pipeline:run");
+  const reextract = useReextract(documentId);
+  // A run needs a rulebook and a template to be worth starting, and both are read from lists that
+  // load asynchronously. No pair, no button: pressing it before they arrive would start a run that
+  // maps against nothing, which is worse than the stale spread the banner is complaining about.
+  const { ont, tpl } = useRunDefaults();
+  return (
+    <div
+      data-testid="ws-superseded"
+      data-run-version={String(info.run_version)}
+      data-latest-version={String(info.latest_version)}
+      style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap",
+               padding: "7px 16px", background: color.amberBg,
+               borderBottom: `1px solid ${color.hairline}`, fontSize: 11.5, color: color.amberFg,
+               lineHeight: 1.5 }}
+    >
+      <strong style={{ fontWeight: 600 }}>{t("ex.superseded.title")}.</strong>
+      <span>
+        {t("ex.superseded.body")
+          .replace("{run}", String(info.run_version))
+          .replace("{latest}", String(info.latest_version))
+          .replace("{key}", info.template_key)}
+      </span>
+      {/* One statement at a time: once a new run has started, the offer to start one is gone —
+          pressing it again would queue a second run for the same revision. */}
+      {canRun && ont && tpl && !reextract.isSuccess && (
+        <button
+          data-testid="ws-reextract"
+          disabled={reextract.isPending}
+          onClick={() => reextract.mutate({ ontologyId: ont.id, templateId: tpl.id })}
+          style={{ fontSize: 11.5, fontWeight: 600, color: color.amberFg, background: "#fff",
+                   border: `1px solid ${color.amberFg}55`, borderRadius: radius.controlSm,
+                   padding: "4px 10px", cursor: reextract.isPending ? "default" : "pointer" }}
+        >
+          {reextract.isPending ? t("ex.superseded.starting") : t("ex.superseded.action")}
+        </button>
+      )}
+      {reextract.isSuccess && (
+        <span data-testid="ws-reextract-started" style={{ fontWeight: 600 }}>
+          {t("ex.superseded.started")}
+        </span>
+      )}
+      {reextract.isError && (
+        <span data-testid="ws-reextract-error" style={{ color: color.redFg }}>
+          {t("ex.superseded.failed")}{" "}
+          <span style={{ fontFamily: font.mono, fontSize: 11 }}>
+            {(reextract.error as Error)?.message}
+          </span>
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function WorkspaceScreen() {
   const navigate = useNavigate();
   const t = useT();
@@ -776,13 +957,29 @@ export default function WorkspaceScreen() {
   const converting = wantConvert && !!srcCcy;
   const fxQ = useFxRateResolution(converting ? srcCcy : undefined, converting ? targetCcy : undefined);
 
+  // Nothing uploaded and no demo project loaded: the genuine greenfield state, and the only one
+  // "No project yet" describes.
   if (!usingReal && !loaded) return <EmptyState />;
-  if (usingReal && realQ.isError) return <EmptyState />;   // uploaded but not extracted yet
+  // A real document with no spread to show — which is where a run IN FLIGHT lands, because the
+  // statement route 404s until a run has a result. It used to land on <EmptyState /> too, telling a
+  // reader watching their own upload being extracted that they had not uploaded anything.
+  if (usingReal && realQ.isError) {
+    return <AwaitingExtraction documentId={activeDocumentId ?? undefined}
+                               statementError={realQ.error}
+                               reloadStatement={realQ.refetch} t={t} />;
+  }
   if (isPending || !data) {
     return <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>;
   }
 
   const d: StatementResponse = data;
+  // Whether the run behind this spread was built on a template that has since been revised, as the
+  // SERVER states it (`SupersededTemplate` — the client cannot tell, since the run's template
+  // version is not in the spread). Read structurally: `StatementResponse` describes the spread, and
+  // a payload served without the report simply says nothing here rather than the banner claiming a
+  // version it cannot name.
+  const superseded =
+    (d as { superseded_template?: SupersededTemplate | null }).superseded_template ?? null;
   // Selecting a row also drives the live source viewer: resolve the clicked figure's provenance
   // to a pick so the document scrolls to and highlights that value's page+bbox (PDF) or cell
   // (Excel). Clicking last year's number goes to last year's figure, not this year's.
@@ -1049,6 +1246,13 @@ export default function WorkspaceScreen() {
           </button>
         </div>
       </div>
+
+      {/* A strip of its own between the toolbar and the panels — out of the grid's way, since the
+          spread underneath is still the thing being read (and is still valid: it is what the run
+          produced, on the template it was launched against). */}
+      {superseded?.superseded && (
+        <SupersededBanner info={superseded} documentId={activeDocumentId ?? undefined} t={t} />
+      )}
 
       {/* ---------------- BODY ---------------- */}
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
