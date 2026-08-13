@@ -146,16 +146,19 @@ def test_progress_moves_through_the_named_stages_of_the_real_pipeline(client):
     assert final["stages_done"] == names and final["stage_index"] == len(names)
 
 
-def test_the_endpoint_serves_the_pipelines_own_stage_list(client):
-    """``stages`` is read off the pipeline, so it cannot fall out of step with it.
+def test_the_stage_list_a_run_records_is_read_off_the_pipeline(client):
+    """``stages`` comes from the pipeline, never from a literal in this module.
 
-    A hardcoded copy would satisfy the first assertion on the day it was written and fail the
-    second, which swaps the pipeline for a different one and demands the endpoint say so.
+    Measured where the list is DECIDED — when the run is queued — rather than when it is read back.
+    Reading it back off the live pipeline was the previous behaviour and is a different claim: it
+    made a finished run adopt stages it never ran (see
+    ``test_a_finished_run_reports_the_stage_list_it_actually_walked``). A hardcoded copy satisfies the
+    first assertion on the day it is written and fails the second, which swaps the pipeline out and
+    demands the run say so.
     """
     doc_id = _upload(client)
     run_id = _run_to_completion(client, doc_id)
-    served = client.get(f"/api/v1/extractions/{run_id}").json()
-    assert served["stages"] == _stage_names()
+    assert client.get(f"/api/v1/extractions/{run_id}").json()["stages"] == _stage_names()
 
     from app.core.pipeline import Pipeline
 
@@ -163,13 +166,14 @@ def test_the_endpoint_serves_the_pipelines_own_stage_list(client):
         def __init__(self, name: str) -> None:
             self.name = name
 
-        def run(self, doc, ctx):  # pragma: no cover — never run; only its name is read
+        def run(self, doc, ctx):
             return doc
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("app.core.pipeline.default_pipeline",
                    lambda: Pipeline(stages=[_Probe("first"), _Probe("second")]))
-        assert client.get(f"/api/v1/extractions/{run_id}").json()["stages"] == ["first", "second"]
+        swapped = _run_to_completion(client, _upload(client, "swapped.pdf"))
+        assert client.get(f"/api/v1/extractions/{swapped}").json()["stages"] == ["first", "second"]
 
 
 def test_the_log_tail_is_flushed_as_stages_complete_not_only_at_the_end(client):
@@ -457,3 +461,104 @@ def test_a_progress_write_that_fails_never_fails_the_extraction(client):
     # Degraded loudly, not silently: the run's own log names what stopped its progress reporting.
     assert "progress:write_failed" in served["log_tail"]
     assert "progress table on fire" in served["log_tail"]
+
+
+# --- what the coordinator closed after the unit landed -----------------------------------------
+
+def test_a_failed_run_keeps_the_stage_trail_and_not_just_the_exception(client):
+    """The failure path used to assign ``f"{type(exc).__name__}: {exc}"`` to ``run.logs``, which
+    replaced every ``stage:*:start``/``:done`` line the recorder had flushed — on the one kind of run
+    where that trail IS the diagnosis. A reader was told the exception type and nothing about how far
+    the pipeline had got, so the only way to learn which stage it was, was to reproduce it."""
+    doc_id = _upload(client)
+
+    def _explode(self, doc, ctx):
+        raise RuntimeError("structural stage exploded")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.stages.structural.StructuralStage.run", _explode)
+        run_id = _run_to_completion(client, doc_id)
+
+    served = client.get(f"/api/v1/extractions/{run_id}").json()
+    assert served["status"] == "failed"
+    tail = served["log_tail"]
+    # The exception, AND the trail that leads to it.
+    assert "RuntimeError: structural stage exploded" in tail
+    for stage in ("stage:ingest:done", "stage:map_ontology:done", "stage:structural:start"):
+        assert stage in tail, f"{stage} missing from the failed run's log:\n{tail}"
+    # …and the stage it died in is the last thing the pipeline said, not buried mid-trail.
+    assert tail.index("stage:structural:start") > tail.index("stage:map_ontology:done")
+
+
+def test_reading_a_run_requires_a_session(anon_client, auth):
+    """This route carried NO dependency at all, and it serves the extracted figures plus the
+    pipeline's own log tail. Run ids are composed from the entity slug and a timestamp
+    (``start_extraction``) rather than being unguessable, so an anonymous caller with a guess could
+    read a filing. Every other read of a document's data sits behind ``authorized_document``; a run
+    is the same data reached by another route."""
+    up = anon_client.post("/api/v1/documents",
+                          files={"file": ("owned.pdf", make_native_pdf(), "application/pdf")},
+                          headers=auth("analyst"))
+    doc_id = up.json()["id"]
+    run_id = anon_client.post(f"/api/v1/documents/{doc_id}/extractions", json={},
+                              headers=auth("analyst")).json()["run_id"]
+
+    assert anon_client.get(f"/api/v1/extractions/{run_id}").status_code == 401
+    mine = anon_client.get(f"/api/v1/extractions/{run_id}", headers=auth("analyst"))
+    assert mine.status_code == 200 and mine.json()["run_id"] == run_id
+
+
+def test_a_run_on_someone_elses_document_is_404_not_403(anon_client, auth):
+    """Ownership is a property of the DOCUMENT (``_can_access``): its uploader, plus the
+    reviewers/admins who work every analyst's queue. Only one analyst is seeded, so the denial is
+    built directly — a document owned by another analyst, with a run on it.
+
+    404 rather than 403, for the reason ``authorized_document`` gives: a 403 would confirm the run
+    exists, which leaks a filing's existence across tenants."""
+    from app.db.base import SessionLocal
+    from app.db.models import Document, ExtractionRun
+
+    doc_id, run_id = f"doc-{uuid.uuid4()}", f"run-{uuid.uuid4()}"
+    with SessionLocal() as s:
+        s.add(Document(id=doc_id, filename="theirs.pdf", owner="another.analyst",
+                       content_hash=str(uuid.uuid4()), object_key=f"objects/{doc_id}"))
+        s.add(ExtractionRun(id=run_id, document_id=doc_id, status="succeeded",
+                            run_number=1, options={}, progress={}, result={"rows": []}))
+        s.commit()
+
+    assert anon_client.get(f"/api/v1/extractions/{run_id}",
+                           headers=auth("analyst")).status_code == 404
+    # A reviewer works every analyst's queue, so the same run IS theirs to read — the check is
+    # ownership, not blanket secrecy.
+    assert anon_client.get(f"/api/v1/extractions/{run_id}",
+                           headers=auth("reviewer")).status_code == 200
+
+
+def test_a_finished_run_reports_the_stage_list_it_actually_walked(client):
+    """``stage_count`` and ``stages_done`` are frozen on the run row when it settles, so serving the
+    LIVE pipeline's list beside them answers a different question the moment a stage is added: the
+    old run's 14 done would be measured against 15, and a screen ticking stages off would show a
+    finished, successful run as permanently incomplete."""
+    doc_id = _upload(client)
+    run_id = _run_to_completion(client, doc_id)
+    walked = client.get(f"/api/v1/extractions/{run_id}").json()["stages"]
+    assert walked == _stage_names()
+
+    # A stage joins the pipeline after the run finished. The run still reports what IT walked, and
+    # its own counts still agree with that list.
+    from app.core.pipeline import Pipeline, default_pipeline
+
+    class _Extra:
+        name = "brand_new_stage"
+
+        def run(self, doc, ctx):
+            return doc
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.core.pipeline.default_pipeline",
+                   lambda: Pipeline(stages=[*default_pipeline().stages, _Extra()]))
+        served = client.get(f"/api/v1/extractions/{run_id}").json()
+
+    assert served["stages"] == walked, "a finished run must not adopt a stage it never ran"
+    assert served["progress"]["stage_count"] == len(served["stages"])
+    assert served["progress"]["stages_done"] == served["stages"]

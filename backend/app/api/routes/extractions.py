@@ -26,11 +26,11 @@ from sqlalchemy.orm import Session
 from pathlib import Path
 
 from app.api.deps import db, settings as get_settings_dep
-from app.api.routes.documents import authorized_document
+from app.api.routes.documents import _can_access, authorized_document
 from app.config import Settings
 from app.ports.object_store import LocalObjectStore
 from app.schemas.loader import load_ontology, load_template
-from app.security import Permission, require
+from app.security import Permission, Principal, current_principal, require
 from app.services import audit as audit_svc
 from app.services.documents import run_extraction
 
@@ -160,6 +160,13 @@ class _RunProgress:
         """Take the live pipeline context as soon as it exists, because its ``logs`` list is what the
         tail is flushed from and ``run_extraction`` only returns it once every stage has finished."""
         self._ctx = ctx
+
+    @property
+    def ctx_logs(self) -> list[str]:
+        """The stage trail so far. Read by the worker's failure path, which has no other route to it:
+        ``run_extraction`` raised rather than returning, so the context it would have handed back does
+        not exist outside this recorder."""
+        return list(getattr(self._ctx, "logs", None) or [])
 
     def __call__(self, phase: str, pct: float) -> None:
         """The pipeline's ``progress_cb``: called before each stage, and once with ``done``.
@@ -602,7 +609,13 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             # assembled, and the record says exactly that: no stages, none done.
             run.progress = (progress.settle("failed") if progress is not None else
                             _progress_payload("failed", 1.0, started_at=began, stage_count=0))
-            run.logs = f"{type(exc).__name__}: {exc}"
+            # The exception ON TOP OF the stage trail, not instead of it. This used to assign the
+            # exception alone, which discarded every `stage:*:start`/`:done` line the recorder had
+            # been flushing — on the one kind of run where that trail is the whole diagnosis. A
+            # failure that reports its own type and nothing about where the pipeline had got to
+            # sends the reader back to reproduce it just to learn which stage it was.
+            trail = list(getattr(progress, "ctx_logs", None) or [])
+            run.logs = _log_tail([*trail, f"{type(exc).__name__}: {exc}"])
             session.commit()
         audit_svc.record(run.document_id if run else "unknown", audit_svc.AuditEntry(
             run_id=run_id, entity=entity, action="extraction",
@@ -687,7 +700,12 @@ def start_extraction(
         id=run_id, document_id=doc.id,
         template_version_id=body.template_version_id,
         ontology_version_id=body.ontology_version_id,
-        status="running", options={**body.model_dump(), "rulebook": rulebook},
+        # The stage list THIS run will walk, recorded at the moment it is queued. Serving the
+        # live pipeline's list instead would make an old run disagree with itself the next time
+        # a stage is added: its frozen `stage_count`/`stages_done` would be measured against a
+        # longer list, and a screen ticking stages off would show a finished run as incomplete.
+        status="running", options={**body.model_dump(), "rulebook": rulebook,
+                                   "stages": pipeline_stage_names()},
         created_at=started_at,
         # The full progress shape from the first poll, not a two-key stub: a screen that reads
         # `stage_count` to draw its stage list must be able to draw it before the first stage
@@ -713,12 +731,31 @@ def start_extraction(
             "progress_url": f"/api/v1/extractions/{run_id}"}
 
 
-@router.get("/extractions/{run_id}")
-def get_run(run_id: str, session: Session = Depends(db)) -> dict:
-    from app.db.models import ExtractionRun
+@router.get("/extractions/{run_id}",
+            dependencies=[Depends(require(Permission.EXTRACTION_VIEW))])
+def get_run(run_id: str, session: Session = Depends(db),
+            principal: Principal = Depends(current_principal)) -> dict:
+    """One run's status, progress and result.
+
+    AUTHENTICATED AND OWNERSHIP-SCOPED, which it was not. This route carried no dependency at all,
+    and it now serves the pipeline's log tail as well as the result — so an unauthenticated caller
+    could read a filing's extracted figures and the pipeline's own commentary on them, given a run
+    id, and run ids are composed from the entity slug and a timestamp
+    (``rulebook_record``/``start_extraction``) rather than being unguessable. Every other read of a
+    document's data is behind ``authorized_document``; the run is the same data by another route.
+
+    A run the caller may not see answers 404 rather than 403, for the reason
+    ``authorized_document`` gives: existence must not leak across tenants.
+    """
+    from app.db.models import Document, ExtractionRun
 
     run = session.get(ExtractionRun, run_id)
     if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    # Ownership is a property of the DOCUMENT, so it is checked there — the same predicate
+    # `authorized_document` applies, reached by run id instead of document id.
+    doc = session.get(Document, run.document_id)
+    if doc is None or not _can_access(doc, principal):
         raise HTTPException(status_code=404, detail="Run not found")
     # The recorded rulebook rides alongside the result so the view can name it from the FIRST poll
     # — while the run is still running, and even if it fails — instead of computing a candidate of
@@ -733,6 +770,10 @@ def get_run(run_id: str, session: Session = Depends(db)) -> dict:
             # The stage list is the pipeline's own (:func:`pipeline_stage_names`) — never a copy kept
             # here or in the client, because a stage added to the pipeline would otherwise leave
             # every screen ticking off a list of stages that no longer describes a run.
-            "stages": pipeline_stage_names(),
+            # THIS run's own stage list, as recorded when it was queued — never the live
+            # pipeline's, which is a different question once a stage has been added. A run
+            # queued before the list was recorded falls back to the live one, which is the
+            # best answer available for it and matches what it was actually built from.
+            "stages": (run.options or {}).get("stages") or pipeline_stage_names(),
             "log_tail": _log_tail((run.logs or "").splitlines()),
             "result": run.result}
