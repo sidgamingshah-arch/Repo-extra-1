@@ -515,17 +515,17 @@ def test_a_manual_value_on_a_subtotal_reaches_the_total_above_it():
 def test_two_printed_lines_on_one_off_template_concept_are_one_row():
     """Emitting a row each gave them the same id, which the client uses as its React key, its
     selection key and its edit address."""
-    rows = [{"canonical_key": "commit_capital", "source_label": "Contracted for",
+    # On the statement path. This used to be exercised through the additional-items view, which is
+    # gone; the grouping it is about belongs to `_build_statement` and is unchanged.
+    rows = [{"canonical_key": "bs_ca__inventories", "source_label": "Raw materials",
              "mapping_confidence": 0.8, "values": [_v("current", 900)]},
-            {"canonical_key": "commit_capital", "source_label": "Authorised not contracted",
+            {"canonical_key": "bs_ca__inventories", "source_label": "Finished goods",
              "mapping_confidence": 0.7, "values": [_v("current", 100)]}]
-    d = _build_statement(rows, TEMPLATE, "additional_items", "f.pdf")
-    items = [r for r in d["rows"] if r["kind"] == "item"]
+    d = _build_statement(rows, TEMPLATE, "balance_sheet", "f.pdf")
+    items = [r for r in d["rows"] if r["kind"] == "item" and r["id"] == "bs_ca__inventories"]
     assert len(items) == 1
-    assert [r["id"] for r in items] == ["commit_capital"]
     assert items[0]["v1"] == 1000                                   # summed, as the face does
-    assert [c["label"] for c in items[0]["contributions"]] == [
-        "Contracted for", "Authorised not contracted"]
+    assert [c["label"] for c in items[0]["contributions"]] == ["Raw materials", "Finished goods"]
     assert len({r["id"] for r in d["rows"]}) == len(d["rows"])       # every id unique
 
 

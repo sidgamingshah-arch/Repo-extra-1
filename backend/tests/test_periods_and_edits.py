@@ -172,33 +172,6 @@ def test_a_kpi_whose_inputs_are_missing_is_shown_as_unavailable_not_dropped():
     assert row["v1"] is None and row["display1"] == "—" and row["status"] == "missing"
 
 
-def test_additional_items_lists_what_reaches_no_face_statement():
-    rows = [
-        # On the balance sheet — must NOT appear here.
-        {"source_label": "Cash", "canonical_key": "bs_current_assets__cash_and_cash_equivalents",
-         "values": [_v("current", 10)]},
-        # Read off the page, mapped to nothing.
-        {"source_label": "Number of employees", "canonical_key": None,
-         "values": [_v("current", 1_240, page=88)]},
-        # Mapped, but to a concept no statement in the template carries.
-        {"source_label": "Contracted but not provided for", "canonical_key": "commit_capital",
-         "mapping_confidence": 0.81, "values": [_v("current", 900, page=91),
-                                                _v("prior", 700, page=92)]},
-    ]
-    d = _build_statement(rows, None, "additional_items", "f.pdf")
-    labels = [r["label"] for r in d["rows"]]
-    assert "Cash" not in labels
-    assert labels == ["Not mapped to any concept", "Number of employees",
-                      "Mapped, but not on any statement in this template",
-                      "Contracted but not provided for"]
-    unmapped = d["rows"][1]
-    assert unmapped["v1"] == 1240 and unmapped["source"]["page_index"] == 88
-    # No concept means no address for an edit — say so rather than offering a control that 404s.
-    assert unmapped["editable"] is False
-    mapped = d["rows"][3]
-    assert mapped["editable"] is True and mapped["source2"]["page_index"] == 92
-
-
 def test_an_equity_movement_is_not_reported_as_an_additional_item():
     # Its columns are components, not periods; it is on the changes-in-equity face already.
     rows = [{"source_label": "Loss for the year", "canonical_key": None, "values": [
@@ -364,17 +337,3 @@ def test_a_spreadsheets_date_headers_are_periods_not_equity_components():
         {"basis": "consolidated", "period_label": "2022", "value": "9"}]}]
     assert _matrix_rows(excel_row, "consolidated") == []
 
-
-def test_an_unmapped_spreadsheet_row_still_reaches_additional_items():
-    rows = [{"canonical_key": None, "source_label": "Number of employees", "values": [
-        {"basis": "consolidated", "period_label": "31 December 2023", "value": "1240",
-         "provenance": {"source_kind": "spreadsheet", "sheet": "BS", "cell": "B9"}},
-        {"basis": "consolidated", "period_label": "31 December 2022", "value": "1180",
-         "provenance": {"source_kind": "spreadsheet", "sheet": "BS", "cell": "C9"}}]}]
-    d = _build_statement(rows, None, "additional_items", "f.xlsx")
-    labels = [r["label"] for r in d["rows"]]
-    assert "Number of employees" in labels
-    row = next(r for r in d["rows"] if r["label"] == "Number of employees")
-    # Unnamed periods → the printed order decides, which is what the fallback is for.
-    assert (row["v1"], row["v2"]) == (1240, 1180)
-    assert row["source"]["cell"] == "B9" and row["source2"]["cell"] == "C9"

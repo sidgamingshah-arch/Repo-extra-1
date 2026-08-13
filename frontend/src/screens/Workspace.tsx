@@ -953,12 +953,14 @@ export default function WorkspaceScreen() {
             { value: "balance_sheet", label: t("ws.stmt.balance_sheet") },
             { value: "profit_and_loss", label: t("ws.stmt.profit_and_loss") },
             { value: "cash_flow", label: t("ws.stmt.cash_flow") },
-            { value: "changes_in_equity", label: t("ws.stmt.changes_in_equity") },
-            // Derived from the extraction, so offered only when there IS one.
+            // Changes in equity is not offered. The matrix parses, but the statement is not part
+            // of the reviewed set, so a tab for it invited an analyst to sign off a spread nobody
+            // had specified. A stored or deep-linked value still renders — this hides the entry
+            // point, it does not remove the view.
+            // Additional items is gone entirely, front and back: see _build_statement.
+            // KPIs are derived from the extraction, so offered only when there IS one.
             ...(usingReal
-              ? [{ value: "kpi" as StatementKey, label: t("ws.stmt.kpi") },
-                 { value: "additional_items" as StatementKey,
-                   label: t("ws.stmt.additional_items") }]
+              ? [{ value: "kpi" as StatementKey, label: t("ws.stmt.kpi") }]
               : []),
           ]}
           value={effectiveStatement}

@@ -55,7 +55,6 @@ _TR: dict[str, dict[str, str]] = {
     "KPIs": {"zh": "关键指标", "ar": "المؤشرات الرئيسية", "fr": "Indicateurs clés"},
     "Computed KPIs": {"zh": "计算得出的关键指标", "ar": "مؤشرات محسوبة",
                       "fr": "Indicateurs calculés"},
-    "Additional items": {"zh": "其他项目", "ar": "بنود إضافية", "fr": "Postes supplémentaires"},
     "Extracted, not on a statement": {"zh": "已提取，但不在报表中",
                                       "ar": "مستخرج، وليس في أي قائمة",
                                       "fr": "Extrait, hors états financiers"},
@@ -1092,7 +1091,6 @@ _ASSERTED_DIFF_KEY = {
     "equity_tie": "diff",
     "calculated_mismatch": "diff",
     # The sum of the ABSOLUTE per-face residuals, which is what the card's delta prints.
-    "note_tie": "total_break",
 }
 
 
@@ -1282,56 +1280,6 @@ def _structural_checks(structural: list[dict], locale: str, covered: set[_Assert
     return out
 
 
-def _untied_by_note(reconciliation: list[dict]) -> dict[tuple, list[dict]]:
-    """The untied reconciliation entries grouped by (note, basis, period).
-
-    Reconciliation records one entry per FACE LINE per note (stages/reconcile.py), and one note
-    legitimately breaks down several face lines. The queue asks ONE question per note — "this note
-    does not tie" — so the entries are grouped rather than deduplicated: taking the first and
-    dropping the rest is how a second face line out by 2,000,000 appeared on no screen at all.
-    """
-    groups: dict[tuple, list[dict]] = {}
-    for ent in reconciliation:
-        if tie_status(ent) != "untied":
-            continue
-        groups.setdefault((ent.get("note_number"), ent.get("basis"),
-                           ent.get("period_label")), []).append(ent)
-    return groups
-
-
-def _note_tie_entries(group: list[dict]) -> dict[str, str]:
-    """One note's untied face lines as ``{face line: "face / residual"}`` — what the card prints
-    and what the evidence digest is taken over, so the two cannot disagree.
-
-    Keyed on ``face_key`` (the canonical key, or the printed caption for a face line that mapped to
-    nothing) and NOT on ``face_item_id``, which is a fresh UUID every run: a digest over per-run
-    ids would report every acceptance as stale on every re-extraction. Sorted by content, not by
-    the order the stage happened to emit, so two runs that found the same set hash alike; two
-    entries that would share a label (two printed lines mapping to one concept, or a run stored
-    before ``face_key`` existed) are numbered, because collapsing them into one dict key would drop
-    a break off the card — the very defect this shape closes.
-    """
-    from app.services import judgement
-
-    def figures(ent: dict) -> str:
-        return f"{judgement.q(float(ent.get('raw_face') or 0)):,.0f} / " \
-               f"{judgement.q(float(ent.get('residual') or 0)):,.0f}"
-
-    ordered = sorted(group, key=lambda e: (str(e.get("face_key") or ""),
-                                           judgement.q(float(e.get("residual") or 0)),
-                                           judgement.q(float(e.get("raw_face") or 0))))
-    out: dict[str, str] = {}
-    for ent in ordered:
-        label = str(ent.get("face_key") or "") or "—"
-        if label in out:
-            n = 2
-            while f"{label} ({n})" in out:
-                n += 1
-            label = f"{label} ({n})"
-        out[label] = figures(ent)
-    return out
-
-
 def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str,
                        structural: list[dict] | None = None,
                        template_def: dict | None = None,
@@ -1432,68 +1380,13 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
                          "bs_equity": judgement.q(bs_equity),
                          "diff": judgement.q(eq_close[1] - bs_equity)},
         })
-    # Only a note that IS a breakdown of the face figure, yet does not tie, is a finding. An
-    # "unconfirmed" entry means the cited note is an analysis/segment/commitments table rather
-    # than a decomposition — raising those turned the queue into hundreds of non-findings.
-    for ident, group in _untied_by_note(reconciliation).items():
-        note, basis, period = ident
-        entries = _note_tie_entries(group)
-        # THE SUMMARY FIGURE OF A CARD TITLED "DOES NOT TIE" MUST NOT BE ABLE TO BE ZERO.
-        # `residual = raw_face - note_total` is SIGNED and TIE_UNTIED only bounds abs(residual)
-        # (services/reconcile.py), so a note breaking +2,000,000 on one face line and −2,000,000 on
-        # another summed to 0: the card served tone 'high', title "Note does not tie to the face
-        # figure", delta '0' and a highlighted row reading "0" — and `evidence['residual']` cancelled
-        # with it, so the fingerprint's own summary was blind to both breaks growing in step. The
-        # figure is now the sum of the ABSOLUTE residuals: it is the total break across the untied
-        # face lines, it can only be zero when nothing is untied, and no two lines can cancel it. The
-        # per-entry residuals stay SIGNED in `entries` — the direction is the truth about each line,
-        # and a reader needs it to know which side the note is out on.
-        total_break = sum(abs(float(ent.get("residual") or 0)) for ent in group)
-        checks.append({
-            "id": f"chk-note-{note}-{basis}-{period}",
-            "type": "note_tie", "icon": "≠",
-            "title": L("Note does not tie to the face figure"),
-            "where": f"Note {note} · {basis}/{period}",
-            "severity": L("Check failed"), "tone": "high",
-            # Every face line that does not tie, as a total that cannot cancel — never the first
-            # one's residual passed off as the note's, which is what "Residual vs note total 20" said
-            # over a second face line out by 2,000,000 on the same note.
-            "delta": f"{total_break:,.0f}", "target": f"note:{note}",
-            # EVERY untied face line, not the first: the card indicts each of them, and the header
-            # tile counts the lines no finding names.
-            "names": sorted({str(ent.get("face_key") or "") for ent in group} - {""}),
-            "calc": [[L("Face lines that do not tie"), str(len(entries)), False],
-                     # Named for what it IS: the total break, not a "total residual", because a
-                     # residual is signed and this is the sum of their magnitudes. One quantity, one
-                     # spelling — the same label the accepted-figures panel shows it under.
-                     [L("Total break across the untied face lines"),
-                      f"{total_break:,.0f}", True],
-                     *([label, figures, False] for label, figures in entries.items())],
-            "fix": L("The note's detail rows do not sum to the face figure(s) it supports. "
-                     "Verify the note breakdown and each face value listed."),
-            # WHICH note, and nothing about which face lines broke. Reconciliation holds one entry
-            # per FACE LINE (stages/reconcile.py keys on (face_item_id, note_number)) and
-            # link_notes has a first-class NOTE_SPLITS_TO_MANY_FACE relationship, so several face
-            # lines citing one note is normal, not an anomaly. This card speaks for all of them, and
-            # the untied SET therefore lives in the evidence rather than the subject: a set that
-            # grows must read as 'stale' — come look again — and never as a subject that changed,
-            # which the screen would caption as the finding having been corrected while a
-            # nine-figure break was still on it.
-            "subject": {"k": "note_tie", "note": str(note),
-                        "basis": str(basis or ""), "period": str(period or "")},
-            # Every entry the card prints, and the count beside them so a set that grew still moves
-            # the digest even if two face lines were to render under one label. The old evidence was
-            # the FIRST entry's face and residual, so a reviewer who accepted "out by 20; the note
-            # rounds" kept an 'accepted' card while two further face lines on the same note went out
-            # by 2,000,000 and 900,000,000 — byte-identical evidence, and both breaks dropped out of
-            # summary.open and out of the commentary's data-quality count.
-            # `total_break` and not the signed sum: the digest's own summary figure used to cancel
-            # exactly as the card's did, so a +2,000,000 and a −2,000,000 break both growing to
-            # ±9,000,000 left it at 0. The per-entry residuals are what actually discriminate, and the
-            # magnitude beside them can no longer be zero while a break is on the card.
-            "evidence": {"entries": entries, "entry_count": len(entries),
-                         "total_break": judgement.q(total_break)},
-        })
+    # NOTE-TIE CARDS ARE NOT RAISED. A note that does not sum to the face figure it supports is
+    # still reconciled and still lowers note_link confidence (stages/reconcile), and the
+    # ReconciliationReport still records every untied face line — what is gone is the review-queue
+    # CARD. On a real filing the queue filled with them: a cited note is very often an analysis,
+    # segment or commitments table rather than a decomposition, and each one that failed to tie
+    # arrived as a finding an analyst had to dismiss. Removed at the user's request rather than
+    # tuned, so nothing here half-raises them.
     # What the cards above ALREADY TELL THE READER, not merely which targets they mention. The two
     # are different questions and were answered by one bare-string set, which is how a 2,500 break
     # came to be silenced by a card asserting 1,000 about the same line.
@@ -1808,10 +1701,6 @@ _EVIDENCE_LABELS: dict[str, dict[str, str]] = {
                    "bs_equity": "Total equity per the balance sheet", "diff": "Difference"},
     # One card per (note, basis, period) covering every untied face line on that note, so the
     # figures are per-face and `entries` is a nested map printing each face line under its own key.
-    "note_tie": {"entries": "Face figure / residual vs note total",
-                 "entry_count": "Face lines that do not tie",
-                 "face": "Face figure",
-                 "total_break": "Total break across the untied face lines"},
     "structural": {"actual": "Reported", "expected": "Sum of template components",
                    "diff": "Difference", "sign_suspect": "Sign suspect",
                    "components": "Components"},
@@ -1880,6 +1769,9 @@ def _subject_label(subject: dict, locale: str) -> str:
     if kind == "equity_tie":
         return L("Equity statement closing balance")
     if kind == "note_tie":
+        # No longer produced — note-tie cards are not raised (see the review-queue builder). Kept
+        # because a JUDGEMENT recorded against one before that change is still in the store, and a
+        # stored judgement whose subject cannot be labelled renders as a blank row.
         return f"{L('Note')} {subject.get('note') or ''}".strip()
     if kind == "structural":
         return f"{L('Template relation')} {subject.get('rule_id') or ''} · " \
@@ -3533,131 +3425,6 @@ def _face_prefixes(template_def: dict | None) -> set[str]:
     return out
 
 
-def _build_additional_items_statement(rows: list[dict], template_def: dict | None, filename: str,
-                                      *, basis: str, locale: str, units_ctx: dict | None,
-                                      company: str | None, doc_format: str,
-                                      page_count: int) -> dict:
-    """Everything extracted that reaches NO face statement — the honest remainder.
-
-    A figure the pipeline read off the page but could not place is the one thing a spreading tool
-    must never hide: silence there reads as "the document did not contain it". Two kinds end up
-    here, and the distinction is what an analyst acts on:
-
-    * lines mapped to no concept at all — the mapper found nothing close enough, so they need a
-      concept (or an ontology alias) before they can join a statement;
-    * lines mapped to a concept that belongs to no statement in the active template — correctly
-      identified, but the template has nowhere to print them.
-
-    Rows that are part of the changes-in-equity matrix are excluded: they are on a face already.
-    """
-    prefixes = _face_prefixes(template_def)
-    on_matrix = {id(r) for r, _cells in _matrix_rows(rows, basis)}
-
-    unmapped: list[dict] = []
-    off_template: dict[str, list[dict]] = {}
-    for r in rows:
-        if not _basis_values(r, basis) or id(r) in on_matrix:
-            continue
-        key = r.get("canonical_key") or ""
-        if key and key.split("_", 1)[0] in prefixes:
-            continue                      # reaches a face statement (or its "Other extracted")
-        if key:
-            # Grouped by concept, exactly as the face statements group. Several printed lines can
-            # map to one off-template concept, and emitting a row each gave them the same id —
-            # which the client uses as its React key, its selection key AND its edit address, so
-            # selecting one selected the other and an edit landed on whichever came first.
-            off_template.setdefault(key, []).append(r)
-        else:
-            unmapped.append(r)
-
-    def row_of(group: list[dict], idx: int) -> dict:
-        r = group[0]
-        key = r.get("canonical_key")
-        cur, prior = _cur_prior(r, basis)
-        confs = [x.get("mapping_confidence") for x in group
-                 if isinstance(x.get("mapping_confidence"), (int, float))]
-        cat, pct = _conf_cat(min(confs) if confs else None)
-        # One reader for the figure, as everywhere else: the sum when several printed lines share
-        # the concept, or the analyst's manual value replacing it.
-        v1 = _concept_value(group, basis, "current") if key else \
-            _to_num((cur or {}).get("value"))
-        v2 = _concept_value(group, basis, "prior") if key else \
-            _to_num((prior or {}).get("value"))
-        contributions = None
-        if len(group) > 1:
-            contributions = [{
-                "label": x.get("source_label") or "",
-                "canonical_key": key,
-                "v1": _to_num((_cur_prior(x, basis)[0] or {}).get("value")),
-                "v2": _to_num((_cur_prior(x, basis)[1] or {}).get("value")),
-                "method": x.get("mapping_method"), "residual": False,
-                "src": _prov_label((_cur_prior(x, basis)[0] or {}).get("provenance")),
-                "source": (_cur_prior(x, basis)[0] or {}).get("provenance"),
-                "src2": _prov_label((_cur_prior(x, basis)[1] or {}).get("provenance")),
-                "source2": (_cur_prior(x, basis)[1] or {}).get("provenance"),
-            } for x in group]
-        return {
-            # Rows with no concept have no canonical key to address, so the id is positional.
-            "id": key or f"extra:{idx}:{(r.get('source_label') or '')[:40]}",
-            "label": r.get("source_label") or "", "source_label": r.get("source_label"),
-            "kind": "item", "note": next((x.get("note") for x in group if x.get("note")), None),
-            "note2": None,
-            "status": "edited" if any(_edited_for(x, basis) for x in group) else None,
-            "confidence": {"cat": cat, "pct": pct} if confs else None,
-            # Editing addresses a CONCEPT, so a line mapped to none cannot be edited here —
-            # give it a concept on the Review screen first.
-            "editable": bool(key),
-            "formula": r.get("formula"), "arithmetic": None,
-            "inspector": {
-                "tag": (r.get("mapping_method") or "unmapped") if key else _t("unmapped", locale),
-                "src": _prov_label((cur or {}).get("provenance")),
-                "formula": r.get("formula") or "",
-                "result": "" if v1 is None else f"{v1:,.0f}",
-                "note": _t("Mapped to a concept the active template has no line for.", locale)
-                        if key else
-                        _t("No concept matched this caption, so it appears on no statement. "
-                           "Map it from the Review queue to bring it onto the face.", locale),
-            },
-            "contributions": contributions,
-            "v1": v1, "v2": v2,
-            "source": (cur or {}).get("provenance"),
-            "source2": (prior or {}).get("provenance"),
-        }
-
-    out: list[dict] = []
-    idx = 0
-    groups: list[tuple[str, list[list[dict]]]] = [
-        (_t("Not mapped to any concept", locale), [[r] for r in unmapped]),
-        (_t("Mapped, but not on any statement in this template", locale),
-         list(off_template.values())),
-    ]
-    for label, members in groups:
-        if not members:
-            continue
-        out.append({"id": f"extra_sec_{len(out)}", "label": label, "kind": "section",
-                    "v1": None, "v2": None})
-        for group in members:
-            out.append(row_of(group, idx))
-            idx += 1
-
-    return {
-        "statement": "additional_items", "label": _t("Additional items", locale), "basis": basis,
-        "layout": "comparative", "periods": _period_labels(rows, basis, locale),
-        "currency": (units_ctx or {}).get("currency") or "",
-        "currency_symbol": "", "units": (units_ctx or {}).get("units_label") or "",
-        "units_scale_factor": _to_num((units_ctx or {}).get("scale_factor")) or 1.0,
-        "format": doc_format, "page_count": page_count,
-        "rows": out,
-        "viewer": {
-            "company": company or filename, "subtitle": _t("Extracted, not on a statement", locale),
-            "chips": [{"label": _t("Consolidated" if basis == "consolidated" else "Standalone",
-                                   locale), "active": True}],
-            "callout": _t("Figures read from the document that reach no face statement. Click one "
-                          "to see where it was printed.", locale),
-        },
-    }
-
-
 def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
                      filename: str, basis: str = "consolidated", locale: str = "en",
                      units_ctx: dict | None = None, company: str | None = None,
@@ -3683,10 +3450,6 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         return _build_kpi_statement(
             rows, filename, basis=basis, locale=locale, company=company,
             doc_format=doc_format, page_count=page_count, template_def=template_def)
-    if statement_type == "additional_items":
-        return _build_additional_items_statement(
-            rows, template_def, filename, basis=basis, locale=locale, units_ctx=units_ctx,
-            company=company, doc_format=doc_format, page_count=page_count)
     # Several printed lines legitimately share one concept: three depreciation lines roll into
     # "Depreciation and amortisation", two tax payments into "Income tax paid", and an "Others"
     # bucket exists precisely to absorb a handful. Keeping only the first row would drop the

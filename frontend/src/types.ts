@@ -197,9 +197,9 @@ export type FxRateResolution =
  *  last two are determined by its figures — the KPIs computed off the statements, and everything
  *  extracted that reaches no face statement. Both are real-extraction only. */
 export type StatementKey = "balance_sheet" | "profit_and_loss" | "cash_flow"
-  | "changes_in_equity" | "kpi" | "additional_items";
+  | "changes_in_equity" | "kpi";
 /** Views that exist only for a real extraction (there is no demo data behind them). */
-export const DERIVED_STATEMENTS: StatementKey[] = ["kpi", "additional_items"];
+export const DERIVED_STATEMENTS: StatementKey[] = ["kpi"];
 export type RowKind = "section" | "subhead" | "item" | "subtotal" | "total";
 export type ExportFmt = "excel" | "json";
 

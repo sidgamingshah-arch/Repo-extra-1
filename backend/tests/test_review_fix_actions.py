@@ -129,8 +129,9 @@ def test_no_flip_when_the_suspect_has_no_figure_or_a_zero_one(template_def):
 
 
 def test_no_other_check_type_offers_a_fix(template_def):
-    """balance, equity_tie, note_tie, calculated_mismatch, uncomputed, unmapped and
-    low_confidence all carry null — none of them implies a single edit."""
+    """balance, equity_tie, calculated_mismatch, uncomputed, unmapped and low_confidence all carry
+    null — none of them implies a single edit. note_tie is not in the list because note-tie cards are
+    no longer raised at all."""
     from app.api.routes.documents import _build_review
 
     rows = [
@@ -148,7 +149,8 @@ def test_no_other_check_type_offers_a_fix(template_def):
               "raw_face": 1000, "residual": 20, "within_tolerance": False}]
     checks = _build_review(rows, "d.pdf", "en", recon, [], template_def)["checks"]
     types = {c["type"] for c in checks}
-    assert {"balance", "note_tie", "unmapped", "low_confidence"} <= types
+    assert {"balance", "unmapped", "low_confidence"} <= types
+    assert "note_tie" not in types      # note-tie cards are no longer raised
     assert types & {"calculated_mismatch", "uncomputed"}
     for c in checks:
         assert c["fix_action"] is None, c["type"]

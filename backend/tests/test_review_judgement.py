@@ -408,63 +408,6 @@ def _untied(residual, *, face, face_key, note="12"):
             "within_tolerance": False, "tie_status": "untied"}
 
 
-def test_a_further_untied_face_line_on_one_note_moves_the_digest_and_reads_stale():
-    """THE ROUND-2 REPRODUCTION. One note, several untied face lines, one card.
-
-    Reconciliation holds one untied entry per FACE LINE, and a note breaking down several face lines
-    is normal (link_notes.NOTE_SPLITS_TO_MANY_FACE, cite_count > 1). The card was built from the
-    FIRST entry: subject and evidence both carried only its face and residual. So a reviewer who
-    accepted "out by 20; the note rounds. Immaterial." kept an 'accepted' card, byte-identical
-    evidence and ``changed == []`` after a mapping regression put a second face line 2,000,000 out
-    and a third 900,000,000 out on the SAME note — two nine-figure breaks reported as vouched for by
-    someone who examined 20, dropping out of ``summary.open`` and so out of
-    ``build_commentary_from_rows``' data-quality count as well.
-    """
-    from app.api.routes.documents import _build_review
-
-    rows = [_row("bs_ca__face_a", 1000)]
-    before = [_untied(20, face=1000, face_key="bs_ca__face_a")]
-    card = _build_review(rows, "d.pdf", "en", before)["checks"][0]
-    assert card["type"] == "note_tie" and card["evidence"]["entry_count"] == 1
-
-    after_rows = [*before,
-                  _untied(2_000_000, face=99_000_000, face_key="bs_ca__face_b"),
-                  _untied(900_000_000, face=20_000_000_000, face_key="bs_ca__face_c")]
-    served = _build_review(rows, "d.pdf", "en", after_rows, judgements=[_accepted(card)])
-    same = _by_key(served, card["subject_key"])
-
-    # One card still — a note asks one question — and it is STALE, not accepted.
-    assert [c["type"] for c in served["checks"]] == ["note_tie"]
-    assert same["status"] == "stale" and same["status"] != "accepted"
-    assert same["judgement"]["changed"]                      # and it names what moved
-    assert same["evidence"]["entry_count"] == 3
-    assert served["summary"]["open"] == 1 and served["summary"]["accepted"] == 0
-    # The subject did NOT move: the note is still the note, so this is "come look again" and not
-    # "the finding you accepted was corrected".
-    assert same["subject"] == card["subject"]
-    assert served["judgements"]["orphaned"] == []
-    # Both new breaks are on the card the reviewer is sent back to.
-    printed = {row[0]: row[1] for row in same["calc"]}
-    assert printed["bs_ca__face_b"] == "99,000,000 / 2,000,000"
-    assert printed["bs_ca__face_c"] == "20,000,000,000 / 900,000,000"
-
-
-def test_a_note_tie_acceptance_holds_while_the_untied_set_stands():
-    """The other direction: the same set, re-emitted in another order by a later run, is the same
-    claim — so the acceptance holds. Without content ordering every re-extraction would read stale
-    and the mechanism would cry wolf."""
-    from app.api.routes.documents import _build_review
-
-    rows = [_row("bs_ca__face_a", 1000)]
-    entries = [_untied(20, face=1000, face_key="bs_ca__face_a"),
-               _untied(40, face=2000, face_key="bs_ca__face_b")]
-    card = _build_review(rows, "d.pdf", "en", entries)["checks"][0]
-    again = _build_review(rows, "d.pdf", "en", list(reversed(entries)),
-                          judgements=[_accepted(card)])
-    assert _by_key(again, card["subject_key"])["status"] == "accepted"
-    assert again["summary"]["accepted"] == 1
-
-
 def test_a_judgement_whose_finding_vanished_is_orphaned_and_counted_nowhere():
     """A corrected finding stops being emitted. The judgement is never auto-deleted — deleting the
     record of who accepted a break is not something an audit trail should permit — so it is listed
