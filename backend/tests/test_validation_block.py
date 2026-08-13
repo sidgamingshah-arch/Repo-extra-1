@@ -39,7 +39,7 @@ _SAMPLES = Path(__file__).resolve().parent.parent / "app" / "sample" / "template
 
 @pytest.fixture(scope="module")
 def raw_ontology() -> dict:
-    return json.loads((_SAMPLES / "hkfrs_hk_china_v2_ontology.json").read_text())
+    return json.loads((_SAMPLES / "hkfrs_hk_china_ontology.json").read_text())
 
 
 @pytest.fixture(scope="module")
@@ -765,7 +765,7 @@ def test_a_real_run_against_the_v2_rulebook_carries_its_declared_relations(clien
                          files={"file": ("bs.pdf", make_native_pdf(),
                                          "application/pdf")}).json()["id"]
     onts = client.get("/api/v1/ontologies").json()
-    ont = next(o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v2")
+    ont = next(o for o in onts if o["ontology_key"] == "hkfrs_hk_china")
     tpls = client.get("/api/v1/templates").json()
     tpl = next(t for t in tpls if t["template_key"] == ont["target_template_key"])
     client.post(f"/api/v1/documents/{doc_id}/extractions",

@@ -19,8 +19,8 @@ What this changes, and why each matters:
   these ids to the template's. ``mapping.section_token_of_scope`` reads the section name off the END
   of a scope id (``bs_s3_current_liabilities`` and ``bs_s5_current_liabilities`` both resolve to the
   token ``current_liabilities``), so the number is decorative to the gate and the rename is safe
-  rather than required. What it IS required to be is internally consistent: the v2 rulebook's
-  ``section_defaults`` is keyed by section id, each of its 174 concepts names one through
+  rather than required. What it IS required to be is internally consistent: the rulebook's
+  ``section_defaults`` is keyed by section id, each of its concepts names one through
   ``inherits``, two residuals name one again under ``residual_policy.section_scope``, and
   ``services/ontology_skeleton.py`` writes ``inherits`` from the template's node_ids.
   ``rename_sections`` moves every one of them together, through a temporary name because equity and
@@ -45,12 +45,8 @@ What this changes, and why each matters:
   node between reserves and total equity. Total equity is therefore reached in two steps
   (owners' + NCI) rather than one flat sum, which is what lets a break in the attribution be seen.
 
-* ONE NEW CONCEPT, ``bs_current_assets__contract_assets``, seeded into both rulebooks by
-  ``seed_contract_assets``: a template line no rulebook recognises is a line that can never be
-  filled. It is written in each file's OWN vocabulary — the v1 file carries
-  ``description``/``value_scope``/``extraction_mode``/``include`` on all 174 concepts and
-  ``match_priority`` on none, the v2 file the reverse — because a concept authored in the other
-  file's shape is the defect ``test_hk_template`` and ``test_mapping_v2`` both caught.
+* ONE NEW CONCEPT, ``bs_current_assets__contract_assets``, seeded by ``seed_contract_assets``: a
+  template line no rulebook recognises is a line that can never be filled.
 
 * ONE NEW CHECK, not the three the spec lists, because the revised structure already enforces the
   other two. ``bs_check_equity_attribution`` (owners' + NCI = total equity) and
@@ -70,8 +66,8 @@ What this changes, and why each matters:
   this revision.
 
 * ONE CHECK DELETED: the rulebook's ``bs_balance`` was the template's ``bs_balances`` in different
-  words — the same footing equation declared in both files, counted twice in coverage. See
-  ``DROP_IDENTITIES``.
+  words — the same footing equation declared in both the template and the rulebook, counted twice
+  in coverage. See ``DROP_IDENTITIES``.
 
 WHAT THE SPEC ASKED FOR AND THIS DOES NOT ENCODE — one item, stated rather than quietly dropped:
 ``COALESCE( bs_equity__reserves , SUM( … ) )`` on rows 79 and 80. There is no coalesce op and none is
@@ -88,9 +84,7 @@ import pathlib
 import sys
 
 TPL = pathlib.Path("app/sample/templates/hkfrs_hk_china_template.json")
-V1 = pathlib.Path("app/sample/templates/hkfrs_hk_china_ontology.json")
-V2 = pathlib.Path("app/sample/templates/hkfrs_hk_china_v2_ontology.json")
-ONTOLOGIES = [V1, V2]
+ONTOLOGY = pathlib.Path("app/sample/templates/hkfrs_hk_china_ontology.json")
 
 # The two misspelt canonical keys, and what they become.
 KEY_FIXES = {
@@ -304,15 +298,14 @@ def _mapping_index(data: dict) -> dict[str, int]:
     return {m.get("canonical_key"): i for i, m in enumerate(data.get("mappings") or [])}
 
 
-def _contract_assets(*, v2: bool) -> dict:
-    """The new concept, in the vocabulary of the file it is going into.
+def _contract_assets() -> dict:
+    """The new concept.
 
-    ``definition`` and the alias set are shared; everything else differs because the two files
-    differ. The v1 file states ``description``/``value_scope``/``extraction_mode``/``include`` on
-    every one of its concepts and ``match_priority`` on none of them; the v2 file states
-    ``inherits`` and ``match_priority`` on every one and reaches the other four through the section
-    layer. Writing one file's fields into the other leaves a concept that fails the invariants the
-    suite holds each file to.
+    This used to take a ``v2`` flag and write two different shapes, because two rulebook generations
+    shipped: the thin file stated ``description``/``value_scope``/``extraction_mode``/``include`` on
+    every concept and ``match_priority`` on none, the rich one the reverse, and a concept written in
+    the other file's shape failed the invariants the suite holds. One rulebook ships now, so there is
+    one shape and no way to pick the wrong one.
     """
     aliases = ["Contract assets", "Contract asset",
                "Amounts due from customers for contract work",
@@ -332,28 +325,19 @@ def _contract_assets(*, v2: bool) -> dict:
                             "bs_current_liabilities__contract_liabilities"],
         "exclude_hints": ["liabilit", "负债", "負債", "payable", "应付"],
     }
-    excl_v1 = ["Amounts mapped to another dedicated concept.",
-               "Gross parent totals that contain separately mapped children."]
-    excl_v2 = [
+    exclude = [
         "Trade receivables, which are unconditional rights to consideration and have their own "
         "concept.",
         "Contract costs capitalised as an asset under HKFRS 15.95, which are not contract assets.",
         "Contract liabilities, which are the mirror balance on the liability side.",
     ]
-    if v2:
-        return {**shared, "inherits": "bs_s2_current_assets", "match_priority": 64,
-                "exclude": excl_v2, **tail}
-    return {**shared,
-            "description": "Contract assets: under 'Current assets' in the balance sheet.",
-            "value_scope": "exclusive_leaf", "extraction_mode": "extract",
-            "include": ["Amounts attributable to this concept for the same entity, scope, period, "
-                        "currency and unit."],
-            "exclude": excl_v1, **tail}
+    return {**shared, "inherits": "bs_s2_current_assets", "match_priority": 64,
+            "exclude": exclude, **tail}
 
 
-def seed_contract_assets(data: dict, *, v2: bool) -> str | None:
+def seed_contract_assets(data: dict) -> str | None:
     """Insert (or replace) the new concept directly after trade receivables."""
-    entry = _contract_assets(v2=v2)
+    entry = _contract_assets()
     mappings = data.setdefault("mappings", [])
     idx = _mapping_index(data)
     at = idx.get(entry["canonical_key"])
@@ -520,32 +504,7 @@ def sync_reserves_group(data: dict) -> str | None:
     return f"equity_reserves group: {', '.join(moved)}"
 
 
-BREAKING_CHANGE = (
-    "Balance-sheet revision: sections reordered to the HK ladder and renumbered accordingly "
-    "(bs_s3_current_liabilities, bs_s5_equity); the misspelt canonical keys "
-    "bs_current_liabilities__cuurent_notes_payable and "
-    "bs_current_liabilities__current_potion_of_long_term_debt corrected, with NO key-alias table, so "
-    "a run stored against either resolves to no template node and reads as unmapped until "
-    "re-extracted; bs_current_assets__contract_assets added; equity restructured so reserves "
-    "absorbs share premium, treasury shares and shares held for award schemes and total equity is "
-    "reached through equity_attributable_to_owners."
-)
 
-
-def revise_metadata(data: dict) -> str | None:
-    """Record the revision as a breaking change.
-
-    The ``retained_defects`` list ends up EMPTY, which is the point: its only entry said the two
-    key typos were kept deliberately. A list that keeps a fixed defect in it is how a reader comes
-    to distrust the whole block.
-    """
-    meta = data.get("metadata")
-    if not isinstance(meta, dict) or "breaking_changes" not in meta:
-        return None
-    if BREAKING_CHANGE in meta["breaking_changes"]:
-        return None
-    meta["breaking_changes"].append(BREAKING_CHANGE)
-    return "breaking_changes records the balance-sheet revision"
 
 
 # The relations the revised balance sheet makes checkable, as the rulebook spells them. Each is
@@ -607,7 +566,7 @@ def revise_validation(data: dict) -> list[str]:
 
 def revise_ontologies() -> list[str]:
     out: list[str] = []
-    for path in ONTOLOGIES:
+    for path in (ONTOLOGY,):
         if not path.exists():
             continue
         data = json.loads(path.read_text())
@@ -617,14 +576,12 @@ def revise_ontologies() -> list[str]:
         data, moved = rename_sections(data)
         if moved:
             notes.append(f"{moved} concept(s) follow the renumbered section ids")
-        if seeded := seed_contract_assets(data, v2=path is V2):
+        if seeded := seed_contract_assets(data):
             notes.append(seeded)
         if counted := sync_declared_count(data):
             notes.append(counted)
         if grouped := sync_reserves_group(data):
             notes.append(grouped)
-        if recorded := revise_metadata(data):
-            notes.append(recorded)
         notes += revise_validation(data)
         if notes:
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")

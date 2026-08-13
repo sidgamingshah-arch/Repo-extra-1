@@ -207,7 +207,7 @@ def test_pl_section_keys_resolve_and_the_compound_wins():
 
 @pytest.fixture(scope="module")
 def v2_matcher() -> OntologyMatcher:
-    definition = json.loads((TEMPLATES / "hkfrs_hk_china_v2_ontology.json").read_text())
+    definition = json.loads((TEMPLATES / "hkfrs_hk_china_ontology.json").read_text())
     return OntologyMatcher(load_ontology(definition, resolve=True), locale="zh")
 
 
@@ -322,7 +322,7 @@ CASH_CAPTION = "Cash and cash equivalents 現金及現金等價物"
 
 
 def _matcher_with(edit) -> OntologyMatcher:
-    definition = json.loads((TEMPLATES / "hkfrs_hk_china_v2_ontology.json").read_text())
+    definition = json.loads((TEMPLATES / "hkfrs_hk_china_ontology.json").read_text())
     edit(definition)
     return OntologyMatcher(load_ontology(definition, resolve=True), locale="zh")
 

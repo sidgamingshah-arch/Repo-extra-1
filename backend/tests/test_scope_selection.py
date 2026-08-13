@@ -32,7 +32,7 @@ from app.services import row_reconstruct as rr
 from app.services.row_reconstruct import Word, build_line_items
 
 RULEBOOK = (Path(__file__).resolve().parent.parent / "app" / "sample" / "templates"
-            / "hkfrs_hk_china_v2_ontology.json")
+            / "hkfrs_hk_china_ontology.json")
 
 
 def _raw_blocks() -> tuple[dict, dict]:

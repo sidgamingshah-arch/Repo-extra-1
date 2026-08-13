@@ -180,15 +180,15 @@ def test_skeleton_does_not_claim_the_live_rulebooks_key(client):
     the parity page both read the highest version — an unfinished skeleton would become the
     rulebook those pages describe."""
     skeleton = _skeleton(client)
-    assert skeleton["ontology_key"] not in {"hkfrs_hk_china_v1", "hkfrs_hk_china_v2"}
+    assert skeleton["ontology_key"] not in {"hkfrs_hk_china", "hkfrs_hk_china_v1"}
 
     def _top(key: str) -> int:
         return max(r["version"] for r in client.get(f"{API}/ontologies").json()
                    if r["ontology_key"] == key)
 
-    before = _top("hkfrs_hk_china_v1")
+    before = _top("hkfrs_hk_china")
     assert client.post(f"{API}/ontologies", json={"definition": skeleton}).status_code == 201
-    assert _top("hkfrs_hk_china_v1") == before
+    assert _top("hkfrs_hk_china") == before
 
 
 def test_unknown_template_id_is_404(client):
@@ -227,42 +227,49 @@ def test_both_authoring_endpoints_require_admin(anon_client, auth):
 
 # --- the v2 seed ------------------------------------------------------------------------------
 
-def test_both_rulebook_generations_are_seeded_and_selectable(client):
+def test_the_shipped_rulebook_is_seeded_whole_and_selectable(client):
+    """One template, one rulebook, and the rulebook seeded with every block it carries.
+
+    This used to assert two generations were seeded side by side. They are consolidated: a concept
+    authored twice in two vocabularies was a defect twice over, so the thin generation is retired and
+    what is checked now is that the one that ships arrives complete — the section layer, the concept
+    count and the target template, all read back through the API rather than off disk.
+    """
     rows = client.get(f"{API}/ontologies").json()
     by_key: dict[str, dict] = {}
     for r in rows:
         if r["ontology_key"] not in by_key or r["version"] > by_key[r["ontology_key"]]["version"]:
             by_key[r["ontology_key"]] = r
-    assert {"hkfrs_hk_china_v1", "hkfrs_hk_china_v2"} <= set(by_key)
-    v1, v2 = by_key["hkfrs_hk_china_v1"], by_key["hkfrs_hk_china_v2"]
-    assert v1["id"] != v2["id"]
-    # Both target the already-seeded template, so either can be selected for a run.
-    assert v1["target_template_key"] == v2["target_template_key"] == SEEDED_TEMPLATE
+    assert "hkfrs_hk_china" in by_key
+    shipped = by_key["hkfrs_hk_china"]
+    assert shipped["target_template_key"] == SEEDED_TEMPLATE
+    assert shipped["superseded"] is False       # nothing replaces it
 
-    d2 = client.get(f"{API}/ontologies/{v2['id']}").json()["definition"]
-    assert d2["schema_version"] == 2 and len(d2["section_defaults"]) == 19
-    assert len(d2["mappings"]) == 185
+    definition = client.get(f"{API}/ontologies/{shipped['id']}").json()["definition"]
+    assert definition["schema_version"] == 2 and len(definition["section_defaults"]) == 19
+    assert len(definition["mappings"]) == 185
+    assert len(definition["validation"]["identities"]) == 19
 
 
-def test_seeding_v2_does_not_displace_the_v1_rulebook(client):
-    """v2 arrives beside v1, never as a version OF it.
+def test_every_version_under_the_shipped_key_is_that_rulebook(client):
+    """Seeding never publishes a DIFFERENT rulebook as a version of this key.
 
-    A run records the ``OntologyVersion`` id it used, so a v1 run must still find the v1 rulebook
-    at that id. And publishing v2 under the v1 key would hand it every consumer that reads "the
-    latest version for this key" — the Template screen and the language-parity page — while the
-    runs pinned to older ids went on being explained by a rulebook nobody chose for them.
+    A run records the ``OntologyVersion`` id it used, and every consumer that reads "the latest
+    version for this key" — the Template screen, the language-parity page — must get the rulebook
+    that key names. Publishing something else under it would hand those pages a rulebook nobody
+    chose, while runs pinned to older ids went on being explained by it.
     """
     rows = [r for r in client.get(f"{API}/ontologies").json()
-            if r["ontology_key"] == "hkfrs_hk_china_v1"]
+            if r["ontology_key"] == "hkfrs_hk_china"]
     assert rows
     for row in rows:
         definition = client.get(f"{API}/ontologies/{row['id']}").json()["definition"]
-        assert definition["ontology_key"] == "hkfrs_hk_china_v1"
-        # Every version under this key descends from the v1 file (inline edits publish further
-        # versions of it), so none of them may carry the v2 section layer.
-        assert definition.get("schema_version", 1) == 1
-        assert "section_defaults" not in definition
-        assert not any(m.get("inherits") for m in definition["mappings"])
+        assert definition["ontology_key"] == "hkfrs_hk_china"
+        # Inline edits publish further versions of the same file, so every version carries its
+        # section layer — a version without one would be a different rulebook under this name.
+        assert definition["schema_version"] == 2
+        assert definition["section_defaults"]
+        assert all(m.get("inherits") for m in definition["mappings"])
 
 
 def test_a_shipped_rulebook_that_cannot_load_fails_seeding_loudly(tmp_path, monkeypatch):
@@ -274,17 +281,17 @@ def test_a_shipped_rulebook_that_cannot_load_fails_seeding_loudly(tmp_path, monk
     from app.db.models import OntologyVersion
     from app.sample import reference
 
-    broken = tmp_path / "broken_v2_ontology.json"
+    broken = tmp_path / "broken_ontology.json"
     broken.write_text(json.dumps({
-        "ontology_key": "probe_broken_v2", "target_template_key": SEEDED_TEMPLATE,
+        "ontology_key": "probe_broken", "target_template_key": SEEDED_TEMPLATE,
         "mappings": [{"canonical_key": "bs_net_assets", "never_sweeep": ["typo"]}],
     }))
-    monkeypatch.setattr(reference, "_ONTOLOGY_V2", broken)
+    monkeypatch.setattr(reference, "_ONTOLOGY", broken)
 
     with SessionLocal() as session:
         with pytest.raises(reference.ReferenceSeedError) as exc:
             reference.ensure_reference_data(session)
-    assert "broken_v2_ontology.json" in str(exc.value)
+    assert "broken_ontology.json" in str(exc.value)
     assert "mappings[0].never_sweeep" in str(exc.value)
 
     # Every file is checked before anything is written, so a bad one takes nothing with it.

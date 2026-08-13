@@ -120,7 +120,7 @@ def test_real_pages_and_statement_from_document(client):
 
     # Attach the seeded HK ontology/template so mapping produces canonical keys (as the UI does).
     onts = client.get("/api/v1/ontologies").json()
-    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china"), onts[0])
     tpls = client.get("/api/v1/templates").json()
     tpl = next((tt for tt in tpls if tt["template_key"] == ont["target_template_key"]), tpls[0])
     client.post(f"/api/v1/documents/{doc_id}/extractions",
@@ -160,7 +160,7 @@ def test_dual_basis_statement_selects_by_basis(client):
         "/api/v1/documents", files={"file": ("dual.pdf", make_dual_basis_pdf(), "application/pdf")}
     ).json()["id"]
     onts = client.get("/api/v1/ontologies").json()
-    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china"), onts[0])
     tpls = client.get("/api/v1/templates").json()
     tpl = next((tt for tt in tpls if tt["template_key"] == ont["target_template_key"]), tpls[0])
     client.post(f"/api/v1/documents/{doc_id}/extractions",
@@ -184,7 +184,7 @@ def _extract_with_ontology(client, filename="bs.pdf", data=None):
         files={"file": (filename, data or make_native_pdf(), "application/pdf")},
     ).json()["id"]
     onts = client.get("/api/v1/ontologies").json()
-    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china"), onts[0])
     tpls = client.get("/api/v1/templates").json()
     tpl = next((tt for tt in tpls if tt["template_key"] == ont["target_template_key"]), tpls[0])
     client.post(f"/api/v1/documents/{doc_id}/extractions",
@@ -516,7 +516,7 @@ def test_reference_ontology_seeded_and_attached_run_maps(client):
     from app.services import settings_state  # noqa: F401 (import parity with other tests)
 
     onts = client.get("/api/v1/ontologies").json()
-    ont = next(o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1")
+    ont = next(o for o in onts if o["ontology_key"] == "hkfrs_hk_china")
     tpls = client.get("/api/v1/templates").json()
     tpl = next(t for t in tpls if t["template_key"] == ont["target_template_key"])
 
@@ -644,7 +644,7 @@ def test_a_note_detail_row_carries_the_measured_confidence_beside_its_badge(clie
         "/api/v1/documents", files={"file": ("bs.pdf", make_native_pdf(), "application/pdf")}
     ).json()["id"]
     onts = client.get("/api/v1/ontologies").json()
-    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china"), onts[0])
     tpls = client.get("/api/v1/templates").json()
     tpl = next((t for t in tpls if t["template_key"] == ont["target_template_key"]), tpls[0])
     client.post(f"/api/v1/documents/{doc_id}/extractions",

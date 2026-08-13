@@ -34,64 +34,79 @@ def matcher():
     from app.schemas.loader import load_ontology
     from app.services.mapping import OntologyMatcher
 
-    return OntologyMatcher(load_ontology(ONTOLOGY), locale="en", settings=get_settings())
+    return OntologyMatcher(load_ontology(ONTOLOGY, resolve=True), locale="en", settings=get_settings())
 
 
-def _key(matcher, caption: str, statement: str) -> str | None:
-    return matcher.match(caption, statement=statement).canonical_key
+def _key(matcher, caption: str, statement: str, section: str | None = None) -> str | None:
+    return matcher.match(caption, statement=statement, section=section).canonical_key
+
+
+# Captions that name a COLLISION FAMILY and cannot be resolved by their own words. "Properties under
+# development" is printed in current assets by a developer and in non-current assets by a landlord;
+# "Non-controlling interests" is printed twice on one income statement, under the profit split and
+# under the comprehensive-income split. The banner is the whole answer, so these carry the banner a
+# filing prints — and `test_a_family_caption_alone_is_refused_rather_than_guessed` holds the other
+# half: without it the matcher refuses instead of picking one.
+_CURRENT_ASSETS = "CURRENT ASSETS 流動資產"
+_PROFIT_SPLIT = "Profit attributable to: 下列各項應佔溢利："
 
 
 # ---- coverage: the captions that previously mapped to nothing -----------------------------
 
-# (caption as printed, statement it was printed on, concept it means)
+# (caption as printed, statement it was printed on, banner above it or None, concept it means)
 COVERAGE = [
     # a property developer's inventory: work in progress and finished stock
-    ("Properties under development 發展中物業", "balance_sheet",
-     "bs_current_assets__properties_under_development"),
-    ("Completed properties held for sale 持作出售已落成物業", "balance_sheet",
-     "bs_current_assets__completed_properties_held_for_sale"),
+    ("Properties under development 發展中物業", "balance_sheet", _CURRENT_ASSETS, "bs_current_assets__properties_under_development"),
+    ("Completed properties held for sale 持作出售已落成物業", "balance_sheet", None, "bs_current_assets__completed_properties_held_for_sale"),
     # cash that is NOT freely available
-    ("Restricted cash 受限制現金", "balance_sheet", "bs_current_assets__restricted_cash"),
+    ("Restricted cash 受限制現金", "balance_sheet", None, "bs_current_assets__restricted_cash"),
     # related-party balances, and the mirror on the other side of the balance sheet
-    ("Due from related parties 應收關聯方款項", "balance_sheet",
-     "bs_current_assets__due_from_related_parties"),
-    ("Due to related parties 應付關聯方款項", "balance_sheet",
-     "bs_current_liabilities__due_to_related_parties"),
-    ("Prepaid income tax 預付稅項", "balance_sheet", "bs_current_assets__prepaid_income_tax"),
+    ("Due from related parties 應收關聯方款項", "balance_sheet", None, "bs_current_assets__due_from_related_parties"),
+    ("Due to related parties 應付關聯方款項", "balance_sheet", None, "bs_current_liabilities__due_to_related_parties"),
+    ("Prepaid income tax 預付稅項", "balance_sheet", None, "bs_current_assets__prepaid_income_tax"),
     # a P&L line of its own — its absence had let administrative expenses absorb it
-    ("Other expenses 其他開支", "profit_and_loss", "pl_expenses__other_expenses"),
+    ("Other expenses 其他開支", "profit_and_loss", None, "pl_expenses__other_expenses"),
     # associates and joint ventures: balance-sheet investments ...
-    ("Investments in associates 於聯營公司的投資", "balance_sheet",
-     "bs_non_current_assets__interests_in_associates"),
-    ("Investments in joint ventures 於合營公司的投資", "balance_sheet",
-     "bs_non_current_assets__interests_in_joint_ventures"),
+    ("Investments in associates 於聯營公司的投資", "balance_sheet", None, "bs_non_current_assets__interests_in_associates"),
+    ("Investments in joint ventures 於合營公司的投資", "balance_sheet", None, "bs_non_current_assets__interests_in_joint_ventures"),
     # ... and the P&L "share of profits and losses of:" lines beneath their own heading
-    ("Share of profits and losses of: 應佔下列各項溢利及虧損： Joint ventures 合營公司",
-     "profit_and_loss",
-     "pl_exceptional_items__share_of_profits_and_losses_of_joint_ventures"),
-    ("Associates 聯營公司", "profit_and_loss",
-     "pl_exceptional_items__share_of_profits_and_losses_of_associates"),
+    ("Share of profits and losses of: 應佔下列各項溢利及虧損： Joint ventures 合營公司", "profit_and_loss", None, "pl_exceptional_items__share_of_profits_and_losses_of_joint_ventures"),
+    ("Associates 聯營公司", "profit_and_loss", None, "pl_exceptional_items__share_of_profits_and_losses_of_associates"),
     # the attribution of the year's result — a flow, not the equity balance
-    ("Profit/(loss) attributable to: 下列各項應佔溢利╱（虧損）： Owners of the parent 母公司擁有人",
-     "profit_and_loss", "pl_profit_attributable_to__owners_of_the_parent"),
-    ("Non-controlling interests 非控股權益", "profit_and_loss",
-     "pl_profit_attributable_to__non_controlling_interests"),
+    ("Profit/(loss) attributable to: 下列各項應佔溢利╱（虧損）： Owners of the parent 母公司擁有人", "profit_and_loss", None, "pl_profit_attributable_to__owners_of_the_parent"),
+    ("Non-controlling interests 非控股權益", "profit_and_loss", _PROFIT_SPLIT, "pl_profit_attributable_to__non_controlling_interests"),
     # balance-sheet subtotals of the net-current-assets presentation format
-    ("NET CURRENT ASSETS/(LIABILITIES) 流動資產╱（負債）淨額", "balance_sheet",
-     "bs_net_current_assets_liabilities"),
-    ("TOTAL ASSETS LESS CURRENT 總資產減流動負債 LIABILITIES", "balance_sheet",
-     "bs_total_assets_less_current_liabilities"),
+    ("NET CURRENT ASSETS/(LIABILITIES) 流動資產╱（負債）淨額", "balance_sheet", None, "bs_net_current_assets_liabilities"),
+    ("TOTAL ASSETS LESS CURRENT 總資產減流動負債 LIABILITIES", "balance_sheet", None, "bs_total_assets_less_current_liabilities"),
     # the other-comprehensive-income subtotal
-    ("OTHER COMPREHENSIVE LOSS 年內其他全面虧損 FOR THE YEAR", "profit_and_loss",
-     "pl_other_comprehensive_income_for_the_year"),
+    ("OTHER COMPREHENSIVE LOSS 年內其他全面虧損 FOR THE YEAR", "profit_and_loss", None, "pl_other_comprehensive_income_for_the_year"),
 ]
 
 
-@pytest.mark.parametrize("caption,statement,expected", COVERAGE,
+@pytest.mark.parametrize("caption,statement,section,expected", COVERAGE,
                          ids=[c.split()[0].lower() + "-" + e.rsplit("__", 1)[-1]
-                              for c, _s, e in COVERAGE])
-def test_previously_uncovered_captions_now_map(matcher, caption, statement, expected):
-    assert _key(matcher, caption, statement) == expected
+                              for c, _s, _b, e in COVERAGE])
+def test_previously_uncovered_captions_now_map(matcher, caption, statement, section, expected):
+    assert _key(matcher, caption, statement, section) == expected
+
+
+def test_a_family_caption_alone_is_refused_rather_than_guessed(matcher):
+    """The other half of the two banner-carrying entries above, and the reason they carry one.
+
+    Both captions name a collision family, so their own words cannot say which member they are: a
+    developer prints "Properties under development" in current assets and a landlord in non-current,
+    and one income statement prints "Non-controlling interests" under the profit split AND under the
+    comprehensive-income split. The matcher refuses rather than picking a member — the answer would be
+    a real figure filed on the wrong concept at full confidence, which no subtotal catches because
+    both members sit in the same total.
+    """
+    assert _key(matcher, "Properties under development 發展中物業", "balance_sheet") is None
+    assert _key(matcher, "發展中物業", "balance_sheet") is None
+    # …and the banner resolves it, in either section.
+    assert _key(matcher, "發展中物業", "balance_sheet", _CURRENT_ASSETS) == \
+        "bs_current_assets__properties_under_development"
+    assert _key(matcher, "發展中物業", "balance_sheet", "NON-CURRENT ASSETS 非流動資產") == \
+        "bs_non_current_assets__properties_under_development"
 
 
 def test_every_newly_covered_concept_exists_in_the_template_and_ontology():
@@ -101,13 +116,13 @@ def test_every_newly_covered_concept_exists_in_the_template_and_ontology():
         load_ontology, load_template, validate_ontology_against_template, validate_template,
     )
 
-    tpl, ont = load_template(TEMPLATE), load_ontology(ONTOLOGY)
+    tpl, ont = load_template(TEMPLATE), load_ontology(ONTOLOGY, resolve=True)
     assert validate_template(tpl) == []
     assert validate_ontology_against_template(ont, tpl) == []
 
     template_keys = tpl.all_canonical_keys()
     by_key = {m.canonical_key: m for m in ont.mappings}
-    for _caption, _statement, key in COVERAGE:
+    for _caption, _statement, _banner, key in COVERAGE:
         assert key in template_keys, f"{key} missing from the template"
         m = by_key.get(key)
         assert m is not None, f"{key} has no ontology mapping"
@@ -119,16 +134,19 @@ def test_every_newly_covered_concept_exists_in_the_template_and_ontology():
 
 def test_traditional_and_simplified_wordings_both_resolve(matcher):
     """A HK filing prints Traditional; a mainland one prints Simplified. Same concept."""
-    for trad, simp, key in [
-        ("發展中物業", "发展中物业", "bs_current_assets__properties_under_development"),
+    for row in [
+        ("發展中物業", "发展中物业", "bs_current_assets__properties_under_development",
+         _CURRENT_ASSETS),
         ("持作出售已落成物業", "持作出售已落成物业",
          "bs_current_assets__completed_properties_held_for_sale"),
         ("受限制現金", "受限制现金", "bs_current_assets__restricted_cash"),
         ("應收關聯方款項", "应收关联方款项", "bs_current_assets__due_from_related_parties"),
         ("預付稅項", "预付税项", "bs_current_assets__prepaid_income_tax"),
     ]:
-        assert _key(matcher, trad, "balance_sheet") == key, trad
-        assert _key(matcher, simp, "balance_sheet") == key, simp
+        section = rest[0] if (rest := row[3:]) else None
+        trad, simp, key = row[0], row[1], row[2]
+        assert _key(matcher, trad, "balance_sheet", section) == key, trad
+        assert _key(matcher, simp, "balance_sheet", section) == key, simp
 
 
 # ---- disambiguation: the two confirmed mis-mappings ---------------------------------------
@@ -187,7 +205,7 @@ def test_the_two_confusable_pairs_declare_each_other():
     reads, so the separation has to live in the DATA and not only in the alias index."""
     from app.schemas.loader import load_ontology
 
-    by_key = {m.canonical_key: m for m in load_ontology(ONTOLOGY).mappings}
+    by_key = {m.canonical_key: m for m in load_ontology(ONTOLOGY, resolve=True).mappings}
     for a, b in [("bs_total_assets_less_current_liabilities",
                   "bs_current_liabilities__total_current_liabilities"),
                  ("pl_total_comprehensive_income_for_the_year", "pl_profit_for_the_year")]:
@@ -207,7 +225,7 @@ def test_exclude_hints_stop_the_rule_tier_cross_firing():
 
     from app.schemas.loader import load_ontology
 
-    by_key = {m.canonical_key: m for m in load_ontology(ONTOLOGY).mappings}
+    by_key = {m.canonical_key: m for m in load_ontology(ONTOLOGY, resolve=True).mappings}
     less = by_key["bs_total_assets_less_current_liabilities"]
     total = by_key["bs_current_liabilities__total_current_liabilities"]
 
@@ -232,8 +250,10 @@ def test_the_equity_nci_balance_and_the_pl_nci_attribution_stay_apart(matcher):
     on the statement it was printed on."""
     assert _key(matcher, "Non-controlling interests 非控股權益",
                 "balance_sheet") == "bs_equity__non_controlling_interests"
-    assert _key(matcher, "Non-controlling interests 非控股權益",
-                "profit_and_loss") == "pl_profit_attributable_to__non_controlling_interests"
+    # Within the income statement the statement alone is not enough — the same caption splits both
+    # profit and total comprehensive income — so the banner above it is what decides.
+    assert _key(matcher, "Non-controlling interests 非控股權益", "profit_and_loss",
+                _PROFIT_SPLIT) == "pl_profit_attributable_to__non_controlling_interests"
 
 
 def test_associates_and_joint_ventures_no_longer_land_on_subsidiaries(matcher):

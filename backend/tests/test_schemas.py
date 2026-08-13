@@ -123,7 +123,7 @@ def test_unknown_keys_is_silent_on_the_shipped_definitions():
     assert unknown_keys(ont, load_ontology(ont)) == []
     # The v2.1 rulebook ships alongside them and goes through the same door (see
     # tests/test_ontology_v2.py for its section layer).
-    v2 = json.loads((d / "hkfrs_hk_china_v2_ontology.json").read_text())
+    v2 = json.loads((d / "hkfrs_hk_china_ontology.json").read_text())
     assert unknown_keys(v2, load_ontology(v2)) == []
 
 

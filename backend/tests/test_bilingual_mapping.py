@@ -26,7 +26,7 @@ def matcher():
     from app.schemas.loader import load_ontology
     from app.services.mapping import OntologyMatcher
 
-    return OntologyMatcher(load_ontology(ONTOLOGY), locale="en", settings=get_settings())
+    return OntologyMatcher(load_ontology(ONTOLOGY, resolve=True), locale="en", settings=get_settings())
 
 
 # ---- Han folding -------------------------------------------------------------------------

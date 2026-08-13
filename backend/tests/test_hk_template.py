@@ -40,15 +40,30 @@ def test_template_validates_and_is_tailored():
     ont = load_ontology(ONTOLOGY)
     assert validate_ontology_against_template(ont, tpl) == []
     assert all(m.meaning() for m in ont.mappings)                 # definition/description present
-    assert all(m.include and m.exclude for m in ont.mappings)     # inclusion/exclusion criteria
+    # Read off the RESOLVED rulebook, which is how the engine reads it: the shipped file states
+    # include/exclude once per section under `section_defaults` and each concept reaches its pair
+    # through `inherits`. Asserting it on the unresolved file asserted the shape of the thin
+    # generation that no longer ships.
+    resolved = load_ontology(ONTOLOGY, resolve=True)
+    assert all(m.include and m.exclude for m in resolved.mappings)
     assert any(m.value_scope == "exclusive_leaf" for m in ont.mappings)
     # Global extraction policies + worked examples + metadata came across (learnings).
-    assert ont.global_rules.parent_child_allocation and ont.global_rules.others_policy
+    # `others_policy` was the thin generation's prose for residual handling and is deliberately
+    # absent: `residual_framework` replaced it with terms the sweep actually reads (its own note says
+    # so — "this replaces the v1 others_policy, which stated intent but gave the engine no
+    # mechanism"). Asserting the prose would hold a field whose only purpose was to be superseded.
+    assert ont.global_rules.parent_child_allocation
+    assert ont.residual_framework and ont.residual_framework.sweep
     assert ont.global_rules.no_fabricated_split
     assert ont.worked_examples and ont.metadata and ont.metadata.framework == "HKFRS"
-    # Repeated captions like "Others" resolve to distinct concepts via context.
-    others = [m for m in ont.mappings if m.label == "Others"]
+    # Repeated captions like "Others" resolve to distinct concepts via context. Keyed on the
+    # `__others` suffix, which is what the engine keys on (`residual._sections_from_template`,
+    # `structural_checks._nil_when_absent`), not on the label: the shipped rulebook labels each one
+    # for its own section ("Other current asset lines (face, unmapped)") precisely so a reviewer
+    # reading a spread can tell the thirteen apart, so matching on a bare "Others" label held nothing.
+    others = [m for m in ont.mappings if m.canonical_key.endswith("__others")]
     assert len(others) >= 4 and len({m.canonical_key for m in others}) == len(others)
+    assert len({m.label for m in others}) == len(others)
 
 
 def test_cash_flow_is_expanded():

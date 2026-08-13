@@ -40,7 +40,7 @@ _SAMPLES = Path(__file__).resolve().parent.parent / "app" / "sample" / "template
 
 @pytest.fixture(scope="module")
 def raw_ontology() -> dict:
-    return json.loads((_SAMPLES / "hkfrs_hk_china_v2_ontology.json").read_text())
+    return json.loads((_SAMPLES / "hkfrs_hk_china_ontology.json").read_text())
 
 
 @pytest.fixture(scope="module")
@@ -81,7 +81,7 @@ def _extracted(client, *, template: bool = True, ontology: bool = True) -> str:
     options: dict = {}
     if template or ontology:
         ont = next(o for o in client.get("/api/v1/ontologies").json()
-                   if o["ontology_key"] == "hkfrs_hk_china_v2")
+                   if o["ontology_key"] == "hkfrs_hk_china")
         tpl = next(t for t in client.get("/api/v1/templates").json()
                    if t["template_key"] == ont["target_template_key"])
         options = {}

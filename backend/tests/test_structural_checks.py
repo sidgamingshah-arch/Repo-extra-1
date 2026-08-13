@@ -361,7 +361,7 @@ def test_run_carries_the_structural_report_end_to_end(client):
                          files={"file": ("bs.pdf", make_native_pdf(),
                                          "application/pdf")}).json()["id"]
     onts = client.get("/api/v1/ontologies").json()
-    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china"), onts[0])
     tpls = client.get("/api/v1/templates").json()
     tpl = next((t for t in tpls if t["template_key"] == ont["target_template_key"]), tpls[0])
     client.post(f"/api/v1/documents/{doc_id}/extractions",
@@ -374,10 +374,24 @@ def test_run_carries_the_structural_report_end_to_end(client):
     structural = client.get(f"/api/v1/documents/{doc_id}/run").json()["result"]["structural"]
     assert structural, "the run should record the template relations it considered"
     assert {r["status"] for r in structural} <= {"pass", "fail", "skipped"}
-    # This fixture spreads onto only a handful of template lines, so no relation is complete:
-    # every one is reported as not evaluable rather than passing or failing by default.
-    assert all(r["status"] == "skipped" for r in structural)
-    assert all(r["details"]["reason"] for r in structural)
+    # This fixture spreads onto a handful of template lines, so almost nothing is complete. What
+    # matters is that a relation is only EVALUATED where the filing supports it, and that a skip
+    # always carries the reason it could not run — silence and a default pass are the two outcomes
+    # that would let a run reporting nothing read as a clean one.
+    assert all(r["details"]["reason"] for r in structural if r["status"] == "skipped")
+    # And a relation that DID evaluate did so on a real spread, not on a section taken as nil
+    # throughout: `_nil_when_absent` treats a leaf of a residual-owning namespace as nil, which is
+    # what makes a partially stated section checkable at all — but never every leaf of it, or the
+    # relation would be asserting 0 == 0.
+    for r in structural:
+        if r["status"] not in ("pass", "fail"):
+            continue
+        details = r["details"]
+        # `assumed_zero` is only attached by the evaluating path, which is the point: a row without
+        # it is one of the section reconciliations, not a relation this rule could have widened.
+        if "assumed_zero" not in details:
+            continue
+        assert len(details["assumed_zero"]) < len(details["components"]), r["rule_id"]
 
 
 def test_balance_identity_is_not_reported_twice():

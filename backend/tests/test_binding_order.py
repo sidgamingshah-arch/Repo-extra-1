@@ -36,7 +36,7 @@ from app.services.mapping import (
 )
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "app" / "sample" / "templates"
-V2_JSON = (TEMPLATES / "hkfrs_hk_china_v2_ontology.json").read_text()
+V2_JSON = (TEMPLATES / "hkfrs_hk_china_ontology.json").read_text()
 
 
 def _v2():
@@ -324,11 +324,29 @@ def test_a_one_way_confusable_edge_is_not_a_tie():
 
 
 def test_a_rulebook_that_declares_no_binding_order_is_unchanged():
-    """Step 6 is an implementation OF `binding.order`, so it is enabled by its presence. A v1
-    rulebook declares no binding block and no `section_disambiguation` for a tie to be resolved by,
-    and keeps the answer it was authored to give."""
-    v1 = load_ontology(json.loads((TEMPLATES / "hkfrs_hk_china_ontology.json").read_text()))
-    m = _matcher(v1)
+    """Step 6 is an implementation OF ``binding.order``, so it is enabled by its presence. A rulebook
+    declaring no binding block has no ``section_disambiguation`` for a tie to be resolved by either,
+    and keeps the answer it was authored to give.
+
+    Built here rather than loaded: this used to read the shipped thin rulebook, which declared no
+    binding block. One rulebook ships now and it declares one, so "declares none of this" is a
+    property to construct, not a file to point at — which is the honest form of the test anyway,
+    since it was never about that file.
+    """
+    ont = OntologyDefinition(
+        ontology_key="k", target_template_key="t",
+        mappings=[
+            OntologyMapping(canonical_key="pl_profit_attributable_to__non_controlling_interests",
+                            label="Non-controlling interests",
+                            aliases=["Non-controlling interests", "非控股權益"]),
+            OntologyMapping(
+                canonical_key="pl_total_comprehensive_income_attributable_to__"
+                              "non_controlling_interests",
+                label="Non-controlling interests",
+                aliases=["Non-controlling interests", "非控股權益"]),
+        ],
+    )
+    m = _matcher(ont)
 
     assert m._binding_order == []
     got = m.match("Non-controlling interests 非控股權益", statement="profit_and_loss")

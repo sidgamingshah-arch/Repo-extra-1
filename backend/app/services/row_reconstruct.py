@@ -491,21 +491,38 @@ def _wrap_adjacent(cur: BBox, nxt: BBox, nxt_label: list[Word]) -> bool:
 # runs before an ontology is attached to the run. A caller that does hold the run's pinned
 # rulebook passes it instead (``build_line_items(scope=…, normalisation=…)``).
 _RULEBOOK_IN_FORCE = (Path(__file__).resolve().parents[1] / "sample" / "templates"
-                      / "hkfrs_hk_china_v2_ontology.json")
+                      / "hkfrs_hk_china_ontology.json")
+
+
+class MissingRulebookError(RuntimeError):
+    """The shipped rulebook this module reads its page rules from is not on disk."""
 
 
 @lru_cache(maxsize=1)
 def in_force_rules() -> tuple[ScopeSelection | None, Normalisation | None]:
     """``(scope_selection, normalisation)`` of the rulebook in force, or ``(None, None)``.
 
-    Only those two blocks are validated, not the whole 173-concept rulebook: this is consulted
-    for every page, and nothing else in the definition says anything about how a page is read.
-    A block that will not validate governs nothing rather than stopping the extraction — the run
-    still produces figures, and the log records which rules were applied.
+    Only those two blocks are validated, not the whole rulebook: this is consulted for every page,
+    and nothing else in the definition says anything about how a page is read. A block that will not
+    VALIDATE governs nothing rather than stopping the extraction — the run still produces figures,
+    and the log records which rules were applied.
+
+    A MISSING FILE is a different thing and is now raised. It used to return ``(None, None)`` beside
+    the invalid-block case, which is how consolidating the two rulebook generations into one file
+    silently switched off every declared page rule: the path here still named the old filename, the
+    read failed, and Group/Company banding, period selection and unit resolution all reverted to
+    engine defaults. Extraction went on succeeding — every Company figure filed as consolidated and
+    added into the Group's. Thirteen tests caught it, and each one reported a wrong basis rather than
+    a missing rulebook, so the cause took finding. An absent shipped file is a packaging defect, and
+    ``sample/reference.py`` already treats one as a startup failure for the same reason.
     """
+    if not _RULEBOOK_IN_FORCE.exists():
+        raise MissingRulebookError(
+            f"the shipped rulebook {_RULEBOOK_IN_FORCE} is missing, so the scope_selection and "
+            f"normalisation rules every page is read under would silently not apply")
     try:
         raw = json.loads(_RULEBOOK_IN_FORCE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except ValueError:
         return None, None
     scope = norm = None
     if isinstance(raw.get("scope_selection"), dict):

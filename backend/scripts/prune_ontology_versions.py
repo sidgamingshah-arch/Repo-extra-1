@@ -4,14 +4,15 @@ Editing a concept, a criterion or a netting rule PUBLISHES A NEW VERSION rather 
 stored one — that is deliberate, and it is what lets a past extraction still be explained by the
 exact rulebook it read (see api/routes/ontologies.py::edit_ontology_mapping). The cost is that a
 developer database accumulates them: the three ontology-edit e2e tests publish one apiece on every
-suite run, so `hkfrs_hk_china_v2` reached v21 holding 4.5 MB of definitions, all of which
+suite run, so the shipped rulebook reached v21 holding 4.5 MB of definitions, all of which
 `GET /ontologies` deserializes on every request to report each rulebook's key, version and size.
 
 Two rules, and the second is the one that matters:
 
 * keep the LATEST version of every ontology_key. Not "the latest per template" — every rulebook here
-  targets one template, so that would collapse to a single row and delete the v1 rulebook that v2
-  declares it supersedes, which is the pair the whole supersession mechanism is demonstrated by.
+  targets one template, so that would collapse to a single row and delete every rulebook but one.
+  One ships today, but a successor is uploaded beside the incumbent rather than over it
+  (``services/ontology_select``), and pruning per template would delete whichever of the two lost.
 * keep any version an ExtractionRun REFERENCES, however old. A run pins the ontology_version_id it
   read the filing against; deleting that row would leave the run naming a rulebook that no longer
   exists, and "every downstream number is reproducible" stops being true. A stale-but-referenced

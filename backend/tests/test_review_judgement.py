@@ -753,7 +753,7 @@ def _real_structural_rows(figures: dict, identities: list[dict] | None = None) -
     from app.services.structural_checks import evaluate_structure
 
     samples = Path(__file__).resolve().parent.parent / "app" / "sample" / "templates"
-    raw = json.loads((samples / "hkfrs_hk_china_v2_ontology.json").read_text())
+    raw = json.loads((samples / "hkfrs_hk_china_ontology.json").read_text())
     if identities is not None:
         raw = copy.deepcopy(raw)
         raw["validation"]["identities"] = list(identities)
@@ -787,7 +787,7 @@ def _real_guard_rows(figures: dict, guards: list[str] | None = None) -> list[dic
     from app.services.structural_checks import evaluate_structure
 
     samples = Path(__file__).resolve().parent.parent / "app" / "sample" / "templates"
-    raw = json.loads((samples / "hkfrs_hk_china_v2_ontology.json").read_text())
+    raw = json.loads((samples / "hkfrs_hk_china_ontology.json").read_text())
     if guards is not None:
         raw = copy.deepcopy(raw)
         raw["validation"]["cross_concept_guards"] = list(guards)
@@ -1226,7 +1226,7 @@ def test_only_a_reviewer_may_judge_while_an_analyst_keeps_the_edit_they_are_enti
     # substituted the newest seeded template for the one the run never named — the edit was being
     # validated against a template the analyst never chose (finding E).
     ont = next(o for o in anon_client.get("/api/v1/ontologies", headers=auth("analyst")).json()
-               if o["ontology_key"] == "hkfrs_hk_china_v2")
+               if o["ontology_key"] == "hkfrs_hk_china")
     tpl = next(t for t in anon_client.get("/api/v1/templates", headers=auth("analyst")).json()
                if t["template_key"] == ont["target_template_key"])
     anon_client.post(f"/api/v1/documents/{doc_id}/extractions",
@@ -1361,7 +1361,7 @@ def _real_review(figures: dict, judgements=None) -> dict:
     """One review payload whose ROWS and STRUCTURAL results come from the same figures.
 
     The structural rows are produced by the real loader + evaluator over the shipped
-    hkfrs_hk_china_v2 rulebook and its template (`_real_structural_rows`), so the guard results
+    shipped rulebook and its template (`_real_structural_rows`), so the guard results
     carry the fields `_guard_slot` really writes — including a ``details.target`` derived from the
     violations. A hand-built RuleResult cannot reproduce this defect: it is the producer's own
     derivation of `target` that collides.

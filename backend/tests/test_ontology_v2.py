@@ -24,7 +24,7 @@ from app.schemas.loader import (
 from app.schemas.ontology import Equivalence, OntologyMapping, ResidualPolicy
 
 SAMPLES = Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
-V2 = SAMPLES / "hkfrs_hk_china_v2_ontology.json"
+V2 = SAMPLES / "hkfrs_hk_china_ontology.json"
 V1 = SAMPLES / "hkfrs_hk_china_ontology.json"
 
 
@@ -60,10 +60,17 @@ def test_v2_loads_resolved_with_nothing_dropped():
     assert unknown_keys(resolved, load_ontology(raw, resolve=True), limit=500) == []
 
 
-def test_shipped_v1_rulebook_is_untouched_by_resolution():
-    """A v1 rulebook has no section layer at all; asking for resolution must be a no-op, not a
-    different definition — the same two loaders read every row already in the database."""
-    raw = json.loads(V1.read_text())
+def test_a_rulebook_with_no_section_layer_is_untouched_by_resolution():
+    """A rulebook with no section layer at all: asking for resolution must be a no-op, not a
+    different definition — the same two loaders read every rulebook, uploaded ones included.
+
+    Written from a literal rather than from a shipped file. It used to read the thin generation,
+    which had no section layer; the one rulebook that ships now has one, and an uploaded schema-1
+    rulebook is what this protects.
+    """
+    raw = {"schema_version": 1, "ontology_key": "k", "target_template_key": "t",
+           "mappings": [{"canonical_key": "bs_current_assets__inventories", "label": "Inventories",
+                         "aliases": ["Inventories"]}]}
     assert unknown_keys(raw, load_ontology(raw)) == []
     assert resolve_inherits(raw) is raw
     assert load_ontology(raw, resolve=True).model_dump() == load_ontology(raw).model_dump()
@@ -140,11 +147,18 @@ def test_nested_blocks_are_modelled_not_free_dicts():
     assert len(groups["equity_reserves"].components) == 8
 
     md = ont.metadata
-    assert md.supersedes == "hkfrs_hk_china_v1" and md.concept_count == 185
+    # No `supersedes`: one rulebook ships, so there is no predecessor for it to name. The field is
+    # still live — `test_an_uploaded_replacement_supersedes_the_shipped_rulebook` uploads one that
+    # uses it — and a value naming a key that ships nowhere would be a declaration pointing at
+    # nothing.
+    assert md.supersedes == "" and md.concept_count == 185
     # ``retained_defects`` is deliberately NOT asserted non-empty: its only entry recorded the two
     # canonical-key typos, which the balance-sheet revision fixed, and a list that keeps a fixed
     # defect in it is how a reader comes to distrust the block.
-    assert md.breaking_changes and md.retained_defects == []
+    # Neither list carries anything, and both are meant to be empty on this file: they describe a
+    # DELTA against a predecessor, and there is none. Held as == [] rather than dropped so a value
+    # appearing without one has to be deliberate.
+    assert md.breaking_changes == [] and md.retained_defects == []
 
     netting = {n.id: n for n in ont.netting_rules}
     assert netting["cogs_inclusive_of_opex"].evidence_required is True
@@ -328,7 +342,7 @@ def test_upload_refuses_an_inherits_naming_a_section_that_does_not_exist(client)
     from pathlib import Path
 
     d = Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
-    bad = copy.deepcopy(json.loads((d / "hkfrs_hk_china_v2_ontology.json").read_text()))
+    bad = copy.deepcopy(json.loads((d / "hkfrs_hk_china_ontology.json").read_text()))
     bad["ontology_key"] = "inherits_probe"
     bad["mappings"][0]["inherits"] = "bs_s1_non_current_assetz"      # one transposed letter
 
@@ -351,7 +365,7 @@ def test_the_shipped_v2_rulebook_still_uploads(client):
     from pathlib import Path
 
     d = Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
-    v2 = json.loads((d / "hkfrs_hk_china_v2_ontology.json").read_text())
+    v2 = json.loads((d / "hkfrs_hk_china_ontology.json").read_text())
     v2 = {**v2, "ontology_key": "v2_upload_probe"}
     r = client.post("/api/v1/ontologies", json={"definition": v2})
     assert r.status_code == 201, r.text
@@ -367,28 +381,51 @@ def test_the_shipped_v2_rulebook_still_uploads(client):
 
 # --- v2 is the rulebook IN FORCE ----------------------------------------------------------------
 
-def test_the_rulebook_in_force_is_the_one_that_supersedes(client):
-    """Which rulebook maps a filing must not be a property of insertion order. `version` counts
-    edits to ONE key, so with v1 and v2 both at version 1 the comparison was a tie and the run used
-    whichever row came back first. Adoption is declared by the author instead."""
+def test_the_shipped_rulebook_is_the_one_in_force(client):
+    """One rulebook ships and it is the one a run against the shipped template gets."""
     from app.db.base import SessionLocal
     from app.services.ontology_select import select_for_template
 
     with SessionLocal() as s:
         row = select_for_template(s, "hkfrs_hk_china_v1")
-        assert row is not None
-        assert row.ontology_key == "hkfrs_hk_china_v2"
+        assert row is not None and row.ontology_key == "hkfrs_hk_china"
 
 
-def test_the_list_marks_the_superseded_rulebook(client):
-    """The client picks the ontology a run uses, so the supersession is computed once, server-side,
-    and travels with the row — two sides re-deriving it differently is how they disagree."""
-    rows = client.get("/api/v1/ontologies").json()
-    by_key = {r["ontology_key"]: r for r in rows}
-    assert by_key["hkfrs_hk_china_v1"]["superseded"] is True
-    assert by_key["hkfrs_hk_china_v2"]["superseded"] is False
-    assert by_key["hkfrs_hk_china_v2"]["supersedes"] == "hkfrs_hk_china_v1"
-    assert by_key["hkfrs_hk_china_v2"]["schema_version"] == 2
+def test_an_uploaded_replacement_supersedes_the_shipped_rulebook(client):
+    """Which rulebook maps a filing must not be a property of insertion order — ``version`` counts
+    edits to ONE key, so two rulebooks both at version 1 were a tie and the run used whichever row
+    came back first. Adoption is declared by the author, in ``metadata.supersedes``.
+
+    Exercised by UPLOADING a replacement, which is the route that exists now that one rulebook ships.
+    It used to read the seeded pair, and that made the test a statement about what happened to be
+    seeded rather than about the mechanism. The supersession is computed once, server-side, and
+    travels with the row: two sides re-deriving it differently is how they come to disagree.
+
+    Cleans up after itself — leaving a second rulebook stored makes "which one is in force"
+    genuinely ambiguous for every later test that picks one.
+    """
+    from app.db.base import SessionLocal
+    from app.db.models import OntologyVersion
+    from app.services.ontology_select import select_for_template
+
+    shipped = _v2()
+    replacement = {**shipped, "ontology_key": "hkfrs_hk_china_next",
+                   "metadata": {**shipped["metadata"], "supersedes": "hkfrs_hk_china"}}
+    created = client.post("/api/v1/ontologies", json={"definition": replacement})
+    assert created.status_code == 201, created.text
+    try:
+        by_key = {r["ontology_key"]: r for r in client.get("/api/v1/ontologies").json()}
+        assert by_key["hkfrs_hk_china"]["superseded"] is True
+        assert by_key["hkfrs_hk_china_next"]["superseded"] is False
+        assert by_key["hkfrs_hk_china_next"]["supersedes"] == "hkfrs_hk_china"
+        assert by_key["hkfrs_hk_china_next"]["schema_version"] == 2
+        with SessionLocal() as s:
+            assert select_for_template(s, "hkfrs_hk_china_v1").ontology_key == \
+                "hkfrs_hk_china_next"
+    finally:
+        with SessionLocal() as s:
+            s.delete(s.get(OntologyVersion, created.json()["id"]))
+            s.commit()
 
 
 def test_supersession_only_counts_when_the_replacement_is_actually_stored():
@@ -416,7 +453,7 @@ def test_the_adopted_unbound_row_policy_is_stated_in_the_rulebook():
     from pathlib import Path
 
     d = Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
-    v2 = json.loads((d / "hkfrs_hk_china_v2_ontology.json").read_text())
+    v2 = json.loads((d / "hkfrs_hk_china_ontology.json").read_text())
     policy = v2["binding"]["unbound_row_policy"]
 
     assert "swept into that section's residual" in policy
@@ -425,3 +462,37 @@ def test_the_adopted_unbound_row_policy_is_stated_in_the_rulebook():
     for kept_out in ("narrative sentence", "per-share", "subtotal"):
         assert kept_out in policy
     assert "still routed to review" in policy
+
+
+def test_an_uploaded_rulebook_that_claims_nothing_does_not_displace_the_incumbent(client):
+    """A draft arriving must not become the rulebook real extractions run on.
+
+    THE DEFECT THIS CLOSES, and it was live for the length of one commit. ``select_for_template``
+    prefers a rulebook DECLARING a supersession over one declaring none — which held the line while
+    two generations shipped, because the successor declared one. Consolidating to a single rulebook
+    left nothing declaring anything: every candidate tied at that test, the next tests were "highest
+    version, then ontology_key", and a leftover ``hkfrs_hk_china_v1_draft`` skeleton — every concept
+    a stub with no aliases — took over from ``hkfrs_hk_china`` on the strength of sorting later.
+    Extraction kept succeeding against it.
+
+    Incumbency is now the tie-break, so this holds whether or not anything declares a supersession:
+    the key that has been here longest stays in force, and taking over is something a rulebook has
+    to SAY (``test_an_uploaded_replacement_supersedes_the_shipped_rulebook``).
+    """
+    from app.db.base import SessionLocal
+    from app.db.models import OntologyVersion
+    from app.services.ontology_select import select_for_template
+
+    # A key that sorts AFTER the shipped one, so key order alone would hand it the template.
+    draft = {**_v2(), "ontology_key": "hkfrs_hk_china_zz_draft"}
+    draft["metadata"] = {k: v for k, v in draft["metadata"].items() if k != "supersedes"}
+    created = client.post("/api/v1/ontologies", json={"definition": draft})
+    assert created.status_code == 201, created.text
+    try:
+        assert "hkfrs_hk_china_zz_draft" > "hkfrs_hk_china"      # the sort the defect relied on
+        with SessionLocal() as s:
+            assert select_for_template(s, "hkfrs_hk_china_v1").ontology_key == "hkfrs_hk_china"
+    finally:
+        with SessionLocal() as s:
+            s.delete(s.get(OntologyVersion, created.json()["id"]))
+            s.commit()

@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 RULEBOOK = (Path(__file__).resolve().parent.parent / "app" / "sample" / "templates"
-            / "hkfrs_hk_china_v2_ontology.json")
+            / "hkfrs_hk_china_ontology.json")
 
 
 def _blocks() -> tuple[dict, dict]:

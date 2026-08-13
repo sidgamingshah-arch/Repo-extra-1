@@ -158,7 +158,7 @@ def test_detail_exposes_raw_per_locale_aliases_for_editing(client):
 
 def test_editing_the_ontology_requires_admin(anon_client, auth):
     rows = anon_client.get(f"{API}/ontologies").json()
-    oid = next(r["id"] for r in rows if r["ontology_key"] == "hkfrs_hk_china_v1")
+    oid = next(r["id"] for r in rows if r["ontology_key"] == "hkfrs_hk_china")
     key = "bs_non_current_assets__property_plant_and_equipment"
     url = f"{API}/ontologies/{oid}/mappings"
 

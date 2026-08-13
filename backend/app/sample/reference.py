@@ -1,14 +1,20 @@
-"""Seed reference template + ontologies into the DB so extraction runs can attach them.
+"""Seed the reference template + ontology into the DB so extraction runs can attach them.
 
-Loads the shipped HKFRS/IFRS template and its companion rulebooks (app/sample/templates/) into
-the versioned tables if absent — idempotent, safe to call on every startup. This is what lets an
+Loads the shipped HKFRS/IFRS template and its companion rulebook (app/sample/templates/) into the
+versioned tables if absent — idempotent, safe to call on every startup. This is what lets an
 uploaded document be mapped against a real ontology out of the box.
 
-BOTH rulebook generations are seeded and both stay selectable: the v1 ontology, and the v2 one
-whose section layer (``section_defaults`` + ``inherits``) the v2 schema adds. They are separate
-``ontology_key``s, so neither displaces the other, and an extraction run pins the exact
-``OntologyVersion`` row id it used — a run made against v1 goes on resolving to v1 for as long as
-that row exists, whatever is seeded beside it.
+ONE template, ONE rulebook. Two generations used to ship side by side — a thin v1 and the v2 that
+adds the section layer (``section_defaults`` + ``inherits``), the residual framework and the
+validation block — on the reasoning that a run made against v1 should go on resolving to v1. That
+reasoning is retired: there is one rulebook, and every concept is authored once in one vocabulary
+instead of twice in two. Authoring it twice was not a theoretical cost — a concept written in the
+other file's shape was a real defect twice over, caught each time by an invariant test rather than
+by review.
+
+Nothing here assumes it is the only rulebook that will ever exist. An uploaded or generated one
+takes its place through the same versioned tables, and ``services/ontology_select`` still reads
+``metadata.supersedes`` to decide which of several is in force.
 
 Every file is put through the checks ``POST /ontologies`` / ``POST /templates`` apply, BEFORE
 anything is written. This path used to write whatever was on disk: a shipped file that no longer
@@ -28,7 +34,6 @@ from sqlalchemy.orm import Session
 _DIR = Path(__file__).resolve().parent / "templates"
 _TEMPLATE = _DIR / "hkfrs_hk_china_template.json"
 _ONTOLOGY = _DIR / "hkfrs_hk_china_ontology.json"
-_ONTOLOGY_V2 = _DIR / "hkfrs_hk_china_v2_ontology.json"
 
 
 class ReferenceSeedError(RuntimeError):
@@ -64,7 +69,7 @@ def _load_ontology(path: Path, raw: dict, template):
     from app.schemas.loader import load_ontology, unknown_keys, validate_ontology_against_template
 
     try:
-        # ``resolve=True`` on top of plain validation: a v2 concept whose ``inherits`` names no
+        # ``resolve=True`` on top of plain validation: a concept whose ``inherits`` names no
         # section is not a load error, it is a silent no-op that leaves the concept with no
         # section at all — the one failure mode a shipped rulebook could carry unnoticed.
         ontology = load_ontology(raw)
@@ -93,13 +98,8 @@ def ensure_reference_data(session: Session) -> None:
     tpl = json.loads(_TEMPLATE.read_text())
     template = _load_template(_TEMPLATE, tpl)
 
-    ontologies: list[dict] = []
-    for path in (_ONTOLOGY, _ONTOLOGY_V2):
-        if not path.exists():
-            continue
-        raw = json.loads(path.read_text())
-        _load_ontology(path, raw, template)
-        ontologies.append(raw)
+    raw_ontology = json.loads(_ONTOLOGY.read_text())
+    _load_ontology(_ONTOLOGY, raw_ontology, template)
 
     # "Already seeded" means ANY version of the key exists, not exactly one: authoring and
     # inline ontology edits publish further versions, and demanding a single row made the next
@@ -113,13 +113,14 @@ def ensure_reference_data(session: Session) -> None:
             definition=tpl, is_published=True,
         ))
 
-    for ont in ontologies:
-        existing_ont = session.execute(
-            select(OntologyVersion).where(OntologyVersion.ontology_key == ont["ontology_key"])
-        ).scalars().first()
-        if existing_ont is None:
-            session.add(OntologyVersion(
-                ontology_key=ont["ontology_key"],
-                target_template_key=ont["target_template_key"], version=1, definition=ont,
-            ))
+    existing_ont = session.execute(
+        select(OntologyVersion)
+        .where(OntologyVersion.ontology_key == raw_ontology["ontology_key"])
+    ).scalars().first()
+    if existing_ont is None:
+        session.add(OntologyVersion(
+            ontology_key=raw_ontology["ontology_key"],
+            target_template_key=raw_ontology["target_template_key"], version=1,
+            definition=raw_ontology,
+        ))
     session.commit()

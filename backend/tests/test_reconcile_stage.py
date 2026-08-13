@@ -135,7 +135,7 @@ def test_reconciliation_surfaces_on_notes_endpoint_and_export(client):
         "/api/v1/documents", files={"file": ("multi.pdf", make_multipage_pdf(), "application/pdf")}
     ).json()["id"]
     onts = client.get("/api/v1/ontologies").json()
-    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v1"), onts[0])
+    ont = next((o for o in onts if o["ontology_key"] == "hkfrs_hk_china"), onts[0])
     tpls = client.get("/api/v1/templates").json()
     tpl = next((t for t in tpls if t["template_key"] == ont["target_template_key"]), tpls[0])
     client.post(f"/api/v1/documents/{doc_id}/extractions",

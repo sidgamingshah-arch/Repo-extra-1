@@ -39,12 +39,12 @@ WHAT THIS CHANGES, and why each matters:
 
 * A SECTION KEY TYPED AS AN ITEM IS RETIRED. ``cf_s4_effect_of_foreign_exchange_rate_changes`` was
   declared ``role: header`` with an empty children array and then USED as a value input to the
-  closing-cash rollup. The v2 rulebook carried a ``template_note`` recording exactly this and asking
+  closing-cash rollup. The rulebook carried a ``template_note`` recording exactly this and asking
   for the node role to be corrected; the note is deleted here because the defect is. The key is now
   ``cf_effect_of_foreign_exchange_rate_changes``, ``role: line``.
 
 * ``pl_total_expenses`` IS DELETED. It carried no formula, no children and no place in the revised
-  ladder, and it was reachable from two lists in the v2 rulebook (a ``never_sweep`` entry and a
+  ladder, and it was reachable from two lists in the rulebook (a ``never_sweep`` entry and a
   ``confusable_with`` entry) that had to go with it.
 
 * ONE KEY RENAMED: ``pl_non_operating_expenses__total_non_operating_expense`` →
@@ -52,12 +52,7 @@ WHAT THIS CHANGES, and why each matters:
   interest expense, so its subtotal is not an expense; two rulebook ``derivation`` sentences and one
   ``never_sweep`` entry named the old spelling and move with it.
 
-* TWELVE NEW CONCEPTS, seeded into BOTH rulebooks in each file's own vocabulary. A template line no
-  rulebook recognises is a line that can never be filled. The v1 file states
-  ``description``/``value_scope``/``extraction_mode``/``include`` on every concept and
-  ``match_priority``/``inherits``/``sign_convention`` on none; the v2 file is the reverse. Writing
-  one file's fields into the other is the defect ``test_hk_template`` and ``test_mapping_v2`` caught
-  during the balance-sheet pass.
+* TWELVE NEW CONCEPTS. A template line no rulebook recognises is a line that can never be filled.
 
 * THE MATCHING GATE LEARNS THE OCI BANNER. ``mapping.SECTION_WORDS`` had no entry for other
   comprehensive income, and the new section id ENDS in "income" — so
@@ -108,9 +103,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from revise_balance_sheet import (ONTOLOGIES, TPL, V1, V2, _mapping_index,  # noqa: E402
-                                 calc, line, rename_outside_metadata, section,
-                                 sync_declared_count)
+from revise_balance_sheet import (ONTOLOGY, TPL, _mapping_index, calc,  # noqa: E402
+                                 line, rename_outside_metadata, section, sync_declared_count)
 
 # The two spellings the revision corrects, and the one concept it removes. Renaming reaches further
 # than the ``canonical_key`` field: both are named from ``derivation`` prose and ``never_sweep`` /
@@ -123,17 +117,6 @@ KEY_FIXES = {
 }
 DROP_CONCEPTS = {"pl_total_expenses"}
 
-BREAKING_CHANGE = (
-    "Income statement and cash flow revised. New sections pl_s2a_cost_of_sales and "
-    "pl_s8_other_comprehensive_income. Twelve new concepts. "
-    "pl_non_operating_expenses__total_non_operating_expense renamed to "
-    "pl_non_operating_expenses__total_non_operating; "
-    "cf_s4_effect_of_foreign_exchange_rate_changes renamed to "
-    "cf_effect_of_foreign_exchange_rate_changes (it was a section key used as a value); "
-    "pl_total_expenses deleted. Gross profit routes through the new total_cost_of_sales, "
-    "operating profit gains a formula, and other comprehensive income gains its two IAS 1 "
-    "categories."
-)
 
 # --- the income statement ----------------------------------------------------------------------
 # (key, English label, Chinese label). Section prefixes are applied by `line`.
@@ -448,7 +431,6 @@ NEW_CONCEPTS = [
         "after": "pl_expenses__purchases_of_stock_in_trade",
         "definition": ("The reported subtotal of cost of sales, where a filing prints one — cost of "
                        "goods sold together with purchases of stock-in-trade."),
-        "v1_section": "Cost of sales",
         "value_scope": "not_applicable",
         "aliases": ["Total cost of sales", "Total cost of goods sold", "Total cost of revenue",
                     "Total cost of sales and services"],
@@ -457,7 +439,7 @@ NEW_CONCEPTS = [
                     "Total operating cost, which also contains the operating expenses."],
         "confusable_with": ["pl_expenses__cost_of_goods_sold",
                             "pl_expenses__total_operating_cost"],
-        "v2": {"inherits": "pl_s2_expenses", "match_priority": 76, "unit_of_account": "subtotal",
+        "rulebook": {"inherits": "pl_s2_expenses", "match_priority": 76, "unit_of_account": "subtotal",
                "extraction_mode": "extract_or_derive", "sign_convention": "negative_expected",
                "derivation": ("sum of pl_expenses__cost_of_goods_sold and "
                               "pl_expenses__purchases_of_stock_in_trade where no subtotal is "
@@ -471,7 +453,6 @@ NEW_CONCEPTS = [
                        "construction and maintenance tax, education surcharge, stamp duty, land "
                        "use and property tax. NOT income tax, which is struck below profit "
                        "before tax."),
-        "v1_section": "Operating expenses",
         "value_scope": "exclusive_leaf",
         "aliases": ["Taxes and surcharges", "Taxes and levies", "Business taxes and surcharges",
                     "Taxes other than income tax"],
@@ -481,7 +462,7 @@ NEW_CONCEPTS = [
                     "Value added tax recovered from customers, which is not an expense."],
         "confusable_with": ["pl_tax_expense__current_tax", "pl_tax_expense__total_tax_expense"],
         "exclude_hints": ["income tax", "所得税", "所得稅", "deferred"],
-        "v2": {"inherits": "pl_s2_expenses", "match_priority": 66},
+        "rulebook": {"inherits": "pl_s2_expenses", "match_priority": 66},
     },
     {
         "canonical_key": "pl_expenses__total_operating_expenses",
@@ -489,7 +470,6 @@ NEW_CONCEPTS = [
         "after": "pl_expenses__others",
         "definition": ("The reported subtotal of the operating expenses that sit below cost of "
                        "sales, where a filing prints one."),
-        "v1_section": "Operating expenses",
         "value_scope": "not_applicable",
         "aliases": ["Total operating expenses", "Total operating expenditure",
                     "Total other operating expenses"],
@@ -498,7 +478,7 @@ NEW_CONCEPTS = [
                     "Cost of sales and its own subtotal."],
         "confusable_with": ["pl_expenses__total_operating_cost",
                             "pl_expenses__total_cost_of_sales"],
-        "v2": {"inherits": "pl_s2_expenses", "match_priority": 76, "unit_of_account": "subtotal",
+        "rulebook": {"inherits": "pl_s2_expenses", "match_priority": 76, "unit_of_account": "subtotal",
                "extraction_mode": "extract_or_derive", "sign_convention": "negative_expected",
                "derivation": ("sum of the operating expense lines and pl_expenses__others where no "
                               "subtotal is printed")},
@@ -511,7 +491,6 @@ NEW_CONCEPTS = [
                        "never be recycled through profit or loss. Where a filing itemises the "
                        "category rather than printing its subtotal, the itemised lines belong to "
                        "this concept and are summed into it."),
-        "v1_section": "Other comprehensive income",
         "value_scope": "exclusive_leaf",
         "aliases": [
             "Items that will not be reclassified to profit or loss",
@@ -536,7 +515,7 @@ NEW_CONCEPTS = [
                     "Amounts presented in profit or loss."],
         "confusable_with": ["pl_oci__items_may_be_reclassified",
                             "pl_other_comprehensive_income_for_the_year"],
-        "v2": {"inherits": "pl_s8_other_comprehensive_income", "match_priority": 66},
+        "rulebook": {"inherits": "pl_s8_other_comprehensive_income", "match_priority": 66},
     },
     {
         "canonical_key": "pl_oci__items_may_be_reclassified",
@@ -547,7 +526,6 @@ NEW_CONCEPTS = [
                        "realised. Where a filing itemises the category rather than printing its "
                        "subtotal, the itemised lines belong to this concept and are summed into "
                        "it."),
-        "v1_section": "Other comprehensive income",
         "value_scope": "exclusive_leaf",
         "aliases": [
             "Items that may be reclassified subsequently to profit or loss",
@@ -570,7 +548,7 @@ NEW_CONCEPTS = [
         "confusable_with": ["pl_oci__items_not_reclassified",
                             "pl_other_comprehensive_income_for_the_year",
                             "cf_effect_of_foreign_exchange_rate_changes"],
-        "v2": {"inherits": "pl_s8_other_comprehensive_income", "match_priority": 66},
+        "rulebook": {"inherits": "pl_s8_other_comprehensive_income", "match_priority": 66},
     },
     {
         "canonical_key": "cf_cash_flow_from_operating_activities__profit_for_the_year",
@@ -578,7 +556,6 @@ NEW_CONCEPTS = [
         "after": "cf_cash_flow_from_operating_activities__profit_before_tax",
         "definition": ("The starting line of an indirect-method cash flow that begins AFTER tax. "
                        "A statement starts from this line or from profit before tax, never both."),
-        "v1_section": "Cash flow from operating activities",
         "value_scope": "exclusive_leaf",
         "aliases": ["Profit for the year", "Profit/(loss) for the year", "Loss for the year",
                     "Net profit for the year", "Profit for the period"],
@@ -587,7 +564,7 @@ NEW_CONCEPTS = [
                     "Profit before tax, which is the other starting line."],
         "confusable_with": ["cf_cash_flow_from_operating_activities__profit_before_tax",
                             "pl_profit_for_the_year"],
-        "v2": {"inherits": "cf_s1_operating", "match_priority": 70},
+        "rulebook": {"inherits": "cf_s1_operating", "match_priority": 70},
     },
     {
         "canonical_key": "cf_cash_flow_from_operating_activities__other_non_cash_adjustments",
@@ -596,14 +573,13 @@ NEW_CONCEPTS = [
                   "loss_gain_on_disposal_of_property_plant_and_equipment"),
         "definition": ("A printed catch-all for the non-cash adjustments a filing does not itemise, "
                        "struck before the working-capital movements."),
-        "v1_section": "Cash flow from operating activities",
         "value_scope": "exclusive_leaf",
         "aliases": ["Other non-cash adjustments", "Other non-cash items",
                     "Other adjustments for non-cash items", "Other non-cash expenses"],
         "aliases_zh": ["其他非现金调整", "其他非現金調整", "其他非现金项目"],
         "exclude": ["Working capital movements, which are struck after this subtotal.",
                     "A specific adjustment this section maps as its own concept."],
-        "v2": {"inherits": "cf_s1_operating", "match_priority": 55},
+        "rulebook": {"inherits": "cf_s1_operating", "match_priority": 55},
     },
     {
         "canonical_key": ("cf_cash_flow_from_operating_activities__"
@@ -612,7 +588,6 @@ NEW_CONCEPTS = [
         "after": "cf_cash_flow_from_operating_activities__other_non_cash_adjustments",
         "definition": ("The HKAS 7 indirect-method subtotal struck after the non-cash adjustments "
                        "and before the working-capital movements."),
-        "v1_section": "Cash flow from operating activities",
         "value_scope": "not_applicable",
         "aliases": ["Operating profit before working capital changes",
                     "Operating cash flows before movements in working capital",
@@ -626,7 +601,7 @@ NEW_CONCEPTS = [
         "confusable_with": ["cf_cash_flow_from_operating_activities__cash_generated_from_operations",
                             ("cf_cash_flow_from_operating_activities__"
                              "net_cash_from_operating_activities")],
-        "v2": {"inherits": "cf_s1_operating", "match_priority": 76, "unit_of_account": "subtotal",
+        "rulebook": {"inherits": "cf_s1_operating", "match_priority": 76, "unit_of_account": "subtotal",
                "extraction_mode": "extract_or_derive",
                "derivation": ("sum of the starting line and the non-cash adjustments where no "
                               "subtotal is printed")},
@@ -638,14 +613,13 @@ NEW_CONCEPTS = [
                   "increase_decrease_in_other_payables_and_accruals"),
         "definition": ("A printed catch-all for the working-capital movements a filing does not "
                        "itemise, struck before cash generated from operations."),
-        "v1_section": "Cash flow from operating activities",
         "value_scope": "exclusive_leaf",
         "aliases": ["Other working capital movements", "Other changes in working capital",
                     "Other movements in working capital", "Changes in other working capital"],
         "aliases_zh": ["其他营运资金变动", "其他營運資金變動", "其他经营性应收应付项目的变动"],
         "exclude": ["A specific working-capital movement this section maps as its own concept.",
                     "Non-cash adjustments, which are struck before this block."],
-        "v2": {"inherits": "cf_s1_operating", "match_priority": 55},
+        "rulebook": {"inherits": "cf_s1_operating", "match_priority": 55},
     },
     {
         "canonical_key": "cf_cash_flow_from_operating_activities__interest_paid",
@@ -654,7 +628,6 @@ NEW_CONCEPTS = [
         "definition": ("Interest paid classified as an operating cash flow, which HKAS 7.33 "
                        "permits. The same caption in the financing section is a different concept "
                        "and only one of the two is populated."),
-        "v1_section": "Cash flow from operating activities",
         "value_scope": "exclusive_leaf",
         "aliases": ["Interest paid", "Interest paid on bank and other borrowings",
                     "Interest and finance charges paid"],
@@ -664,7 +637,7 @@ NEW_CONCEPTS = [
                     "Interest received."],
         "confusable_with": ["cf_cash_flow_from_financing_activities__interest_paid",
                             "cf_cash_flow_from_operating_activities__finance_costs"],
-        "v2": {"inherits": "cf_s1_operating", "match_priority": 66,
+        "rulebook": {"inherits": "cf_s1_operating", "match_priority": 66,
                "sign_convention": "negative_expected"},
     },
     {
@@ -673,7 +646,6 @@ NEW_CONCEPTS = [
         "after": "cf_cash_flow_from_investing_activities__disposal_of_subsidiaries_net_of_cash_disposed",
         "definition": ("Loans and advances made to related parties, and repayments received on "
                        "them, presented as an investing cash flow."),
-        "v1_section": "Cash flow from investing activities",
         "value_scope": "exclusive_leaf",
         "aliases": ["Advances to related parties", "Loans to related parties",
                     "Advances to associates and joint ventures",
@@ -684,7 +656,7 @@ NEW_CONCEPTS = [
                     "concept.",
                     "Trade balances with related parties, which are a working-capital movement."],
         "confusable_with": ["cf_cash_flow_from_financing_activities__advances_from_related_parties"],
-        "v2": {"inherits": "cf_s2_investing", "match_priority": 66},
+        "rulebook": {"inherits": "cf_s2_investing", "match_priority": 66},
     },
     {
         "canonical_key": "cf_cash_flow_from_financing_activities__advances_from_related_parties",
@@ -692,7 +664,6 @@ NEW_CONCEPTS = [
         "after": "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests",
         "definition": ("Loans and advances received from related parties, and repayments made on "
                        "them, presented as a financing cash flow."),
-        "v1_section": "Cash flow from financing activities",
         "value_scope": "exclusive_leaf",
         "aliases": ["Advances from related parties", "Loans from related parties",
                     "Advances from a shareholder", "Advances from the immediate holding company",
@@ -702,7 +673,7 @@ NEW_CONCEPTS = [
                     "concept.",
                     "Trade balances with related parties, which are a working-capital movement."],
         "confusable_with": ["cf_cash_flow_from_investing_activities__advances_to_related_parties"],
-        "v2": {"inherits": "cf_s3_financing", "match_priority": 66},
+        "rulebook": {"inherits": "cf_s3_financing", "match_priority": 66},
     },
 ]
 
@@ -846,26 +817,21 @@ SEVERITY_CHANGES = {
 }
 
 
-def _concept(spec: dict, *, v2: bool) -> dict:
-    """One new concept in the vocabulary of the file it is going into."""
+def _concept(spec: dict) -> dict:
+    """One new concept.
+
+    A single shape, because a single rulebook ships. This took a ``v2`` flag while two generations
+    did, and each concept had to be written twice — once with ``inherits``/``match_priority`` and
+    once with ``description``/``extraction_mode``/``include`` — with nothing but an invariant test
+    to catch a concept written in the wrong one. It caught two.
+    """
     aliases = list(spec["aliases"])
     entry = {"canonical_key": spec["canonical_key"], "label": spec["label"],
-             "definition": spec["definition"]}
-    if v2:
-        entry.update(spec["v2"])
-        entry["value_scope"] = spec["value_scope"]
-    else:
-        entry["description"] = f"{spec['label']}: under '{spec['v1_section']}' in the statement."
-        entry["value_scope"] = spec["value_scope"]
-        entry["extraction_mode"] = "extract"
-        entry["include"] = ["Amounts attributable to this concept for the same entity, scope, "
-                            "period, currency and unit."]
+             "definition": spec["definition"], **spec["rulebook"],
+             "value_scope": spec["value_scope"]}
     entry["aliases"] = aliases
     entry["aliases_i18n"] = {"en": aliases, "zh": list(spec["aliases_zh"])}
-    entry["exclude"] = list(spec["exclude"]) if v2 else [
-        "Amounts mapped to another dedicated concept.",
-        "Gross parent totals that contain separately mapped children.",
-    ]
+    entry["exclude"] = list(spec["exclude"])
     if spec.get("confusable_with"):
         entry["confusable_with"] = list(spec["confusable_with"])
     if spec.get("exclude_hints"):
@@ -873,12 +839,12 @@ def _concept(spec: dict, *, v2: bool) -> dict:
     return entry
 
 
-def seed_concepts(data: dict, *, v2: bool) -> list[str]:
+def seed_concepts(data: dict) -> list[str]:
     """Insert (or replace) each new concept behind the one it is printed after."""
     mappings = data.setdefault("mappings", [])
     notes: list[str] = []
     for spec in NEW_CONCEPTS:
-        entry = _concept(spec, v2=v2)
+        entry = _concept(spec)
         idx = _mapping_index(data)
         at = idx.get(entry["canonical_key"])
         if at is not None:
@@ -1001,15 +967,6 @@ def apply_sign_conventions(data: dict) -> list[str]:
     return notes
 
 
-def revise_metadata(data: dict) -> str | None:
-    meta = data.get("metadata")
-    if not isinstance(meta, dict) or "breaking_changes" not in meta:
-        return None
-    if BREAKING_CHANGE in meta["breaking_changes"]:
-        return None
-    meta["breaking_changes"].append(BREAKING_CHANGE)
-    return "breaking_changes records the income-statement and cash-flow revision"
-
 
 def revise_validation(data: dict) -> list[str]:
     rules = data.get("validation")
@@ -1040,7 +997,7 @@ def revise_validation(data: dict) -> list[str]:
 
 def revise_ontologies() -> list[str]:
     out: list[str] = []
-    for path in ONTOLOGIES:
+    for path in (ONTOLOGY,):
         if not path.exists():
             continue
         data = json.loads(path.read_text())
@@ -1049,7 +1006,7 @@ def revise_ontologies() -> list[str]:
         if renamed:
             notes.append(f"{renamed} key(s) renamed everywhere they are written")
         notes += drop_concepts(data)
-        notes += seed_concepts(data, v2=path is V2)
+        notes += seed_concepts(data)
         if dropped := drop_template_note(data):
             notes.append(dropped)
         notes += add_section_defaults(data)
@@ -1057,8 +1014,6 @@ def revise_ontologies() -> list[str]:
         notes += apply_sign_conventions(data)
         if counted := sync_declared_count(data):
             notes.append(counted)
-        if recorded := revise_metadata(data):
-            notes.append(recorded)
         notes += revise_validation(data)
         if notes:
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")

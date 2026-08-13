@@ -31,7 +31,7 @@ from app.services.mapping import (
 )
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "app" / "sample" / "templates"
-V2 = json.loads((TEMPLATES / "hkfrs_hk_china_v2_ontology.json").read_text())
+V2 = json.loads((TEMPLATES / "hkfrs_hk_china_ontology.json").read_text())
 
 
 @pytest.fixture(scope="module")
@@ -728,18 +728,32 @@ def test_deleting_the_equivalence_declaration_silences_the_finding():
     assert not [f for f in rows["Net assets"].confidence.flags if f.startswith("equivalence")]
 
 
-def test_a_v1_rulebook_declares_none_of_this_and_is_unchanged():
-    """Every field here is optional and every default is the previous behaviour: a v1 concept has
-    `alias_matching: "enabled"` and no `match_priority`, so nothing is locked and every ordering
-    ties back to the order the file declares."""
-    v1 = load_ontology(json.loads((TEMPLATES / "hkfrs_hk_china_ontology.json").read_text()))
-    m = _matcher(v1)
+def test_a_rulebook_declaring_none_of_this_is_unchanged():
+    """Every field here is optional and every default is the previous behaviour: a concept with no
+    ``match_priority`` and the default ``alias_matching: "enabled"`` locks nothing, and every
+    ordering ties back to the order the file declares.
+
+    Built here rather than loaded. This used to read the shipped thin rulebook, which declared none of
+    these fields; one rulebook ships now and it declares all of them. What the test is actually about
+    is the DEFAULTS an uploaded schema-1 rulebook still gets — a property to construct, not a file to
+    point at.
+    """
+    ont = OntologyDefinition(
+        ontology_key="k", target_template_key="t",
+        mappings=[
+            OntologyMapping(canonical_key="bs_current_liabilities__others", label="Others",
+                            aliases=["Others", "其他"]),
+            OntologyMapping(canonical_key="bs_current_liabilities__current_trade_payables",
+                            label="Trade payables", aliases=["Trade payables"]),
+        ],
+    )
+    m = _matcher(ont)
 
     assert m._locked == set()
-    assert {m._priority_of(c.canonical_key) for c in v1.mappings} == {0}
-    keys = [c.canonical_key for c in v1.mappings]
+    assert {m._priority_of(c.canonical_key) for c in ont.mappings} == {0}
+    keys = [c.canonical_key for c in ont.mappings]
     assert m._by_priority(keys) == keys
-    # v1 authors "Others" as an ordinary alias on ten buckets, and it still matches.
+    # "Others" as an ordinary alias still matches, because nothing disabled alias matching.
     assert m.match("Others", statement="balance_sheet",
                    section="CURRENT LIABILITIES 流動負債").canonical_key == (
         "bs_current_liabilities__others")

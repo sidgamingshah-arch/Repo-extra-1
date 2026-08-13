@@ -180,7 +180,7 @@ def test_the_flip_the_server_prescribes_is_an_ordinary_edit_and_is_revertible(cl
                          files={"file": ("flip.pdf", make_native_pdf(),
                                          "application/pdf")}).json()["id"]
     onts = client.get("/api/v1/ontologies").json()
-    ont = next(o for o in onts if o["ontology_key"] == "hkfrs_hk_china_v2")
+    ont = next(o for o in onts if o["ontology_key"] == "hkfrs_hk_china")
     tpl = next(t for t in client.get("/api/v1/templates").json()
                if t["template_key"] == ont["target_template_key"])
     client.post(f"/api/v1/documents/{doc_id}/extractions",

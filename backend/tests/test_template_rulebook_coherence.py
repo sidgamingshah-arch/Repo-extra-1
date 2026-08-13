@@ -23,7 +23,7 @@ from app.services.mapping import (CONCEPT_FAMILIES, section_of_banner,
 from app.services.structural_checks import ontology_identities, relations
 
 _SAMPLES = pathlib.Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
-_ONTOLOGIES = ("hkfrs_hk_china_ontology.json", "hkfrs_hk_china_v2_ontology.json")
+_ONTOLOGIES = ("hkfrs_hk_china_ontology.json", "hkfrs_hk_china_ontology.json")
 
 
 @pytest.fixture(scope="module")

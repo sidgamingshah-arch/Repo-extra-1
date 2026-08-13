@@ -55,15 +55,34 @@ def select_for_template(session: Session, template_key: str):
        uploaded to try something, replaces nothing and says so by omission. Without this test a
        freshly uploaded skeleton — every concept a stub with no aliases at all — could become the
        rulebook a real extraction runs on, purely because its key happened to sort late.
-    3. Then the highest edit version, and finally ontology_key so the answer is at least stable.
+    3. THE INCUMBENT WINS A TIE. Among rulebooks that all declare nothing, the one that has been
+       here longest stays in force, so an upload never takes over by arriving.
 
-    Reaching step 3 with a genuine tie means two adopted rulebooks both claim one template and
-    neither replaces the other. That is an authoring question this function cannot answer, and the
-    caller sees a definite — if arbitrary — choice rather than an unstable one.
+       This is what step 2 alone could not do, and the day it mattered is instructive: while two
+       generations shipped, the successor declared a supersession and won at step 2 whatever else was
+       stored. Consolidating to one rulebook left NOTHING declaring one — step 2 became a tie on
+       every template, step 3 was "highest version, then ontology_key", and a leftover
+       ``hkfrs_hk_china_v1_draft`` skeleton took over from ``hkfrs_hk_china`` because it sorts later.
+       Extraction went on running, against a rulebook of empty stubs.
+    4. Then the highest edit version of that key — a later version IS adoption of that key's newer
+       content — and finally ontology_key, so a genuine tie is at least stable.
+
+    Reaching step 4 with a genuine tie means two rulebooks first seen in the same instant both claim
+    one template and neither replaces the other. That is an authoring question this function cannot
+    answer, and the caller sees a definite — if arbitrary — choice rather than an unstable one.
     """
     rows = rulebooks_for_template(session, template_key)
     if not rows:
         return None
     dead = superseded_keys(rows)
     live = [r for r in rows if r.ontology_key not in dead] or rows
-    return max(live, key=lambda r: (bool(_supersedes(r.definition)), r.version, r.ontology_key))
+    # Incumbency is a property of the KEY, not of one stored version of it: editing a rulebook
+    # publishes a new row, and a fresh row for a long-standing key must not read as a newcomer.
+    first_seen: dict[str, object] = {}
+    for r in live:
+        prior = first_seen.get(r.ontology_key)
+        if prior is None or r.created_at < prior:
+            first_seen[r.ontology_key] = r.created_at
+    return max(live, key=lambda r: (bool(_supersedes(r.definition)),
+                                    -first_seen[r.ontology_key].timestamp(),
+                                    r.version, r.ontology_key))
