@@ -196,7 +196,7 @@ def get_template_detail(template_id: str, locale: str = "en",
     Ontology screen shows — so an admin sees the seeded/authored template instead of an
     empty screen (the demo-bound view only ever showed demo data). Aliases, sign convention
     and any note-decomposition rule are pulled from the ontology that targets this template."""
-    from app.db.models import OntologyVersion, TemplateVersion
+    from app.db.models import TemplateVersion
 
     row = session.get(TemplateVersion, template_id)
     if row is None:
@@ -233,64 +233,109 @@ def get_template_detail(template_id: str, locale: str = "en",
     tree: list[dict] = []
     node_config: dict[str, dict] = {}
     leaves = 0
+
+    def emit(nodes: list[dict], lvl: int, trail: list[str], stmt_label: str) -> None:
+        """Walk one section tree, taking the heading/line branch from ``export._emit_nodes``.
+
+        Branching on "is a top-level section" instead is what made a calculated total impossible to
+        select. The template declares Gross Profit and sixteen other lines as CHILDLESS entries in
+        ``sections[]`` (``pl_gross_profit``, ``pl_profit_before_tax``, ``bs_net_assets``,
+        ``cf_closing_cash_and_cash_equivalents``, …), because that is where in the statement they
+        are PRINTED. Emitting every section as a heading turned each of them into an inert row whose
+        inner loop had nothing to iterate, so no ``node_config`` entry was ever written for it — and
+        the screen resolved the click to an unrelated concept and showed that concept's rules under
+        the heading of the line the analyst had clicked.
+
+        The role test is exactly ``== "header"``, matching ``export._emit_nodes`` and ``_publish``'s
+        own ``line_items`` count above, so all three agree on what a line is. ``LineRole.SPACER``
+        gets no third treatment here for that reason: a fourth opinion about it, in a fourth place,
+        is how these counts drifted apart to begin with, and no shipped template declares one.
+
+        Children are walked BELOW A LINE as well as below a heading, which ``_emit_nodes`` does not
+        do — every non-heading node is a concept the ontology maps, and a concept that reaches no
+        ``node_config`` entry is a concept the screen cannot answer about. It also keeps ``leaves``
+        equal to every keyed non-heading node for any template, not just for one nested no deeper
+        than the shipped file. (An export that skips such a node is an export bug, not a reason for
+        this screen to hide it.)
+        """
+        nonlocal leaves
+        for node in nodes:
+            label = _loc(node, locale)
+            children = node.get("children") or []
+            if node.get("role") == "header":
+                tree.append({"id": f"sec:{node.get('node_id', label)}", "label": label,
+                             "lvl": lvl, "head": True})
+                emit(children, lvl + 1, [*trail, label], stmt_label)
+                continue
+            key = node.get("canonical_key")
+            if not key:
+                # A node with no key is not addressable: `node_config` is keyed by canonical_key, so
+                # there is nothing to select and nothing to edit. Its subtree still is, and is
+                # emitted at THIS level rather than indented under a row that was never drawn.
+                # `_publish` does count such a node, so its `line_items` reads one higher — the
+                # schema requires `canonical_key`, so reaching here at all means an empty string got
+                # past the upload gate, and the fix for that belongs at the gate.
+                emit(children, lvl, trail, stmt_label)
+                continue
+            leaves += 1
+            m = by_key.get(key)
+            decomp = getattr(m, "decomposition_rule", None) if m else None
+            tree.append({"id": key, "label": label, "lvl": lvl, "rule": bool(decomp)})
+            # `aliases` is the merged display set (locale + English fallback, capped).
+            # `aliases_locale` is the RAW list stored for this locale — what the editor
+            # loads and writes back, so saving zh aliases can't absorb the en fallbacks.
+            default_locale = "en"
+            if m is not None:
+                raw_i18n = m.aliases_i18n.get(locale)
+                aliases_locale = list(
+                    raw_i18n if raw_i18n is not None
+                    else (m.aliases if locale == default_locale else [])
+                )
+            else:
+                aliases_locale = []
+            node_config[key] = {
+                # The path down to this line. A total printed at statement level has no section
+                # above it, so it breadcrumbs to the statement alone rather than borrowing the
+                # heading of whichever section happens to precede it.
+                "breadcrumb": " / ".join([stmt_label, *trail]),
+                "label": label,
+                "canonical_key": key,
+                "aliases_locale": aliases_locale,
+                "aliases": (m.aliases_for(locale) if m else [])[:12],
+                "sign": (
+                    _ONT_SIGN_UI.get(str(m.sign_rule.convention.value), "as_reported")
+                    if m is not None and (m.sign_rule.convention.value or "") != "natural"
+                    else _SIGN_UI.get(str(node.get("sign", "natural")), "auto")
+                ),
+                # The criteria the LLM reasons over, so the editor can show and change what
+                # actually drives meaning-based mapping rather than only string matching.
+                "definition": (m.definition or m.description or "") if m else "",
+                "include": list(m.include) if m else [],
+                "exclude": list(m.exclude) if m else [],
+                "confusable_with": list(m.confusable_with) if m else [],
+                "value_scope": (m.value_scope if m else "exclusive_leaf"),
+                "keyword_hints": list(m.keyword_hints) if m else [],
+                "regex_hints": list(m.regex_hints) if m else [],
+                "exclude_hints": list(m.exclude_hints) if m else [],
+                "value_type": "Monetary",
+                "aggregation": "Sum of children" if node.get("role") in ("subtotal", "total")
+                               else "Direct value",
+                "netting": {"expr": "", "explain": decomp or "No note-decomposition rule for this concept."},
+            }
+            emit(children, lvl + 1, [*trail, label], stmt_label)
+
     for stmt in tdef.get("statements", []):
         stmt_label = _loc(stmt, locale) or str(stmt.get("type", "")).replace("_", " ").title()
         tree.append({"id": f"stmt:{stmt.get('type')}", "label": stmt_label, "lvl": 0, "head": True})
-        for sec in stmt.get("sections", []):
-            sec_label = _loc(sec, locale)
-            tree.append({"id": f"sec:{sec.get('node_id', sec_label)}", "label": sec_label,
-                         "lvl": 1, "head": True})
-            for child in sec.get("children", []):
-                key = child.get("canonical_key")
-                if not key:
-                    continue
-                leaves += 1
-                m = by_key.get(key)
-                decomp = getattr(m, "decomposition_rule", None) if m else None
-                tree.append({"id": key, "label": _loc(child, locale), "lvl": 2,
-                             "rule": bool(decomp)})
-                # `aliases` is the merged display set (locale + English fallback, capped).
-                # `aliases_locale` is the RAW list stored for this locale — what the editor
-                # loads and writes back, so saving zh aliases can't absorb the en fallbacks.
-                default_locale = "en"
-                if m is not None:
-                    raw_i18n = m.aliases_i18n.get(locale)
-                    aliases_locale = list(
-                        raw_i18n if raw_i18n is not None
-                        else (m.aliases if locale == default_locale else [])
-                    )
-                else:
-                    aliases_locale = []
-                node_config[key] = {
-                    "breadcrumb": f"{stmt_label} / {sec_label}",
-                    "label": _loc(child, locale),
-                    "canonical_key": key,
-                    "aliases_locale": aliases_locale,
-                    "aliases": (m.aliases_for(locale) if m else [])[:12],
-                    "sign": (
-                        _ONT_SIGN_UI.get(str(m.sign_rule.convention.value), "as_reported")
-                        if m is not None and (m.sign_rule.convention.value or "") != "natural"
-                        else _SIGN_UI.get(str(child.get("sign", "natural")), "auto")
-                    ),
-                    # The criteria the LLM reasons over, so the editor can show and change what
-                    # actually drives meaning-based mapping rather than only string matching.
-                    "definition": (m.definition or m.description or "") if m else "",
-                    "include": list(m.include) if m else [],
-                    "exclude": list(m.exclude) if m else [],
-                    "confusable_with": list(m.confusable_with) if m else [],
-                    "value_scope": (m.value_scope if m else "exclusive_leaf"),
-                    "keyword_hints": list(m.keyword_hints) if m else [],
-                    "regex_hints": list(m.regex_hints) if m else [],
-                    "exclude_hints": list(m.exclude_hints) if m else [],
-                    "value_type": "Monetary",
-                    "aggregation": "Sum of children" if child.get("role") in ("subtotal", "total")
-                                   else "Direct value",
-                    "netting": {"expr": "", "explain": decomp or "No note-decomposition rule for this concept."},
-                }
+        emit(stmt.get("sections") or [], 1, [], stmt_label)
 
     return {"tree": tree, "node_config": node_config, "netting_rules": netting_rules,
             # Which ontology version supplied the aliases/sign above — the editor PATCHes this
             # id, and `locale` tells it which alias list it is editing.
             "ontology": ({"id": ont_row.id, "ontology_key": ont_row.ontology_key,
                           "version": ont_row.version, "locale": locale} if ont_row else None),
+            # `line_items` is every keyed non-heading node, which is the count `_publish` reports on
+            # upload — one quantity, one spelling. It disagreed before this walk was fixed: the
+            # seventeen lines printed at statement level were counted as headings here and as line
+            # items there, so the screen said 170 about a template published as 187.
             "template": {"key": row.template_key, "name": row.name, "line_items": leaves}}
