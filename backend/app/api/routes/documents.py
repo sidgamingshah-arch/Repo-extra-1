@@ -2838,17 +2838,23 @@ def export_document(
     ccy = (src_units or {}).get("currency")
     caption = (f"Amounts in {ccy + ' ' if ccy else ''}{unit_label}" if unit_label else None)
     narrative = run.result.get("credit_narrative")  # stored LLM narrative, if generated
+    # Resolved BEFORE the format branch so both the workbook and the JSON carry it, and read through
+    # the same `_coverage_block` the review screen is served — a second computation here is how the
+    # sheet and the queue would come to disagree about whether anything was checked.
+    export_template = _template_for_run(session, run)
+    coverage = _coverage_block(run, export_template, locale)
     if fmt == "json":
         data = build_rows_json(rows, filename=doc.filename or "document",
                                disclosures=run.result.get("disclosures", []),
                                note_details=run.result.get("note_details", []),
                                reconciliation=run.result.get("reconciliation", []), locale=locale,
                                credit_narrative=narrative,
-                               netting_rules=run.result.get("netting") or [])
+                               netting_rules=run.result.get("netting") or [],
+                               coverage=coverage)
         return Response(content=data, media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
 
-    template_def = _template_for_run(session, run)
+    template_def = export_template
     if layout == "statement" and template_def:
         data = build_statement_workbook(rows, template_def, locale=locale,
                                         filename=doc.filename or "document",
@@ -2856,7 +2862,7 @@ def export_document(
                                         note_details=run.result.get("note_details", []),
                                         reconciliation=run.result.get("reconciliation", []),
                                         include=include_set, scale=scale, units_caption=caption,
-                                        credit_narrative=narrative)
+                                        credit_narrative=narrative, coverage=coverage)
     else:
         data = build_rows_xlsx(rows, filename=doc.filename or "document", scale=scale)
     return Response(

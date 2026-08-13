@@ -44,6 +44,44 @@ def _col(term: str, locale: str) -> str:
     return term if locale == "en" else _COL.get(term, {}).get(locale, term)
 
 
+# The validation banner's vocabulary. A sheet that says nothing was checked has to say it in the
+# reader's language, or the one warning on the workbook is the one line they cannot read.
+_EXPORT_TR = {
+    "Validation status is unknown for this export.": {
+        "zh": "本次导出的校验状态未知。", "ar": "حالة التحقق غير معروفة لهذا التصدير.",
+        "fr": "Le statut de validation est inconnu pour cet export."},
+    "No template relations were checked on this filing.": {
+        "zh": "本报表未执行任何模板关系校验。",
+        "ar": "لم يتم التحقق من أي علاقات في القالب لهذا الملف.",
+        "fr": "Aucune relation du modèle n'a été vérifiée sur ce dépôt."},
+    "A blocking rule could not be enforced on this filing.": {
+        "zh": "本报表存在无法执行的阻断性规则。",
+        "ar": "تعذّر تطبيق قاعدة مانعة على هذا الملف.",
+        "fr": "Une règle bloquante n'a pu être appliquée à ce dépôt."},
+    "The template declares no relations for this filing, so none was checked.": {
+        "zh": "模板未为本报表声明任何关系，因此未做校验。",
+        "ar": "لا يعلن القالب أي علاقات لهذا الملف، فلم يتم التحقق من شيء.",
+        "fr": "Le modèle ne déclare aucune relation pour ce dépôt : rien n'a été vérifié."},
+    "No template relation could be evaluated — nothing here is validated.": {
+        "zh": "没有任何模板关系可被评估——此处内容均未经校验。",
+        "ar": "لم يكن بالإمكان تقييم أي علاقة في القالب — لا شيء هنا مُتحقَّق منه.",
+        "fr": "Aucune relation du modèle n'a pu être évaluée — rien ici n'est validé."},
+    "of": {"zh": "/", "ar": "من", "fr": "sur"},
+    "relations checked did not hold; see the review queue.": {
+        "zh": "项已校验的关系不成立；请见审核队列。",
+        "ar": "علاقة تم التحقق منها لم تتحقق؛ راجع قائمة المراجعة.",
+        "fr": "relations vérifiées ne tiennent pas ; voir la file de revue."},
+    "relations could be checked; the rest were not evaluable.": {
+        "zh": "项关系可被校验；其余无法评估。",
+        "ar": "علاقة أمكن التحقق منها؛ الباقي غير قابل للتقييم.",
+        "fr": "relations ont pu être vérifiées ; les autres n'étaient pas évaluables."},
+    "relations checked held.": {
+        "zh": "项已校验的关系成立。", "ar": "علاقة تم التحقق منها وتحققت.",
+        "fr": "relations vérifiées tiennent."},
+    "Validation": {"zh": "校验", "ar": "التحقق", "fr": "Validation"},
+}
+
+
 def _prov_str(prov: dict | None) -> str:
     if not prov:
         return ""
@@ -68,7 +106,7 @@ def _netting_block(rows: list[dict], netting_rules: list | None) -> list[dict]:
 def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] | None = None,
                     note_details: list[dict] | None = None, reconciliation: list[dict] | None = None,
                     locale: str = "en", credit_narrative: dict | None = None,
-                    netting_rules: list | None = None) -> bytes:
+                    netting_rules: list | None = None, coverage: dict | None = None) -> bytes:
     """JSON export of a REAL extraction: every line item with its mapping, confidence, any
     edited formula, and the exact source location of each value (sheet/cell or page/bbox),
     plus a derived-analysis block (ratios / disclosures / credit) and the note detail +
@@ -112,6 +150,14 @@ def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] 
         },
         "note_details": note_details or [],
         "reconciliation": reconciliation or [],
+        # What these figures were verified against, verbatim from the report the review screen is
+        # served — a machine-readable consumer must be able to tell a validated extraction from one
+        # where no relation could be evaluated, which it could not before.
+        "validation": {
+            "coverage": coverage,
+            "caption": (lambda b: None if b is None else {"text": b[0], "severe": b[1]})(
+                validation_caption(coverage, locale)),
+        },
     }
     return json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
 
@@ -238,13 +284,70 @@ def _bases_present(rows: list[dict]) -> list[str]:
     return [b for b in ("consolidated", "standalone") if b in found] or ["consolidated"]
 
 
+def validation_caption(coverage: dict | None, locale: str = "en") -> tuple[str, bool] | None:
+    """What this workbook's figures were actually verified against — or None when everything held.
+
+    A filing whose template relations could not be evaluated used to export as a workbook
+    indistinguishable from a fully validated one: the numbers look the same, the formatting is the
+    same, and nothing on the sheet says the arithmetic behind them was never checked. That is the
+    export equivalent of reading "3 relations passed" as "the statement is verified", which the
+    coverage contract exists to prevent on screen.
+
+    Every figure here is read from the coverage report the review screen is served — no second
+    computation, so the sheet and the queue cannot disagree. `severe` marks the cases where nothing
+    was verified, or a BLOCKING rule could not be enforced, as opposed to a partial check.
+    """
+    def L(s: str) -> str:
+        return _EXPORT_TR.get(s, {}).get(locale, s)
+
+    if coverage is None:
+        # The flat row layout, or a run stored before coverage existed. Silence here would be the
+        # defect: an absent report is not a clean one.
+        return L("Validation status is unknown for this export."), True
+    if not coverage.get("available"):
+        return (str(coverage.get("reason_label")
+                    or L("No template relations were checked on this filing.")), True)
+
+    agg = coverage.get("aggregate") or {}
+    status = str(agg.get("status") or "")
+    passed, failed = int(agg.get("passed") or 0), int(agg.get("failed") or 0)
+    evaluated, declarable = int(agg.get("evaluated") or 0), int(agg.get("declarable") or 0)
+    unenforceable = [a for a in (coverage.get("alarms") or [])
+                     if a.get("code") == "BLOCKING_RULE_UNENFORCEABLE"]
+
+    parts: list[str] = []
+    severe = False
+    if unenforceable:
+        parts.append(L("A blocking rule could not be enforced on this filing."))
+        severe = True
+    if status == "ABSENT" or declarable == 0:
+        parts.append(L("The template declares no relations for this filing, so none was checked."))
+        severe = True
+    elif status == "UNVALIDATED" or evaluated == 0:
+        parts.append(L("No template relation could be evaluated — nothing here is validated."))
+        severe = True
+    elif status == "FAILED":
+        parts.append(f"{failed} {L('of')} {evaluated} "
+                     f"{L('relations checked did not hold; see the review queue.')}")
+        severe = True
+    elif status == "PARTIAL":
+        parts.append(f"{evaluated} {L('of')} {declarable} "
+                     f"{L('relations could be checked; the rest were not evaluable.')}")
+    elif status == "PASSED" and not unenforceable:
+        return None                          # every declarable relation ran and held
+    else:
+        parts.append(f"{passed} {L('of')} {evaluated} {L('relations checked held.')}")
+    return " ".join(parts), severe
+
+
 def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: str = "en",
                              filename: str = "", disclosures: list[dict] | None = None,
                              note_details: list[dict] | None = None,
                              reconciliation: list[dict] | None = None,
                              include: set[str] | None = None,
                              scale: float = 1.0, units_caption: str | None = None,
-                             credit_narrative: dict | None = None) -> bytes:
+                             credit_narrative: dict | None = None,
+                             coverage: dict | None = None) -> bytes:
     """A formatted, statement-shaped workbook: one sheet per statement in the template, with
     its sections / subtotals / totals, localized line labels, and consolidated + standalone
     columns side by side, plus Note details / Ratios / Disclosures sheets. Purely
@@ -252,6 +355,10 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
     import openpyxl
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
+
+    # What these figures were verified against, derived once from the report the review screen is
+    # served. None means every declarable relation ran and held, and the sheet needs no warning.
+    banner = validation_caption(coverage, locale)
 
     # Grouped, not overwritten. Several printed lines legitimately share one concept — three
     # depreciation lines, two tax payments, a section's residual "Others" bucket — and keeping
@@ -303,11 +410,24 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
 
         ws.cell(1, 1, filename).font = Font(size=9, color="8A94A6")
         ws.cell(2, 1, _STMT_TITLE.get(stype, {}).get(locale, stype)).font = Font(bold=True, size=13, color=ink)
+        nxt = 3
         if units_caption:
-            ws.cell(3, 1, units_caption).font = Font(size=9, italic=True, color="6B7280")
+            ws.cell(nxt, 1, units_caption).font = Font(size=9, italic=True, color="6B7280")
+            nxt += 1
+        if banner:
+            # Above the figures, not on a sheet of its own: a reader who opens the balance sheet and
+            # scrolls has to pass it. A workbook whose arithmetic was never checked looked exactly
+            # like one that was, and this is the only line that says otherwise.
+            text, severe = banner
+            cell = ws.cell(nxt, 1, f"⚠ {_EXPORT_TR.get('Validation', {}).get(locale, 'Validation')}"
+                                   f": {text}")
+            cell.font = Font(bold=True, size=9, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="B42318" if severe else "B54708")
+            cell.alignment = Alignment(vertical="center", wrap_text=False)
+            nxt += 1
 
-        # Header band (row 4: basis groups; row 5: column names).
-        hb, hc = 4, 5
+        # Header band (basis groups, then column names).
+        hb, hc = nxt, nxt + 1
         ws.cell(hb, 1, filename and "" or "")
         for idx, b in enumerate(bases):
             c0 = first_val + idx * 2
