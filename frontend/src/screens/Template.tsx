@@ -932,14 +932,29 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
   }, []);
   const dirty = Object.values(dirtyBy).some(Boolean);
 
-  const cfg: NodeConfig | undefined = data
-    ? (data.node_config[tplSel] ?? data.node_config["trade_recv"]
-       ?? Object.values(data.node_config)[0])
-    : undefined;
+  // The selected concept, and ONLY that one. There used to be a fallback chain here — a hardcoded
+  // "trade_recv", then whichever concept happened to be first — which let the editor answer about a
+  // concept nobody had chosen: `trade_recv` is not a key this product's template declares, so a
+  // selection the tree could not resolve (a calculated total, before the walk that serves them was
+  // fixed; a `tplSel` left over from another template) rendered Property, Plant and Equipment's
+  // aliases, sign and criteria under the heading of the line that was clicked, with no row
+  // highlighted to give it away. An analyst editing that is editing the wrong concept.
+  const cfg: NodeConfig | undefined = data ? data.node_config[tplSel] : undefined;
   // Every concept this template maps, in statement order — the only legal values for
   // `confusable_with` and for a netting rule's keys, so both are picked from here.
   const concepts: Concept[] = Object.entries(data?.node_config ?? {})
     .map(([key, c]) => ({ key, label: c.label || key }));
+
+  // Open ON a line: the detail's job is to show a concept's rules, so arriving with nothing
+  // resolved SELECTS the tree's first line rather than rendering another concept's rules behind
+  // its back. `tplSel` starts life as a demo key no template declares (store.ts) and survives a
+  // move between templates, so "resolves to nothing" is the ordinary first state, not an error.
+  // Selecting is the honest form of the deleted fallback: it moves the highlight in the tree, so
+  // the row the reader sees selected is the concept the editor is editing.
+  const first = data?.tree.find((n) => !n.head && data.node_config[n.id])?.id;
+  useEffect(() => {
+    if (!cfg && first) setTpl(first);
+  }, [cfg, first, setTpl]);
 
   function body() {
     if (isError) {
@@ -959,8 +974,9 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
       );
     }
     // Greenfield (no project loaded yet): the template tree is empty. Show guidance rather
-    // than crashing on a missing node config.
-    if (!data.tree.length || !cfg) {
+    // than crashing on a missing node config. A tree that HAS lines but no resolved selection is
+    // not this state — it still renders, so the reader can pick one (see the right pane below).
+    if (!data.tree.length) {
       return (
         <div style={{ maxWidth: 560, margin: "60px auto", textAlign: "center", color: color.muted,
                       padding: "0 24px" }}>
@@ -1011,16 +1027,19 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
               return (
                 <div
                   key={node.id}
-                  // Only leaves map to a concept (headings carry no ontology rules to edit).
+                  // Only lines map to a concept (headings carry no ontology rules to edit) — and
+                  // only lines are clickable. A heading used to select its own id, which no
+                  // `node_config` key can match: the click threw away whatever the analyst had
+                  // selected and put a different concept, or nothing, in the editor.
                   data-testid={head ? undefined : "tpl-node"}
-                  onClick={() => setTpl(node.id)}
+                  onClick={head ? undefined : () => setTpl(node.id)}
                   style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
                     padding: "7px 10px",
                     borderRadius: radius.controlSm,
-                    cursor: "pointer",
+                    cursor: head ? "default" : "pointer",
                     background: sel ? color.indigoTint : "transparent",
                     marginLeft: node.lvl * 16,
                   }}
@@ -1060,65 +1079,84 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
         {/* RIGHT: node editor */}
         <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "26px 30px" }}>
           <div style={{ maxWidth: 680 }}>
-            <div style={{ fontSize: 11, color: color.muted, marginBottom: 3 }}>{cfg.breadcrumb}</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 3 }}>
-              <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>{cfg.label}</h1>
-              {!canEdit && (
-                <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: radius.pill,
-                               background: color.rowAltBg, color: color.muted, border: `1px solid ${color.hairline3}` }}>
-                  {t("tp.viewOnly")}
-                </span>
-              )}
-            </div>
-            <p style={{ margin: "0 0 20px", color: color.sec2, fontSize: 12.5 }}>
-              {canEdit ? t("tp.editorSubhead") : t("tp.viewOnlyHint")}
-            </p>
+            {cfg ? (
+              <>
+                <div style={{ fontSize: 11, color: color.muted, marginBottom: 3 }}>{cfg.breadcrumb}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 3 }}>
+                  <h1 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>{cfg.label}</h1>
+                  {!canEdit && (
+                    <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: radius.pill,
+                                   background: color.rowAltBg, color: color.muted, border: `1px solid ${color.hairline3}` }}>
+                      {t("tp.viewOnly")}
+                    </span>
+                  )}
+                </div>
+                <p style={{ margin: "0 0 20px", color: color.sec2, fontSize: 12.5 }}>
+                  {canEdit ? t("tp.editorSubhead") : t("tp.viewOnlyHint")}
+                </p>
 
-            {/* Editable ontology rules for this concept (aliases + sign + mapping criteria),
-                saved as a new version */}
-            <NodeRules
-              cfg={cfg}
-              canonicalKey={cfg.canonical_key ?? tplSel}
-              ontologyId={data.ontology?.id}
-              concepts={concepts}
-              locale={locale}
-              canEdit={canEdit}
-              onDirty={reportDirty}
-              t={t}
-            />
+                {/* Editable ontology rules for this concept (aliases + sign + mapping criteria),
+                    saved as a new version */}
+                <NodeRules
+                  cfg={cfg}
+                  canonicalKey={cfg.canonical_key ?? tplSel}
+                  ontologyId={data.ontology?.id}
+                  concepts={concepts}
+                  locale={locale}
+                  canEdit={canEdit}
+                  onDirty={reportDirty}
+                  t={t}
+                />
 
-            {/* Note-to-face netting rule (flagship) */}
-            <div
-              style={{
-                background: color.surface,
-                border: `1px solid ${color.indigoBorder}`,
-                borderRadius: radius.card,
-                padding: 18,
-                borderLeft: `3px solid ${color.indigo}`,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{t("tp.nettingRule")}</span>
-                <span
+                {/* Note-to-face netting rule (flagship) */}
+                <div
                   style={{
-                    fontSize: 10,
-                    fontWeight: 600,
-                    padding: "2px 7px",
-                    borderRadius: radius.pill,
-                    background: color.indigoTint2,
-                    color: color.indigo,
+                    background: color.surface,
+                    border: `1px solid ${color.indigoBorder}`,
+                    borderRadius: radius.card,
+                    padding: 18,
+                    borderLeft: `3px solid ${color.indigo}`,
                   }}
                 >
-                  {t("tp.key")}
-                </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 9 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{t("tp.nettingRule")}</span>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 600,
+                        padding: "2px 7px",
+                        borderRadius: radius.pill,
+                        background: color.indigoTint2,
+                        color: color.indigo,
+                      }}
+                    >
+                      {t("tp.key")}
+                    </span>
+                  </div>
+                  <p style={{ margin: "0 0 12px", fontSize: 12, color: color.sec, lineHeight: 1.55 }}>
+                    {cfg.netting.explain}
+                  </p>
+                  <NettingExpr expr={cfg.netting.expr} />
+                </div>
+              </>
+            ) : (
+              /* No concept resolved, so no concept's rules — never a stand-in for the one that
+                 didn't. With the selection seeded above this is the case where the tree offers
+                 nothing to select (a template of headings alone), which is why it asks rather than
+                 explains. The words are the review screen's `r.remapPick`, the app's one localized
+                 sentence for "choose a template line"; a second spelling of it is a second thing to
+                 keep translated in four languages. */
+              <div data-testid="tpl-no-selection"
+                   style={{ margin: "40px auto", textAlign: "center", color: color.muted,
+                            fontSize: 12.5, lineHeight: 1.6 }}>
+                <div style={{ fontSize: 28, marginBottom: 10 }}>◆</div>
+                {t("r.remapPick")}
               </div>
-              <p style={{ margin: "0 0 12px", fontSize: 12, color: color.sec, lineHeight: 1.55 }}>
-                {cfg.netting.explain}
-              </p>
-              <NettingExpr expr={cfg.netting.expr} />
-            </div>
+            )}
 
-            {/* Template-wide containment-netting policies (LLM-gated), admin-editable. */}
+            {/* Template-wide containment-netting policies (LLM-gated), admin-editable. These are
+                the TEMPLATE's policies, not the selected concept's, so they stay put when no
+                concept resolved. */}
             {data.netting_rules && (
               <NettingRules rules={data.netting_rules} concepts={concepts}
                             ontologyId={data.ontology?.id} canEdit={canEdit}

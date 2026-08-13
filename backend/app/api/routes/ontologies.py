@@ -32,9 +32,42 @@ class OntologyCreate(BaseModel):
     target_template_key: str | None = None
 
 
+def _validate_against_target_template(session: Session, ontology) -> dict:
+    """Hold a rulebook to the template it targets, and report WHICH version it was held to.
+
+    Every publishing path goes through here, so validation cannot be skipped on one of them. It
+    used to be skipped on the inline-edit path, which guarded the check with ``if tpl_row is not
+    None``: an ontology whose ``target_template_key`` matched no stored template — a typo, a renamed
+    key, a deleted template — published anyway and became the rulebook in force while mapping onto
+    canonical keys no template declares. A rulebook that cannot be validated is refused, because
+    "unvalidatable" and "valid" are not the same answer.
+
+    The returned record says which template version the check ran against. That is the NEWEST stored
+    at publish time, which is not necessarily the version a run pins, so a reader with only the
+    response would otherwise have to assume it.
+    """
+    from app.db.models import TemplateVersion
+
+    tpl_row = session.execute(
+        select(TemplateVersion)
+        .where(TemplateVersion.template_key == ontology.target_template_key)
+        .order_by(TemplateVersion.version.desc())
+    ).scalars().first()
+    if tpl_row is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Target template {ontology.target_template_key!r} not found",
+        )
+    errors = validate_ontology_against_template(ontology, load_template(tpl_row.definition))
+    if errors:
+        raise HTTPException(status_code=422,
+                            detail={"errors": [e.model_dump() for e in errors]})
+    return {"id": tpl_row.id, "template_key": tpl_row.template_key, "version": tpl_row.version}
+
+
 @router.post("", status_code=201, dependencies=[Depends(require(Permission.CONFIG_ONTOLOGY))])
 def create_ontology(body: OntologyCreate, session: Session = Depends(db)) -> dict:
-    from app.db.models import OntologyVersion, TemplateVersion
+    from app.db.models import OntologyVersion
 
     definition = body.definition
     if body.target_template_key:
@@ -65,22 +98,7 @@ def create_ontology(body: OntologyCreate, session: Session = Depends(db)) -> dic
     except UnknownInheritsError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # Validate against the latest matching template version.
-    tpl_row = session.execute(
-        select(TemplateVersion)
-        .where(TemplateVersion.template_key == ontology.target_template_key)
-        .order_by(TemplateVersion.version.desc())
-    ).scalars().first()
-    if tpl_row is None:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Target template {ontology.target_template_key!r} not found",
-        )
-    template = load_template(tpl_row.definition)
-    errors = validate_ontology_against_template(ontology, template)
-    if errors:
-        raise HTTPException(status_code=422,
-                            detail={"errors": [e.model_dump() for e in errors]})
+    validated_against = _validate_against_target_template(session, ontology)
 
     max_ver = session.execute(
         select(func.max(OntologyVersion.version))
@@ -97,7 +115,8 @@ def create_ontology(body: OntologyCreate, session: Session = Depends(db)) -> dic
     session.commit()
     return {"id": row.id, "ontology_key": ontology.ontology_key,
             "target_template_key": ontology.target_template_key, "version": version,
-            "mappings": len(ontology.mappings)}
+            "mappings": len(ontology.mappings),
+            "validated_against_template": validated_against}
 
 
 @router.get("")
@@ -277,7 +296,7 @@ def _publish_new_version(session: Session, row, definition: dict) -> dict:
     Shared by every inline edit so validation can never be skipped on one path: a run
     references the exact version it used, so edits must add a version rather than mutate one.
     """
-    from app.db.models import OntologyVersion, TemplateVersion
+    from app.db.models import OntologyVersion
 
     try:
         ontology = load_ontology(definition)
@@ -285,16 +304,7 @@ def _publish_new_version(session: Session, row, definition: dict) -> dict:
         raise HTTPException(status_code=422,
                             detail=f"Edit produced an invalid ontology: {exc}") from exc
 
-    tpl_row = session.execute(
-        select(TemplateVersion)
-        .where(TemplateVersion.template_key == ontology.target_template_key)
-        .order_by(TemplateVersion.version.desc())
-    ).scalars().first()
-    if tpl_row is not None:
-        errors = validate_ontology_against_template(ontology, load_template(tpl_row.definition))
-        if errors:
-            raise HTTPException(status_code=422,
-                                detail={"errors": [e.model_dump() for e in errors]})
+    validated_against = _validate_against_target_template(session, ontology)
 
     max_ver = session.execute(
         select(func.max(OntologyVersion.version))
@@ -310,7 +320,8 @@ def _publish_new_version(session: Session, row, definition: dict) -> dict:
     session.add(new_row)
     session.commit()
     return {"id": new_row.id, "ontology_key": new_row.ontology_key,
-            "version": new_row.version}
+            "version": new_row.version,
+            "validated_against_template": validated_against}
 
 @router.patch("/{ontology_id}/mappings",
               dependencies=[Depends(require(Permission.CONFIG_ONTOLOGY))])
@@ -323,7 +334,7 @@ def edit_ontology_mapping(ontology_id: str, body: MappingEdit,
     The edit is re-validated against the target template before it is published, so the
     editor cannot persist an ontology the pipeline would then reject.
     """
-    from app.db.models import OntologyVersion, TemplateVersion
+    from app.db.models import OntologyVersion
 
     row = session.get(OntologyVersion, ontology_id)
     if row is None:
