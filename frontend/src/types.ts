@@ -332,9 +332,28 @@ export interface StatementResponse {
    *  re-scaled or re-currencied. Absent means ordinary monetary presentation. */
   presentation?: "raw" | "monetary";
   rows: StatementRow[];
+  /** Why this statement is serving no rows, or null while it is serving them.
+   *
+   *  An empty grid has more than one cause and they need telling apart: the run's template declares
+   *  no statement of this type at all, or it declares one and nothing was extracted for the
+   *  requested basis. "Nothing here" reads as "the extraction found nothing", which sends an analyst
+   *  back into the document after figures that were never going to be shown. `viewer.callout`
+   *  carries the same sentence, but only one of the Workspace's three viewer branches renders the
+   *  callout — the paper preview, which a real PDF or workbook never takes — so the reason has to be
+   *  readable where the rows would have been. */
+  refused?: StatementRefusal | null;
+  /** Set when the run's template version is no longer the newest stored one for its key. Stated by
+   *  the server, never acted on: a re-extract is the analyst's call. */
+  superseded_template?: SupersededTemplate | null;
   viewer: ViewerMeta;
   format?: string;       // real docs: "pdf" | "xlsx" | … → chooses the live source viewer
   page_count?: number;   // real docs: page count for the PDF viewer
+}
+export interface StatementRefusal {
+  /** Machine-readable, so the client can branch without matching on prose. */
+  reason: string;
+  /** The reader's sentence, already localized by the server. */
+  message: string;
 }
 
 export interface Project {

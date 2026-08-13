@@ -130,13 +130,22 @@ def _num(v):
 def leftovers(rows: list[dict], template_def: dict | None, basis: str) -> list[Leftover]:
     """Extracted lines that reach no face statement, in document order.
 
-    Same population the Additional-items view shows, and for the same reason: these are the only
-    figures whose placement is still open, so they are the only honest candidates for a gap.
+    "Reaches no face" is decided against the keys the template actually PUTS ON A GRID
+    (``_declared_line_keys``), not against the statement PREFIX of the key. The prefix test was true
+    only while the statement builder rendered any prefix-matching key under an "Other extracted
+    items" heading: a row mapped to ``bs_something_the_template_never_declared`` was on the balance
+    sheet, so treating it as placed was right. That heading is gone — an off-template row now renders
+    nowhere and is raised as an ``off_template`` finding instead — so the prefix test would call such
+    a row placed while nothing shows it, and it would be the one row a gap-closing pass could most
+    usefully have offered.
+
+    Otherwise the same population as before, and for the same reason: these are the only figures
+    whose placement is still open, so they are the only honest candidates for a gap.
     """
-    from app.api.routes.documents import _face_prefixes, _is_named_column
+    from app.api.routes.documents import _declared_line_keys, _is_named_column
     from app.services.periods import basis_values, split_current_prior
 
-    prefixes = _face_prefixes(template_def)
+    declared = _declared_line_keys(template_def)
     out: list[Leftover] = []
     for i, r in enumerate(rows):
         vals = basis_values(r, basis)
@@ -146,7 +155,7 @@ def leftovers(rows: list[dict], template_def: dict | None, basis: str) -> list[L
         if all(_is_named_column(v.get("period_label")) for v in vals):
             continue
         key = r.get("canonical_key") or ""
-        if key and key.split("_", 1)[0] in prefixes:
+        if key and key in declared:
             continue
         cur, prior = split_current_prior(vals)
         c, p = _num((cur or {}).get("value")), _num((prior or {}).get("value"))

@@ -560,3 +560,28 @@ def test_the_french_kpi_headings_are_in_french():
     headings = [r["label"] for r in d["rows"] if r["kind"] == "section"]
     assert "Rentabilité" in headings
     assert "الربحية" not in headings          # the Arabic string had been copied into `fr`
+
+
+def test_an_off_template_row_is_a_leftover_because_nothing_renders_it():
+    """"Reaches no face" is decided against the keys the template puts ON A GRID, not against the
+    statement PREFIX of the key.
+
+    The prefix test was true only while the statement builder rendered any prefix-matching key under
+    an "Other extracted items" heading: a row mapped to a `bs_`-prefixed concept the template never
+    declared WAS on the balance sheet, so calling it placed was right. That heading is gone — such a
+    row now renders nowhere and is raised as an `off_template` finding — so the prefix test would
+    call it placed while nothing shows it, and it is the one row gap closing could most usefully
+    have offered.
+    """
+    from app.services.gap_closing import leftovers
+
+    rows = [
+        _row("bs_ca__inventories", "Inventories", 100, 90),
+        # Right prefix for this statement, and a concept the template declares nowhere.
+        _row("bs_ca__pledged_deposits", "Pledged bank deposits", 40, 20),
+    ]
+    offered = {lo.canonical_key for lo in leftovers(rows, TEMPLATE, "consolidated")}
+
+    assert "bs_ca__pledged_deposits" in offered
+    # A row on a key the template DOES declare is placed, and stays out of the candidate set.
+    assert "bs_ca__inventories" not in offered

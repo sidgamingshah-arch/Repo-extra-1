@@ -1482,8 +1482,30 @@ export default function WorkspaceScreen() {
             </div>
           )}
 
+          {/* WHY THE GRID IS EMPTY, where the rows would have been. An empty spread has more than
+              one cause — the run's template declares no statement of this type, it declares one and
+              nothing was extracted for this basis, or a matrix the template does not carry — and
+              "nothing here" reads as "the extraction found nothing", which sends an analyst back
+              into the document after figures that were never going to be shown. The server states
+              the reason and its sentence (`refused`); the same sentence also rides on
+              `viewer.callout`, which only the paper-preview branch renders and a real PDF or
+              workbook never takes. */}
+          {d.refused && (
+            <div
+              data-testid="ws-refused"
+              data-reason={d.refused.reason}
+              style={{
+                flex: 1, minHeight: 0, display: "flex", alignItems: "center",
+                justifyContent: "center", padding: "40px 32px", textAlign: "center",
+                fontSize: 12.5, lineHeight: 1.6, color: color.muted,
+              }}
+            >
+              {d.refused.message}
+            </div>
+          )}
+
           {/* scroll body — `gridRows` is `d.rows` unless the low-confidence chip is pressed. */}
-          {isMatrix ? (
+          {!d.refused && (isMatrix ? (
             <MatrixGrid columns={d.columns ?? []} rows={gridRows} sel={sel} present={present}
                         linkable={usingReal} onSelect={handleSelect} />
           ) : (
@@ -1496,7 +1518,7 @@ export default function WorkspaceScreen() {
                 />
               ))}
             </div>
-          )}
+          ))}
 
           {/* ---------------- CELL INSPECTOR ---------------- */}
           <div
