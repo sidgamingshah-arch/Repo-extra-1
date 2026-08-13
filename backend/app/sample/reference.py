@@ -36,7 +36,7 @@ class ReferenceSeedError(RuntimeError):
 
 
 def _load_template(path: Path, raw: dict):
-    from app.schemas.loader import load_template, unknown_keys
+    from app.schemas.loader import load_template, unknown_keys, validate_template
 
     try:
         template = load_template(raw)
@@ -47,6 +47,16 @@ def _load_template(path: Path, raw: dict):
         raise ReferenceSeedError(
             f"{path.name} carries keys the template schema does not declare, which would be "
             f"dropped in silence: {stray}")
+    # The same reference check the upload route runs (``routes.templates._publish``), which this
+    # seeder claims to stand in for and did not run: a rollup child naming no node, an identity term
+    # naming nothing, a KPI term naming a key the template never declares, a cycle among the KPI
+    # intermediates. None of those stop a definition from LOADING — they stop it from ever computing
+    # anything, silently, which is precisely what a shipped file must not be allowed to do.
+    errors = validate_template(template)
+    if errors:
+        raise ReferenceSeedError(
+            f"{path.name} would be refused by the template upload gate: "
+            + "; ".join(f"{e.location}: {e.message}" for e in errors[:10]))
     return template
 
 

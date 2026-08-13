@@ -228,6 +228,95 @@ _RATIOS = [
 ]
 
 
+# --- 1b. The same catalog, declared by a template -------------------------------------------
+# ``_RATIOS`` above is the BUILT-IN catalog: it ships with the product and a user cannot revise it
+# without a release. A template may declare its own (``schemas.template.KpiBlock``), and when it
+# does that block IS the catalog for that template's runs — which is the whole point of putting the
+# KPIs in the template. Both catalogs are evaluated by the code below, in the same terms, so a
+# declared ratio cannot compute differently from a built-in one.
+
+
+def template_kpis(template_def: dict | None):
+    """A template's declared KPI catalog as a validated ``KpiBlock``, or None when it declares none.
+
+    None is the signal to fall back to ``_RATIOS`` — every template authored before the block
+    existed, and every stored run against one, therefore behaves exactly as it does today.
+
+    The pydantic error is NOT caught. The block's shape is refused at the upload gate
+    (``routes.templates._publish``), so a stored block that no longer validates is a defect in what
+    was stored, and quietly substituting the built-in catalog would serve an analyst a set of KPIs
+    they did not author while telling them the opposite.
+    """
+    from app.schemas.template import KpiBlock
+
+    raw = (template_def or {}).get("kpis")
+    if not raw:
+        return None
+    block = KpiBlock.model_validate(raw)
+    # Intermediates with no ratio built on them compute nothing anybody can see, so a block that
+    # declares no ratios is not a catalog.
+    return block if block.ratios else None
+
+
+def _terms_of(terms) -> list[tuple]:
+    """``KpiTerm``s in the ``(keyspec, sign[, "opt"])`` shape the built-in catalog is written in.
+
+    One term shape for both catalogs, so ``_side`` and ``_side_inputs`` are the only things that
+    know how a side is added up — a second evaluator for declared ratios is a second answer to
+    "what is this KPI".
+    """
+    out: list[tuple] = []
+    for t in terms:
+        keyspec = (t.key, *t.fallback_keys) if t.fallback_keys else t.key
+        out.append((keyspec, t.sign, "opt") if t.optional else (keyspec, t.sign))
+    return out
+
+
+def _catalog_of(block) -> list[dict]:
+    """A ``KpiBlock``'s ratios as catalog entries, in the shape ``_RATIOS`` uses.
+
+    No ``formula`` key: a declared ratio's formula is derived from its own terms at compute time
+    (:func:`_formula_of`), because a prose formula authored beside the arithmetic can contradict it.
+    """
+    return [{"key": r.key, "label": r.label, "label_i18n": dict(r.label_i18n),
+             "unit": r.unit, "category": r.category,
+             "num": _terms_of(r.numerator), "den": _terms_of(r.denominator)}
+            for r in block.ratios]
+
+
+def _intermediate_order(defs: dict[str, list[tuple]]) -> list[str]:
+    """Intermediate keys in dependency order — net debt after the total debt it is written from.
+
+    A cycle cannot be evaluated at all; the upload gate refuses one
+    (``schemas.loader._validate_kpis``) and this is the read-path backstop for a definition stored
+    before that gate: the keys in the cycle are still emitted, and each resolves its cyclic input to
+    None, so every ratio built on them reports unavailable instead of recursing or inventing a
+    figure.
+    """
+    order: list[str] = []
+    state: dict[str, int] = {}
+    for key in defs:
+        stack = [(key, False)]
+        while stack:
+            node, expanded = stack.pop()
+            if state.get(node) == 2:
+                continue
+            if expanded:
+                state[node] = 2
+                order.append(node)
+                continue
+            if state.get(node) == 1:
+                continue                              # a cycle; the input resolves to None
+            state[node] = 1
+            stack.append((node, True))
+            for term in defs[node]:
+                spec = term[0]
+                for cand in (spec if isinstance(spec, tuple) else (spec,)):
+                    if cand in defs and state.get(cand) != 2:
+                        stack.append((cand, False))
+    return order
+
+
 def _num(v) -> float | None:
     if v is None:
         return None
@@ -258,31 +347,42 @@ def _value(by_key: dict, key: str, basis: str, period: str) -> float | None:
     return concept_value(group if isinstance(group, list) else [group], basis, period)
 
 
-def _term_value(by_key, keyspec, basis, period) -> float | None:
+def _term_value(by_key, keyspec, basis, period, derived=None) -> float | None:
     """Resolve a term's value. ``keyspec`` is a single canonical key, or a tuple/list of
     candidate keys tried in order (first one present wins) — used for a graceful fallback,
-    e.g. cost of goods sold → total operating cost when a filing doesn't break out COGS."""
-    if isinstance(keyspec, (tuple, list)):
-        for k in keyspec:
-            v = _value(by_key, k, basis, period)
-            if v is not None:
-                return v
-        return None
-    return _value(by_key, keyspec, basis, period)
+    e.g. cost of goods sold → total operating cost when a filing doesn't break out COGS.
+
+    ``derived`` holds the figures for a template's KPI intermediates (EBITDA, net debt, …), which
+    no filing prints and no row carries. They are consulted first and then fall through to the
+    extracted rows, so a candidate list may mix the two; an intermediate that came out unavailable
+    is absent exactly like an unextracted line, which is what keeps a ratio built on it unavailable
+    rather than partial.
+    """
+    keys = keyspec if isinstance(keyspec, (tuple, list)) else (keyspec,)
+    for k in keys:
+        v = derived.get(k) if derived and k in derived else _value(by_key, k, basis, period)
+        if v is not None:
+            return v
+    return None
 
 
-def _side(by_key, terms, basis, period) -> float | None:
+def _side(by_key, terms, basis, period, derived=None) -> float | None:
     """Sum one side of a ratio. Each term is ``(key, sign)`` — required, missing => whole side
     None — or ``(key, sign, "opt")`` — optional component, missing => treated as 0 (so an
     aggregate like 'total debt' still computes when a company reports only some components).
     A term's key may itself be a tuple of fallback candidates (see ``_term_value``). The side
-    is None if no term contributed a value at all (nothing to measure)."""
+    is None if no term contributed a value at all (nothing to measure).
+
+    This is also how a KPI INTERMEDIATE is computed — an intermediate is one side and nothing more —
+    so a declared "EBITDA = EBIT + depreciation (optional)" is unavailable when EBIT was never
+    extracted, instead of being served as the add-back alone.
+    """
     total = 0.0
     present = False
     for term in terms:
         key, sign = term[0], term[1]
         mode = term[2] if len(term) > 2 else "req"
-        val = _term_value(by_key, key, basis, period)
+        val = _term_value(by_key, key, basis, period, derived)
         if val is None:
             if mode == "opt":
                 continue                     # optional component absent → contributes 0
@@ -292,10 +392,17 @@ def _side(by_key, terms, basis, period) -> float | None:
     return total if present else None
 
 
-def _term_label(by_key, key) -> str:
+def _term_label(by_key, key, labels=None) -> str:
     """A readable name for a ratio input: the caption the document printed for it when the line
-    was extracted, else the canonical key made readable."""
+    was extracted, else the canonical key made readable.
+
+    ``labels`` carries the template's own label for a KPI intermediate, which is the only name it
+    has — nothing printed it, so there is no source caption to prefer over the declaration.
+    """
     keys = list(key) if isinstance(key, (tuple, list)) else [key]
+    for k in keys:
+        if labels and k in labels:
+            return labels[k]
     for k in keys:
         group = by_key.get(k)
         if group:
@@ -321,7 +428,7 @@ def _resolved_key(by_key, keyspec, basis, period) -> str:
     return str(keys[0]) if keys else ""
 
 
-def _side_inputs(by_key, terms, basis, period) -> list[dict]:
+def _side_inputs(by_key, terms, basis, period, derived=None) -> list[dict]:
     """Every input that went into one side of a ratio, with the value actually used.
 
     A ratio the analyst cannot take apart is a number to be taken on trust. Listing the inputs —
@@ -332,7 +439,7 @@ def _side_inputs(by_key, terms, basis, period) -> list[dict]:
     for term in terms:
         key, sign = term[0], term[1]
         mode = term[2] if len(term) > 2 else "req"
-        val = _term_value(by_key, key, basis, period)
+        val = _term_value(by_key, key, basis, period, derived)
         out.append({
             "canonical_key": _resolved_key(by_key, key, basis, period),
             "label": _term_label(by_key, key), "sign": sign, "value": val,
@@ -360,35 +467,92 @@ def _display(value: float | None, unit: str) -> str:
 _CATEGORY_ORDER = ["Liquidity", "Leverage", "Coverage", "Efficiency", "Profitability"]
 
 
+def _formula_of(by_key, entry: dict, inter_labels: dict[str, str] | None = None) -> str:
+    """A declared KPI's formula, rendered FROM its terms.
+
+    There is no authored prose to print: ``KpiRatio`` deliberately has no ``formula`` field, because
+    a sentence written beside the arithmetic can be edited out of step with it and nothing can detect
+    that the stated derivation has become a lie. So the sentence is generated, every time, from the
+    same terms the value was computed from.
+    """
+    def side(terms) -> str:
+        parts: list[str] = []
+        for term in terms:
+            key, sign = term[0], term[1]
+            name = (inter_labels or {}).get(key if isinstance(key, str) else "") \
+                or _term_label(by_key, key, inter_labels)
+            parts.append(f"{'− ' if sign < 0 else ('+ ' if parts else '')}{name}")
+        return " ".join(parts).strip()
+
+    num, den = side(entry["num"]), side(entry["den"])
+    return f"({num}) ÷ ({den})" if den else num
+
+
 def compute_ratios(rows: list[dict], *, basis: str = "consolidated", period: str = "current",
-                   locale: str = "en") -> list[dict]:
-    """Compute the ratio catalog from the extracted values. Ratios missing an input are
-    returned as unavailable (never fabricated), so the UI/export can show the full set,
-    grouped by category (liquidity / leverage / coverage / efficiency / profitability)."""
+                   locale: str = "en", template_def: dict | None = None) -> list[dict]:
+    """Compute the KPI catalog from the extracted values.
+
+    WHICH catalog is the template's choice. A template that declares a ``kpis`` block owns the KPI
+    set for its own runs — that is the whole point of declaring them there, since a user revising a
+    template can then change which KPIs exist and how each is derived without a release. A template
+    that declares none falls back to the built-in ``_RATIOS``, so every template authored before the
+    block, and every stored run, behaves exactly as it did.
+
+    Each entry says which catalog it came from (``source``): "template" and "built-in" are different
+    facts about whether a user can revise it, and a screen that cannot tell them apart would offer
+    an edit that goes nowhere.
+
+    A KPI missing a required input, or dividing by zero, is returned UNAVAILABLE — never fabricated
+    and never quietly reported as 0. Which KPIs a filing cannot support is itself a finding.
+    """
     by_key = _group_by_key(rows)
+    block = template_kpis(template_def)
+    catalog = _catalog_of(block) if block is not None else _RATIOS
+    source = "template" if block is not None else "built-in"
+
+    # A template's intermediates are figures no filing prints (EBITDA, net debt, capital employed),
+    # so they are evaluated FIRST and in dependency order — net debt after the total debt it is
+    # written from — and then stand in for a canonical key wherever a ratio's terms name them.
+    derived_vals: dict[str, float | None] = {}
+    inter_labels: dict[str, str] = {}
+    if block is not None:
+        defs = {i.key: _terms_of(i.terms) for i in block.intermediates}
+        for key in _intermediate_order(defs):
+            derived_vals[key] = _side(by_key, defs[key], basis, period, derived_vals)
+        for i in block.intermediates:
+            inter_labels[i.key] = ((i.label_i18n.get(locale) if locale != "en" else None)
+                                   or i.label)
+
     computed: dict[str, float | None] = {}
     out: list[dict] = []
-    for d in _RATIOS:
+    for d in catalog:
         label = (d.get("label_i18n", {}).get(locale) if locale != "en" else None) or d["label"]
-        num = _side(by_key, d["num"], basis, period)
-        den = _side(by_key, d["den"], basis, period)
+        num = _side(by_key, d["num"], basis, period, derived_vals)
+        den = _side(by_key, d["den"], basis, period, derived_vals)
         unit = d["unit"]
         available = num is not None and den not in (None, 0)
         value = round((num / den) * _UNIT_SCALE[unit], 2) if available else None
         computed[d["key"]] = value
         out.append({
             "key": d["key"], "label": label, "category": d.get("category", "Profitability"),
-            "unit": unit, "formula": d["formula"], "value": value,
+            "unit": unit,
+            # A declared KPI has no authored prose formula — it is rendered from the terms, so an
+            # author who edits the arithmetic cannot leave a sentence behind that contradicts it.
+            "formula": d.get("formula") or _formula_of(by_key, d, inter_labels),
+            "value": value, "source": source,
             "display": _display(value, unit), "available": available,
             # The arithmetic, openable: which extracted figures were used, and with what sign.
-            "inputs": {"numerator": _side_inputs(by_key, d["num"], basis, period),
-                       "denominator": _side_inputs(by_key, d["den"], basis, period)},
+            "inputs": {"numerator": _side_inputs(by_key, d["num"], basis, period, derived_vals),
+                       "denominator": _side_inputs(by_key, d["den"], basis, period, derived_vals)},
         })
 
     # Cash conversion cycle is a combination of the day-based ratios (DSO + DIO − DPO), so it is
-    # derived after the loop from their computed values rather than from raw keys.
+    # derived after the loop from their computed values rather than from raw keys. It belongs to the
+    # BUILT-IN catalog only: a template declaring its own KPIs decides for itself whether it wants
+    # one, and appending it regardless would put a KPI in the set that the template never declared
+    # and its author cannot remove.
     dso, dio, dpo = computed.get("dso"), computed.get("dio"), computed.get("dpo")
-    if dso is not None and dio is not None and dpo is not None:
+    if block is None and dso is not None and dio is not None and dpo is not None:
         ccc = round(dso + dio - dpo, 2)
         out.append({
             "key": "cash_conversion_cycle",

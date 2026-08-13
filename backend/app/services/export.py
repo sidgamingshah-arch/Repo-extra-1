@@ -106,7 +106,8 @@ def _netting_block(rows: list[dict], netting_rules: list | None) -> list[dict]:
 def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] | None = None,
                     note_details: list[dict] | None = None, reconciliation: list[dict] | None = None,
                     locale: str = "en", credit_narrative: dict | None = None,
-                    netting_rules: list | None = None, coverage: dict | None = None) -> bytes:
+                    netting_rules: list | None = None, coverage: dict | None = None,
+                    template_def: dict | None = None) -> bytes:
     """JSON export of a REAL extraction: every line item with its mapping, confidence, any
     edited formula, and the exact source location of each value (sheet/cell or page/bbox),
     plus a derived-analysis block (ratios / disclosures / credit) and the note detail +
@@ -142,7 +143,7 @@ def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] 
         "analysis": {
             "ratios": [{"key": x["key"], "label": x["label"], "category": x.get("category"),
                         "value": x["value"], "display": x["display"], "available": x["available"]}
-                       for x in compute_ratios(rows, locale=locale)],
+                       for x in compute_ratios(rows, locale=locale, template_def=template_def)],
             "disclosures": disc,
             "credit": credit,
             # Face-line containment netting (target line net of contained lines) + the formula.
@@ -460,8 +461,11 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
         ws = wb.create_sheet("Extraction")
         ws.cell(1, 1, "No extracted line items for this document.")
 
+    # The template travels through so a template-declared KPI catalog reaches the Ratios sheet;
+    # without it the sheet would show the built-in catalog for a template that declares its own.
     _add_analysis_sheets(wb, rows, disclosures or [], note_details or [], locale,
-                         reconciliation or [], include, credit_narrative)
+                         reconciliation or [], include, credit_narrative,
+                         template_def=template_def)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -481,7 +485,8 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
                          note_details: list[dict], locale: str,
                          reconciliation: list[dict] | None = None,
                          include: set[str] | None = None,
-                         credit_narrative: dict | None = None) -> None:
+                         credit_narrative: dict | None = None,
+                         template_def: dict | None = None) -> None:
     """Note details / Ratios / Disclosures / Credit Analysis sheets, each gated by the Include
     set (all on when include is None). ``credit_narrative`` is the optional stored LLM narrative
     (``run.result['credit_narrative']``) — folded into the Credit Analysis sheet when present."""
@@ -576,7 +581,7 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
     cat_fill = PatternFill("solid", fgColor="EEF1F6")
     ri = 2
     last_cat = None
-    for r in compute_ratios(rows, locale=locale):
+    for r in compute_ratios(rows, locale=locale, template_def=template_def):
         cat = r.get("category") or ""
         if cat != last_cat:
             hc = ws.cell(ri, 1, cat); hc.font = Font(bold=True, color="1f2937")

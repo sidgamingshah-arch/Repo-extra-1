@@ -2850,7 +2850,7 @@ def export_document(
                                reconciliation=run.result.get("reconciliation", []), locale=locale,
                                credit_narrative=narrative,
                                netting_rules=run.result.get("netting") or [],
-                               coverage=coverage)
+                               coverage=coverage, template_def=export_template)
         return Response(content=data, media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
 
@@ -3465,8 +3465,12 @@ def _build_kpi_statement(rows: list[dict], filename: str, *, basis: str, locale:
     """
     from app.services.derived import compute_ratios
 
-    cur = compute_ratios(rows, basis=basis, period="current", locale=locale)
-    prior = {r["key"]: r for r in compute_ratios(rows, basis=basis, period="prior", locale=locale)}
+    # The template's own KPI block is the catalog when it declares one — passing it is what makes a
+    # declared KPI reach this view at all, and without it the block would be an inert declaration.
+    cur = compute_ratios(rows, basis=basis, period="current", locale=locale,
+                         template_def=template_def)
+    prior = {r["key"]: r for r in compute_ratios(rows, basis=basis, period="prior", locale=locale,
+                                                 template_def=template_def)}
     provs = _key_provenance(rows, basis)
 
     out: list[dict] = []

@@ -168,6 +168,71 @@ def validate_template(template: TemplateDefinition) -> list[ValidationError]:
                             location=f"rollup:{node.node_id}",
                             message=f"references unknown node_id {child!r}",
                         ))
+    errors += _validate_kpis(template)
+    return errors
+
+
+def _validate_kpis(template: TemplateDefinition) -> list[ValidationError]:
+    """The KPI block's references and its dependency graph, refused AT THE DOOR.
+
+    Two authoring mistakes are caught here because neither is detectable later without inventing a
+    number or reporting "unavailable" forever:
+
+    * a term naming a key the template does not declare — the term can never carry a figure, so the
+      KPI it belongs to reads as "inputs not extracted" on every filing, which is indistinguishable
+      from thin extraction and is really a typo;
+    * a cycle among the intermediates (net debt from capital employed from net debt) — nothing can
+      be evaluated first, so every ratio built on either is permanently unavailable.
+
+    Both would otherwise be silent: a KPI that never computes looks exactly like a document that
+    never reported its inputs. Failing on upload is the only place there is an author to tell.
+    """
+    errors: list[ValidationError] = []
+    kpis = template.kpis
+    known = template.all_canonical_keys()
+    intermediates = {i.key: i for i in kpis.intermediates}
+
+    def check_terms(location: str, terms) -> None:
+        for term in terms:
+            for key in [term.key, *term.fallback_keys]:
+                if key not in known and key not in intermediates:
+                    errors.append(ValidationError(
+                        location=location,
+                        message=f"references {key!r}, which is neither a canonical_key in this "
+                                f"template nor one of its kpi intermediates",
+                    ))
+
+    for inter in kpis.intermediates:
+        check_terms(f"kpi_intermediate:{inter.key}", inter.terms)
+    for ratio in kpis.ratios:
+        check_terms(f"kpi:{ratio.key}", ratio.numerator)
+        check_terms(f"kpi:{ratio.key}", ratio.denominator)
+
+    # Depth-first cycle detection over intermediate → intermediate references only; a term naming a
+    # canonical key is a leaf (a printed figure depends on nothing).
+    state: dict[str, int] = {}                       # 1 = on the current path, 2 = settled
+    cyclic: set[str] = set()
+
+    def visit(key: str) -> None:
+        if state.get(key) == 2:
+            return
+        if state.get(key) == 1:
+            cyclic.add(key)
+            return
+        state[key] = 1
+        for term in intermediates[key].terms:
+            for cand in [term.key, *term.fallback_keys]:
+                if cand in intermediates:
+                    visit(cand)
+        state[key] = 2
+
+    for key in intermediates:
+        visit(key)
+    for key in sorted(cyclic):
+        errors.append(ValidationError(
+            location=f"kpi_intermediate:{key}",
+            message="is part of a cycle of intermediates, so it can never be evaluated",
+        ))
     return errors
 
 
