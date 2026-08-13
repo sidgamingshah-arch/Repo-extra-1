@@ -1092,13 +1092,13 @@
           ]
         },
         {
-          "node_id": "pl_s2_expenses",
-          "canonical_key": "pl_s2_expenses",
-          "label": "Expenses",
+          "node_id": "pl_s2a_cost_of_sales",
+          "canonical_key": "pl_s2a_cost_of_sales",
+          "label": "Cost of sales",
           "role": "header",
           "label_i18n": {
-            "en": "Expenses",
-            "zh": "费用"
+            "en": "Cost of sales",
+            "zh": "销售成本"
           },
           "children": [
             {
@@ -1109,6 +1109,72 @@
               "label_i18n": {
                 "en": "Cost of Goods Sold",
                 "zh": "销售成本"
+              }
+            },
+            {
+              "node_id": "pl_expenses__purchases_of_stock_in_trade",
+              "canonical_key": "pl_expenses__purchases_of_stock_in_trade",
+              "label": "Purchases of Stock-in-trade",
+              "role": "line",
+              "label_i18n": {
+                "en": "Purchases of Stock-in-trade",
+                "zh": "存货采购"
+              }
+            },
+            {
+              "node_id": "pl_expenses__total_cost_of_sales",
+              "canonical_key": "pl_expenses__total_cost_of_sales",
+              "label": "Total cost of sales",
+              "role": "subtotal",
+              "label_i18n": {
+                "en": "Total cost of sales",
+                "zh": "销售成本总额"
+              },
+              "rollup": {
+                "op": "sum",
+                "children": [
+                  "pl_expenses__cost_of_goods_sold",
+                  "pl_expenses__purchases_of_stock_in_trade"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "node_id": "pl_gross_profit",
+          "canonical_key": "pl_gross_profit",
+          "label": "Gross profit",
+          "role": "total",
+          "label_i18n": {
+            "en": "Gross profit",
+            "zh": "毛利"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_income__revenue_from_operations",
+              "pl_expenses__total_cost_of_sales"
+            ]
+          }
+        },
+        {
+          "node_id": "pl_s2_expenses",
+          "canonical_key": "pl_s2_expenses",
+          "label": "Operating expenses",
+          "role": "header",
+          "label_i18n": {
+            "en": "Operating expenses",
+            "zh": "营业费用"
+          },
+          "children": [
+            {
+              "node_id": "pl_expenses__taxes_and_surcharges",
+              "canonical_key": "pl_expenses__taxes_and_surcharges",
+              "label": "Taxes and surcharges",
+              "role": "line",
+              "label_i18n": {
+                "en": "Taxes and surcharges",
+                "zh": "税金及附加"
               }
             },
             {
@@ -1152,13 +1218,13 @@
               }
             },
             {
-              "node_id": "pl_expenses__purchases_of_stock_in_trade",
-              "canonical_key": "pl_expenses__purchases_of_stock_in_trade",
-              "label": "Purchases of Stock-in-trade",
+              "node_id": "pl_expenses__depreciation_and_amortisation_expense",
+              "canonical_key": "pl_expenses__depreciation_and_amortisation_expense",
+              "label": "Depreciation and Amortisation Expense",
               "role": "line",
               "label_i18n": {
-                "en": "Purchases of Stock-in-trade",
-                "zh": "存货采购"
+                "en": "Depreciation and Amortisation Expense",
+                "zh": "折旧及摊销费用"
               }
             },
             {
@@ -1182,16 +1248,6 @@
               }
             },
             {
-              "node_id": "pl_expenses__depreciation_and_amortisation_expense",
-              "canonical_key": "pl_expenses__depreciation_and_amortisation_expense",
-              "label": "Depreciation and Amortisation Expense",
-              "role": "line",
-              "label_i18n": {
-                "en": "Depreciation and Amortisation Expense",
-                "zh": "折旧及摊销费用"
-              }
-            },
-            {
               "node_id": "pl_expenses__others",
               "canonical_key": "pl_expenses__others",
               "label": "Other expense items",
@@ -1202,26 +1258,25 @@
               }
             },
             {
-              "node_id": "pl_expenses__total_operating_cost",
-              "canonical_key": "pl_expenses__total_operating_cost",
-              "label": "Total operating cost",
+              "node_id": "pl_expenses__total_operating_expenses",
+              "canonical_key": "pl_expenses__total_operating_expenses",
+              "label": "Total operating expenses",
               "role": "subtotal",
               "label_i18n": {
-                "en": "Total operating cost",
-                "zh": "营业成本总额"
+                "en": "Total operating expenses",
+                "zh": "营业费用总额"
               },
               "rollup": {
                 "op": "sum",
                 "children": [
-                  "pl_expenses__cost_of_goods_sold",
+                  "pl_expenses__taxes_and_surcharges",
                   "pl_expenses__selling_and_marketing_expenses",
                   "pl_expenses__general_and_administrative_expenses",
                   "pl_expenses__research_and_development_expenses",
                   "pl_expenses__employee_benefits_expense",
-                  "pl_expenses__purchases_of_stock_in_trade",
+                  "pl_expenses__depreciation_and_amortisation_expense",
                   "pl_expenses__other_operating_costs",
                   "pl_expenses__other_expenses",
-                  "pl_expenses__depreciation_and_amortisation_expense",
                   "pl_expenses__others"
                 ]
               }
@@ -1229,12 +1284,46 @@
           ]
         },
         {
+          "node_id": "pl_expenses__total_operating_cost",
+          "canonical_key": "pl_expenses__total_operating_cost",
+          "label": "Total operating cost",
+          "role": "subtotal",
+          "label_i18n": {
+            "en": "Total operating cost",
+            "zh": "营业成本总额"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_expenses__total_cost_of_sales",
+              "pl_expenses__total_operating_expenses"
+            ]
+          }
+        },
+        {
+          "node_id": "pl_operating_profit_ebit",
+          "canonical_key": "pl_operating_profit_ebit",
+          "label": "Operating Profit / EBIT",
+          "role": "total",
+          "label_i18n": {
+            "en": "Operating Profit / EBIT",
+            "zh": "营业利润/息税前利润"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_income__total_income",
+              "pl_expenses__total_operating_cost"
+            ]
+          }
+        },
+        {
           "node_id": "pl_s3_non_operating_expenses",
           "canonical_key": "pl_s3_non_operating_expenses",
-          "label": "Non-operating expenses",
+          "label": "Non-operating income and expenses",
           "role": "header",
           "label_i18n": {
-            "en": "Non-operating expenses",
+            "en": "Non-operating income and expenses",
             "zh": "营业外收支"
           },
           "children": [
@@ -1279,12 +1368,12 @@
               }
             },
             {
-              "node_id": "pl_non_operating_expenses__total_non_operating_expense",
-              "canonical_key": "pl_non_operating_expenses__total_non_operating_expense",
-              "label": "Total non-operating expense",
+              "node_id": "pl_non_operating_expenses__total_non_operating",
+              "canonical_key": "pl_non_operating_expenses__total_non_operating",
+              "label": "Total non-operating income/(expense)",
               "role": "subtotal",
               "label_i18n": {
-                "en": "Total non-operating expense",
+                "en": "Total non-operating income/(expense)",
                 "zh": "营业外收支总额"
               },
               "rollup": {
@@ -1298,6 +1387,23 @@
               }
             }
           ]
+        },
+        {
+          "node_id": "pl_profit_before_exceptional_items_and_tax",
+          "canonical_key": "pl_profit_before_exceptional_items_and_tax",
+          "label": "Profit before exceptional items and tax",
+          "role": "total",
+          "label_i18n": {
+            "en": "Profit before exceptional items and tax",
+            "zh": "非经常性项目及税前利润"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_operating_profit_ebit",
+              "pl_non_operating_expenses__total_non_operating"
+            ]
+          }
         },
         {
           "node_id": "pl_s4_exceptional_items",
@@ -1360,6 +1466,16 @@
               }
             },
             {
+              "node_id": "pl_exceptional_items__gains_on_asset_disposal",
+              "canonical_key": "pl_exceptional_items__gains_on_asset_disposal",
+              "label": "Gains on asset disposal",
+              "role": "line",
+              "label_i18n": {
+                "en": "Gains on asset disposal",
+                "zh": "资产处置收益"
+              }
+            },
+            {
               "node_id": "pl_exceptional_items__credit_impairment_losses",
               "canonical_key": "pl_exceptional_items__credit_impairment_losses",
               "label": "Credit impairment losses",
@@ -1377,16 +1493,6 @@
               "label_i18n": {
                 "en": "Asset impairment losses",
                 "zh": "资产减值损失"
-              }
-            },
-            {
-              "node_id": "pl_exceptional_items__gains_on_asset_disposal",
-              "canonical_key": "pl_exceptional_items__gains_on_asset_disposal",
-              "label": "Gains on asset disposal",
-              "role": "line",
-              "label_i18n": {
-                "en": "Gains on asset disposal",
-                "zh": "资产处置收益"
               }
             },
             {
@@ -1416,14 +1522,31 @@
                   "pl_exceptional_items__share_of_profits_and_losses_of_joint_ventures",
                   "pl_exceptional_items__gain_on_derecognition_of_financial_assets_at_amortised_cost",
                   "pl_exceptional_items__fair_value_change_gains",
+                  "pl_exceptional_items__gains_on_asset_disposal",
                   "pl_exceptional_items__credit_impairment_losses",
                   "pl_exceptional_items__asset_impairment_losses",
-                  "pl_exceptional_items__gains_on_asset_disposal",
                   "pl_exceptional_items__others"
                 ]
               }
             }
           ]
+        },
+        {
+          "node_id": "pl_profit_before_tax",
+          "canonical_key": "pl_profit_before_tax",
+          "label": "Profit before tax",
+          "role": "total",
+          "label_i18n": {
+            "en": "Profit before tax",
+            "zh": "税前利润"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_profit_before_exceptional_items_and_tax",
+              "pl_exceptional_items__total_exceptional_items"
+            ]
+          }
         },
         {
           "node_id": "pl_s5_tax_expense",
@@ -1486,6 +1609,23 @@
           ]
         },
         {
+          "node_id": "pl_profit_for_the_year",
+          "canonical_key": "pl_profit_for_the_year",
+          "label": "Profit for the year",
+          "role": "total",
+          "label_i18n": {
+            "en": "Profit for the year",
+            "zh": "年度利润"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_profit_before_tax",
+              "pl_tax_expense__total_tax_expense"
+            ]
+          }
+        },
+        {
           "node_id": "pl_s6_profit_attributable_to",
           "canonical_key": "pl_s6_profit_attributable_to",
           "label": "Profit/(loss) attributable to",
@@ -1518,6 +1658,72 @@
           ]
         },
         {
+          "node_id": "pl_s8_other_comprehensive_income",
+          "canonical_key": "pl_s8_other_comprehensive_income",
+          "label": "Other comprehensive income",
+          "role": "header",
+          "label_i18n": {
+            "en": "Other comprehensive income",
+            "zh": "其他综合收益"
+          },
+          "children": [
+            {
+              "node_id": "pl_oci__items_not_reclassified",
+              "canonical_key": "pl_oci__items_not_reclassified",
+              "label": "Items that will not be reclassified to profit or loss",
+              "role": "line",
+              "label_i18n": {
+                "en": "Items that will not be reclassified to profit or loss",
+                "zh": "不会重分类进损益的项目"
+              }
+            },
+            {
+              "node_id": "pl_oci__items_may_be_reclassified",
+              "canonical_key": "pl_oci__items_may_be_reclassified",
+              "label": "Items that may be reclassified subsequently to profit or loss",
+              "role": "line",
+              "label_i18n": {
+                "en": "Items that may be reclassified subsequently to profit or loss",
+                "zh": "将重分类进损益的项目"
+              }
+            },
+            {
+              "node_id": "pl_other_comprehensive_income_for_the_year",
+              "canonical_key": "pl_other_comprehensive_income_for_the_year",
+              "label": "Other comprehensive income/(loss) for the year",
+              "role": "subtotal",
+              "label_i18n": {
+                "en": "Other comprehensive income/(loss) for the year",
+                "zh": "年内其他全面收益／（亏损）"
+              },
+              "rollup": {
+                "op": "sum",
+                "children": [
+                  "pl_oci__items_not_reclassified",
+                  "pl_oci__items_may_be_reclassified"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "node_id": "pl_total_comprehensive_income_for_the_year",
+          "canonical_key": "pl_total_comprehensive_income_for_the_year",
+          "label": "Total comprehensive income/(loss) for the year",
+          "role": "total",
+          "label_i18n": {
+            "en": "Total comprehensive income/(loss) for the year",
+            "zh": "年内全面收益／（亏损）总额"
+          },
+          "rollup": {
+            "op": "sum",
+            "children": [
+              "pl_profit_for_the_year",
+              "pl_other_comprehensive_income_for_the_year"
+            ]
+          }
+        },
+        {
           "node_id": "pl_s7_total_comprehensive_income_attributable_to",
           "canonical_key": "pl_s7_total_comprehensive_income_attributable_to",
           "label": "Total comprehensive income/(loss) attributable to",
@@ -1548,124 +1754,9 @@
               }
             }
           ]
-        },
-        {
-          "node_id": "pl_gross_profit",
-          "canonical_key": "pl_gross_profit",
-          "label": "Gross profit",
-          "role": "total",
-          "label_i18n": {
-            "en": "Gross profit",
-            "zh": "毛利"
-          },
-          "rollup": {
-            "op": "sum",
-            "children": [
-              "pl_income__revenue_from_operations",
-              "pl_expenses__cost_of_goods_sold"
-            ]
-          }
-        },
-        {
-          "node_id": "pl_operating_profit_ebit",
-          "canonical_key": "pl_operating_profit_ebit",
-          "label": "Operating Profit / EBIT",
-          "role": "total",
-          "label_i18n": {
-            "en": "Operating Profit / EBIT",
-            "zh": "营业利润/息税前利润"
-          }
-        },
-        {
-          "node_id": "pl_total_expenses",
-          "canonical_key": "pl_total_expenses",
-          "label": "Total expenses",
-          "role": "total",
-          "label_i18n": {
-            "en": "Total expenses",
-            "zh": "费用总额"
-          }
-        },
-        {
-          "node_id": "pl_profit_before_exceptional_items_and_tax",
-          "canonical_key": "pl_profit_before_exceptional_items_and_tax",
-          "label": "Profit before exceptional items and tax",
-          "role": "total",
-          "label_i18n": {
-            "en": "Profit before exceptional items and tax",
-            "zh": "非经常性项目及税前利润"
-          },
-          "rollup": {
-            "op": "sum",
-            "children": [
-              "pl_income__total_income",
-              "pl_expenses__total_operating_cost",
-              "pl_non_operating_expenses__total_non_operating_expense"
-            ]
-          }
-        },
-        {
-          "node_id": "pl_profit_before_tax",
-          "canonical_key": "pl_profit_before_tax",
-          "label": "Profit before tax",
-          "role": "total",
-          "label_i18n": {
-            "en": "Profit before tax",
-            "zh": "税前利润"
-          },
-          "rollup": {
-            "op": "sum",
-            "children": [
-              "pl_profit_before_exceptional_items_and_tax",
-              "pl_exceptional_items__total_exceptional_items"
-            ]
-          }
-        },
-        {
-          "node_id": "pl_profit_for_the_year",
-          "canonical_key": "pl_profit_for_the_year",
-          "label": "Profit for the year",
-          "role": "total",
-          "label_i18n": {
-            "en": "Profit for the year",
-            "zh": "年度利润"
-          },
-          "rollup": {
-            "op": "sum",
-            "children": [
-              "pl_profit_before_tax",
-              "pl_tax_expense__total_tax_expense"
-            ]
-          }
-        },
-        {
-          "node_id": "pl_other_comprehensive_income_for_the_year",
-          "canonical_key": "pl_other_comprehensive_income_for_the_year",
-          "label": "Other comprehensive income/(loss) for the year",
-          "role": "subtotal",
-          "label_i18n": {
-            "en": "Other comprehensive income/(loss) for the year",
-            "zh": "年内其他全面收益／（亏损）"
-          }
-        },
-        {
-          "node_id": "pl_total_comprehensive_income_for_the_year",
-          "canonical_key": "pl_total_comprehensive_income_for_the_year",
-          "label": "Total comprehensive income/(loss) for the year",
-          "role": "total",
-          "label_i18n": {
-            "en": "Total comprehensive income/(loss) for the year",
-            "zh": "年内全面收益／（亏损）总额"
-          },
-          "rollup": {
-            "op": "sum",
-            "children": [
-              "pl_profit_for_the_year",
-              "pl_other_comprehensive_income_for_the_year"
-            ]
-          }
         }
-      ]
+      ],
+      "identities": []
     },
     {
       "type": "cash_flow",
@@ -1688,6 +1779,16 @@
               "label_i18n": {
                 "en": "Profit before tax",
                 "zh": "税前利润"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_operating_activities__profit_for_the_year",
+              "canonical_key": "cf_cash_flow_from_operating_activities__profit_for_the_year",
+              "label": "Profit for the year",
+              "role": "line",
+              "label_i18n": {
+                "en": "Profit for the year",
+                "zh": "年度利润"
               }
             },
             {
@@ -1724,31 +1825,87 @@
               "node_id": "cf_cash_flow_from_operating_activities__interest_income",
               "canonical_key": "cf_cash_flow_from_operating_activities__interest_income",
               "label": "Interest income",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Interest income",
+                "zh": "利息收入"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_operating_activities__share_of_results_of_associates_and_joint_ventures",
               "canonical_key": "cf_cash_flow_from_operating_activities__share_of_results_of_associates_and_joint_ventures",
               "label": "Share of results of associates and joint ventures",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Share of results of associates and joint ventures",
+                "zh": "应占联营及合营企业业绩"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_operating_activities__fair_value_changes_on_financial_instruments",
               "canonical_key": "cf_cash_flow_from_operating_activities__fair_value_changes_on_financial_instruments",
               "label": "Fair value changes on financial instruments",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Fair value changes on financial instruments",
+                "zh": "金融工具公允价值变动"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_operating_activities__impairment_losses_on_financial_and_contract_assets",
               "canonical_key": "cf_cash_flow_from_operating_activities__impairment_losses_on_financial_and_contract_assets",
               "label": "Impairment losses on financial and contract assets",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Impairment losses on financial and contract assets",
+                "zh": "金融及合同资产减值损失"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_operating_activities__loss_gain_on_disposal_of_property_plant_and_equipment",
               "canonical_key": "cf_cash_flow_from_operating_activities__loss_gain_on_disposal_of_property_plant_and_equipment",
               "label": "Loss/(gain) on disposal of property, plant and equipment",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Loss/(gain) on disposal of property, plant and equipment",
+                "zh": "处置物业、厂房及设备的亏损／（收益）"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_operating_activities__other_non_cash_adjustments",
+              "canonical_key": "cf_cash_flow_from_operating_activities__other_non_cash_adjustments",
+              "label": "Other non-cash adjustments",
+              "role": "line",
+              "label_i18n": {
+                "en": "Other non-cash adjustments",
+                "zh": "其他非现金调整"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_operating_activities__operating_profit_before_working_capital_changes",
+              "canonical_key": "cf_cash_flow_from_operating_activities__operating_profit_before_working_capital_changes",
+              "label": "Operating profit before working capital changes",
+              "role": "subtotal",
+              "label_i18n": {
+                "en": "Operating profit before working capital changes",
+                "zh": "营运资金变动前经营利润"
+              },
+              "rollup": {
+                "op": "sum",
+                "children": [
+                  "cf_cash_flow_from_operating_activities__profit_before_tax",
+                  "cf_cash_flow_from_operating_activities__profit_for_the_year",
+                  "cf_cash_flow_from_operating_activities__income_tax_expense",
+                  "cf_cash_flow_from_operating_activities__depreciation_and_amortisation",
+                  "cf_cash_flow_from_operating_activities__finance_costs",
+                  "cf_cash_flow_from_operating_activities__interest_income",
+                  "cf_cash_flow_from_operating_activities__share_of_results_of_associates_and_joint_ventures",
+                  "cf_cash_flow_from_operating_activities__fair_value_changes_on_financial_instruments",
+                  "cf_cash_flow_from_operating_activities__impairment_losses_on_financial_and_contract_assets",
+                  "cf_cash_flow_from_operating_activities__loss_gain_on_disposal_of_property_plant_and_equipment",
+                  "cf_cash_flow_from_operating_activities__other_non_cash_adjustments"
+                ]
+              }
             },
             {
               "node_id": "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_receivables",
@@ -1757,7 +1914,7 @@
               "role": "line",
               "label_i18n": {
                 "en": "(Increase)/decrease in trade receivables",
-                "zh": "应收账款的（增加）/减少"
+                "zh": "应收账款的（增加）／减少"
               }
             },
             {
@@ -1767,14 +1924,18 @@
               "role": "line",
               "label_i18n": {
                 "en": "(Increase)/decrease in inventories",
-                "zh": "存货的（增加）/减少"
+                "zh": "存货的（增加）／减少"
               }
             },
             {
               "node_id": "cf_cash_flow_from_operating_activities__increase_decrease_in_prepayments_and_other_receivables",
               "canonical_key": "cf_cash_flow_from_operating_activities__increase_decrease_in_prepayments_and_other_receivables",
               "label": "(Increase)/decrease in prepayments and other receivables",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "(Increase)/decrease in prepayments and other receivables",
+                "zh": "预付款项及其他应收款的（增加）／减少"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_payables",
@@ -1783,20 +1944,38 @@
               "role": "line",
               "label_i18n": {
                 "en": "Increase/(decrease) in trade payables",
-                "zh": "应付账款的增加/（减少）"
+                "zh": "应付账款的增加／（减少）"
               }
             },
             {
               "node_id": "cf_cash_flow_from_operating_activities__increase_decrease_in_contract_liabilities",
               "canonical_key": "cf_cash_flow_from_operating_activities__increase_decrease_in_contract_liabilities",
               "label": "Increase/(decrease) in contract liabilities",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Increase/(decrease) in contract liabilities",
+                "zh": "合同负债的增加／（减少）"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_operating_activities__increase_decrease_in_other_payables_and_accruals",
               "canonical_key": "cf_cash_flow_from_operating_activities__increase_decrease_in_other_payables_and_accruals",
               "label": "Increase/(decrease) in other payables and accruals",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Increase/(decrease) in other payables and accruals",
+                "zh": "其他应付款及应计费用的增加／（减少）"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_operating_activities__other_working_capital_movements",
+              "canonical_key": "cf_cash_flow_from_operating_activities__other_working_capital_movements",
+              "label": "Other working capital movements",
+              "role": "line",
+              "label_i18n": {
+                "en": "Other working capital movements",
+                "zh": "其他营运资金变动"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
@@ -1810,22 +1989,14 @@
               "rollup": {
                 "op": "sum",
                 "children": [
-                  "cf_cash_flow_from_operating_activities__profit_before_tax",
-                  "cf_cash_flow_from_operating_activities__income_tax_expense",
-                  "cf_cash_flow_from_operating_activities__depreciation_and_amortisation",
-                  "cf_cash_flow_from_operating_activities__finance_costs",
-                  "cf_cash_flow_from_operating_activities__interest_income",
-                  "cf_cash_flow_from_operating_activities__share_of_results_of_associates_and_joint_ventures",
-                  "cf_cash_flow_from_operating_activities__fair_value_changes_on_financial_instruments",
-                  "cf_cash_flow_from_operating_activities__impairment_losses_on_financial_and_contract_assets",
-                  "cf_cash_flow_from_operating_activities__loss_gain_on_disposal_of_property_plant_and_equipment",
+                  "cf_cash_flow_from_operating_activities__operating_profit_before_working_capital_changes",
                   "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_receivables",
                   "cf_cash_flow_from_operating_activities__increase_decrease_in_inventories",
                   "cf_cash_flow_from_operating_activities__increase_decrease_in_prepayments_and_other_receivables",
                   "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_payables",
                   "cf_cash_flow_from_operating_activities__increase_decrease_in_contract_liabilities",
                   "cf_cash_flow_from_operating_activities__increase_decrease_in_other_payables_and_accruals",
-                  "cf_cash_flow_from_operating_activities__others"
+                  "cf_cash_flow_from_operating_activities__other_working_capital_movements"
                 ]
               }
             },
@@ -1837,6 +2008,16 @@
               "label_i18n": {
                 "en": "Interest received",
                 "zh": "已收利息"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_operating_activities__interest_paid",
+              "canonical_key": "cf_cash_flow_from_operating_activities__interest_paid",
+              "label": "Interest paid",
+              "role": "line",
+              "label_i18n": {
+                "en": "Interest paid",
+                "zh": "已付利息"
               }
             },
             {
@@ -1873,7 +2054,9 @@
                 "children": [
                   "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
                   "cf_cash_flow_from_operating_activities__interest_received",
-                  "cf_cash_flow_from_operating_activities__income_tax_paid"
+                  "cf_cash_flow_from_operating_activities__interest_paid",
+                  "cf_cash_flow_from_operating_activities__income_tax_paid",
+                  "cf_cash_flow_from_operating_activities__others"
                 ]
               }
             }
@@ -1903,19 +2086,31 @@
               "node_id": "cf_cash_flow_from_investing_activities__purchase_of_intangible_assets",
               "canonical_key": "cf_cash_flow_from_investing_activities__purchase_of_intangible_assets",
               "label": "Purchase of intangible assets",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Purchase of intangible assets",
+                "zh": "购买无形资产"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_investing_activities__additions_to_investment_properties",
               "canonical_key": "cf_cash_flow_from_investing_activities__additions_to_investment_properties",
               "label": "Additions to investment properties",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Additions to investment properties",
+                "zh": "添置投资物业"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_investing_activities__proceeds_from_disposal_of_property_plant_and_equipment",
               "canonical_key": "cf_cash_flow_from_investing_activities__proceeds_from_disposal_of_property_plant_and_equipment",
               "label": "Proceeds from disposal of property, plant and equipment",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Proceeds from disposal of property, plant and equipment",
+                "zh": "处置物业、厂房及设备所得款项"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_investing_activities__purchase_of_investments",
@@ -1941,19 +2136,41 @@
               "node_id": "cf_cash_flow_from_investing_activities__acquisition_of_subsidiaries_net_of_cash_acquired",
               "canonical_key": "cf_cash_flow_from_investing_activities__acquisition_of_subsidiaries_net_of_cash_acquired",
               "label": "Acquisition of subsidiaries, net of cash acquired",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Acquisition of subsidiaries, net of cash acquired",
+                "zh": "收购子公司（扣除所得现金）"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_investing_activities__disposal_of_subsidiaries_net_of_cash_disposed",
               "canonical_key": "cf_cash_flow_from_investing_activities__disposal_of_subsidiaries_net_of_cash_disposed",
               "label": "Disposal of subsidiaries, net of cash disposed",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Disposal of subsidiaries, net of cash disposed",
+                "zh": "出售子公司（扣除所付现金）"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_investing_activities__advances_to_related_parties",
+              "canonical_key": "cf_cash_flow_from_investing_activities__advances_to_related_parties",
+              "label": "Advances to related parties",
+              "role": "line",
+              "label_i18n": {
+                "en": "Advances to related parties",
+                "zh": "向关联方提供的款项"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_investing_activities__dividends_received_from_associates_and_investments",
               "canonical_key": "cf_cash_flow_from_investing_activities__dividends_received_from_associates_and_investments",
               "label": "Dividends received from associates and investments",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Dividends received from associates and investments",
+                "zh": "已收联营公司及投资股息"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_investing_activities__interest_received",
@@ -1969,7 +2186,11 @@
               "node_id": "cf_cash_flow_from_investing_activities__placement_withdrawal_of_time_deposits",
               "canonical_key": "cf_cash_flow_from_investing_activities__placement_withdrawal_of_time_deposits",
               "label": "(Placement)/withdrawal of time deposits",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "(Placement)/withdrawal of time deposits",
+                "zh": "定期存款的（存入）／提取"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_investing_activities__others",
@@ -2001,6 +2222,7 @@
                   "cf_cash_flow_from_investing_activities__proceeds_from_sale_of_investments",
                   "cf_cash_flow_from_investing_activities__acquisition_of_subsidiaries_net_of_cash_acquired",
                   "cf_cash_flow_from_investing_activities__disposal_of_subsidiaries_net_of_cash_disposed",
+                  "cf_cash_flow_from_investing_activities__advances_to_related_parties",
                   "cf_cash_flow_from_investing_activities__dividends_received_from_associates_and_investments",
                   "cf_cash_flow_from_investing_activities__interest_received",
                   "cf_cash_flow_from_investing_activities__placement_withdrawal_of_time_deposits",
@@ -2041,34 +2263,84 @@
               }
             },
             {
-              "node_id": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
-              "canonical_key": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
-              "label": "Proceeds from issue of shares",
-              "role": "line"
-            },
-            {
-              "node_id": "cf_cash_flow_from_financing_activities__repurchase_of_shares",
-              "canonical_key": "cf_cash_flow_from_financing_activities__repurchase_of_shares",
-              "label": "Repurchase of shares",
-              "role": "line"
-            },
-            {
               "node_id": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_bonds_and_notes",
               "canonical_key": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_bonds_and_notes",
               "label": "Proceeds from issue of bonds and notes",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Proceeds from issue of bonds and notes",
+                "zh": "发行债券及票据所得款项"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_financing_activities__redemption_of_bonds_and_notes",
               "canonical_key": "cf_cash_flow_from_financing_activities__redemption_of_bonds_and_notes",
               "label": "Redemption of bonds and notes",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Redemption of bonds and notes",
+                "zh": "赎回债券及票据"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_financing_activities__principal_elements_of_lease_payments",
               "canonical_key": "cf_cash_flow_from_financing_activities__principal_elements_of_lease_payments",
               "label": "Principal elements of lease payments",
-              "role": "line"
+              "role": "line",
+              "label_i18n": {
+                "en": "Principal elements of lease payments",
+                "zh": "租赁付款的本金部分"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_financing_activities__interest_paid",
+              "canonical_key": "cf_cash_flow_from_financing_activities__interest_paid",
+              "label": "Interest paid",
+              "role": "line",
+              "label_i18n": {
+                "en": "Interest paid",
+                "zh": "已付利息"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
+              "canonical_key": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
+              "label": "Proceeds from issue of shares",
+              "role": "line",
+              "label_i18n": {
+                "en": "Proceeds from issue of shares",
+                "zh": "发行股份所得款项"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_financing_activities__repurchase_of_shares",
+              "canonical_key": "cf_cash_flow_from_financing_activities__repurchase_of_shares",
+              "label": "Repurchase of shares",
+              "role": "line",
+              "label_i18n": {
+                "en": "Repurchase of shares",
+                "zh": "购回股份"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests",
+              "canonical_key": "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests",
+              "label": "Capital contributions from non-controlling interests",
+              "role": "line",
+              "label_i18n": {
+                "en": "Capital contributions from non-controlling interests",
+                "zh": "非控股权益注资"
+              }
+            },
+            {
+              "node_id": "cf_cash_flow_from_financing_activities__advances_from_related_parties",
+              "canonical_key": "cf_cash_flow_from_financing_activities__advances_from_related_parties",
+              "label": "Advances from related parties",
+              "role": "line",
+              "label_i18n": {
+                "en": "Advances from related parties",
+                "zh": "关联方提供的款项"
+              }
             },
             {
               "node_id": "cf_cash_flow_from_financing_activities__dividends_paid",
@@ -2084,22 +2356,10 @@
               "node_id": "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests",
               "canonical_key": "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests",
               "label": "Dividends paid to non-controlling interests",
-              "role": "line"
-            },
-            {
-              "node_id": "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests",
-              "canonical_key": "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests",
-              "label": "Capital contributions from non-controlling interests",
-              "role": "line"
-            },
-            {
-              "node_id": "cf_cash_flow_from_financing_activities__interest_paid",
-              "canonical_key": "cf_cash_flow_from_financing_activities__interest_paid",
-              "label": "Interest paid",
               "role": "line",
               "label_i18n": {
-                "en": "Interest paid",
-                "zh": "已付利息"
+                "en": "Dividends paid to non-controlling interests",
+                "zh": "已付非控股权益股息"
               }
             },
             {
@@ -2126,31 +2386,21 @@
                 "children": [
                   "cf_cash_flow_from_financing_activities__proceeds_from_borrowings",
                   "cf_cash_flow_from_financing_activities__repayment_of_borrowings",
-                  "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
-                  "cf_cash_flow_from_financing_activities__repurchase_of_shares",
                   "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_bonds_and_notes",
                   "cf_cash_flow_from_financing_activities__redemption_of_bonds_and_notes",
                   "cf_cash_flow_from_financing_activities__principal_elements_of_lease_payments",
+                  "cf_cash_flow_from_financing_activities__interest_paid",
+                  "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
+                  "cf_cash_flow_from_financing_activities__repurchase_of_shares",
+                  "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests",
+                  "cf_cash_flow_from_financing_activities__advances_from_related_parties",
                   "cf_cash_flow_from_financing_activities__dividends_paid",
                   "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests",
-                  "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests",
-                  "cf_cash_flow_from_financing_activities__interest_paid",
                   "cf_cash_flow_from_financing_activities__others"
                 ]
               }
             }
           ]
-        },
-        {
-          "node_id": "cf_s4_effect_of_foreign_exchange_rate_changes",
-          "canonical_key": "cf_s4_effect_of_foreign_exchange_rate_changes",
-          "label": "Effect of foreign exchange rate changes",
-          "role": "header",
-          "label_i18n": {
-            "en": "Effect of foreign exchange rate changes",
-            "zh": "汇率变动的影响"
-          },
-          "children": []
         },
         {
           "node_id": "cf_net_increase_decrease_in_cash_and_cash_equivalents",
@@ -2181,6 +2431,16 @@
           }
         },
         {
+          "node_id": "cf_effect_of_foreign_exchange_rate_changes",
+          "canonical_key": "cf_effect_of_foreign_exchange_rate_changes",
+          "label": "Effect of foreign exchange rate changes",
+          "role": "line",
+          "label_i18n": {
+            "en": "Effect of foreign exchange rate changes",
+            "zh": "汇率变动的影响"
+          }
+        },
+        {
           "node_id": "cf_closing_cash_and_cash_equivalents",
           "canonical_key": "cf_closing_cash_and_cash_equivalents",
           "label": "Closing cash and cash equivalents",
@@ -2194,11 +2454,12 @@
             "children": [
               "cf_opening_cash_and_cash_equivalents",
               "cf_net_increase_decrease_in_cash_and_cash_equivalents",
-              "cf_s4_effect_of_foreign_exchange_rate_changes"
+              "cf_effect_of_foreign_exchange_rate_changes"
             ]
           }
         }
-      ]
+      ],
+      "identities": []
     }
   ]
 }

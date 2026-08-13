@@ -80,7 +80,7 @@ def test_every_declared_identity_is_read_and_evaluated(template, raw_ontology):
     """All 14 are built from their authored ``expr``, and all 14 name keys the template actually
     declares — audited here rather than left to the first filing that needs one of them."""
     built = ontology_identities(template, _ontology(raw_ontology))
-    assert len(built) == len(raw_ontology["validation"]["identities"]) == 14
+    assert len(built) == len(raw_ontology["validation"]["identities"]) == 19
 
     assert {r.id: r.broken for r in built if r.broken} == {}
     # Each one is anchored on the statement its left-hand side is printed on, so a relation for a
@@ -202,9 +202,14 @@ def test_the_gross_profit_tie_is_evaluated_under_the_stated_sign_convention(temp
 
 
 def test_severity_decides_whether_a_break_caps_confidence(template, raw_ontology):
-    """``cf_to_bs_cash`` is authored ``warning``: closing cash disagreeing with the balance-sheet
-    line is usually restricted cash swept into cash equivalents, so it is surfaced for review.
-    Change the one word in the rulebook and the same break caps the value's confidence instead."""
+    """``cf_to_bs_cash`` is authored ``blocking``: the revised spec calls closing cash disagreeing
+    with the balance-sheet line a failure. Change the one word in the rulebook and the same break
+    only surfaces for review instead, without touching the value's confidence.
+
+    Read in the direction the shipped file sets, which is the direction that matters: this used to
+    ship ``warning`` — the disagreement is often restricted cash or a bank overdraft netted into cash
+    equivalents — and the revision raised it. Either way what the test holds is that the severity
+    word, and nothing else, decides."""
     from app.core.models.document import DocumentModel
     from app.core.stage import PipelineContext
     from app.stages.structural import FLAG, FLAG_WARNING, StructuralStage
@@ -224,15 +229,15 @@ def test_severity_decides_whether_a_break_caps_confidence(template, raw_ontology
         return item, next(iter(item.values.values()))
 
     item, value = run(raw_ontology)
-    assert _one_status(item) == FLAG_WARNING
-    assert value.confidence.validation is None      # a warning never lowers the signal
-
-    escalated = copy.deepcopy(raw_ontology)
-    ident = next(i for i in escalated["validation"]["identities"] if i["id"] == "cf_to_bs_cash")
-    ident["severity"] = "blocking"
-    item, value = run(escalated)
     assert FLAG in item.confidence.flags
     assert value.confidence.validation == 0.5
+
+    relaxed = copy.deepcopy(raw_ontology)
+    ident = next(i for i in relaxed["validation"]["identities"] if i["id"] == "cf_to_bs_cash")
+    ident["severity"] = "warning"
+    item, value = run(relaxed)
+    assert _one_status(item) == FLAG_WARNING
+    assert value.confidence.validation is None      # a warning never lowers the signal
 
 
 def _one_status(item) -> str:
@@ -733,7 +738,7 @@ def test_coverage_of_a_real_report_is_dominated_by_what_was_not_verified(templat
         "cf_cash_flow_from_financing_activities__net_cash_from_financing_activities": -13_389_527,
         "cf_net_increase_decrease_in_cash_and_cash_equivalents": -4_251_131,
         "cf_opening_cash_and_cash_equivalents": 8_156_453,
-        "cf_s4_effect_of_foreign_exchange_rate_changes": 26_703,
+        "cf_effect_of_foreign_exchange_rate_changes": 26_703,
         "cf_closing_cash_and_cash_equivalents": 3_932_025,
     }), ontology=_ontology(raw_ontology))
 

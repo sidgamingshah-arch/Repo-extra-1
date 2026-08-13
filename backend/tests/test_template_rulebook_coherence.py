@@ -18,6 +18,8 @@ import pathlib
 import pytest
 
 from app.schemas.loader import load_ontology, load_template, resolve_inherits
+from app.services.mapping import (CONCEPT_FAMILIES, section_of_banner,
+                                  section_token_of_scope)
 from app.services.structural_checks import ontology_identities, relations
 
 _SAMPLES = pathlib.Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
@@ -91,3 +93,90 @@ def test_no_two_identities_assert_the_same_arithmetic(template, filename):
         seen.setdefault(_assertion(rel), []).append(rel.id)
     duplicates = {k: v for k, v in seen.items() if len(v) > 1}
     assert duplicates == {}, f"{filename}: one equation declared twice: {duplicates}"
+
+
+# --- what the income-statement and cash-flow revision could break silently ----------------------
+
+@pytest.mark.parametrize("filename", _ONTOLOGIES)
+def test_one_sweep_bucket_per_section(filename):
+    """Two residuals in one section leaves one of them permanently unreachable.
+
+    THE DEFECT THIS CLOSES: the revised cash flow's spec marks three catch-all lines inside the
+    operating section — ``other_non_cash_adjustments``, ``other_working_capital_movements`` and the
+    existing ``others``. ``stages/residual._sweep`` keys its usable residuals as
+    ``{r.section: r}``, so the last one authored wins and the other two never sweep a row: they
+    would sit on the statement looking like catch-alls and stay empty on every filing, and WHICH one
+    survived would depend on position in the JSON file. Both new lines are ordinary concepts with
+    their own captions instead.
+    """
+    raw = json.loads((_SAMPLES / filename).read_text())
+    per_section: dict[str, list[str]] = {}
+    for m in raw.get("mappings") or []:
+        policy = m.get("residual_policy")
+        if not isinstance(policy, dict):
+            continue
+        per_section.setdefault(policy.get("section_scope") or "", []).append(m["canonical_key"])
+    shared = {sec: keys for sec, keys in per_section.items() if len(keys) > 1}
+    assert shared == {}, (
+        f"{filename}: these sections declare more than one residual, and the sweep can only reach "
+        f"one per section, so the rest are unreachable: {shared}")
+
+
+@pytest.mark.parametrize("filename", _ONTOLOGIES)
+def test_a_caption_printed_under_two_sections_of_one_statement_is_a_declared_family(filename):
+    """The same caption in two sections needs the family, or whichever concept scores first takes it.
+
+    THE DEFECT THIS CLOSES: the revised cash flow gives the OPERATING section its own "Interest
+    paid" concept, because HKAS 7.33 lets a filing classify it as operating or financing. The
+    financing one already existed and the captions are byte-identical in English and Chinese, so
+    until ``CONCEPT_FAMILIES`` carried the pair the two were one caption with two homes — and the
+    family is also what lets a banner RE-ROUTE a refused answer to the right leaf
+    (``mapping.family_leaf_named_by``). Nothing else in the schema notices: both concepts are valid,
+    both resolve, and the wrong one simply wins by score.
+
+    Same statement only. A key namespace repeated ACROSS statements (``interest_income`` in the P&L
+    and in the cash flow) is separated by the statement constraint before the section gate is
+    reached. Residuals are excluded — ``alias_matching`` is disabled on them, so they never compete
+    for a caption — and they are recognised the way the rest of the engine recognises them, by the
+    ``__others`` suffix (``residual._sections_from_template``, the zero-fill test in
+    ``structural_checks``). Not by ``residual_policy``, which only the v2 file states, and not by
+    ``value_scope``, which the v1 file states on some of its residuals and not others.
+    """
+    raw = json.loads((_SAMPLES / filename).read_text())
+    familied = {k for _, members in CONCEPT_FAMILIES for k in members}
+    by_suffix: dict[str, set[str]] = {}
+    for m in raw.get("mappings") or []:
+        key = m["canonical_key"]
+        if "__" not in key or key.endswith("__others"):
+            continue
+        namespace, suffix = key.split("__", 1)
+        by_suffix.setdefault(f"{namespace.split('_', 1)[0]}:{suffix}", set()).add(key)
+    undeclared = {s: sorted(keys) for s, keys in by_suffix.items()
+                  if len(keys) > 1 and not keys <= familied}
+    assert undeclared == {}, (
+        f"{filename}: one caption, two sections of the same statement, no collision family: "
+        f"{undeclared}")
+
+
+def test_the_oci_section_is_not_read_as_the_revenue_section():
+    """``pl_s8_other_comprehensive_income`` ends in "income", and so does the revenue section's token.
+
+    THE DEFECT THIS CLOSES, exactly: ``section_token_of_scope`` reads the token off the END of a
+    scope id, and ``SECTION_WORDS`` carried no entry for other comprehensive income — so the new
+    section resolved to ``income``, the REVENUE section. Every OCI concept would have been admitted
+    under a revenue banner and REFUSED under its own, at full confidence, with nothing in the
+    rulebook or the schema to show it: the id looks right, the concepts load, and the gate is
+    reading a different section from the one the author wrote.
+
+    The third assertion is the other half. The OCI entry has to be tested BEFORE the attribution
+    entry, which matches the bare word "comprehensive" — but not so broadly that it steals the
+    attribution banner it is not for.
+    """
+    assert section_token_of_scope("pl_s8_other_comprehensive_income") == \
+        "other_comprehensive_income"
+    assert section_of_banner("Other comprehensive income") == "other_comprehensive_income"
+    assert section_of_banner("其他综合收益") == "other_comprehensive_income"
+    assert section_of_banner("Total comprehensive income attributable to owners of the parent") == \
+        "total_comprehensive_income_attributable_to"
+    # And the revenue section still resolves to itself.
+    assert section_token_of_scope("pl_s1_income") == "income"

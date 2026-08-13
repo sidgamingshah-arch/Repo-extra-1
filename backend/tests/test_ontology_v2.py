@@ -21,7 +21,7 @@ from app.schemas.loader import (
     resolve_inherits,
     unknown_keys,
 )
-from app.schemas.ontology import Equivalence, ResidualPolicy
+from app.schemas.ontology import Equivalence, OntologyMapping, ResidualPolicy
 
 SAMPLES = Path(__file__).resolve().parents[1] / "app" / "sample" / "templates"
 V2 = SAMPLES / "hkfrs_hk_china_v2_ontology.json"
@@ -42,14 +42,14 @@ def test_v2_rulebook_loads_with_nothing_dropped():
     raw = _v2()
     ont = load_ontology(raw)
     assert unknown_keys(raw, ont, limit=500) == []
-    assert len(ont.mappings) == 174
-    assert len(ont.section_defaults) == 18
+    assert len(ont.mappings) == 185
+    assert len(ont.section_defaults) == 19
     # The six new top-level blocks are objects, not swallowed keys.
     assert ont.normalisation and ont.normalisation.pipeline
     assert ont.binding and ont.binding.order
     assert ont.scope_selection and ont.scope_selection.entity_scope.default == "consolidated"
     assert ont.residual_framework and ont.residual_framework.population == "sweep_only"
-    assert ont.validation and len(ont.validation.identities) == 14
+    assert ont.validation and len(ont.validation.identities) == 19
 
 
 def test_v2_loads_resolved_with_nothing_dropped():
@@ -108,7 +108,12 @@ def test_concept_level_prose_and_containment_fields_survive():
     assert len(reserves.children_if_decomposed) == 4
     assert by_key["pl_income__total_income"].derivation.startswith("sum of")
     assert by_key["bs_non_current_assets__land_of_use_rights"].section_disambiguation
-    assert by_key["cf_s4_effect_of_foreign_exchange_rate_changes"].template_note
+    # The one template_note the file carried was on cf_s4_effect_of_foreign_exchange_rate_changes:
+    # "the template declares this node with role: header … the role should be corrected to 'line'".
+    # The cash-flow revision corrected it and retired that key, so the shipped file needs none — the
+    # field still has to survive a load, which is what the model assertion below holds.
+    assert [m for m in ont.mappings if m.template_note] == []
+    assert OntologyMapping(canonical_key="x", template_note="t").template_note == "t"
     assert by_key["pl_tax_expense__others"].notes_as_source_rationale
     assert by_key["pl_expenses__employee_benefits_expense"].note_use == "evidence_only"
     assert by_key["bs_equity__total_equity"].unit_of_account == "subtotal"
@@ -122,7 +127,12 @@ def test_nested_blocks_are_modelled_not_free_dicts():
     assert g.face_only_default and "face_only" in g.face_only_default
     assert g.sign_convention["expenses_and_outflows"].startswith("Stored NEGATIVE")
     groups = {grp.id: grp for grp in g.mutually_exclusive_groups}
-    assert set(groups) == {"equity_reserves", "associate_jv_share"}
+    # The income-statement and cash-flow revision adds two: `oci_composition` (the printed other
+    # comprehensive income subtotal versus its two IAS 1 categories) and `cf_starting_point` (a cash
+    # flow starts from profit before tax OR profit for the year, and the template's operating rollup
+    # lists both children because exactly one is ever printed).
+    assert set(groups) == {"equity_reserves", "associate_jv_share", "oci_composition",
+                           "cf_starting_point"}
     assert groups["equity_reserves"].aggregate == "bs_equity__reserves"
     # Eight, not four: the balance-sheet revision moved share premium, treasury shares and shares
     # held for award schemes into the reserves rollup, and the exclusivity group has to cover every
@@ -130,7 +140,7 @@ def test_nested_blocks_are_modelled_not_free_dicts():
     assert len(groups["equity_reserves"].components) == 8
 
     md = ont.metadata
-    assert md.supersedes == "hkfrs_hk_china_v1" and md.concept_count == 174
+    assert md.supersedes == "hkfrs_hk_china_v1" and md.concept_count == 185
     # ``retained_defects`` is deliberately NOT asserted non-empty: its only entry recorded the two
     # canonical-key typos, which the balance-sheet revision fixed, and a list that keeps a fixed
     # defect in it is how a reader comes to distrust the block.
@@ -150,7 +160,10 @@ def test_nested_blocks_are_modelled_not_free_dicts():
 
     ids = {i.id: i for i in ont.validation.identities}
     assert ids["pl_tci_tie"].severity == "blocking"
-    assert ids["cf_to_bs_cash"].severity == "warning" and ids["cf_to_bs_cash"].note
+    # cf_to_bs_cash ships blocking since the revised spec called it a failure; x_check_dep is the
+    # example of the other severity, and both carry the note that travels with the finding.
+    assert ids["cf_to_bs_cash"].severity == "blocking" and ids["cf_to_bs_cash"].note
+    assert ids["x_check_dep"].severity == "warning" and ids["x_check_dep"].note
 
 
 # --- extraction_mode ---------------------------------------------------------------------------
@@ -197,7 +210,7 @@ def test_section_layer_reaches_every_concept_only_after_resolution():
 
     ont = load_ontology(raw, resolve=True)
     placed = [m for m in ont.mappings if m.section_scope and m.statement]
-    assert len(placed) == 174
+    assert len(placed) == 185
     assert all(m.temporality and m.face_only is True for m in placed)
 
     m = _by_key(ont)["bs_current_assets__inventories"]
@@ -247,7 +260,7 @@ def test_unknown_inherits_is_a_clear_error_not_a_silent_no_op():
         load_ontology(raw, resolve=True)
     # The read path stays tolerant, by design: one bad stored row must not 500 the ontology
     # editor, the language-parity page or an extraction run.
-    assert len(load_ontology(raw).mappings) == 174
+    assert len(load_ontology(raw).mappings) == 185
 
 
 def test_resolution_does_not_mutate_the_definition_it_was_given():

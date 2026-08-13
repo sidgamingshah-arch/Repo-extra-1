@@ -213,6 +213,20 @@ SECTION_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     # comprehensive income. Only the sub-heading above them tells the pairs apart; without it
     # both land on one concept and are added into a meaningless total. The comprehensive-income
     # heading is tested first because it contains "attributable to" as well.
+    # Other comprehensive income, tested BEFORE the attribution entry below and before the bare
+    # "income" entry at the bottom, and load-bearing against both.
+    #
+    # Against "income": the OCI section's scope id is `pl_s8_other_comprehensive_income`, and
+    # `section_token_of_scope` reads the token off the END of an id — so without this entry that id
+    # resolves to `income`, the REVENUE section. Every OCI concept would then be admitted under a
+    # revenue banner and refused under its own.
+    #
+    # Against the attribution entry: that one matches the bare word "comprehensive", which appears
+    # in "Other comprehensive income" too. Tested second, it would claim the OCI banner and scope it
+    # to the attribution captions. Tested first, this entry is narrow enough not to take the banner
+    # it is not for: "Total comprehensive income attributable to" does not contain "other".
+    ("other_comprehensive_income", ("other comprehensive income", "其他综合收益", "其他綜合收益",
+                                    "其他全面收益", "其他全面收入")),
     # "comprehensive" is the whole distinction, and it has to be matched on its own: a filing
     # reporting a loss prints "Total comprehensive LOSS attributable to", and a filing covering
     # both prints "income/(loss)". Requiring the word "income" missed every one of those, which
@@ -431,6 +445,12 @@ CONCEPT_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # answer and the caption is byte-identical in both.
     ("interest_received", ("cf_cash_flow_from_operating_activities__interest_received",
                            "cf_cash_flow_from_investing_activities__interest_received")),
+    # HKAS 7.33 says the same about interest PAID — operating or financing, one filing's choice —
+    # and the revised cash flow gives the operating section its own concept for it. Both print
+    # "Interest paid" / 已付利息 exactly, so without this pair the two are one caption with two
+    # homes and whichever concept scores first takes it.
+    ("interest_paid", ("cf_cash_flow_from_operating_activities__interest_paid",
+                       "cf_cash_flow_from_financing_activities__interest_paid")),
     ("nci_attribution", (
         "bs_equity__non_controlling_interests",
         "pl_profit_attributable_to__non_controlling_interests",

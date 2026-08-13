@@ -403,10 +403,29 @@ def revise_keys(data: dict) -> int:
     for m in data.get("mappings") or []:
         if (defn := m.get("definition")) and "legacy 'cuurent' typo" in defn:
             m["definition"] = defn.split(" Note: the canonical_key retains")[0]
-    before = json.dumps(data)
+    renamed, count = rename_outside_metadata(data, KEY_FIXES)
     data.clear()
-    data.update(_rename_everywhere(json.loads(before), KEY_FIXES))
-    return sum(before.count(old) for old in KEY_FIXES)
+    data.update(renamed)
+    return count
+
+
+def rename_outside_metadata(data: dict, mapping: dict[str, str]) -> tuple[dict, int]:
+    """``_rename_everywhere``, with ``metadata`` held back — and the count of what moved.
+
+    ``metadata.breaking_changes`` records renames by naming BOTH spellings ("X renamed to Y"), which
+    is the whole value of the entry. Renaming inside it turns that into "Y renamed to Y" on the
+    second run of the script, and the emptied sentence then differs from the one the script wants to
+    append, so it appends a second copy: the file grows a corrupted note and a duplicate every time,
+    and the script stops being idempotent. Held back rather than special-cased inside the walk,
+    because the walk is deliberately blind to WHERE it is.
+    """
+    meta = data.pop("metadata", None)
+    before = json.dumps(data, ensure_ascii=False)
+    out = _rename_everywhere(data, mapping)
+    if meta is not None:
+        data["metadata"] = meta
+        out["metadata"] = meta
+    return out, sum(before.count(old) for old in mapping)
 
 
 def sync_declared_count(data: dict) -> str | None:
@@ -483,14 +502,22 @@ def sync_reserves_group(data: dict) -> str | None:
     if group is None:
         return None
     want = [f"bs_equity__{k}" for k, *_ in EQ_RESERVE_PARTS]
+    # Names the rollup, because the rollup is what enforces it. An earlier version of this note said
+    # "the rulebook's bs_reserves_composition identity reports the disagreement" — an identity this
+    # pass deliberately did NOT add, precisely because the rollup already asserts that sum. A note
+    # citing a check that does not exist is the defect class the pass was closing.
     note = ("The template's bs_equity__reserves rollup lists all of these. Loading the aggregate and "
-            "its components together double-counts, and the rulebook's bs_reserves_composition "
-            "identity reports the disagreement when a filing prints both.")
+            "its components together double-counts, and that rollup is what reports the "
+            "disagreement when a filing prints both.")
     if group.get("components") == want and group.get("note") == note:
         return None
-    was = len(group.get("components") or [])
+    # Says which of the two moved. "components 8 -> 8" was the message when only the note changed,
+    # which reads as work the run did not do.
+    moved = ([f"components {len(group.get('components') or [])} -> {len(want)}"]
+             if group.get("components") != want else []) + \
+            (["note"] if group.get("note") != note else [])
     group["components"], group["note"] = want, note
-    return f"equity_reserves group components {was} -> {len(want)}"
+    return f"equity_reserves group: {', '.join(moved)}"
 
 
 BREAKING_CHANGE = (

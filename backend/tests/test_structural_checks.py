@@ -257,7 +257,7 @@ def test_shipped_template_relations_hold_on_a_consistent_spread():
         # movements. While the rollup omitted that third term the relation could not hold on
         # any filing that reports one — it showed up as a phantom mismatch equal to the
         # exchange effect.
-        "cf_s4_effect_of_foreign_exchange_rate_changes": 26_703,
+        "cf_effect_of_foreign_exchange_rate_changes": 26_703,
         "cf_closing_cash_and_cash_equivalents": 3_932_025,
     }))
     passed = {r.rule_id for r in report.results if r.status == "pass"}
@@ -401,3 +401,80 @@ def test_balance_identity_is_not_reported_twice():
                                "op": "sum", "component_values": {}}}]
     types = [c["type"] for c in _accounting_checks(rows, [], "en", structural)]
     assert types == ["balance"]
+
+
+def _shipped_template():
+    import json
+    from pathlib import Path
+    path = (Path(__file__).resolve().parent.parent / "app" / "sample" / "templates"
+            / "hkfrs_hk_china_template.json")
+    return load_template(json.loads(path.read_text()))
+
+
+def test_a_leaf_the_filing_does_not_print_is_nil_where_the_section_sweeps_it():
+    """A subtotal split into tiers must not lose its arithmetic check to a line nobody prints.
+
+    THE DEFECT THIS CLOSES, measured on the shipped template: the revision gives cost of sales its
+    own subtotal over TWO leaves — cost of goods sold and purchases of stock-in-trade. Almost no
+    filing prints the second one. A missing component used to make the whole relation `skipped`
+    unless the rollup's own child list contained the section residual, so
+    ``rollup:pl_expenses__total_cost_of_sales`` would have been not-evaluable on essentially every
+    filing, and so would the gross-profit tie behind it. That is the failure mode this module's own
+    docstring calls out: a relation occupying the slot where a reviewer expects assurance while
+    proving nothing.
+
+    ``_nil_when_absent`` closes it: the expenses namespace owns an ``__others`` bucket that sweeps
+    every printed row it places there, so a leaf of that namespace which is STILL absent is one the
+    filing does not print. The pass records it in ``assumed_zero`` so the reader can see the relation
+    was checked against a section the filing states partially.
+    """
+    tpl = _shipped_template()
+    report = evaluate_structure(tpl, _items(**{
+        "pl_expenses__cost_of_goods_sold": -600,
+        "pl_expenses__total_cost_of_sales": -600,      # the printed subtotal, no purchases line
+    }))
+    res = _one(report, "rollup:pl_expenses__total_cost_of_sales")
+    assert res.status == "pass", res.details
+    assert res.details["assumed_zero"] == ["pl_expenses__purchases_of_stock_in_trade"]
+
+
+def test_a_calculated_component_the_filing_does_not_print_is_never_taken_as_nil():
+    """The other half, and the one that would FAIL a correct filing rather than skip it.
+
+    ``pl_gross_profit`` now routes through ``pl_expenses__total_cost_of_sales``, a calculated
+    subtotal most filings do not print. Taking an absent calculated node as nil would compare the
+    printed gross profit against revenue ALONE — a break equal to the entire cost of sales, raised
+    as a blocking finding, on a filing where nothing is wrong. So it stays a skip, and the tie is
+    covered instead by the rulebook identity over the leaves.
+    """
+    tpl = _shipped_template()
+    report = evaluate_structure(tpl, _items(**{
+        "pl_income__revenue_from_operations": 1000,
+        "pl_gross_profit": 400,
+    }))
+    res = _one(report, "rollup:pl_gross_profit")
+    assert res.status == "skipped"
+    assert res.details["missing"] == ["pl_expenses__total_cost_of_sales"]
+
+
+def test_the_cash_flow_starting_line_the_filing_did_not_choose_is_nil():
+    """Two mutually exclusive starting lines, one rollup, and a check that still runs.
+
+    HKAS 7 lets an indirect-method cash flow start from profit before tax or from profit for the
+    year. The spec writes the new operating subtotal as ``SUM(COALESCE(pbt, pfy) + adjustments)``;
+    with a missing child skipped by ``rollups.evaluate`` the plain SUM over both IS that coalesce,
+    and ``cf_starting_point`` in the rulebook reports a filing that populates both. What is left is
+    the check: exactly one starting line is absent on EVERY filing by construction, so without
+    ``_nil_when_absent`` this subtotal's arithmetic could never be verified once — not on a thin
+    extraction, on any extraction at all.
+    """
+    tpl = _shipped_template()
+    op = "cf_cash_flow_from_operating_activities"
+    report = evaluate_structure(tpl, _items(**{
+        f"{op}__profit_before_tax": 1000,
+        f"{op}__income_tax_expense": 200,
+        f"{op}__operating_profit_before_working_capital_changes": 1200,
+    }))
+    res = _one(report, f"rollup:{op}__operating_profit_before_working_capital_changes")
+    assert res.status == "pass", res.details
+    assert f"{op}__profit_for_the_year" in res.details["assumed_zero"]

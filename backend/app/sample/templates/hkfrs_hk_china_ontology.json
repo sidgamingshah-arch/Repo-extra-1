@@ -11,24 +11,6 @@
     "en": {},
     "zh": {}
   },
-  "metadata": {
-    "name": "HKFRS / IFRS Hong Kong-China Extraction Ontology",
-    "framework": "HKFRS",
-    "version": "1.0",
-    "source_template": "hkfrs_hk_china_v1",
-    "field_count": 161,
-    "changes": [
-      "Initial HK/China ontology generated from the HKFRS/IFRS template.",
-      "Added the 'Gross profit' (毛利) face subtotal concept (pl_gross_profit) with its accounting definition, inclusion/exclusion criteria and bilingual aliases.",
-      "Added plain HKFRS/IFRS face-line wordings and Traditional Chinese aliases used in HKEX filings (Revenue 收益, Cost of sales 銷售成本, Other income and gains 其他收入及收益, Selling and marketing expenses 銷售及營銷開支, Administrative expenses 行政開支, Finance costs 財務費用, Profit/(loss) before tax 除稅前溢利, Income tax expense 稅項開支, Loss for the year 年內虧損) to the existing profit-or-loss mappings.",
-      "Coverage (HKEX property developer, China SCE AR2023): added the current-asset concepts Properties under development (發展中物業), Completed properties held for sale (持作出售已落成物業), Restricted cash (受限制現金), Due from related parties (應收關聯方款項) and Prepaid income tax (預付稅項), the current-liability mirror Due to related parties (應付關聯方款項), the non-current Interests in joint ventures (於合營公司的投資), and the face line Other expenses (其他開支) — whose absence had let administrative expenses absorb it.",
-      "Added the balance-sheet subtotals NET CURRENT ASSETS/(LIABILITIES) (流動資產╱（負債）淨額) and TOTAL ASSETS LESS CURRENT LIABILITIES (總資產減流動負債). The latter previously resolved to bs_current_liabilities__total_current_liabilities on token overlap; the two are now separated by their own aliases, by reciprocal confusable_with, by exclusion criteria naming the other line, and by regex_hints/exclude_hints so the rule tier can never cross-fire.",
-      "Split the profit-or-loss bottom line from the total-comprehensive bottom line: added pl_other_comprehensive_income_for_the_year (年內其他全面虧損) and pl_total_comprehensive_income_for_the_year (年內全面虧損總額). On a bilingual HKEX statement of comprehensive income the wrapped caption 'TOTAL COMPREHENSIVE / LOSS FOR THE YEAR' reaches the matcher as the bare fragment 'LOSS FOR THE YEAR'; the total-comprehensive concept is declared before pl_profit_for_the_year so that fragment resolves to it, while pl_profit_for_the_year carries bilingual anchors ('LOSS FOR THE YEAR 年內虧損') and keeps its own row. Both concepts state the other in exclude/confusable_with.",
-      "Added the attribution lines pl_profit_attributable_to__owners_of_the_parent (母公司擁有人) and pl_profit_attributable_to__non_controlling_interests (非控股權益) as period FLOWS, distinct from the balance-sheet equity NCI balance, and the separately-presented share of profits and losses of associates (應佔聯營公司損益) and of joint ventures (應佔合營公司損益) as children of the combined face line.",
-      "Added the total-comprehensive attribution lines (pl_total_comprehensive_income_attributable_to__owners_of_the_parent / __non_controlling_interests, HKAS 1.81B(b)) so the OCI attribution captions no longer fall onto the profit attribution lines — the two carry different amounts.",
-      "Total equity now also recognises the net-assets-format caption 'Net assets' (資產淨值) — the same reported amount under HKFRS — and 'Net current assets/(liabilities)' excludes it explicitly, so the two 淨額/淨值 lines cannot be confused."
-    ]
-  },
   "global_rules": {
     "source_fact_id": "document_id|scope|period|currency|unit|page|table_or_note|source_row_id",
     "parent_child_allocation": [
@@ -2673,6 +2655,51 @@
       }
     },
     {
+      "canonical_key": "pl_expenses__taxes_and_surcharges",
+      "label": "Taxes and surcharges",
+      "definition": "Turnover-based taxes and levies charged as an operating expense — city construction and maintenance tax, education surcharge, stamp duty, land use and property tax. NOT income tax, which is struck below profit before tax.",
+      "description": "Taxes and surcharges: under 'Operating expenses' in the statement.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Taxes and surcharges",
+        "Taxes and levies",
+        "Business taxes and surcharges",
+        "Taxes other than income tax"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Taxes and surcharges",
+          "Taxes and levies",
+          "Business taxes and surcharges",
+          "Taxes other than income tax"
+        ],
+        "zh": [
+          "税金及附加",
+          "稅金及附加",
+          "营业税金及附加",
+          "營業稅金及附加"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_tax_expense__current_tax",
+        "pl_tax_expense__total_tax_expense"
+      ],
+      "exclude_hints": [
+        "income tax",
+        "所得税",
+        "所得稅",
+        "deferred"
+      ]
+    },
+    {
       "canonical_key": "pl_expenses__selling_and_marketing_expenses",
       "label": "Selling and Marketing Expenses",
       "definition": "Selling and Marketing Expenses: under 'Expenses' in the statement of profit or loss (HKFRS/IFRS).",
@@ -2871,6 +2898,44 @@
           "存货采购"
         ]
       }
+    },
+    {
+      "canonical_key": "pl_expenses__total_cost_of_sales",
+      "label": "Total cost of sales",
+      "definition": "The reported subtotal of cost of sales, where a filing prints one — cost of goods sold together with purchases of stock-in-trade.",
+      "description": "Total cost of sales: under 'Cost of sales' in the statement.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Total cost of sales",
+        "Total cost of goods sold",
+        "Total cost of revenue",
+        "Total cost of sales and services"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Total cost of sales",
+          "Total cost of goods sold",
+          "Total cost of revenue",
+          "Total cost of sales and services"
+        ],
+        "zh": [
+          "销售成本总额",
+          "销售成本合计",
+          "营业成本合计"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_expenses__cost_of_goods_sold",
+        "pl_expenses__total_operating_cost"
+      ]
     },
     {
       "canonical_key": "pl_expenses__other_operating_costs",
@@ -3150,7 +3215,7 @@
       }
     },
     {
-      "canonical_key": "pl_non_operating_expenses__total_non_operating_expense",
+      "canonical_key": "pl_non_operating_expenses__total_non_operating",
       "label": "Total non-operating expense",
       "definition": "Total non-operating expense: under 'Non-operating expenses' in the statement of profit or loss (HKFRS/IFRS).",
       "description": "Total non-operating expense: under 'Non-operating expenses' in the statement of profit or loss.",
@@ -3666,6 +3731,106 @@
       }
     },
     {
+      "canonical_key": "pl_oci__items_not_reclassified",
+      "label": "Items that will not be reclassified to profit or loss",
+      "definition": "The IAS 1.82A(a) category of other comprehensive income: items that will never be recycled through profit or loss. Where a filing itemises the category rather than printing its subtotal, the itemised lines belong to this concept and are summed into it.",
+      "description": "Items that will not be reclassified to profit or loss: under 'Other comprehensive income' in the statement.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Items that will not be reclassified to profit or loss",
+        "Item that will not be reclassified to profit or loss",
+        "Items that will not be reclassified subsequently to profit or loss",
+        "Will not be reclassified to profit or loss",
+        "Fair value changes on equity investments at fair value through other comprehensive income",
+        "Changes in fair value of equity investments at fair value through other comprehensive income",
+        "Remeasurement of defined benefit obligations",
+        "Remeasurement gains/(losses) on defined benefit plans",
+        "Revaluation of property, plant and equipment"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Items that will not be reclassified to profit or loss",
+          "Item that will not be reclassified to profit or loss",
+          "Items that will not be reclassified subsequently to profit or loss",
+          "Will not be reclassified to profit or loss",
+          "Fair value changes on equity investments at fair value through other comprehensive income",
+          "Changes in fair value of equity investments at fair value through other comprehensive income",
+          "Remeasurement of defined benefit obligations",
+          "Remeasurement gains/(losses) on defined benefit plans",
+          "Revaluation of property, plant and equipment"
+        ],
+        "zh": [
+          "不会重分类进损益的项目",
+          "不會重新分類至損益的項目",
+          "以后不能重分类进损益的项目",
+          "以公允价值计量且其变动计入其他综合收益的权益工具投资公允价值变动",
+          "重新计量设定受益计划"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_oci__items_may_be_reclassified",
+        "pl_other_comprehensive_income_for_the_year"
+      ]
+    },
+    {
+      "canonical_key": "pl_oci__items_may_be_reclassified",
+      "label": "Items that may be reclassified subsequently to profit or loss",
+      "definition": "The IAS 1.82A(b) category of other comprehensive income: items that will be recycled through profit or loss when the underlying position is realised. Where a filing itemises the category rather than printing its subtotal, the itemised lines belong to this concept and are summed into it.",
+      "description": "Items that may be reclassified subsequently to profit or loss: under 'Other comprehensive income' in the statement.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Items that may be reclassified subsequently to profit or loss",
+        "Item that may be reclassified subsequently to profit or loss",
+        "Items that may be reclassified to profit or loss",
+        "May be reclassified subsequently to profit or loss",
+        "Exchange differences on translation of foreign operations",
+        "Exchange differences on translating foreign operations",
+        "Cash flow hedges",
+        "Share of other comprehensive income of associates and joint ventures"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Items that may be reclassified subsequently to profit or loss",
+          "Item that may be reclassified subsequently to profit or loss",
+          "Items that may be reclassified to profit or loss",
+          "May be reclassified subsequently to profit or loss",
+          "Exchange differences on translation of foreign operations",
+          "Exchange differences on translating foreign operations",
+          "Cash flow hedges",
+          "Share of other comprehensive income of associates and joint ventures"
+        ],
+        "zh": [
+          "将重分类进损益的项目",
+          "可能重新分類至損益的項目",
+          "以后可能重分类进损益的项目",
+          "换算境外业务产生的汇兑差额",
+          "現金流量對沖",
+          "应占联营及合营企业的其他综合收益"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_oci__items_not_reclassified",
+        "pl_other_comprehensive_income_for_the_year",
+        "cf_effect_of_foreign_exchange_rate_changes"
+      ]
+    },
+    {
       "canonical_key": "pl_profit_attributable_to__owners_of_the_parent",
       "label": "Owners of the parent",
       "definition": "Profit/(loss) for the year attributable to owners of the parent: the share of the period's consolidated profit or loss that belongs to the equity holders of the parent company (HKAS 1.81B(a)). It is an ATTRIBUTION of profit for the year, not a further component of it.",
@@ -3993,32 +4158,6 @@
         ],
         "zh": [
           "营业利润/息税前利润"
-        ]
-      }
-    },
-    {
-      "canonical_key": "pl_total_expenses",
-      "label": "Total expenses",
-      "definition": "Total expenses: a top-level line of the statement of profit or loss (HKFRS/IFRS).",
-      "description": "Total expenses: a top-level line of the statement of profit or loss.",
-      "value_scope": "not_applicable",
-      "extraction_mode": "extract",
-      "include": [
-        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
-      ],
-      "exclude": [
-        "Amounts mapped to another dedicated concept.",
-        "Gross parent totals that contain separately mapped children."
-      ],
-      "aliases": [
-        "Total expenses"
-      ],
-      "aliases_i18n": {
-        "en": [
-          "Total expenses"
-        ],
-        "zh": [
-          "费用总额"
         ]
       }
     },
@@ -4358,6 +4497,48 @@
       }
     },
     {
+      "canonical_key": "cf_cash_flow_from_operating_activities__profit_for_the_year",
+      "label": "Profit for the year",
+      "definition": "The starting line of an indirect-method cash flow that begins AFTER tax. A statement starts from this line or from profit before tax, never both.",
+      "description": "Profit for the year: under 'Cash flow from operating activities' in the statement.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Profit for the year",
+        "Profit/(loss) for the year",
+        "Loss for the year",
+        "Net profit for the year",
+        "Profit for the period"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Profit for the year",
+          "Profit/(loss) for the year",
+          "Loss for the year",
+          "Net profit for the year",
+          "Profit for the period"
+        ],
+        "zh": [
+          "年度利润",
+          "年度溢利",
+          "年内利润",
+          "本年净利润",
+          "期间利润"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "cf_cash_flow_from_operating_activities__profit_before_tax",
+        "pl_profit_for_the_year"
+      ]
+    },
+    {
       "canonical_key": "cf_cash_flow_from_operating_activities__income_tax_expense",
       "label": "Income tax expense",
       "definition": "Income tax expense: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
@@ -4565,6 +4746,79 @@
       ]
     },
     {
+      "canonical_key": "cf_cash_flow_from_operating_activities__other_non_cash_adjustments",
+      "label": "Other non-cash adjustments",
+      "definition": "A printed catch-all for the non-cash adjustments a filing does not itemise, struck before the working-capital movements.",
+      "description": "Other non-cash adjustments: under 'Cash flow from operating activities' in the statement.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Other non-cash adjustments",
+        "Other non-cash items",
+        "Other adjustments for non-cash items",
+        "Other non-cash expenses"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Other non-cash adjustments",
+          "Other non-cash items",
+          "Other adjustments for non-cash items",
+          "Other non-cash expenses"
+        ],
+        "zh": [
+          "其他非现金调整",
+          "其他非現金調整",
+          "其他非现金项目"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ]
+    },
+    {
+      "canonical_key": "cf_cash_flow_from_operating_activities__operating_profit_before_working_capital_changes",
+      "label": "Operating profit before working capital changes",
+      "definition": "The HKAS 7 indirect-method subtotal struck after the non-cash adjustments and before the working-capital movements.",
+      "description": "Operating profit before working capital changes: under 'Cash flow from operating activities' in the statement.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Operating profit before working capital changes",
+        "Operating cash flows before movements in working capital",
+        "Operating profit before changes in working capital",
+        "Cash flows from operations before movements in working capital"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Operating profit before working capital changes",
+          "Operating cash flows before movements in working capital",
+          "Operating profit before changes in working capital",
+          "Cash flows from operations before movements in working capital"
+        ],
+        "zh": [
+          "营运资金变动前经营利润",
+          "營運資金變動前經營利潤",
+          "经营资金变动前的营业利润",
+          "营运资金变动前经营现金流量"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
+        "cf_cash_flow_from_operating_activities__net_cash_from_operating_activities"
+      ]
+    },
+    {
       "canonical_key": "cf_cash_flow_from_operating_activities__increase_decrease_in_trade_receivables",
       "label": "(Increase)/decrease in trade receivables",
       "definition": "(Increase)/decrease in trade receivables: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
@@ -4709,6 +4963,40 @@
       ]
     },
     {
+      "canonical_key": "cf_cash_flow_from_operating_activities__other_working_capital_movements",
+      "label": "Other working capital movements",
+      "definition": "A printed catch-all for the working-capital movements a filing does not itemise, struck before cash generated from operations.",
+      "description": "Other working capital movements: under 'Cash flow from operating activities' in the statement.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Other working capital movements",
+        "Other changes in working capital",
+        "Other movements in working capital",
+        "Changes in other working capital"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Other working capital movements",
+          "Other changes in working capital",
+          "Other movements in working capital",
+          "Changes in other working capital"
+        ],
+        "zh": [
+          "其他营运资金变动",
+          "其他營運資金變動",
+          "其他经营性应收应付项目的变动"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ]
+    },
+    {
       "canonical_key": "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
       "label": "Cash generated from operations",
       "definition": "Cash generated from operations: under 'Cash flow from operating activities' in the statement of cash flows (HKFRS/IFRS).",
@@ -4759,6 +5047,42 @@
           "已收利息"
         ]
       }
+    },
+    {
+      "canonical_key": "cf_cash_flow_from_operating_activities__interest_paid",
+      "label": "Interest paid",
+      "definition": "Interest paid classified as an operating cash flow, which HKAS 7.33 permits. The same caption in the financing section is a different concept and only one of the two is populated.",
+      "description": "Interest paid: under 'Cash flow from operating activities' in the statement.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Interest paid",
+        "Interest paid on bank and other borrowings",
+        "Interest and finance charges paid"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Interest paid",
+          "Interest paid on bank and other borrowings",
+          "Interest and finance charges paid"
+        ],
+        "zh": [
+          "已付利息",
+          "已付利息费用",
+          "支付的利息"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "cf_cash_flow_from_financing_activities__interest_paid",
+        "cf_cash_flow_from_operating_activities__finance_costs"
+      ]
     },
     {
       "canonical_key": "cf_cash_flow_from_operating_activities__income_tax_paid",
@@ -5080,6 +5404,46 @@
       },
       "exclude_hints": [
         "\\b(gain|loss)s? on disposal\\b"
+      ]
+    },
+    {
+      "canonical_key": "cf_cash_flow_from_investing_activities__advances_to_related_parties",
+      "label": "Advances to related parties",
+      "definition": "Loans and advances made to related parties, and repayments received on them, presented as an investing cash flow.",
+      "description": "Advances to related parties: under 'Cash flow from investing activities' in the statement.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Advances to related parties",
+        "Loans to related parties",
+        "Advances to associates and joint ventures",
+        "(Advances to)/repayments from related parties",
+        "Amounts advanced to related parties"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Advances to related parties",
+          "Loans to related parties",
+          "Advances to associates and joint ventures",
+          "(Advances to)/repayments from related parties",
+          "Amounts advanced to related parties"
+        ],
+        "zh": [
+          "向关联方提供的款项",
+          "向關聯方提供的款項",
+          "向关联方垫款",
+          "应收关联方款项变动"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "cf_cash_flow_from_financing_activities__advances_from_related_parties"
       ]
     },
     {
@@ -5492,6 +5856,46 @@
       }
     },
     {
+      "canonical_key": "cf_cash_flow_from_financing_activities__advances_from_related_parties",
+      "label": "Advances from related parties",
+      "definition": "Loans and advances received from related parties, and repayments made on them, presented as a financing cash flow.",
+      "description": "Advances from related parties: under 'Cash flow from financing activities' in the statement.",
+      "value_scope": "exclusive_leaf",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Advances from related parties",
+        "Loans from related parties",
+        "Advances from a shareholder",
+        "Advances from the immediate holding company",
+        "Amounts advanced from related parties"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Advances from related parties",
+          "Loans from related parties",
+          "Advances from a shareholder",
+          "Advances from the immediate holding company",
+          "Amounts advanced from related parties"
+        ],
+        "zh": [
+          "关联方提供的款项",
+          "關聯方提供的款項",
+          "关联方垫款",
+          "应付关联方款项变动"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "cf_cash_flow_from_investing_activities__advances_to_related_parties"
+      ]
+    },
+    {
       "canonical_key": "cf_cash_flow_from_financing_activities__interest_paid",
       "label": "Interest paid",
       "definition": "Interest paid: under 'Cash flow from financing activities' in the statement of cash flows (HKFRS/IFRS).",
@@ -5847,7 +6251,7 @@
       }
     },
     {
-      "canonical_key": "cf_s4_effect_of_foreign_exchange_rate_changes",
+      "canonical_key": "cf_effect_of_foreign_exchange_rate_changes",
       "label": "Effect of foreign exchange rate changes",
       "definition": "Effect of foreign exchange rate changes: as presented on the face of the statement (HKFRS/IFRS).",
       "description": "Effect of foreign exchange rate changes: as presented on the face of the statement.",
@@ -5957,6 +6361,42 @@
       }
     },
     {
+      "canonical_key": "pl_expenses__total_operating_expenses",
+      "label": "Total operating expenses",
+      "definition": "The reported subtotal of the operating expenses that sit below cost of sales, where a filing prints one.",
+      "description": "Total operating expenses: under 'Operating expenses' in the statement.",
+      "value_scope": "not_applicable",
+      "extraction_mode": "extract",
+      "include": [
+        "Amounts attributable to this concept for the same entity, scope, period, currency and unit."
+      ],
+      "aliases": [
+        "Total operating expenses",
+        "Total operating expenditure",
+        "Total other operating expenses"
+      ],
+      "aliases_i18n": {
+        "en": [
+          "Total operating expenses",
+          "Total operating expenditure",
+          "Total other operating expenses"
+        ],
+        "zh": [
+          "营业费用总额",
+          "营业费用合计",
+          "经营费用合计"
+        ]
+      },
+      "exclude": [
+        "Amounts mapped to another dedicated concept.",
+        "Gross parent totals that contain separately mapped children."
+      ],
+      "confusable_with": [
+        "pl_expenses__total_operating_cost",
+        "pl_expenses__total_cost_of_sales"
+      ]
+    },
+    {
       "canonical_key": "pl_exceptional_items__others",
       "label": "Other exceptional items",
       "definition": "Other exceptional items: printed lines in this section that no more specific concept covers.",
@@ -6014,5 +6454,23 @@
         ]
       }
     }
-  ]
+  ],
+  "metadata": {
+    "name": "HKFRS / IFRS Hong Kong-China Extraction Ontology",
+    "framework": "HKFRS",
+    "version": "1.0",
+    "source_template": "hkfrs_hk_china_v1",
+    "field_count": 161,
+    "changes": [
+      "Initial HK/China ontology generated from the HKFRS/IFRS template.",
+      "Added the 'Gross profit' (毛利) face subtotal concept (pl_gross_profit) with its accounting definition, inclusion/exclusion criteria and bilingual aliases.",
+      "Added plain HKFRS/IFRS face-line wordings and Traditional Chinese aliases used in HKEX filings (Revenue 收益, Cost of sales 銷售成本, Other income and gains 其他收入及收益, Selling and marketing expenses 銷售及營銷開支, Administrative expenses 行政開支, Finance costs 財務費用, Profit/(loss) before tax 除稅前溢利, Income tax expense 稅項開支, Loss for the year 年內虧損) to the existing profit-or-loss mappings.",
+      "Coverage (HKEX property developer, China SCE AR2023): added the current-asset concepts Properties under development (發展中物業), Completed properties held for sale (持作出售已落成物業), Restricted cash (受限制現金), Due from related parties (應收關聯方款項) and Prepaid income tax (預付稅項), the current-liability mirror Due to related parties (應付關聯方款項), the non-current Interests in joint ventures (於合營公司的投資), and the face line Other expenses (其他開支) — whose absence had let administrative expenses absorb it.",
+      "Added the balance-sheet subtotals NET CURRENT ASSETS/(LIABILITIES) (流動資產╱（負債）淨額) and TOTAL ASSETS LESS CURRENT LIABILITIES (總資產減流動負債). The latter previously resolved to bs_current_liabilities__total_current_liabilities on token overlap; the two are now separated by their own aliases, by reciprocal confusable_with, by exclusion criteria naming the other line, and by regex_hints/exclude_hints so the rule tier can never cross-fire.",
+      "Split the profit-or-loss bottom line from the total-comprehensive bottom line: added pl_other_comprehensive_income_for_the_year (年內其他全面虧損) and pl_total_comprehensive_income_for_the_year (年內全面虧損總額). On a bilingual HKEX statement of comprehensive income the wrapped caption 'TOTAL COMPREHENSIVE / LOSS FOR THE YEAR' reaches the matcher as the bare fragment 'LOSS FOR THE YEAR'; the total-comprehensive concept is declared before pl_profit_for_the_year so that fragment resolves to it, while pl_profit_for_the_year carries bilingual anchors ('LOSS FOR THE YEAR 年內虧損') and keeps its own row. Both concepts state the other in exclude/confusable_with.",
+      "Added the attribution lines pl_profit_attributable_to__owners_of_the_parent (母公司擁有人) and pl_profit_attributable_to__non_controlling_interests (非控股權益) as period FLOWS, distinct from the balance-sheet equity NCI balance, and the separately-presented share of profits and losses of associates (應佔聯營公司損益) and of joint ventures (應佔合營公司損益) as children of the combined face line.",
+      "Added the total-comprehensive attribution lines (pl_total_comprehensive_income_attributable_to__owners_of_the_parent / __non_controlling_interests, HKAS 1.81B(b)) so the OCI attribution captions no longer fall onto the profit attribution lines — the two carry different amounts.",
+      "Total equity now also recognises the net-assets-format caption 'Net assets' (資產淨值) — the same reported amount under HKFRS — and 'Net current assets/(liabilities)' excludes it explicitly, so the two 淨額/淨值 lines cannot be confused."
+    ]
+  }
 }

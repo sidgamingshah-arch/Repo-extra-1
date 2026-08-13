@@ -635,12 +635,27 @@ def test_a_containment_the_arithmetic_does_not_support_is_routed_to_review(v2):
     assert "low_mapping_confidence" not in confirmed.confidence.flags
 
 
-def test_the_shipped_rulebook_agrees_with_its_own_key_names(v2):
-    """Every one of the 173 concepts declares the section its canonical key is namespaced under, so
-    reading `section_scope` instead of the key name changes no answer TODAY. That is the point: the
-    two diverge the moment someone edits one, and the gate must follow the declaration."""
+def test_no_concept_declares_a_section_its_own_key_name_contradicts(v2):
+    """A declared ``section_scope`` may say MORE than the key name; it may never say something else.
+
+    This started as "the two agree on all 173 concepts", which held until the income statement gained
+    an ``Other comprehensive income`` section: its concepts are keyed ``pl_oci__*``, a namespace
+    ``section_of_key`` reads as no section at all, while ``inherits`` scopes them to
+    ``pl_s8_other_comprehensive_income``. That is the declaration doing exactly what it is for —
+    constraining a concept the key name leaves unconstrained — so requiring equality would have
+    forced either a worse key or a weaker gate.
+
+    A CONTRADICTION is still a defect, and is what this holds: a key namespaced under one section
+    while the rulebook scopes it to a different one means the gate and the key disagree about which
+    banner may claim the row, and whichever a reader consults tells them the wrong thing.
+    """
     m = _matcher(v2)
     for c in v2.mappings:
         tok = section_of_key(c.canonical_key)
-        assert m._sections_of(c.canonical_key) == (frozenset([tok]) if tok else frozenset()), \
-            c.canonical_key
+        declared = m._sections_of(c.canonical_key)
+        if tok:
+            assert declared == frozenset([tok]), c.canonical_key
+        else:
+            # No section in the key name: the declaration is free to name one, and free to name
+            # none, but not to name two — a concept in two sections has no residual sweep at all.
+            assert len(declared) <= 1, c.canonical_key

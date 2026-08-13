@@ -490,13 +490,16 @@ def test_a_derive_concept_is_computed_and_never_bound_to_a_printed_caption(v2):
 
 
 def test_extract_or_derive_is_still_bound_to_the_caption_that_prints_it(v2):
-    """The neighbouring value, and the reason `derive` cannot simply be read as "do not extract": 20
+    """The neighbouring value, and the reason `derive` cannot simply be read as "do not extract": 22
     concepts are subtotals a filing may print on the face or leave to arithmetic. Refusing those would
-    sweep a printed subtotal into the section residual, the more expensive of the two mistakes."""
+    sweep a printed subtotal into the section residual, the more expensive of the two mistakes.
+
+    22, not 20: the revision adds total cost of sales, total operating expenses and the cash flow's
+    operating profit before working capital changes, and retires pl_total_expenses."""
     m = _matcher(v2)
     printed = [c.canonical_key for c in v2.mappings if c.extraction_mode == "extract_or_derive"]
 
-    assert len(printed) == 20
+    assert len(printed) == 22
     assert set(printed) <= set(m._mappable_keys())
     assert m.match("Total income", statement="profit_and_loss",
                    section="REVENUE").canonical_key == "pl_income__total_income"

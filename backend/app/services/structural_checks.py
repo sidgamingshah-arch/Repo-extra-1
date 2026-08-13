@@ -561,6 +561,52 @@ def _scope(slot: Slot) -> str:
     return f"{slot[0]}/{slot[1] or '—'}"
 
 
+def _nil_when_absent(template: TemplateDefinition) -> dict[str, str]:
+    """Concepts whose absence from a filing means NIL, not unknown — mapped to their statement.
+
+    A relation is normally skipped when any component was not extracted, because a figure nobody
+    read is not a figure worth asserting against. The exception the module already made is the
+    section subtotal: a section that owns a residual bucket has a home for every printed row, so a
+    concept in it that is STILL absent is one the filing does not print.
+
+    That reasoning is a property of the residual's REACH, not of one rollup's child list — which is
+    all the original test (``any(c.endswith("__others"))``) could see. It is generalised here because
+    the revised statements split several subtotals into tiers: ``pl_expenses__total_cost_of_sales``
+    is struck from two leaves the expenses residual covers but is not itself the section subtotal,
+    and the cash flow's two intermediate operating subtotals are the same shape. Without this, the
+    most-used check on the income statement — gross profit against revenue and cost of sales — would
+    be permanently skipped on every filing that does not print a purchases of stock-in-trade line,
+    which is most of them.
+
+    THE REACH IS THE KEY NAMESPACE, not the template's section node. ``stages/residual`` reads a
+    residual's section off the ``__others`` key itself (``_sections_from_template``:
+    "bs_current_liabilities__others" -> "current_liabilities") and sweeps every row it places
+    there, so a namespace with an ``__others`` row has a home for all of it. The template may
+    present one namespace as two sections — the revision prints ``pl_expenses__*`` as both Cost of
+    sales and Operating expenses — and a rule keyed on the presentation would call a leaf unknown
+    that the sweep in fact covers.
+
+    TWO EXCLUSIONS, both of which cause a FALSE FAILURE rather than a missed one:
+
+    * A CALCULATED node never qualifies. Its absence means the filing printed no subtotal there,
+      and its figure is computable, so taking it as nil would compare a reported total against a
+      knowingly incomplete sum. ``pl_gross_profit = revenue + total_cost_of_sales`` would then fail
+      by the whole cost of sales on any filing that prints no cost-of-sales subtotal.
+    * The caller applies this only to components on the relation's own statement. A cross-statement
+      tie compares two independently extracted statements, and an operand missing there says the
+      other statement is incomplete — ``cf_to_bs_cash`` would otherwise assert closing cash equals
+      zero on a filing whose balance-sheet cash line was not found.
+    """
+    swept = {k.rsplit("__", 1)[0] for k in template.all_canonical_keys() if k.endswith("__others")}
+    out: dict[str, str] = {}
+    for st in template.statements:
+        for node in template._walk(st.sections):
+            key = node.canonical_key
+            if key and not node.rollup and "__" in key and key.rsplit("__", 1)[0] in swept:
+                out[key] = st.type.value
+    return out
+
+
 def evaluate_structure(template: TemplateDefinition,
                        items: Iterable[LineItem],
                        ontology=None) -> StructuralReport:
@@ -573,6 +619,7 @@ def evaluate_structure(template: TemplateDefinition,
     vals = collect_values(items)
     report = StructuralReport()
     stmt_of = _statement_index(template)
+    nil_absent = _nil_when_absent(template)
     # A statement no key was extracted for is not thin coverage, it is a statement this filing
     # does not contain (a standalone-only filing has no cash flow). Its relations are still
     # reported — silence would be indistinguishable from a pass — but they must not sit in the
@@ -636,8 +683,13 @@ def evaluate_structure(template: TemplateDefinition,
         mixed: list[Slot] = []
         for slot in target_slots:
             missing = [c for c in rel.components if vals.get(c, slot) is None]
-            if missing and not zero_fill:
-                unmapped[slot] = missing
+            # A component the template declares as a leaf of a section that owns a residual bucket
+            # is nil when absent, not unknown — see ``_nil_when_absent``, including why the test is
+            # restricted to this relation's own statement.
+            unknown = ([] if zero_fill
+                       else [c for c in missing if nil_absent.get(c) != rel.statement])
+            if unknown:
+                unmapped[slot] = unknown
                 continue
             # Every component missing means nothing was extracted for this section at all;
             # "0 == 0" would be a vacuous pass, so it stays a skip.
