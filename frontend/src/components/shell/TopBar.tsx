@@ -6,7 +6,7 @@ import { useDocuments, useMe, useProject } from "../../lib/queries";
 import { useUI } from "../../store";
 import { color } from "../../theme";
 import { useT } from "../../i18n";
-import { STEPPER, screenIdForPath } from "../../screens/config";
+import { STEPPER, stepIdForPath } from "../../screens/config";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { UserMenu } from "./UserMenu";
 
@@ -45,8 +45,10 @@ export function TopBar() {
   const steps = STEPPER
     .filter((s) => !(extractMode === "auto" && s.id === "scope"))
     .filter((s) => !me || me.screens.includes(s.id));
-  const activeId = screenIdForPath(loc.pathname);
-  const curIdx = steps.findIndex((s) => s.id === activeId);
+  // The STEP reached, which is not the same as the screen shown: the Workspace and All Notes
+  // are read after the extraction and sit at its step, so the bar marks progress instead of
+  // going blank on the screen an analyst spends most of their time on.
+  const curIdx = steps.findIndex((s) => s.id === stepIdForPath(loc.pathname));
 
   return (
     <div
@@ -95,7 +97,7 @@ export function TopBar() {
 
       <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto" }}>
         {steps.map((s, i) => {
-          const active = s.id === activeId;
+          const active = i === curIdx;
           const done = curIdx !== -1 && i < curIdx;
           return (
             <div

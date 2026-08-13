@@ -297,7 +297,7 @@ export default function ScopeScreen() {
         <Button variant="secondary" onClick={() => nav(SCREENS.integrity.path)}>
           ← {t("sc.back")}
         </Button>
-        <Button onClick={() => nav(usingReal ? `/documents/${activeDocumentId}` : SCREENS.workspace.path)}>
+        <Button onClick={() => nav(usingReal ? SCREENS.extraction.path : SCREENS.workspace.path)}>
           {t("sc.extract")} {focused} {t("sc.pages")} →
         </Button>
       </div>

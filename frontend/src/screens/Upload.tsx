@@ -606,7 +606,7 @@ export default function UploadScreen() {
               title={title}
               onClick={() =>
                 activeDocumentId &&
-                navigate(extractMode === "auto" ? `/documents/${activeDocumentId}` : SCREENS.scope.path)
+                navigate(extractMode === "auto" ? SCREENS.extraction.path : SCREENS.scope.path)
               }
             >
               {t("u.extractDirectly")} →

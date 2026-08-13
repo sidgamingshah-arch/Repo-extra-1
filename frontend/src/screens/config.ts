@@ -56,3 +56,24 @@ export function screenIdForPath(pathname: string): string {
   const found = Object.values(SCREENS).find((s) => pathname.startsWith(s.path));
   return found?.id ?? "workspace";
 }
+
+/** For a screen that is not itself a step, the step it sits at.
+ *
+ * The stepper answers "how far through the run am I", which is not the same question the nav rail
+ * answers. Screens like the Workspace and All Notes are what you read AFTER the extraction, so they
+ * sit AT the Extract step — and when the Workspace stopped being step 4, nothing claimed its place
+ * and `curIdx` went to -1, which blanked every step in the bar for the screen an analyst spends most
+ * of their time on. A screen outside the flow entirely (Template, Settings) maps to nothing and
+ * correctly leaves the bar unmarked.
+ */
+const STEP_FOR_SCREEN: Record<string, string> = {
+  workspace: "extraction",
+  notes: "extraction",
+  commentary: "review",
+};
+
+/** The stepper id for a pathname — the screen's own step, or the step it sits at. */
+export function stepIdForPath(pathname: string): string {
+  const id = screenIdForPath(pathname);
+  return STEP_FOR_SCREEN[id] ?? id;
+}

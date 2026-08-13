@@ -261,9 +261,17 @@ export function useExtraction(
  *  launched against, so re-running is the only way a template revision reaches a document that was
  *  extracted before it.
  *
- *  Every cached view of the old run is dropped on success, because all of them are now about a
- *  superseded run: the start key (so the screen picks up the new run id), the run poll, and every
- *  derived read of the document. */
+ *  THE NEW RUN IS WRITTEN INTO THE START QUERY'S CACHE, never removed from it. `removeQueries` on
+ *  that key looks like the obvious way to make the screen pick up the new run, and it starts a
+ *  SECOND run: the start query is MOUNTED while the button is on screen, so dropping its data
+ *  leaves an observer with nothing and React Query immediately refetches — and that query's
+ *  `queryFn` is the POST that launches an extraction. One click, two concurrent pipelines racing to
+ *  write the same run rows. Seeding the cache with the response this mutation already has hands the
+ *  screen the new run id with no refetch at all.
+ *
+ *  Every derived read of the document IS invalidated, because all of them are now about a
+ *  superseded run. The run poll is left alone: the start query's new data changes the run id, so the
+ *  poll re-keys onto the new run by itself. */
 export function useReextract(documentId: string | undefined) {
   const qc = useQueryClient();
   return useMutation({
@@ -271,9 +279,13 @@ export function useReextract(documentId: string | undefined) {
       api.runExtraction(documentId as string, {
         ontology_version_id: vars.ontologyId, template_version_id: vars.templateId,
       }),
-    onSuccess: () => {
-      qc.removeQueries({ queryKey: ["extraction-start", documentId] });
-      qc.removeQueries({ queryKey: ["extraction-run"] });
+    onSuccess: (started, vars) => {
+      // The same key `useExtraction` builds, so the mounted start query adopts this run rather
+      // than launching another one of its own.
+      qc.setQueryData(
+        ["extraction-start", documentId, vars?.ontologyId ?? null, vars?.templateId ?? null],
+        started,
+      );
       for (const key of ["document-statement", "document-run", "document-review",
                          "document-analysis", "document-commentary", "document-notes"]) {
         qc.invalidateQueries({ queryKey: [key, documentId] });

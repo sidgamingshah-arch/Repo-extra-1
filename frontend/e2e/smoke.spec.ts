@@ -108,7 +108,7 @@ test("analyst uploads a document and views its extracted data with provenance", 
   // Skip the integrity review and go straight to extraction for the just-uploaded document
   // (auto mode → the extraction view). The per-row "View" affordance was removed.
   await page.getByRole("button", { name: /Extract directly/ }).click();
-  await expect(page).toHaveURL(/\/documents\//);
+  await expect(page).toHaveURL(/\/extraction/);
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   // Real extracted line item + click-to-source provenance from the native PDF.
   await expect(page.getByText("Trade receivables").first()).toBeVisible();
@@ -124,7 +124,7 @@ test("analyst uploads a spreadsheet and gets Excel cell-level click-to-source", 
   await expect(page.getByTestId("doc-row").filter({ hasText: "sample.xlsx" })).toBeVisible({ timeout: 15_000 });
 
   await page.getByRole("button", { name: /Extract directly/ }).click();
-  await expect(page).toHaveURL(/\/documents\//);
+  await expect(page).toHaveURL(/\/extraction/);
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Trade receivables").first()).toBeVisible();
 
@@ -152,7 +152,7 @@ test("end-to-end: upload a new file → Run integrity check shows real results �
 
   // Continue into the real extraction for the uploaded document.
   await page.getByRole("button", { name: /Extract now/ }).click();
-  await expect(page).toHaveURL(/\/documents\//);
+  await expect(page).toHaveURL(/\/extraction/);
   await expect(page.getByRole("heading", { name: "Extracted data" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Trade receivables").first()).toBeVisible();
   // Derived analysis (ratios / disclosures / notes) renders from the extraction.
@@ -981,7 +981,7 @@ async function extractFixture(page: Page, file: string): Promise<string> {
   await expect(page.getByTestId("doc-row").filter({ hasText: file }))
     .toBeVisible({ timeout: 15_000 });
   await page.getByRole("button", { name: /Extract directly/ }).click();
-  await expect(page).toHaveURL(/\/documents\//);
+  await expect(page).toHaveURL(/\/extraction/);
   await expect(page.getByRole("heading", { name: "Extracted data" }))
     .toBeVisible({ timeout: 60_000 });
   const id = await page.evaluate(() => localStorage.getItem("finex-active-doc"));

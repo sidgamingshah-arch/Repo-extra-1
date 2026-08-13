@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useParams } from "react-router-dom";
 
 import { NavRail } from "./components/shell/NavRail";
 import { TopBar } from "./components/shell/TopBar";
@@ -20,6 +20,29 @@ import SettingsScreen from "./screens/Settings";
 import TemplateScreen from "./screens/Template";
 import UploadScreen from "./screens/Upload";
 import WorkspaceScreen from "./screens/Workspace";
+
+/** The old per-document extraction URL, kept working — and kept MEANINGFUL.
+ *
+ * `/documents/:id` moved to `/extraction`, which reads the ACTIVE document from the store. A bare
+ * redirect would therefore honour the path but discard the one thing it carried: a link to document
+ * A, opened by someone whose active document is B, would silently show B's extraction under A's
+ * URL. So the id in the path is adopted as the active document first. Links to this URL exist in the
+ * wild — the Upload and Integrity screens both navigate to it, and it has been shared.
+ */
+function AdoptDocumentAndRedirect() {
+  const { id } = useParams();
+  const setActiveDocumentId = useUI((s) => s.setActiveDocumentId);
+  const active = useUI((s) => s.activeDocumentId);
+  useEffect(() => {
+    if (id && id !== active) setActiveDocumentId(id);
+  }, [id, active, setActiveDocumentId]);
+  // Held until the store agrees, so the extraction screen never mounts against the outgoing
+  // document and fires a run for it.
+  if (id && id !== active) {
+    return <div style={{ padding: 60, textAlign: "center", color: color.muted }}>Loading…</div>;
+  }
+  return <Navigate to="/extraction" replace />;
+}
 
 /** Route guard: renders the screen only if the caller's role may see it; otherwise
  * redirects to the first screen the role can access. */
@@ -53,11 +76,9 @@ function Shell() {
                 reader was looking at the extraction. A screen the product cannot name is a screen
                 the reader cannot find. */}
             <Route path="/extraction" element={<RequireScreen screen="extraction"><ExtractionView /></RequireScreen>} />
-            {/* The old deep link still resolves: an extraction is bound to the ACTIVE document
-                (`useUI.activeDocumentId`, persisted to localStorage), so the id in the path was
-                never what selected it. Kept as a redirect rather than deleted because links to it
-                exist in the wild — in the Upload screen's own buttons, among other places. */}
-            <Route path="/documents/:id" element={<Navigate to="/extraction" replace />} />
+            {/* The old deep link still resolves, and still selects the document it names — see
+                AdoptDocumentAndRedirect. */}
+            <Route path="/documents/:id" element={<AdoptDocumentAndRedirect />} />
             <Route path="/integrity" element={<RequireScreen screen="integrity"><IntegrityScreen /></RequireScreen>} />
             <Route path="/scope" element={<RequireScreen screen="scope"><ScopeScreen /></RequireScreen>} />
             <Route path="/workspace" element={<RequireScreen screen="workspace"><WorkspaceScreen /></RequireScreen>} />
