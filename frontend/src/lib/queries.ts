@@ -237,7 +237,49 @@ export function useExtraction(
     // from a client-side guess: a screen that decides for itself which rulebook was in force is
     // how a superseded run came to be labelled as the current one.
     rulebook: run?.result?.rulebook ?? run?.rulebook ?? start.data?.rulebook ?? undefined,
+    // HOW FAR IT HAS GOT, which the caller could not previously reach. `data` collapses to
+    // undefined until the run succeeds — deliberately, so no screen renders half a spread — and
+    // that also threw away the `progress` the poll had been fetching every second all along. So
+    // progress is returned beside `data`, true of the run from the moment it exists, exactly like
+    // `rulebook` above and for the same reason: a screen must be able to say what is happening
+    // while it is happening. `runId` comes with it because a re-extract has to know which run the
+    // screen is watching.
+    runId,
+    status: run?.status ?? (start.data?.status || (start.isPending ? "queued" : "")),
+    progress: run?.progress ?? undefined,
+    stages: run?.stages ?? undefined,
+    logTail: run?.log_tail ?? undefined,
   };
+}
+
+/** Start a FRESH extraction for a document that already has one.
+ *
+ *  Not a variant of `useExtraction`: that hook's start query is keyed on
+ *  (document, ontology, template) with `staleTime: Infinity`, so asking it again hands back the
+ *  cached run rather than launching a new one — which is correct for a screen mount and useless for
+ *  "re-extract this against the revised template". A run is PINNED to the template version it was
+ *  launched against, so re-running is the only way a template revision reaches a document that was
+ *  extracted before it.
+ *
+ *  Every cached view of the old run is dropped on success, because all of them are now about a
+ *  superseded run: the start key (so the screen picks up the new run id), the run poll, and every
+ *  derived read of the document. */
+export function useReextract(documentId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { ontologyId?: string; templateId?: string } = {}) =>
+      api.runExtraction(documentId as string, {
+        ontology_version_id: vars.ontologyId, template_version_id: vars.templateId,
+      }),
+    onSuccess: () => {
+      qc.removeQueries({ queryKey: ["extraction-start", documentId] });
+      qc.removeQueries({ queryKey: ["extraction-run"] });
+      for (const key of ["document-statement", "document-run", "document-review",
+                         "document-analysis", "document-commentary", "document-notes"]) {
+        qc.invalidateQueries({ queryKey: [key, documentId] });
+      }
+    },
+  });
 }
 
 /** Cells around a value's spreadsheet origin — the Excel click-to-source backdrop.

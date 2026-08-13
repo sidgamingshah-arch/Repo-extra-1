@@ -46,7 +46,18 @@ function Shell() {
           <Routes>
             <Route path="/" element={<Navigate to="/workspace" replace />} />
             <Route path="/upload" element={<RequireScreen screen="upload"><UploadScreen /></RequireScreen>} />
-            <Route path="/documents/:id" element={<RequireScreen screen="upload"><ExtractionView /></RequireScreen>} />
+            {/* Extraction is its OWN destination. It used to be mounted only at /documents/:id and
+                gated on the `upload` screen, with no entry in SCREENS — so it appeared in no nav
+                group, held no stepper slot, and `screenIdForPath` fell through to its "workspace"
+                default, which left the rail and the stepper both highlighting Workspace while the
+                reader was looking at the extraction. A screen the product cannot name is a screen
+                the reader cannot find. */}
+            <Route path="/extraction" element={<RequireScreen screen="extraction"><ExtractionView /></RequireScreen>} />
+            {/* The old deep link still resolves: an extraction is bound to the ACTIVE document
+                (`useUI.activeDocumentId`, persisted to localStorage), so the id in the path was
+                never what selected it. Kept as a redirect rather than deleted because links to it
+                exist in the wild — in the Upload screen's own buttons, among other places. */}
+            <Route path="/documents/:id" element={<Navigate to="/extraction" replace />} />
             <Route path="/integrity" element={<RequireScreen screen="integrity"><IntegrityScreen /></RequireScreen>} />
             <Route path="/scope" element={<RequireScreen screen="scope"><ScopeScreen /></RequireScreen>} />
             <Route path="/workspace" element={<RequireScreen screen="workspace"><WorkspaceScreen /></RequireScreen>} />

@@ -452,13 +452,54 @@ export interface ExtractionResult {
    *  weaker rule/alias ensemble decided — surfaced so a degraded run is visible, not implied. */
   mapping?: { strategy: string; reason: string; llm_calls: number; model: string } | null;
 }
+/** How far the pipeline has got, as the run row records it.
+ *
+ *  The whole shape lives in the run's existing `progress` JSON column rather than in new table
+ *  columns: `init_db` uses `create_all`, which never adds a column to an existing SQLite file, so
+ *  new columns would break every database already on disk.
+ *
+ *  `stage` is the pipeline stage's own name (`"map_ontology"`, `"residual"`, …) — served, never
+ *  guessed client-side, because the stage list is assembled in `core/pipeline.py` and the docs have
+ *  already been wrong about it once. Empty/absent while a run is still queued. */
+export interface ExtractionProgress {
+  /** "queued" | a stage name | "done" | "failed". */
+  phase: string;
+  pct: number;
+  stage: string;
+  stage_index: number;
+  stage_count: number;
+  /** The stages already finished, in order, so the screen can tick them off. */
+  stages_done: string[];
+  started_at: string;
+  elapsed_ms: number;
+}
 export interface ExtractionRunResponse {
   run_id: string;
   status: string;
   /** Alongside the result rather than inside it, so the rulebook can be named from the first poll
    *  — while the run is still running, and even when it fails without producing a result. */
   rulebook?: RulebookRecord | null;
+  /** Declared, and now populated. The field was always served by `GET /extractions/{run_id}` and
+   *  never declared here, so no component could reach it without widening this interface first —
+   *  which is one of the three reasons extraction progress reached no screen. */
+  progress?: ExtractionProgress | null;
+  /** The stage names this run will pass through, in order, as the pipeline assembles them. */
+  stages?: string[];
+  /** The tail of the run log, flushed as stages complete rather than only at the end. */
+  log_tail?: string;
   result: ExtractionResult;
+}
+/** A run whose template version is no longer the newest published one for that template key.
+ *
+ *  A run is PINNED to the template it was launched against, so a spread built before the template
+ *  was revised keeps rendering the old shape — which is exactly how a corrected line order can
+ *  still look wrong on screen. Stated by the server so the screen can say it out loud and offer a
+ *  re-extract, rather than a stale spread being indistinguishable from a current one. */
+export interface SupersededTemplate {
+  superseded: boolean;
+  run_version: number;
+  latest_version: number;
+  template_key: string;
 }
 /** Derived analysis from a real extraction: ratios, disclosure scan, free-form notes. */
 export interface Ratio {

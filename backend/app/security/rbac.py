@@ -90,13 +90,17 @@ PERMISSIONS: dict[Role, set[Permission]] = {
 # (``CONFIG_TEMPLATE``), enforced both on the write endpoints and on the screen's
 # editing controls.
 SCREENS_BY_ROLE: dict[Role, list[str]] = {
-    Role.ADMIN: ["upload", "integrity", "scope", "workspace", "notes", "review",
+    Role.ADMIN: ["upload", "integrity", "scope", "extraction", "workspace", "notes", "review",
                  "commentary", "template", "settings", "export"],
-    Role.REVIEWER: ["integrity", "workspace", "notes", "review", "commentary", "export"],
+    Role.REVIEWER: ["integrity", "extraction", "workspace", "notes", "review", "commentary",
+                    "export"],
     # Analysts run the operational pipeline; configuration surfaces (Template & Ontology
     # authoring, Settings) are admin-only. Analysts still pick a template on the Upload
     # screen (TEMPLATE_SELECT), they just don't get the authoring/config screen.
-    Role.ANALYST: ["upload", "integrity", "scope", "workspace", "notes", "review",
+    # "extraction" is the screen that RUNS the pipeline and reports its progress. Every role that
+    # works an extraction gets it, and no new Permission is needed: all three already hold
+    # EXTRACTION_VIEW, and starting a run is separately gated on PIPELINE_RUN at the endpoint.
+    Role.ANALYST: ["upload", "integrity", "scope", "extraction", "workspace", "notes", "review",
                    "commentary", "export"],
 }
 
