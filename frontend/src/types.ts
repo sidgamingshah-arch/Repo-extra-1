@@ -508,6 +508,19 @@ export interface ExtractionRunResponse {
   log_tail?: string;
   result: ExtractionResult;
 }
+/** Whether a document has an extraction IN FLIGHT, and how far it has got.
+ *
+ *  `/documents/{id}/run` answers 404 until a run has a RESULT, so a screen loaded fresh mid-run
+ *  could not tell "extracting" from "never extracted" — it had to say the second, which is the
+ *  wrong answer and the one that reads as "nothing happened". This is the per-document question,
+ *  answerable without knowing a run id: a hard reload onto the Workspace has no run id to poll. */
+export interface DocumentRunStatus {
+  /** "none" | "running" | "succeeded" | "failed". */
+  status: string;
+  run_id: string;
+  progress?: ExtractionProgress | null;
+}
+
 /** A run whose template version is no longer the newest published one for that template key.
  *
  *  A run is PINNED to the template it was launched against, so a spread built before the template
@@ -964,6 +977,13 @@ export interface NodeConfig {
   label: string;
   /** The concept this node maps to — the key an ontology edit targets. */
   canonical_key?: string;
+  /** Whether the RULEBOOK IN FORCE actually maps this template line.
+   *
+   *  A template node the rulebook does not mention has no ontology entry to edit, so every write
+   *  the editor offers for it is refused — the mapping PATCH answers 404 "not in this ontology", and
+   *  offering the key in the confusable-with or netting pickers gets a 422. Absent means an older
+   *  payload that never said; treat that as mapped, since that is what those payloads described. */
+  mapped?: boolean;
   /** Merged display set (this locale + English fallback, capped) — read-only. */
   aliases: string[];
   /** RAW aliases stored for the requested locale — what the editor loads and saves back,

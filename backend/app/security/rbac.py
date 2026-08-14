@@ -92,6 +92,10 @@ PERMISSIONS: dict[Role, set[Permission]] = {
 SCREENS_BY_ROLE: dict[Role, list[str]] = {
     Role.ADMIN: ["upload", "integrity", "scope", "extraction", "workspace", "notes", "review",
                  "commentary", "template", "settings", "export"],
+    # A reviewer sees the extraction screen to READ a run — its stages, its log, its rows — and
+    # cannot start one: PIPELINE_RUN is the analyst's and the admin's. Granting the screen without
+    # the permission is deliberate, not an oversight; the screen's own re-extract control is gated on
+    # the permission, so a reviewer is never shown a button that would 403.
     Role.REVIEWER: ["integrity", "extraction", "workspace", "notes", "review", "commentary",
                     "export"],
     # Analysts run the operational pipeline; configuration surfaces (Template & Ontology
