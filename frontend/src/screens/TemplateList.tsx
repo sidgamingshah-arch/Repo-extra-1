@@ -391,12 +391,23 @@ function TemplateRow({ tpl, ontology, active, onOpen, t }: {
               {ontology.ontology_key}
             </span>
             <span style={{ color: color.muted }}>{` · v${ontology.version}`}</span>
-            {/* Only reachable when EVERY rulebook for this template has been replaced and none of
-                the replacements is present. Naming it without saying so would describe the run as
-                governed by a rulebook its own author retired. */}
+            {/* "IN FORCE, THOUGH SUPERSEDED" — never the bare word, because this column only ever
+                names the rulebook IN FORCE (`ontologyFor`). So `superseded` here is always a
+                statement about the rulebook the next run will map against, and printing "superseded"
+                beside it said the opposite of what the column means: an admin reads that the
+                extractor is governed by a rulebook someone retired, when it is the current one.
+
+                The state is ordinary now, not a corner. It used to need every rulebook for the
+                template to have been replaced with no replacement present — the old ranking
+                preferred a live row. Selection is "the latest stored wins", so it takes only an
+                admin republishing a key that an older rulebook declared it superseded, or one the
+                repo retired: newest stored, therefore in force, and still carrying the label. The
+                server resolves the same collision the same way for a run's own record
+                (extractions.rulebook_record), and the extraction view's picker has always used this
+                exact phrase — one wording for one state, in all three places. */}
             {ontology.superseded && (
               <span style={{ color: color.amberFg, marginInlineStart: 6 }}>
-                {t("tp.list.ontSuperseded")}
+                {t("tp.rb.inForceSuperseded")}
               </span>
             )}
           </>

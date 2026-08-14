@@ -722,9 +722,16 @@ test("the index names the rulebook the SERVER says is in force, and ranks nothin
   await page.goto("/template", DCL);
   const row = page.getByTestId("tpl-row").filter({ hasText: "hkfrs_hk_china_v1" }).first();
   await expect(row).toBeVisible({ timeout: 15_000 });
-  // The column has to name what the extractor would actually use for this template.
-  await expect(row.getByTestId("tpl-row-ontology"))
-    .toHaveText("hkfrs_hk_china_v2 · v1", { timeout: 15_000 });
+  // The column has to name what the extractor would actually use for this template…
+  const column = row.getByTestId("tpl-row-ontology");
+  await expect(column).toContainText("hkfrs_hk_china_v2 · v1", { timeout: 15_000 });
+  // …and it must not print the bare word "superseded" beside it. This row is in force AND carries
+  // the replacement label, and the column only ever names the rulebook in force — so the label has
+  // to be the reconciled phrase the extraction view's picker already uses, or an admin reads that
+  // the extractor is governed by a retired rulebook when it is the current one. Asserted through the
+  // rendered text rather than an i18n key, because what is wrong is what a reader sees.
+  await expect(column).toContainText("in force, though superseded");
+  await expect(column).not.toHaveText(/·\s*v1\s*superseded\s*$/);
   await page.unroute("**/api/v1/ontologies");
 });
 
