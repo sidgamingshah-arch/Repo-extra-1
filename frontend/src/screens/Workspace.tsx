@@ -16,8 +16,8 @@ import { ExcelGrid, PageStack, toPicked, type Picked } from "../components/Sourc
 import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseAccounting } from "../theme";
 import { DERIVED_STATEMENTS } from "../types";
 import type { Basis, FxRateResolution, StatementColumn, StatementKey, StatementResponse, StatementRow, SupersededTemplate } from "../types";
-import { ApiError } from "../lib/api";
-import { ontologyInForce, useDocumentStatement, useEditDocumentLineItem, useExtraction, useFxRateResolution, useOntologies, useReextract, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded, useTemplates } from "../lib/queries";
+import { ApiError, refusalText } from "../lib/api";
+import { ontologyInForce, useDocumentRunStatus, useDocumentStatement, useEditDocumentLineItem, useFxRateResolution, useOntologies, useReextract, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded, useTemplates } from "../lib/queries";
 import { useCan } from "../lib/rbac";
 import { useUI } from "../store";
 import { useT } from "../i18n";
@@ -715,11 +715,9 @@ function InspectorEditor({
  *  the Upload screen, and failing that the one in force among everything stored — decided by the ONE
  *  shared rule (`ontologyInForce`), never by a version comparison of this screen's own.
  *
- *  Both users of it in this screen need the same pair. Reading the run the Extraction screen started
- *  needs it because the start query is KEYED on (document, rulebook, template), and launching a new
- *  run needs it because a POST that names neither records `engine_default` and maps against no
- *  rulebook at all — a spread offered as "rebuilt against the current template" would come back
- *  with nothing mapped to it. */
+ *  Launching a run needs the pair because a POST that names neither records `engine_default` and maps
+ *  against no rulebook at all — a spread offered as "rebuilt against the current template" would come
+ *  back with nothing mapped to it. */
 function useRunDefaults() {
   const ontQ = useOntologies();
   const tplQ = useTemplates();
@@ -741,10 +739,13 @@ function useRunDefaults() {
  * was false in the one case a reader most needed the truth. The genuine greenfield state still
  * belongs to <EmptyState /> and is decided by the caller (no active document at all).
  *
- * What this can say is bounded by what it can know. The run is READ from the one the Extraction
- * screen started — the same start key, with the start DISABLED, because opening the Workspace must
- * never POST a run of its own just by being looked at — so after a hard reload there is no cached
- * run and the state falls back to what the 404 alone proves: nothing has been extracted yet.
+ * What this can say it asks the DOCUMENT, not a run id it may not have. It used to read the run the
+ * Extraction screen started — that screen's start key, with the start disabled, because opening the
+ * Workspace must never POST a run of its own just by being looked at — and after a hard reload there
+ * is no cached run to read, so a live pipeline fell through to "nothing has been extracted yet". The
+ * one situation this component exists for was the one it got wrong. `useDocumentRunStatus` needs no
+ * run id and answers before a run has a result, which is what makes a fresh page load correct; it
+ * stays a READ, so the Workspace still starts nothing.
  *
  * No stage, percentage or elapsed time is repeated here. The Extraction screen derives those from
  * the run once (`RunProgress`), and a second derivation is a second chance to disagree with it;
@@ -758,41 +759,58 @@ function AwaitingExtraction({ documentId, statementError, reloadStatement, t }: 
   t: (k: string) => string;
 }) {
   const navigate = useNavigate();
-  // The same three values the Extraction screen keys its start query on: a different key is a
-  // different cache entry, which would make this read a run that does not exist. A reader who
-  // PINNED a rulebook there (`?rulebook=`) is one such miss — the pin lives in that screen's URL, so
-  // this falls through to "not extracted yet", which the 404 does still prove.
-  const { ont, tpl } = useRunDefaults();
-  // `enabled: false` — read the run, never start one.
-  const { data: run, runId, status, isError: runFailed } =
-    useExtraction(documentId, ont?.id, tpl?.id, false);
-  // `runId` decides first, because `status` cannot be trusted without it: with the start query
-  // disabled the hook answers "queued" for a document nobody has started anything for. Once a run
-  // exists the status is the RUN's own, so it is what says the pipeline is still working — a run
-  // that ended without a usable result must not be described as still going.
-  const running = !!runId && (status === "running" || status === "queued");
+  const runQ = useDocumentRunStatus(documentId);
+  // ANSWERED THIS VISIT. The cache holds the previous visit's answer while the read refetches, and
+  // an analyst who starts a run and walks over here would be shown that one — "not extracted yet"
+  // over their own working pipeline, which is the whole defect on a shorter clock.
+  const answered = runQ.isFetchedAfterMount && runQ.isSuccess;
+  const status = answered ? runQ.data?.status : undefined;
 
   // The poll is what learns the run finished, so it is what asks for the spread. The statement is
   // fetched once and never retried, so a run that succeeded while the reader waited here would
   // otherwise leave this state on screen indefinitely under a promise it had already kept.
-  useEffect(() => { if (run) reloadStatement(); }, [run, reloadStatement]);
+  const succeeded = status === "succeeded";
+  useEffect(() => { if (succeeded) reloadStatement(); }, [succeeded, reloadStatement]);
 
   // A statement that failed for any reason other than "not extracted yet" is its own fact, and
   // saying "not extracted" over a 403 or a 500 would send the reader to run an extraction that is
   // not what is wrong.
   const notExtracted = statementError instanceof ApiError && statementError.status === 404;
   const state = !notExtracted ? "error"
-    : runFailed ? "failed"
-      : running ? "running"
-        : "none";
+    // A read that FAILED knows nothing about the run, and falling back to "none" would guess the one
+    // answer that reads as "nothing happened". The failure is stated instead.
+    : runQ.isError ? "unknown"
+      // NOTHING HAS ANSWERED YET, and "not extracted yet" is the sentence that must not be printed in
+      // that gap: it is the wrong answer for a run in flight, and printing it early is the same
+      // defect on a shorter clock. Succeeded belongs here too — the spread has been asked for again
+      // (above) and is on its way, so the wait is for the statement, not for an extraction.
+      : !answered || succeeded ? "loading"
+        : status === "failed" ? "failed"
+          : status === "running" ? "running"
+            : status === "none" ? "none"
+              // A status word this build does not know is not "nothing happened". The server passes
+              // the run's own word through unmapped, deliberately, so a state added to the pipeline
+              // arrives here unrecognised — and falling off the end of this chain into "none" would
+              // print the one sentence the read exists to prevent.
+              : "unknown";
   const title = state === "error" ? t("ex.pending.errorTitle")
-    : state === "failed" ? t("ex.failed")
-      : state === "running" ? t("ex.running")
-        : t("ex.pending.noneTitle");
+    : state === "loading" ? t("empty.loading")
+      : state === "unknown" ? t("ex.pending.unknownTitle")
+        : state === "failed" ? t("ex.failed")
+          : state === "running" ? t("ex.running")
+            : t("ex.pending.noneTitle");
   const body = state === "error" ? t("ex.pending.errorBody")
-    : state === "failed" ? t("ex.pending.failedBody")
-      : state === "running" ? t("ex.pending.runningBody")
-        : t("ex.pending.noneBody");
+    : state === "loading" ? ""
+      : state === "unknown" ? t("ex.pending.unknownBody")
+        : state === "failed" ? t("ex.pending.failedBody")
+          : state === "running" ? t("ex.pending.runningBody")
+            : t("ex.pending.noneBody");
+  // The server's own words for whichever refusal this state is about — the statement's, or the run
+  // read's. "Something went wrong" names neither. When the read ANSWERED and the answer was a word
+  // this build does not know, the word itself is what there is to report.
+  const refusal = state === "error" ? refusalText(statementError)
+    : state === "unknown" ? (refusalText(runQ.error) || (status ? `status: ${status}` : ""))
+      : "";
 
   return (
     <div data-testid="ws-awaiting" data-state={state}
@@ -805,19 +823,27 @@ function AwaitingExtraction({ documentId, statementError, reloadStatement, t }: 
                   maxWidth: 440 }}>
         {body}
       </p>
-      {/* The server's own words for a refusal that is not a missing extraction — it names the
-          concept or the status, which "something went wrong" never did. */}
-      {state === "error" && (
+      {refusal && (
         <p style={{ fontFamily: font.mono, fontSize: 11, color: color.muted,
                     margin: "0 auto 20px", maxWidth: 440, wordBreak: "break-word" }}>
-          {statementError instanceof ApiError
-            ? (statementError.detail ?? statementError.message)
-            : statementError instanceof Error ? statementError.message : ""}
+          {refusal}
         </p>
       )}
-      <Button testid="ws-awaiting-open" onClick={() => navigate(SCREENS.extraction.path)}>
-        {t("ex.pending.open")}
-      </Button>
+      <div style={{ display: "flex", gap: 9, justifyContent: "center", flexWrap: "wrap" }}>
+        {/* The only state with nothing watching it. Every other one either resolves itself (the read
+            polls a running run, and succeeding re-asks for the spread) or is the reader's answer;
+            an unanswered read polls nothing, so without this the screen could not get off it. */}
+        {state === "unknown" && (
+          <Button variant="secondary" testid="ws-awaiting-recheck"
+                  disabled={runQ.isFetching}
+                  onClick={() => { void runQ.refetch(); reloadStatement(); }}>
+            {runQ.isFetching ? t("ex.run.retryPending") : t("ex.readOnly.recheck")}
+          </Button>
+        )}
+        <Button testid="ws-awaiting-open" onClick={() => navigate(SCREENS.extraction.path)}>
+          {t("ex.pending.open")}
+        </Button>
+      </div>
     </div>
   );
 }
