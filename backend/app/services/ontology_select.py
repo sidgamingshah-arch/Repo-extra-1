@@ -1,23 +1,26 @@
-"""Which rulebook is in force for a template.
+"""Which rulebook is in force for a template: **the latest one**.
 
-More than one ontology can target the same template — a v1 written for it and a v2 that replaces
-that v1 — and until now every consumer decided for itself, by taking the highest ``version`` among
-the matches. That answers the wrong question: ``version`` counts EDITS to one rulebook, so it
-cannot compare two different ones. With v1 and v2 both sitting at version 1, the choice fell
-through to whichever row the database returned first, which made the product's mapping behaviour a
-property of insertion order.
+More than one ontology can target the same template, and every consumer used to decide for itself by
+taking the highest ``version`` among the matches. That answers the wrong question — ``version`` counts
+EDITS to one rulebook, so it cannot compare two different ones — and with two rulebooks both at
+version 1 the choice fell through to whichever row the database returned first, making the product's
+mapping behaviour a property of insertion order.
 
-Adoption is declared in the rulebook instead. ``metadata.supersedes`` names the ontology_key this
-one replaces, so a rulebook says for itself that it takes over — and the next one takes over from it
-without anybody editing code or re-ordering a seed. That is the same principle the rest of this
-system runs on: the ontology is data, and a decision about extraction belongs in the data.
+The answer is simply the most recently stored one. An admin uploads a rulebook, or corrects a concept
+from the Template screen, or start-up refreshes the shipped file: whichever of those happened last is
+what the next run maps against. Nothing outranks recency, because there is no honest sense in which
+an older rulebook is more current than a newer one.
 
-One thing a rulebook cannot declare, and this module therefore asks the repo: whether it is the
-rulebook the repo SHIPS (``sample.reference.shipped_ontology_key``). A shipped rulebook does not
-know which legacy keys some particular database still holds, and the keys it replaced cannot be
-expected to declare their own retirement — they were authored before the successor existed. See
-``sample.reference.RETIRED_ONTOLOGY_KEYS``, and ``select_for_template`` for why being the shipped
-one has to outrank both of the tests below.
+This module previously ranked on five tests — declared supersession, the shipped key, declaring
+anything at all, incumbency, then version — each added to work around the previous one, and their net
+effect was that publishing the current rulebook beside an obsolete one changed nothing. What they
+were really guarding is a skeleton upload becoming the rulebook a real extraction runs on, and that
+belongs at the door rather than in a ranking: ``POST /ontologies`` refuses a rulebook that recognises
+nothing, where an author is present to be told why.
+
+``metadata.supersedes`` is still read, and ``superseded_keys`` still reports it, for LABELLING — the
+ontology list and a run's record both show whether a rulebook has been declared replaced. That is a
+different question from which one runs next, and it no longer decides it.
 """
 from __future__ import annotations
 
@@ -77,67 +80,36 @@ def superseded_keys(rows: list) -> set[str]:
 def select_for_template(session: Session, template_key: str):
     """The rulebook in force for a template, or None when none targets it.
 
-    Five tests, in order:
+    ONE TEST: **the latest rulebook wins.** Whatever was stored most recently for this template —
+    uploaded by an admin, or published by correcting a concept from the Template screen, or refreshed
+    from the shipped file at start-up — is what the next run maps against.
 
-    1. Drop anything a present rulebook says it replaces, or that the repo has retired
-       (``superseded_keys``).
-    2. THE SHIPPED RULEBOOK WINS. Among what survives step 1, the rulebook whose key this repo
-       ships is in force — nothing that merely sits in the database outranks the file the product is
-       built from.
+    That is the whole rule, and it replaces five. The five were: drop declared supersessions, prefer
+    the shipped key, prefer a rulebook that declares a supersession, prefer the incumbent key, then
+    highest version. Every one of them after the first was added to work around the one before it —
+    "prefer the shipped key" existed only to defeat "prefer the incumbent", which existed only to
+    defeat "highest version", which had let a skeleton win on sort order. A precedence hierarchy
+    nobody asked for, whose net effect was that publishing the current 185-concept rulebook beside an
+    old 173-concept one changed nothing, because the old one had been seen first and said it
+    superseded something.
 
-       This is the test that lets a rulebook revision reach a reader, and the state it was found in
-       is why it exists. A database seeded before the one-rulebook consolidation holds
-       ``hkfrs_hk_china_v2``, which DECLARES a supersession and was seen FIRST, while the shipped
-       ``hkfrs_hk_china`` declares none and arrives later — so it lost at step 3 and again at
-       step 4, and publishing the current 185-concept rulebook beside the old one changed nothing.
-       The product went on mapping filings with a 173-concept rulebook carrying a tax bucket the
-       specification had removed.
+    THE HOLE THE OLD TESTS WERE REALLY GUARDING was a skeleton upload — every concept a stub with no
+    aliases at all — becoming the rulebook a real extraction runs on. That is not a precedence
+    question and ranking cannot answer it honestly: a rulebook that recognises nothing is not a
+    lower-priority rulebook, it is not a rulebook. It is refused at the door instead, by
+    ``POST /ontologies``, where an author is present to be told why (``routes.ontologies``).
 
-       It does not reopen the hole step 4 closes. An arbitrary upload still cannot displace the
-       shipped rulebook: taking over is something a rulebook has to SAY, and saying it removes the
-       shipped one at step 1, where a declared supersession is honoured whoever declares it.
-    3. Prefer a rulebook that DECLARES a supersession over one that declares none. This is what
-       separates an adopted successor from a draft: a generated skeleton, or a rulebook someone
-       uploaded to try something, replaces nothing and says so by omission. Without this test a
-       freshly uploaded skeleton — every concept a stub with no aliases at all — could become the
-       rulebook a real extraction runs on, purely because its key happened to sort late.
-    4. THE INCUMBENT WINS A TIE. Among rulebooks that all declare nothing, the one that has been
-       here longest stays in force, so an upload never takes over by arriving.
+    ``created_at`` decides, because "latest" means latest in time and a version number only counts
+    edits WITHIN one key — it cannot compare two different rulebooks, which is the mistake this
+    module was originally written to fix. Version and id break an exact tie so the answer is stable
+    rather than a property of row order.
 
-       This is what step 3 alone could not do, and the day it mattered is instructive: while two
-       generations shipped, the successor declared a supersession and won at step 3 whatever else
-       was stored. Consolidating to one rulebook left NOTHING declaring one — step 3 became a tie on
-       every template, the next test was "highest version, then ontology_key", and a leftover
-       ``hkfrs_hk_china_v1_draft`` skeleton took over from ``hkfrs_hk_china`` because it sorted
-       later.
-       Extraction went on running, against a rulebook of empty stubs.
-
-       It stays even though step 2 covers the shipped rulebook, because it is the answer for every
-       key that is NOT the shipped one: two uploads, neither declaring anything, must not swap
-       places on each other's edits.
-    5. Then the highest edit version of that key — a later version IS adoption of that key's newer
-       content — and finally ontology_key, so a genuine tie is at least stable.
-
-    Reaching step 5 with a genuine tie means two rulebooks first seen in the same instant both claim
-    one template and neither replaces the other. That is an authoring question this function cannot
-    answer, and the caller sees a definite — if arbitrary — choice rather than an unstable one.
+    A declared supersession no longer changes the outcome, and does not need to: a rulebook that
+    replaces another is published after it, so it already wins. ``superseded_keys`` stays, for
+    LABELLING only — "has this been declared replaced?" is worth showing on the ontology list and on
+    a run's record, and it is a different question from "what runs next".
     """
     rows = rulebooks_for_template(session, template_key)
     if not rows:
         return None
-    dead = superseded_keys(rows)
-    live = [r for r in rows if r.ontology_key not in dead] or rows
-    # Incumbency is a property of the KEY, not of one stored version of it: editing a rulebook
-    # publishes a new row, and a fresh row for a long-standing key must not read as a newcomer.
-    first_seen: dict[str, object] = {}
-    for r in live:
-        prior = first_seen.get(r.ontology_key)
-        if prior is None or r.created_at < prior:
-            first_seen[r.ontology_key] = r.created_at
-    shipped, _ = _shipped()
-    # ``shipped and`` because "" is what an absent sample file answers, and without it every row
-    # whose key is empty would be treated as the shipped rulebook.
-    return max(live, key=lambda r: (bool(shipped) and r.ontology_key == shipped,
-                                    bool(_supersedes(r.definition)),
-                                    -first_seen[r.ontology_key].timestamp(),
-                                    r.version, r.ontology_key))
+    return max(rows, key=lambda r: (r.created_at, r.version, r.id))

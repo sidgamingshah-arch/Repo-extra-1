@@ -395,7 +395,14 @@ def test_the_shipped_v2_rulebook_still_uploads(client):
 # --- v2 is the rulebook IN FORCE ----------------------------------------------------------------
 
 def test_the_shipped_rulebook_is_the_one_in_force(client):
-    """One rulebook ships and it is the one a run against the shipped template gets."""
+    """One rulebook ships, and with nothing stored after it, it is the one a run gets.
+
+    The reason it wins is now the only reason anything wins: it is the LATEST rulebook stored for
+    this template. That is a weaker claim than this test used to make — the shipped rulebook no
+    longer outranks anything — and it is the honest one. Store a rulebook after it and that one runs
+    (``test_the_latest_rulebook_stored_is_the_one_that_runs``), which is what an admin uploading or
+    correcting one is asking for.
+    """
     from app.db.base import SessionLocal
     from app.services.ontology_select import select_for_template
 
@@ -477,35 +484,40 @@ def test_the_adopted_unbound_row_policy_is_stated_in_the_rulebook():
     assert "still routed to review" in policy
 
 
-def test_an_uploaded_rulebook_that_claims_nothing_does_not_displace_the_incumbent(client):
-    """A draft arriving must not become the rulebook real extractions run on.
+def test_the_latest_rulebook_stored_is_the_one_that_runs(client):
+    """THE RULE, in one test: whatever was stored last for this template is what the next run maps
+    against — uploaded by an admin, or published by correcting a concept from the Template screen.
 
-    THE DEFECT THIS CLOSES, and it was live for the length of one commit. ``select_for_template``
-    prefers a rulebook DECLARING a supersession over one declaring none — which held the line while
-    two generations shipped, because the successor declared one. Consolidating to a single rulebook
-    left nothing declaring anything: every candidate tied at that test, the next tests were "highest
-    version, then ontology_key", and a leftover ``hkfrs_hk_china_v1_draft`` skeleton — every concept
-    a stub with no aliases — took over from ``hkfrs_hk_china`` on the strength of sorting later.
-    Extraction kept succeeding against it.
+    THE DEFECT THIS CLOSES, and this file previously asserted its opposite. ``select_for_template``
+    had grown five ranking tests: drop declared supersessions, prefer the shipped key, prefer a
+    rulebook that declares a supersession, prefer the incumbent key, then highest version. Each was
+    added to work around the one before it, and together they meant a rulebook stored AFTER the
+    shipped one did not take over — so publishing a corrected 185-concept rulebook beside an obsolete
+    173-concept one changed nothing, and the product went on mapping filings with a rulebook whose
+    tax bucket the specification had removed. This test used to REQUIRE that, under the name "does
+    not displace the incumbent".
 
-    Incumbency is now the tie-break, so this holds whether or not anything declares a supersession:
-    the key that has been here longest stays in force, and taking over is something a rulebook has
-    to SAY (``test_an_uploaded_replacement_supersedes_the_shipped_rulebook``).
+    Uploaded under a key that sorts EARLIER than the shipped one, so no sort order can be mistaken
+    for the mechanism: it wins on recency alone.
     """
     from app.db.base import SessionLocal
     from app.db.models import OntologyVersion
     from app.services.ontology_select import select_for_template
 
-    # A key that sorts AFTER the shipped one, so key order alone would hand it the template.
-    draft = {**_v2(), "ontology_key": "hkfrs_hk_china_zz_draft"}
-    draft["metadata"] = {k: v for k, v in draft["metadata"].items() if k != "supersedes"}
-    created = client.post("/api/v1/ontologies", json={"definition": draft})
+    later = {**_v2(), "ontology_key": "aaa_uploaded_later"}
+    later["metadata"] = {k: v for k, v in later["metadata"].items() if k != "supersedes"}
+    created = client.post("/api/v1/ontologies", json={"definition": later})
     assert created.status_code == 201, created.text
     try:
-        assert "hkfrs_hk_china_zz_draft" > "hkfrs_hk_china"      # the sort the defect relied on
+        assert "aaa_uploaded_later" < "hkfrs_hk_china"     # sorts first; recency is what decides
         with SessionLocal() as s:
-            assert select_for_template(s, "hkfrs_hk_china_v1").ontology_key == "hkfrs_hk_china"
+            assert select_for_template(s, "hkfrs_hk_china_v1").ontology_key == "aaa_uploaded_later"
     finally:
         with SessionLocal() as s:
             s.delete(s.get(OntologyVersion, created.json()["id"]))
             s.commit()
+
+    # …and with it gone the shipped rulebook is the latest again. Nothing is sticky: "in force" is a
+    # question about what is stored now, not a title something keeps once it has held it.
+    with SessionLocal() as s:
+        assert select_for_template(s, "hkfrs_hk_china_v1").ontology_key == "hkfrs_hk_china"

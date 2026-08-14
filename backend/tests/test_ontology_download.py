@@ -107,6 +107,27 @@ def test_skeleton_is_served_as_a_named_json_attachment(client):
     assert r.headers["content-type"].startswith("application/json")
 
 
+def _drop_ontology(ont_id: str) -> None:
+    """Remove a rulebook a test stored, so it does not decide what a LATER test extracts with.
+
+    The rulebook in force for a template is simply the latest one stored for it
+    (``services.ontology_select``), so a skeleton left behind by a test about UPLOADING is in force
+    for every test after it — and a skeleton maps nothing, so those tests extract nothing. These two
+    tests are about the round trip publishing, not about the skeleton being adopted; leaving the row
+    asserts the second by accident. The previous ranking rule hid this by keeping the shipped
+    rulebook in force whatever else was stored, which is exactly the behaviour that let an obsolete
+    rulebook outrank a corrected one in production.
+    """
+    from app.db.base import SessionLocal
+    from app.db.models import OntologyVersion
+
+    with SessionLocal() as s:
+        row = s.get(OntologyVersion, ont_id)
+        if row is not None:
+            s.delete(row)
+            s.commit()
+
+
 def test_skeleton_posts_straight_back_and_publishes(client):
     """The round trip, unmodified. This is the requirement — the user's first action with the
     file is to upload it, and a skeleton that fails there has cost them more than it saved."""
@@ -122,6 +143,7 @@ def test_skeleton_posts_straight_back_and_publishes(client):
     # Nothing was dropped on the way through: the gate reports undeclared keys, and pydantic
     # silently discards them, so an equal definition proves both.
     assert stored == skeleton
+    _drop_ontology(out["id"])
 
 
 def test_skeleton_accounts_for_every_canonical_key_the_template_declares(client):
@@ -187,8 +209,10 @@ def test_skeleton_does_not_claim_the_live_rulebooks_key(client):
                    if r["ontology_key"] == key)
 
     before = _top("hkfrs_hk_china")
-    assert client.post(f"{API}/ontologies", json={"definition": skeleton}).status_code == 201
+    created = client.post(f"{API}/ontologies", json={"definition": skeleton})
+    assert created.status_code == 201
     assert _top("hkfrs_hk_china") == before
+    _drop_ontology(created.json()["id"])
 
 
 def test_unknown_template_id_is_404(client):

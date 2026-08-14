@@ -209,14 +209,37 @@ def _newest(session: Session, model, key_column, key: str):
     """The highest-``version`` row of one key, or None.
 
     Ordered rather than "the first row that comes back": authoring and inline ontology edits publish
-    further versions, so several rows share a key, and every consumer of these tables reads the
-    newest one (``sortTemplates`` on the Template screen, ``select_for_template`` for a rulebook).
-    Comparing the file against an ARBITRARY stored version would republish on every boot in one
-    direction and never republish in the other.
+    further versions, so several rows share a key. Used to number the next version and to report what
+    was found — NOT to decide whether to publish; see :func:`_already_stored`.
     """
     return session.execute(
         select(model).where(key_column == key).order_by(model.version.desc())
     ).scalars().first()
+
+
+def _already_stored(session: Session, model, key_column, key: str, definition: object) -> bool:
+    """Whether this exact shipped content is ALREADY stored under this key, at any version.
+
+    WHY THIS AND NOT "does it differ from the newest version". Because an admin's own correction is
+    usually the newest version, and comparing against it republishes the file on top of their work
+    every time the server restarts. The rule this system now runs on is that the LATEST rulebook wins
+    (``services.ontology_select``), so a start-up that republishes the file unprompted silently
+    overrules a human edit — the analyst fixes an alias, restarts, and their fix is gone with nothing
+    saying so. Asking "have we published this file's content before?" leaves their edit latest, and
+    therefore in force, which is what they asked for by making it.
+
+    A genuinely NEW shipped file is still unseen, so it still publishes and still wins — that is the
+    property the whole refresh exists for.
+
+    The one case this gives up: reverting the shipped file to content published earlier is a no-op
+    here, because that content IS stored. Rare, and recoverable on purpose rather than by accident —
+    ``scripts/reconcile_reference_data.py --apply`` republishes the file as the newest version when an
+    operator says to. Chosen deliberately over the alternative, which loses somebody's work on every
+    restart.
+    """
+    canonical = _canonical(definition)
+    return any(_canonical(row.definition) == canonical for row in session.execute(
+        select(model).where(key_column == key)).scalars().all())
 
 
 def ensure_reference_data(session: Session, *, dry_run: bool = False) -> list[str]:
@@ -286,15 +309,14 @@ def _refresh(session: Session, *, dry_run: bool) -> list[str]:
     replaced: list[str] = []
     tpl_key = tpl["template_key"]
     newest_tpl = _newest(session, TemplateVersion, TemplateVersion.template_key, tpl_key)
-    if newest_tpl is None or _canonical(newest_tpl.definition) != _canonical(tpl):
+    if not _already_stored(session, TemplateVersion, TemplateVersion.template_key, tpl_key, tpl):
         version = 1 if newest_tpl is None else newest_tpl.version + 1
         notes.append(f"template {tpl_key}: published v{version} from {_TEMPLATE.name}"
                      + ("" if newest_tpl is None else f" (stored v{newest_tpl.version} differed)"))
         if newest_tpl is not None:
-            replaced.append(f"template {tpl_key} v{newest_tpl.version} did not match "
-                            f"{_TEMPLATE.name} and has been superseded by v{version} — an edited "
-                            f"template workbook uploaded onto a shipped key does not outlive a "
-                            f"restart")
+            replaced.append(f"template {tpl_key} v{newest_tpl.version} is no longer the newest: "
+                            f"{_TEMPLATE.name} has changed and is published as v{version}, which "
+                            f"takes precedence for the next run")
         if not dry_run:
             # ``is_published`` names ONE row — the shipped definition in force — so the version it
             # named stops being published when a newer one takes over. Nothing selects on the flag
@@ -311,26 +333,30 @@ def _refresh(session: Session, *, dry_run: bool) -> list[str]:
             ))
 
     newest_ont = _newest(session, OntologyVersion, OntologyVersion.ontology_key, ont_key)
-    if newest_ont is None or _canonical(newest_ont.definition) != _canonical(raw_ontology):
+    if not _already_stored(session, OntologyVersion, OntologyVersion.ontology_key, ont_key,
+                           raw_ontology):
         version = 1 if newest_ont is None else newest_ont.version + 1
         notes.append(f"ontology {ont_key}: published v{version} from {_ONTOLOGY.name}"
                      + ("" if newest_ont is None else f" (stored v{newest_ont.version} differed)"))
         if newest_ont is not None:
             replaced.append(f"ontology {ont_key} v{newest_ont.version} did not match "
                             f"{_ONTOLOGY.name} and has been superseded by v{version} — an alias, "
-                            f"criterion or netting rule edited through the ontology editor on a "
-                            f"shipped key does not outlive a restart")
+                            f"criterion or netting rule edited through the ontology editor is NOT "
+                            f"replaced by a restart — only a genuinely changed shipped file is "
+                            f"published, and then it is the latest and takes precedence")
         if not dry_run:
             session.add(OntologyVersion(
                 ontology_key=ont_key, target_template_key=raw_ontology["target_template_key"],
                 version=version, definition=raw_ontology,
             ))
 
-    # Retirement is a DECLARATION, not a write: ``ontology_select.superseded_keys`` reads
-    # RETIRED_ONTOLOGY_KEYS, so a legacy key stops being selectable the moment the shipped rulebook
-    # is stored beside it. Reported here because a startup that silently ignores two rival rulebooks
-    # in the database tells the operator nothing about why the product's mapping behaviour just
-    # changed; the destructive clean is ``scripts/reconcile_reference_data.py``.
+    # A legacy key found stored is REPORTED and nothing more. It no longer needs to be excluded from
+    # anything: the rulebook in force is simply the latest one, and a legacy rulebook is by definition
+    # older than the shipped file that replaced it, so it cannot win. RETIRED_ONTOLOGY_KEYS survives
+    # for two narrower jobs — labelling those rows "replaced" on the ontology list
+    # (``ontology_select.superseded_keys``), and telling the destructive clean in
+    # ``scripts/reconcile_reference_data.py`` which rows an operator may want deleted. Reported here
+    # because a database quietly holding two rival rulebooks is worth an operator knowing about.
     retired_present = session.execute(
         select(OntologyVersion.ontology_key)
         .where(OntologyVersion.ontology_key.in_(RETIRED_ONTOLOGY_KEYS)).distinct()

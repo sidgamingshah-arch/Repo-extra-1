@@ -169,7 +169,7 @@ def test_a_stale_stored_template_is_refreshed_to_the_shipped_order(session, capl
     # Superseding a stored definition is reported, at a level this app's absent logging config still
     # lets through: what it replaces can be an edit somebody made, and a silent replacement of a
     # user's edit is the one outcome nobody would think to look for.
-    assert any("superseded by v2" in r.getMessage() for r in caplog.records), caplog.text
+    assert any("published as v2" in r.getMessage() for r in caplog.records), caplog.text
 
     versions = _rows(session, TemplateVersion)
     assert [r.version for r in versions] == [1, 2]
@@ -420,3 +420,92 @@ def test_an_uploaded_replacement_that_declares_the_supersession_still_takes_over
     assert select_for_template(session,
                                shipped["target_template_key"]).ontology_key == \
         "hkfrs_hk_china_next"
+
+
+def _own_ontology_file(tmp_path, monkeypatch) -> tuple[object, callable]:
+    """Point ``reference._ONTOLOGY`` at this test's OWN copy of the shipped rulebook.
+
+    A test about "the shipped file changed" has to be able to change it, and it must not change the
+    repo's. Returns the path and a writer; the writer bumps mtime, because ``_key_in_file`` caches on
+    (path, mtime) and a cache answering from content it no longer reflects is the same stale
+    declaration this module exists to remove.
+    """
+    from app.sample import reference
+
+    path = tmp_path / "own_ontology.json"
+    path.write_text(json.dumps(_shipped_ontology()))
+    monkeypatch.setattr(reference, "_ONTOLOGY", path)
+
+    def write(definition: dict) -> None:
+        path.write_text(json.dumps(definition))
+        path.touch()
+
+    return path, write
+
+
+def test_an_edit_made_through_the_product_survives_a_restart(session, tmp_path, monkeypatch):
+    """The property the refresh must PRESERVE rather than override.
+
+    THE RULE is that the LATEST rulebook wins (``services.ontology_select``), so a start-up that
+    republishes the shipped file unprompted does not merely add a row — it OVERRULES whatever a human
+    did last. An analyst corrects an alias from the Template screen, restarts the server, and the
+    correction is silently out of force with nothing on any screen saying so. That is the same class
+    of defect as the drift this refresh was written to close, pointed the other way.
+
+    So the refresh asks "have we published this file's content before?", not "does it differ from the
+    newest version". An unchanged file is already stored, nothing is published, and the human's edit
+    stays newest — and therefore in force.
+    """
+    from app.db.models import OntologyVersion
+    from app.sample.reference import ensure_reference_data
+    from app.services.ontology_select import select_for_template
+
+    _own_ontology_file(tmp_path, monkeypatch)
+    ensure_reference_data(session)
+    base = _rows(session, OntologyVersion)[0]
+
+    edited = json.loads(json.dumps(base.definition))
+    edited["mappings"][0]["aliases"] = [*(edited["mappings"][0].get("aliases") or []), "Analyst"]
+    session.add(OntologyVersion(
+        ontology_key=base.ontology_key, target_template_key=base.target_template_key,
+        version=base.version + 1, definition=edited))
+    session.commit()
+
+    notes = ensure_reference_data(session)                       # the restart
+
+    assert not any("ontology" in n and "published" in n for n in notes), notes
+    assert [r.version for r in _rows(session, OntologyVersion)] == [1, 2]
+    in_force = select_for_template(session, base.target_template_key)
+    assert "Analyst" in in_force.definition["mappings"][0]["aliases"]
+
+
+def test_a_genuinely_changed_shipped_file_still_takes_precedence(session, tmp_path, monkeypatch):
+    """The other half: giving a human's edit precedence must not make the shipped file inert.
+
+    Content that has never been published is unseen however many edits sit on top of it, so it
+    publishes, becomes the newest version, and runs — which is the whole point of shipping a fix.
+    """
+    from app.db.models import OntologyVersion
+    from app.sample.reference import ensure_reference_data
+    from app.services.ontology_select import select_for_template
+
+    _path, write = _own_ontology_file(tmp_path, monkeypatch)
+    ensure_reference_data(session)
+    base = _rows(session, OntologyVersion)[0]
+
+    edited = json.loads(json.dumps(base.definition))
+    edited["mappings"][0]["aliases"] = ["Analyst"]
+    session.add(OntologyVersion(
+        ontology_key=base.ontology_key, target_template_key=base.target_template_key,
+        version=base.version + 1, definition=edited))
+    session.commit()
+
+    changed = json.loads(json.dumps(_shipped_ontology()))
+    changed["metadata"] = {**(changed.get("metadata") or {}), "version": "shipped-later"}
+    write(changed)
+
+    notes = ensure_reference_data(session)
+
+    assert any("ontology" in n and "published" in n for n in notes), notes
+    in_force = select_for_template(session, base.target_template_key)
+    assert in_force.definition["metadata"]["version"] == "shipped-later"
