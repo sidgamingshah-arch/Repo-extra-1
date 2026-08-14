@@ -103,3 +103,96 @@ def test_greenfield_empty_until_sample_loaded(client, auth, anon_client):
         assert any(e["run_id"] == _SEED_RUN_ID for e in loaded_audit)
     finally:
         settings_state.set_seed_demo(True)
+
+
+def test_submitting_a_real_document_names_that_documents_entity(anon_client, auth):
+    """THE DEFECT THIS CLOSES: submitting an uploaded filing wrote an audit entry naming the DEMO
+    company. The Export screen drives an uploaded document and the seeded sample from the same
+    button, and the route hardcoded ``DEMO["project"]["entity"]`` — so the audit trail recorded a
+    submission that happened, for a company nobody submitted. That is worse than no audit trail:
+    the entry looks authoritative and names the wrong entity.
+
+    The name comes from the run's own ``result["entity"]``, which is what the extraction read off
+    the filing. Written directly here rather than extracted, because what is under test is which
+    entity the audit entry carries.
+    """
+    from app.db.base import SessionLocal
+    from app.db.models import Document, ExtractionRun
+
+    with SessionLocal() as s:
+        doc = Document(filename="acme-annual.pdf", fmt="pdf", byte_size=1,
+                       object_key="audit/acme.pdf", content_hash="audit-real-entity",
+                       owner="analyst")
+        s.add(doc)
+        s.flush()
+        run = ExtractionRun(document_id=doc.id, status="succeeded",
+                            result={"entity": "Acme Holdings Limited"})
+        s.add(run)
+        s.commit()
+        doc_id, run_id = doc.id, run.id
+    try:
+        r = anon_client.post(f"/api/v1/projects/demo/submit-review?document_id={doc_id}",
+                             headers=auth("analyst"))
+        assert r.status_code == 200, r.text
+        entry = r.json()["entry"]
+        assert entry["entity"] == "Acme Holdings Limited"
+        assert entry["action"] == "submit_review"
+        # The entry points at the run that produced the figures, so the submission is traceable to
+        # the extraction it is a submission OF.
+        assert entry["run_id"] == run_id
+        # And the demo name is nowhere near it.
+        from app.sample.demo import DEMO
+        assert entry["entity"] != DEMO["project"]["entity"]
+    finally:
+        with SessionLocal() as s:
+            s.delete(s.get(ExtractionRun, run_id))
+            s.delete(s.get(Document, doc_id))
+            s.commit()
+
+
+def test_submitting_a_document_with_no_extracted_entity_is_refused(anon_client, auth):
+    """No entity means no honest submission. Falling back to the demo name is the defect above, so
+    an un-extracted document is refused and told why rather than recorded under a borrowed name."""
+    from app.db.base import SessionLocal
+    from app.db.models import Document
+
+    with SessionLocal() as s:
+        doc = Document(filename="not-yet-run.pdf", fmt="pdf", byte_size=1,
+                       object_key="audit/not-yet-run.pdf", content_hash="audit-no-entity",
+                       owner="analyst")
+        s.add(doc)
+        s.commit()
+        doc_id = doc.id
+    try:
+        r = anon_client.post(f"/api/v1/projects/demo/submit-review?document_id={doc_id}",
+                             headers=auth("analyst"))
+        assert r.status_code == 422, r.text
+        assert "not-yet-run.pdf" in str(r.json()["detail"])
+    finally:
+        with SessionLocal() as s:
+            s.delete(s.get(Document, doc_id))
+            s.commit()
+
+
+def test_submitting_another_owners_document_is_not_found(anon_client, auth):
+    """404, not 403, and by the same predicate every other document read uses: whether a document
+    exists must not leak across tenants. An analyst is not elevated, so another analyst's filing is
+    simply absent."""
+    from app.db.base import SessionLocal
+    from app.db.models import Document
+
+    with SessionLocal() as s:
+        doc = Document(filename="someone-else.pdf", fmt="pdf", byte_size=1,
+                       object_key="audit/someone-else.pdf", content_hash="audit-other-owner",
+                       owner="another-analyst")
+        s.add(doc)
+        s.commit()
+        doc_id = doc.id
+    try:
+        r = anon_client.post(f"/api/v1/projects/demo/submit-review?document_id={doc_id}",
+                             headers=auth("analyst"))
+        assert r.status_code == 404, r.text
+    finally:
+        with SessionLocal() as s:
+            s.delete(s.get(Document, doc_id))
+            s.commit()

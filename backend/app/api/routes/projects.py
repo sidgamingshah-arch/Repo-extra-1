@@ -539,16 +539,54 @@ def run_project_analysis(project_id: str) -> dict:
 
 @router.post("/{project_id}/submit-review",
              dependencies=[Depends(require(Permission.REVIEW_SUBMIT))])
-def submit_for_review(project_id: str) -> dict:
+def submit_for_review(project_id: str, document_id: str | None = Query(default=None),
+                      principal=Depends(current_principal)) -> dict:
     """Analyst hands the final output to the reviewer. Recorded to the audit log.
 
     The REVIEW_SUBMIT permission is only granted to the analyst while the review step
-    is enabled (see security.effective_permissions), so this 403s once review is off."""
+    is enabled (see security.effective_permissions), so this 403s once review is off.
+
+    ``document_id`` NAMES WHAT IS BEING SUBMITTED, and it is the whole point of this signature.
+    The Export screen serves an uploaded document and the seeded sample from the same controls, but
+    this route hardcoded ``DEMO["project"]["entity"]`` — so submitting a real filing wrote an audit
+    entry naming the demo company. An audit trail whose entries name the wrong entity is worse than
+    no audit trail: it reads as a submission that happened, for a company nobody submitted.
+
+    The entity comes from the run's own ``result["entity"]`` — the name the extraction read off the
+    filing — never re-derived here. A document with no run, or a run that has not named an entity,
+    is REFUSED (422) rather than falling back to the demo name: "I do not know whose filing this is"
+    is the true answer, and the fallback is exactly the defect.
+
+    Recorded under ``project_id`` regardless, because the audit log is keyed by project and the
+    Audit view reads that one key; the entry says which entity and which run it is about.
+    """
+    from app.api.routes.documents import _can_access, _latest_run
+    from app.db.base import SessionLocal
+    from app.db.models import Document
     from app.services import audit as audit_svc
 
-    entity = DEMO["project"]["entity"]
+    if document_id:
+        with SessionLocal() as session:
+            doc = session.get(Document, document_id)
+            # 404 not 403, and the same predicate every other document read uses — existence must
+            # not leak across tenants (see documents.authorized_document).
+            if doc is None or not _can_access(doc, principal):
+                raise HTTPException(status_code=404, detail="Document not found")
+            run = _latest_run(session, document_id)
+            entity = ((run.result or {}).get("entity") or "").strip() if run is not None else ""
+            run_id = run.id if run is not None else ""
+        if not entity:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Document {doc.filename!r} has no extracted entity name to submit under; "
+                       f"run the extraction first.")
+    else:
+        # The seeded sample project, which is what this router is for.
+        entity = DEMO["project"]["entity"]
+        run_id = audit_svc.make_run_id(entity)
+
     entry = audit_svc.record(project_id, audit_svc.AuditEntry(
-        run_id=audit_svc.make_run_id(entity), entity=entity, action="submit_review",
+        run_id=run_id, entity=entity, action="submit_review",
         provider="—", model="—", input_tokens=None, output_tokens=None, status="succeeded",
     ))
     return {"ok": True, "entry": entry.to_dict()}

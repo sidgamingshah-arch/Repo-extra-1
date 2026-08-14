@@ -170,8 +170,15 @@ export const api = {
   updateFxRate: (id: string, body: FxRateInput) =>
     req<FxRate>(`/fx-rates/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteFxRate: (id: string) => req<void>(`/fx-rates/${id}`, { method: "DELETE" }),
-  submitForReview: () =>
-    req<{ ok: boolean; entry: AuditEntry }>(`/projects/${PROJECT}/submit-review`, { method: "POST" }),
+  /** Hand the output to the reviewer. `documentId` says WHOSE filing is being submitted: the
+   *  Export screen serves an uploaded document and the seeded sample from the same controls, and
+   *  without it the server had no choice but to name the demo company in the audit entry. Omitted
+   *  for the sample project, which is the only case that name is right for. The server refuses a
+   *  document whose run has not named an entity rather than guessing one. */
+  submitForReview: (documentId?: string) =>
+    req<{ ok: boolean; entry: AuditEntry }>(
+      `/projects/${PROJECT}/submit-review${documentId ? `?document_id=${encodeURIComponent(documentId)}` : ""}`,
+      { method: "POST" }),
   commentary: (locale: Locale = "en") =>
     req<Commentary>(`/projects/${PROJECT}/commentary?locale=${locale}`),
   audit: () => req<AuditResponse>(`/projects/${PROJECT}/audit`),

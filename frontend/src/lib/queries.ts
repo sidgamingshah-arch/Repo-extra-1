@@ -120,7 +120,7 @@ export function useDeleteFxRate() {
 export function useSubmitForReview() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.submitForReview(),
+    mutationFn: (documentId?: string) => api.submitForReview(documentId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["audit"] }),
   });
 }

@@ -410,7 +410,9 @@ export default function ExportScreen() {
                 </span>
               ) : (
                 <button
-                  onClick={() => submitReview.mutate()}
+                  // The document being submitted, so the audit entry names the filing's own entity
+                  // rather than the demo company's. Undefined for the sample project.
+                  onClick={() => submitReview.mutate(activeDocumentId ?? undefined)}
                   disabled={submitReview.isPending}
                   style={{
                     fontSize: 13, fontWeight: 600, color: "#fff",

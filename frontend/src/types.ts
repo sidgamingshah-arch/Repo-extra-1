@@ -469,6 +469,15 @@ export interface ExtractionResult {
   filename: string;
   entity?: string | null;
   page_count?: number;
+  /** How many LINES the run produced — `len(doc_model.line_items)`, the mapper's promoted subtotals
+   *  included. The screen captions it "lines" (`ex.count`) for that reason: "line items" is the
+   *  narrower population the TEMPLATE declares and the sample's own count reports, and one word for
+   *  two populations is how the Export footer came to overstate what it had counted.
+   *
+   *  The FIELD keeps its name deliberately, here and in the JSON export's `line_item_count` /
+   *  `line_items`: renaming a key in a downloadable artifact changes a schema people have already
+   *  saved, for no gain a reader of the file can see. The label is what made a claim; it is the
+   *  label that was wrong. */
   line_item_count: number;
   notes: number;
   rows: ExtractionRow[];
