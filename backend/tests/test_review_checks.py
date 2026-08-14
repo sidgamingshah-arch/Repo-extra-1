@@ -322,6 +322,17 @@ def _balance_card_review(structural):
     return review
 
 
+def _cards_above(review: dict) -> list[dict]:
+    """The cards the relations are tested AGAINST — everything served before them.
+
+    Not the whole payload: a relation card declares the same assertion its relation carries
+    (`_ASSERTED_DIFF_KEY`), so a set built from a list containing it answers "already reported" for
+    the relation itself. `_accounting_checks` passes the queue as it stands before the relations, and
+    these tests have to ask the question the same way round.
+    """
+    return [c for c in review["checks"] if c["type"] != "structural"]
+
+
 def test_a_relation_asserting_a_different_break_is_not_silenced_by_one_sharing_its_target():
     """Suppression matched a bare `details.target` and ignored what the card SAYS.
 
@@ -335,7 +346,7 @@ def test_a_relation_asserting_a_different_break_is_not_silenced_by_one_sharing_i
     assert any(c["type"] == "structural" and c.get("target") == "bs_total_assets"
                for c in review["checks"]), \
         "a 2,500 break must not be silenced by a card reporting 100 about the same line"
-    assert not _relation_reported_elsewhere(rel, _reported_assertions(review["checks"]))
+    assert not _relation_reported_elsewhere(rel, _reported_assertions(_cards_above(review)))
 
 
 def test_a_consolidated_card_does_not_delete_a_break_in_the_standalone_column():
@@ -350,7 +361,7 @@ def test_a_consolidated_card_does_not_delete_a_break_in_the_standalone_column():
     assert any(c["type"] == "structural" and c.get("target") == "bs_total_assets"
                for c in review["checks"]), \
         "a standalone break must not be deleted by a consolidated card"
-    assert not _relation_reported_elsewhere(rel, _reported_assertions(review["checks"]))
+    assert not _relation_reported_elsewhere(rel, _reported_assertions(_cards_above(review)))
 
 
 def test_one_break_reported_twice_is_still_suppressed():
@@ -367,4 +378,4 @@ def test_one_break_reported_twice_is_still_suppressed():
         "a relation restating the balance card's own 100 break should not get a second card"
     # Suppressed AND accounted for: the coverage band's "reported by a finding above" count reads
     # this same predicate, so a dropped relation is never silently unaccounted for.
-    assert _relation_reported_elsewhere(rel, _reported_assertions(review["checks"]))
+    assert _relation_reported_elsewhere(rel, _reported_assertions(_cards_above(review)))

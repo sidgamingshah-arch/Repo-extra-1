@@ -1189,32 +1189,75 @@ def _guard_check(res: dict, d: dict, locale: str) -> dict:
     }
 
 
-# ONE assertion a served card makes: this target, in this scope, is out by this much. Suppression
-# compares ASSERTIONS and never bare targets, because "a card mentions this target" and "a card
-# already tells the reader about this difference" are different facts, and only the second one makes
-# a second card a duplicate.
+# ONE assertion a served card makes: this target, in this scope, is out by this much. Every finding
+# that reports a difference is suppressed on ASSERTIONS and never on bare targets, because "a card
+# mentions this target" and "a card already tells the reader about this difference" are different facts,
+# and only the second one makes a second card a duplicate. (The one finding that reports no difference
+# at all is asked the weaker question below.)
 #
 # `covered` used to be a set of bare target strings, and that cost two blocking findings on the
 # shipped rulebook. An equity-closing card whose target is bs_equity__total_equity — asserting a
 # 1,000 break between the equity statement's closing row and the balance sheet — suppressed
-# rollup:bs_equity__total_equity and section_reconciliation:bs_s3_equity, which assert a 2,500 break
+# rollup:bs_equity__total_equity and section_reconciliation:bs_s5_equity, which assert a 2,500 break
 # between total equity and its own components. Same target, a different statement about it, and the
 # 2,500 was then reported NOWHERE while `failed_reported_elsewhere` counted it as raised above. The
 # key also carried no scope, so the consolidated balance card — hardcoded to consolidated/current —
 # deleted a 900 break in the STANDALONE column it makes no claim about at all.
 _Assertion = tuple[str, str, str, int]
 
-# Where each card kind keeps the difference it prints. A kind absent from this map declares NO
-# assertion and therefore suppresses nothing, which is the safe default and a real case rather than
-# a hypothetical one: `uncomputed`'s delta is the literal "—" because none of the components could
-# be computed, so it makes no claim about a difference and cannot be the duplicate of a relation
-# that found one. A card type added later without a key here over-reports; it cannot lose a finding.
+# ONE target a served card already has a card about, and THE COLUMN it has it in — the other, weaker
+# question: not "is this difference already reported" but "does this template line already have a card
+# here at all". It is the only question a finding that reports NO difference can be asked, which is why
+# it exists beside the assertion: an `uncomputed` card's delta is the literal "—".
+#
+# It carries the scope for the same reason the assertion does. Keyed on the bare template key, this set
+# let `chk-balance` — hardcoded consolidated/current — delete the STANDALONE column's card for the same
+# line, and nothing counts a dropped calculated card (`failed_reported_elsewhere` sums relations only),
+# so it left the queue with nothing anywhere saying it had.
+_Claim = tuple[str, str, str]
+
+# Where each card kind keeps the difference it prints — EVERY kind that prints one, because this map
+# is what a card declares about itself, read both to build the set of what is already on screen and to
+# ask whether a new card would restate it.
+#
+# A kind absent from this map declares NO assertion and therefore suppresses nothing, which is the
+# safe default and a real case rather than a hypothetical one: `uncomputed`'s delta is the literal "—"
+# because none of the components could be computed, so it makes no claim about a difference and cannot
+# be the duplicate of a relation that found one (it yields through the weaker question instead —
+# `_claimed_targets`). A guard is absent for a stronger reason still: see `_assertion_of`. A card type
+# added later without a key here over-reports; it cannot lose a finding.
 _ASSERTED_DIFF_KEY = {
     "balance": "diff",
     "equity_tie": "diff",
+    "structural": "diff",
     "calculated_mismatch": "diff",
-    # The sum of the ABSOLUTE per-face residuals, which is what the card's delta prints.
 }
+
+
+def _card_scope(check: dict) -> tuple[str, str] | None:
+    """The COLUMN a served card makes its claim about, as (basis, period) — or None when it names
+    none.
+
+    TWO VOCABULARIES, ONE QUESTION, ONE READER. The accounting cards declare the pair outright as
+    ``subject.basis``/``subject.period``; a relation card carries the evaluator's ``scope_key``, which
+    is that same pair spelled as one string (services/structural_checks.py::_scope). Both suppression
+    questions ask this, so it is answered here once: the suppression key that carried NO scope is how
+    a consolidated card came to delete a standalone-column break, and a second reader inventing a
+    third spelling of the pair is how that would come back.
+
+    None for the row-shaped findings (unmapped, off-template, low-confidence). Those are about one
+    printed line rather than a column, and their ``target`` is that line's CAPTION rather than a
+    template key — so they own no template line in any column and may silence nothing. Stated rather
+    than left to the fact that a caption does not usually collide with a canonical key.
+    """
+    subject = check.get("subject") or {}
+    basis, period = subject.get("basis"), subject.get("period")
+    if basis and period:
+        return str(basis), str(period)
+    # `scope_key` is "{basis}/{period}", with "—" for a period the slot could not name. Partitioned
+    # rather than split so a malformed value yields None and keeps the card it would have silenced.
+    basis, _, period = str(subject.get("scope") or "").partition("/")
+    return (basis, period) if basis and period else None
 
 
 def _assertion_of(check: dict) -> _Assertion | None:
@@ -1231,8 +1274,8 @@ def _assertion_of(check: dict) -> _Assertion | None:
     if subject.get("k") == "guard":
         return None
     diff_key = _ASSERTED_DIFF_KEY.get(str(subject.get("k") or ""))
-    target, basis, period = check.get("target"), subject.get("basis"), subject.get("period")
-    if not (diff_key and target and basis and period):
+    target, scope = check.get("target"), _card_scope(check)
+    if not (diff_key and target and scope):
         return None
     diff = (check.get("evidence") or {}).get(diff_key)
     if diff is None:
@@ -1241,16 +1284,27 @@ def _assertion_of(check: dict) -> _Assertion | None:
     # assets − (equity + liabilities), so one break legitimately reaches the two cards with
     # opposite signs. Matching on magnitude suppresses that true duplicate; it cannot merge two
     # DIFFERENT differences, which is the failure this function exists to prevent.
-    return (str(target), str(basis), str(period), abs(int(diff)))
+    return (str(target), *scope, abs(int(diff)))
 
 
 def _reported_assertions(checks: list[dict]) -> set[_Assertion]:
-    """Everything the cards above already tell the reader — the only grounds for dropping a card."""
+    """Everything the cards above already tell the reader — the only grounds for dropping a card.
+
+    ``checks`` is the cards ALREADY SERVED, and never a list containing the card being tested against
+    it: every card asserts what it asserts, so a list including it answers "yes, that is reported" for
+    the card itself and drops it. Both callers pass the queue as it stands before the batch they are
+    about to build.
+    """
     return {a for a in (_assertion_of(c) for c in checks) if a is not None}
 
 
-def _keys_with_a_card(checks: list[dict]) -> set[str]:
-    """The targets served cards OWN — the only ones that may suppress a second card about one figure.
+def _claimed_targets(checks: list[dict]) -> set[_Claim]:
+    """The (target, basis, period) triples served cards OWN — the only ones that may suppress a
+    second card about the same line in the same column.
+
+    Read by the one finding with no difference of its own to compare, so that this is the only
+    question it can be asked: ``uncomputed`` in ``_calculated_checks``. Everything that does report a
+    difference is compared on the difference (``_assertion_of``).
 
     A GUARD OWNS NOTHING HERE, and that is the whole point of the function. A guard card's ``target``
     is ``violations[0]["key"]`` under sign_expectation (services/structural_checks.py::_guard_slot),
@@ -1258,14 +1312,17 @@ def _keys_with_a_card(checks: list[dict]) -> set[str]:
     whether a different card exists: mis-sign bs_total_equity_and_liabilities and the "Printed subtotal
     could not be verified" card for that very line disappears from the queue. That is the defect that
     dropped the guard card itself (see ``_structural_checks``), one field along, and it got worse the
-    moment guards started being emitted unconditionally — so both suppression sets are built here.
+    moment guards started being emitted unconditionally — so a guard is excluded from BOTH suppression
+    questions, here and in ``_assertion_of``.
 
-    Every other kind's ``target`` is DECLARED: the balance identity's side, the note the tie is about,
-    a relation's template target, a calculated line's key. Those may legitimately stop a second card
-    restating the same difference.
+    Every other kind's ``target`` is DECLARED: the balance identity's side, a relation's template
+    target, a calculated line's key. Those may legitimately stop a second card about that line — but
+    only in the column the card actually looked at, which is what ``_card_scope`` supplies and what a
+    bare set of key strings could not say. A card that names no column names no claim at all.
     """
-    return {c["target"] for c in checks
-            if c.get("target") and (c.get("subject") or {}).get("k") != "guard"}
+    claims = ((c.get("target"), _card_scope(c)) for c in checks
+              if (c.get("subject") or {}).get("k") != "guard")
+    return {(str(target), *scope) for target, scope in claims if target and scope}
 
 
 def _relation_reported_elsewhere(res: dict, reported: set[_Assertion]) -> bool:
@@ -1525,18 +1582,20 @@ def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str
         # card anywhere reported it.
         stats["failed_reported_elsewhere"] = sum(
             1 for res in (structural or []) if _relation_reported_elsewhere(res, reported))
-    # A DIFFERENT question, deliberately kept a different function: not "is this difference already
-    # reported" but "does this template key already have a card at all". A calculated line whose key
-    # is already spoken for should not get a second card about the same key, whatever the figures —
-    # so this one is target-keyed by design. Sharing one `covered` set between the two questions is
-    # what let a bare string answer both.
+    # The calculated path asks BOTH questions, one per finding it raises, and both sets are taken here
+    # — after the relations, because a relation card is exactly what legitimately covers a calculated
+    # line's mismatch (they are the same arithmetic over the same components). A subtotal nobody could
+    # verify has no difference to compare, so it yields to any card about its line in its column; a
+    # subtotal that DISAGREES with its components has one, and yields only to a card reporting that
+    # same difference.
     checks += _calculated_checks(rows, template_def, locale,
-                                 covered=_keys_with_a_card(checks))
+                                 covered=_claimed_targets(checks),
+                                 asserted=_reported_assertions(checks))
     return checks
 
 
 def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
-                       covered: set[str]) -> list[dict]:
+                       covered: set[_Claim], asserted: set[_Assertion]) -> list[dict]:
     """Review items for the template's CALCULATED lines — the face now shows the computed figure,
     so the printed one has to be accounted for somewhere.
 
@@ -1548,8 +1607,22 @@ def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
     * a calculated line had NO extracted components at all, so there was nothing to compute from
       and the printed figure is on the face unverified.
 
-    Relations that already have their own check (the balance identity) are left to it, so the same
-    difference is never raised twice.
+    THE TWO FINDINGS YIELD TO A CARD ABOVE ON DIFFERENT TERMS, because they say different things, and
+    conflating them cost a real break twice over. Nothing here is counted anywhere —
+    ``failed_reported_elsewhere`` sums relations only — so unlike a dropped relation, a calculated card
+    dropped in error leaves no trace on the screen at all:
+
+    * ``uncomputed`` reports no difference (its delta is the literal "—"), so there is nothing to
+      compare and the only honest rule is the weaker one: it yields when the line already has a card
+      IN THIS COLUMN (``covered``, keyed on target + basis + period). Keyed on the bare template key,
+      that test let ``chk-balance`` — hardcoded consolidated/current — delete the STANDALONE column's
+      card for the same line;
+    * ``calculated_mismatch`` reports a difference, so it yields only to a card that reports THE SAME
+      difference about the same line in the same column (``asserted``). Under the target-keyed rule a
+      balance card asserting 100 on total assets deleted a 250 break between that printed subtotal and
+      its own components — a different fact, on no card, in no counter. The relation card for the same
+      line does still cover it: a rollup relation and a calculated line's mismatch are the same
+      arithmetic over the same components, so their assertions coincide.
 
     NEITHER finding offers a mechanical fix, and the mismatch case is the important one: writing
     the PRINTED figure over the computed subtotal would close the card while hiding the
@@ -1567,8 +1640,13 @@ def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
         return []
     names = node_labels(template_def, locale)
     out: list[dict] = []
+    # A calculated line is evaluated for the CURRENT column only. Named once because the same string
+    # decides what is computed, what the card says it is about, and which claim silences it — three
+    # spellings of one column is how the suppression came to be tested against a column nobody had
+    # looked at.
+    period = "current"
     for basis in ("consolidated", "standalone"):
-        calc = _calculated(rows, template_def, basis, "current", locale)
+        calc = _calculated(rows, template_def, basis, period, locale)
         if not any(c.components for c in calc.values()):
             continue
         groups: dict[str, list[dict]] = {}
@@ -1580,16 +1658,16 @@ def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
         if not any(_basis_values(r, basis) for r in rows):
             continue
         for key, c in calc.items():
-            if key in covered or c.cycle:
+            if c.cycle:
                 continue
-            reported = _concept_value(groups.get(key, []), basis, "current")
+            reported = _concept_value(groups.get(key, []), basis, period)
             label = names.get(key, key)
-            where = f"{label} · {basis}/current"
+            where = f"{label} · {basis}/{period}"
             parts = [[comp.label, "—" if comp.value is None else f"{comp.value:,.0f}", False]
                      for comp in c.components]
             if not c.computable:
-                if reported is None:
-                    continue        # neither printed nor computable: nothing to say about it
+                if reported is None or (key, basis, period) in covered:
+                    continue        # neither printed nor computable, or the line is spoken for here
                 out.append({
                     "id": f"chk-uncomputed-{basis}-{key}", "type": "uncomputed", "icon": "∅",
                     "title": L("Printed subtotal could not be verified"),
@@ -1610,7 +1688,7 @@ def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
                              "could not be recomputed. The printed figure is on the face "
                              "unverified — map its components, or accept it as reported."),
                     "subject": {"k": "uncomputed", "key": key, "basis": basis,
-                                "period": "current"},
+                                "period": period},
                     # This check's `delta` is the literal "—", so `reported` is the ONLY thing
                     # standing between an acceptance and a silently changed printed figure.
                     # Components are keyed by canonical_key, never comp.label, which
@@ -1625,7 +1703,7 @@ def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
             diff = c.value - reported
             if abs(diff) <= _CALC_TOLERANCE:
                 continue            # the printed figure and the components agree
-            out.append({
+            mismatch = {
                 "id": f"chk-calc-{basis}-{key}", "type": "calculated_mismatch", "icon": "≠",
                 "title": L("Printed subtotal differs from its components"),
                 "where": where, "severity": L("Check failed"), "tone": "high",
@@ -1641,13 +1719,19 @@ def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
                          "one, so a component is mis-mapped, missing, or double-counted — check "
                          "the components below against the page."),
                 "subject": {"k": "calculated_mismatch", "key": key, "basis": basis,
-                            "period": "current"},
+                            "period": period},
                 "evidence": {"reported": judgement.q(reported),
                              "computed": judgement.q(c.value),
                              "diff": judgement.q(c.value - reported),
                              "components": {comp.canonical_key: judgement.q(comp.value)
                                             for comp in c.components}},
-            })
+            }
+            # Built first and then tested, so what is compared is WHAT THIS CARD SAYS, read by the
+            # same function that read it off every card above — not a second expression of the same
+            # tuple that could drift from the one on screen. `_assertion_of` returns None if the card
+            # ever stops declaring all three, and None is in no set, so the card is served.
+            if _assertion_of(mismatch) not in asserted:
+                out.append(mismatch)
     return out
 
 
