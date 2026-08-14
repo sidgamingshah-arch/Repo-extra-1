@@ -79,12 +79,17 @@ _VIEWER = {
 
 def _demo_statement_line_items(statements: dict) -> int:
     """Statement rows that ARE line items — the sample's answer to "how many line items", which is
-    the Export footer's question and nobody else's.
+    the question the Export footer and the shell's progress card both put this figure under.
 
     A DIFFERENT QUANTITY from the review header's "lines with no finding", and no longer confused
     with it: that tile counts LINES, and a subtotal and a total are lines (they are what the balance
     card names) even though neither is a line item. Its population lives in
-    services/review_lines.py, shared with the real route, and this count feeds only `_demo_progress`.
+    services/review_lines.py, shared with the real route.
+
+    THE EXPORT FOOTER'S OTHER PATH COUNTS THAT OTHER POPULATION, under its own word — a real run's
+    rows are lines, the subtotals the mapper promotes included, so `len(rows)` was never an answer to
+    THIS question, and for a while one label ("line items") headed both numbers. Keep the two words
+    apart: whichever of them a future figure needs, it is the label that has to name the population.
     """
     return sum(1 for s in statements.values() for r in s["rows"] if r.get("kind") == "item")
 

@@ -349,17 +349,29 @@ export default function ExportScreen() {
               justifyContent: "space-between",
             }}
           >
-            {/* Each path names the quantity IT counts. "flagged" used to label both the real
-                path's rows-with-no-mapping-or-a-flag and the sample's review backlog — one word
-                over two different quantities, which is how a 12 the payload no longer contained
-                went on reading as "flagged" after the literals were deleted from this markup. The
-                sample's two figures are the demo project's own served counts (statement line items,
-                and the review route's open count); there is no third figure and no percentage,
-                because the payload carries none. Nothing is printed until the query resolves: a
-                pending request is not an empty project. */}
+            {/* Each path names the quantity IT counts — BOTH figures, not just the second one.
+                "flagged" used to label the real path's rows-with-no-mapping-or-a-flag and the
+                sample's review backlog alike — one word over two different quantities, which is how
+                a 12 the payload no longer contained went on reading as "flagged" after the literals
+                were deleted from this markup. The first figure had the same fault left in it: one
+                word, "line items", over the sample's served count of ITEM rows and over
+                `realRows.length`.
+
+                THOSE ARE NOT THE SAME POPULATION. A served row's `role` is the extractor's
+                (routes/extractions.py::_serialize_rows over LineItem.role): `line`, or the
+                `subtotal` the mapper promotes a row to when it lands on a subtotal concept
+                (stages/map_ontology.py, the only place a role ever changes) — and a caption word
+                never becomes a line item at all, so no row here is one. `realRows.length` is
+                therefore exactly the statement LINES that services/review_lines.py defines for both
+                routes, the population the Review header's third tile counts within on this same run,
+                while a subtotal is a line and is NOT a line item — which is why the sample's own
+                count leaves its subtotal and total rows out. So the number needs no filtering and
+                did not change: the WORD was the half asserting a membership its number did not have.
+                Nothing is printed until the query resolves: a pending request is not an empty
+                project. */}
             <span data-testid="e-footer-counts" style={{ fontSize: 11.5, color: color.muted }}>
               {usingReal
-                ? `${realRows.length} ${t("e.footer.lineitems")} · `
+                ? `${realRows.length} ${t("e.footer.lines")} · `
                   + `${realFlagged} ${t("e.footer.unmappedOrFlagged")}`
                 : sampleProgress
                   ? `${sampleProgress.line_items} ${t("e.footer.lineitems")} · `
