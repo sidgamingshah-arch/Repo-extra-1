@@ -321,6 +321,16 @@ export default function ReviewScreen() {
   // refetch would be submitted for a different row. Absent means "nothing picked yet", which is
   // distinct from "" — the analyst's deliberate choice to leave the row unmapped.
   const [picks, setPicks] = useState<Record<string, string>>({});
+  // WHY THE RE-MAP REASON IS ITS OWN MAP, keyed on `row_ref` beside `picks` rather than sharing the
+  // acceptance reason's slot. Same rule as above — a map is keyed on the identity ITS post carries,
+  // and the re-map POST carries the row handle, not the subject — and here the rule has a second
+  // consequence the shared slot broke outright: a row-shaped finding is judgeable AND re-mappable,
+  // so one card renders both textareas, and behind one slot they mirrored each other keystroke for
+  // keystroke. The two are different records at different endpoints — why the figure was MOVED, and
+  // why it was accepted AS IS — so whichever button the reviewer pressed stored the other's
+  // sentence: "wrong concept, this is trade receivables" filed as the justification for letting the
+  // figure stand.
+  const [remapReasons, setRemapReasons] = useState<Record<string, string>>({});
 
   // No real document and no admin-seeded demo → greenfield guidance.
   if (!usingReal && !loaded) return <EmptyState />;
@@ -804,23 +814,28 @@ export default function ReviewScreen() {
                     targets={data.remap_targets}
                     picked={picks[c.remap.row_ref]}
                     onPick={(key) => setPicks((s) => ({ ...s, [rr]: key }))}
-                    reason={reason}
-                    onReason={(text) => setReasons((s) => ({ ...s, [sk]: text }))}
+                    reason={remapReasons[rr] ?? ""}
+                    onReason={(text) => setRemapReasons((s) => ({ ...s, [rr]: text }))}
                     busy={remapBusy}
                     canEdit={canEdit}
                     t={t}
                     onApply={() => {
                       setErrors((s) => ({ ...s, [sk]: "" }));
                       remapMut.mutate(
-                        { rowRef: rr, canonicalKey: picks[rr] ?? "", reason: reason.trim(),
-                          locale },
+                        { rowRef: rr, canonicalKey: picks[rr] ?? "",
+                          reason: (remapReasons[rr] ?? "").trim(), locale },
                         {
-                          // The row moves, so the card goes; the typed text must not survive onto
-                          // whatever card the refetch puts in its place.
+                          // The row moves, so the card goes; neither box's text may survive onto
+                          // whatever card the refetch puts in its place — the acceptance reason
+                          // included, which was typed against a finding that no longer exists.
                           onSuccess: () => {
                             setPicks((s) => { const n = { ...s }; delete n[rr]; return n; });
+                            setRemapReasons((s) => { const n = { ...s }; delete n[rr]; return n; });
                             setReasons((s) => ({ ...s, [sk]: "" }));
                           },
+                          // The refusal is shown in the CARD's error slot, so it is keyed the way
+                          // that slot is read — on the subject — not on the row handle the request
+                          // carried.
                           onError: (e) => failed(sk, e),
                         },
                       );

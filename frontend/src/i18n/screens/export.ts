@@ -12,6 +12,15 @@ import type { Locale } from "../../types";
  *  sample's review backlog: one word over two different quantities, which is how a stale 12
  *  went on reading as "flagged" long after the literal was deleted from the markup.
  *
+ *  `e.footer.lines` is the same lesson applied to the footer's FIRST figure, which kept the fault
+ *  after the second one lost it: `e.footer.lineitems` labelled the sample's served count of item
+ *  rows AND, on the real path, every row a run serialized — the subtotals the mapper promotes
+ *  included. A subtotal is a line and is not a line item, so those are two populations, and each now
+ *  has its own word. Both keys are live: the sample path counts line items, the real path counts
+ *  lines. The zh and ar `unmappedOrFlagged` moved with it — they carry the noun ("项" / "بند", item)
+ *  and it now has to be the same noun as the figure beside it, since both count the same rows; fr
+ *  agrees its participles with `lignes` for the same reason.
+ *
  *  `e.col.source` was REFERENCED by the real Excel preview's sixth column header and defined in
  *  none of the four dicts, so that header rendered the literal key text "e.col.source" to every
  *  user in every language — translate() falls back to English and then to the key itself, which
@@ -64,6 +73,7 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.col.note": "Note",
     "e.col.conf": "Conf.",
     "e.col.source": "Source",
+    "e.footer.lines": "lines",
     "e.footer.lineitems": "line items",
     "e.footer.unmappedOrFlagged": "unmapped or flagged",
     "e.footer.inReview": "in review",
@@ -108,8 +118,9 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.col.note": "附注",
     "e.col.conf": "置信度",
     "e.col.source": "来源",
+    "e.footer.lines": "行",
     "e.footer.lineitems": "个项目",
-    "e.footer.unmappedOrFlagged": "项未映射或带标记",
+    "e.footer.unmappedOrFlagged": "行未映射或带标记",
     "e.footer.inReview": "项待审核",
     "e.download": "下载",
     "e.sendForReview": "提交审核",
@@ -152,8 +163,9 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.col.note": "إيضاح",
     "e.col.conf": "الثقة",
     "e.col.source": "المصدر",
+    "e.footer.lines": "سطر",
     "e.footer.lineitems": "بند",
-    "e.footer.unmappedOrFlagged": "بند غير مرتبط أو موسوم",
+    "e.footer.unmappedOrFlagged": "سطر غير مرتبط أو موسوم",
     "e.footer.inReview": "بند قيد المراجعة",
     "e.download": "تنزيل",
     "e.sendForReview": "إرسال للمراجعة",
@@ -196,8 +208,9 @@ export const exportScreen: Record<Locale, Record<string, string>> = {
     "e.col.note": "Note",
     "e.col.conf": "Conf.",
     "e.col.source": "Source",
+    "e.footer.lines": "lignes",
     "e.footer.lineitems": "postes",
-    "e.footer.unmappedOrFlagged": "non rattachés ou signalés",
+    "e.footer.unmappedOrFlagged": "non rattachées ou signalées",
     "e.footer.inReview": "en cours de révision",
     "e.download": "Télécharger",
     "e.sendForReview": "Envoyer en revue",
