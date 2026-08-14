@@ -5,11 +5,24 @@
 Three roles with a permission matrix (`backend/app/security/rbac.py`), modelling a linear
 workflow: **Analyst → (Reviewer) → deliver**, with **Admin** owning configuration and oversight.
 
+The screen lists are `SCREENS_BY_ROLE` in that file, and they are the same 11 ids
+`frontend/src/screens/config.ts::SCREENS` registers.
+
 | Role | Workflow responsibility | Sees (screens) |
 |---|---|---|
-| **analyst** | Upload a document, **choose** an output template, run the pipeline end to end (integrity → scope → extract → QA in the Review Queue), then **submit the final output for review**. | upload, integrity, scope, workspace, notes, **review (QA)**, commentary, export |
-| **reviewer** | **Review & finalize** the analyst's output, then deliver it. | integrity, workspace, notes, review, commentary, export |
-| **admin** | Configuration (templates, ontology, **LLM config**, feature flags, the review toggle), users, and the **audit log**. | all 10 screens incl. Template & Ontology and **Settings** |
+| **analyst** | Upload a document, **choose** an output template, run the pipeline end to end (integrity → scope → **extraction** → QA in the Review Queue), then **submit the final output for review**. | upload, integrity, scope, **extraction**, workspace, notes, **review (QA)**, commentary, export — 9 |
+| **reviewer** | **Review & finalize** the analyst's output, then deliver it. | integrity, **extraction**, workspace, notes, review, commentary, export — 7 |
+| **admin** | Configuration (templates, ontology, **LLM config**, extraction thresholds, feature flags, the review toggle, the sample project), users, and the **audit log**. | all 11 screens incl. Template & Ontology and **Settings** |
+
+A reviewer holds the **extraction** screen to READ the latest run and cannot start one:
+`pipeline:run` belongs to the analyst and the admin, and the screen's re-extract control is
+gated on the permission, so a reviewer is never shown a button that would 403. What the
+reviewer actually gets is the run's **rows, rulebook and status** — the read path is
+`GET /documents/{id}/run`, which serves `{run_id, status, rulebook, result}` and **not** the
+per-stage progress record or the log tail (those are on `GET /extractions/{run_id}`, and the
+progress panel is rendered only on the `pipeline:run` path). `rbac.py`'s own comment says a
+reviewer reads "its stages, its log, its rows"; the first two do not reach them today, which
+is a defect in the endpoint (or in the comment), not a documented feature.
 
 Representative permissions: `documents:manage`, `template:select` (analyst *chooses* a
 template) vs `config:template` (admin *authors* one), `pipeline:run`, `extraction:edit`,
@@ -26,8 +39,10 @@ Admin-controlled feature flag (Settings screen; default **on**). It governs the
 - **Off** — the workflow **closes at the analyst**, who finalizes and exports directly
   (`export:run`, no `review:submit`).
 
-Crucially, this flag never removes the **human-in-the-loop Review Queue** (balance/subtotal/
-sign checks + low-confidence items). That QA screen stays available to the analyst in both
+Crucially, this flag never removes the **human-in-the-loop Review Queue** (the accounting
+checks — balance, subtotals, signs, note ties, the template's and rulebook's declared
+arithmetic — plus the three row-shaped findings: unmapped, off-template and
+low-confidence). That QA screen stays available to the analyst in both
 modes — the flag only changes who performs the final sign-off/hand-off. Implemented as
 `effective_permissions(role)` (adjusts the analyst's export vs submit at runtime); screen
 visibility is unaffected by the flag.
@@ -52,16 +67,22 @@ change the matrix.
 **Frontend** — the app renders a **login screen** until a session exists; `GET /me`
 drives everything after. The nav rail filters to `me.screens`; routes are guarded
 (`RequireScreen` redirects a role away from a screen it can't see); a top-bar user menu
-shows the signed-in user and a sign-out button; and admin-only controls
-(template/ontology buttons, export "Include" options, page-scope toggles, review resolve
-actions, the Settings toggle) are hidden/disabled via `useCan(permission)`. The server
-still enforces regardless of the UI.
+shows the signed-in user and a sign-out button; and gated controls are hidden/disabled via
+`useCan(permission)` — template/ontology authoring and the extraction thresholds
+(`config:template` / `config:ontology` / `config:settings`), export "Include" options,
+page-scope toggles, the Extraction screen's re-extract button (`pipeline:run`), the review
+queue's accept/withdraw (`review:resolve`) and its flip-sign and **re-map** actions
+(`extraction:edit`). The server still enforces regardless of the UI.
 
 ## Financial-analysis commentary (the Analysis tab)
 
 A one-page, data-driven commentary derived from the *extracted* statements
-(`backend/app/services/commentary.py`), exposed at `GET /projects/{id}/commentary`
-(permission `commentary:view`; localized via the `locale` param).
+(`backend/app/services/commentary.py`). Two endpoints, one builder: a real uploaded
+document's commentary is `GET /documents/{id}/commentary`
+(`build_commentary_from_rows` over that run's rows), and the seeded sample's is
+`GET /projects/{id}/commentary` (`build_commentary`). Permission `commentary:view`;
+localized via the `locale` param, with the catalog strings localized on the way out
+(`documents.py::_localize_commentary`).
 
 - **Ratios** computed from the statement rows: current ratio, debt-to-equity, equity
   ratio, interest coverage, net (pre-tax) margin, YoY revenue growth, cash ratio, asset
@@ -92,6 +113,12 @@ LLM/extraction runs showing **input and output token usage separately** (plus th
 the model, action and timestamp. Each run's id combines the **entity name + date/time**
 (`services/audit.make_run_id`, e.g. `reliance-industries-ltd-20260807-021455`), which is also
 the `ExtractionRun` primary key.
+
+The ledger itself is **process-local and in memory** (`services/audit.py`) — it is lost on
+restart and not shared between processes. The durable table it stands in for is the
+unbuilt `EditEvent` / run ledger; swapping it in does not change these signatures. The runs
+themselves are durable: `extraction_runs` rows survive, they simply do not carry the token
+columns.
 
 The run is **analyst-driven** — analyst, reviewer and admin hold `analysis:run` and can
 trigger a live **`POST /projects/{id}/analysis`**: it calls the configured LLM provider on

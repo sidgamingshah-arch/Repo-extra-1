@@ -9,23 +9,38 @@ well-formatted **Excel or JSON**.
 Analysts today manually re-key financials from the *face* of statements **and** the
 *notes*, reconcile them, and verify totals — slow, error-prone, and unauditable.
 FinEx automates that while keeping a human in control: every machine value is
-editable (with spreadsheet formulas), every edit is audited, and nothing that fails
-a balance check slips through silently.
+editable (with spreadsheet formulas), an edit is recorded on the run with its reason and is
+exactly revertible to the machine figure, a reviewer's acceptance of a finding is stored
+against the figures they actually saw, and nothing that fails a balance check slips through
+silently.
 
 ## Status
 
-An **end-to-end integrated product**: a FastAPI backend (extraction pipeline + a
-seeded Ind-AS demo project served over real endpoints) and a React/TypeScript
-frontend implementing the 8-screen FinExtract design handoff, wired to the backend.
-The heavier extraction engines (OCR, LLM) are scaffolded behind swappable adapters
-and land in subsequent phases — see [`docs/architecture/`](docs/architecture/).
+An **end-to-end integrated product**: a FastAPI backend (a 14-stage extraction pipeline,
+plus a seeded Ind-AS sample project served over the same kind of endpoints) and a
+React/TypeScript frontend of **11 screens**, wired to the backend. Upload a real document
+and every screen reads that document's own run; with no document active, the screens that
+can fall back render the sample instead.
+
+The extraction engines are real and swappable, not scaffolds: OCR ships **Docling** (free,
+pip-only — the default in `backend/config.toml`), **Azure AI Document Intelligence** and
+**PaddleOCR**; the LLM ships **Azure OpenAI** (default), **Anthropic** and any
+OpenAI-compatible gateway. A loud `stub` is registered for each so the app also runs fully
+offline. What is *not* built is listed plainly in
+[`docs/architecture/06-testing-and-roadmap.md`](docs/architecture/06-testing-and-roadmap.md)
+— chiefly: no embedding adapter is bound, no optimistic-concurrency (`If-Match`) on edits,
+no Alembic migrations, and progress is polled rather than pushed.
 
 ## Monorepo layout
 
 ```
 repo-extra-1/
   backend/            FastAPI app + extraction pipeline (Python 3.11+)
-  frontend/           React + TypeScript SPA (Vite) — the 8-screen workspace
+    app/              stages/, services/, api/routes/, schemas/, adapters/, ports/
+    app/sample/       the shipped HKFRS/IFRS template + rulebook, and the demo dataset
+    scripts/          operator scripts (reference-data reconcile, template builders, probes)
+    tests/            78 test modules
+  frontend/           React + TypeScript SPA (Vite) — the 11-screen workspace
   docs/architecture/  Design & architecture documents
 ```
 
@@ -47,16 +62,19 @@ Then **sign in**. The app opens on a login screen; in demo mode use the one-clic
 (Rahul Mehta), or **analyst** (Ana Ferreira) — or type the username with a matching
 password.
 
-The app starts **greenfield** (empty): upload a source document on the **Documents**
-screen to begin. To explore every screen with data, an admin can flip **Load sample
+The app starts **greenfield** (empty): upload a source document on the **Documents &
+Template** screen (`/upload`) to begin. To explore every screen with data, an admin can flip **Load sample
 project** on the **Settings** screen (or the "Load sample data" button on any empty
 screen); set `[features].seed_demo = true` in `backend/config.toml` to load it at
 startup instead. LLM configuration (provider/model/endpoint) is admin-editable on
 Settings — the API key stays in the environment, never the UI.
 
 Optional backend engines install behind extras so the core stays light:
-`pip install -e ".[ocr]"` (PaddleOCR), `.[llm]` (Anthropic), `.[embeddings]`,
-`.[pdf]`, `.[lang]`.
+`pip install -e ".[docling]"` (the recommended free OCR), `.[ocr]` (PaddleOCR),
+`.[llm]` (the Anthropic SDK), `.[embeddings]`, `.[pdf]`, `.[lang]`, `.[cjk]`
+(Traditional↔Simplified Han folding — `app/services/han.py` falls back to a built-in table
+without it). Azure OpenAI and Azure Document Intelligence need no extra; both speak REST
+over `httpx`.
 
 ### Frontend regression (Playwright)
 
@@ -64,18 +82,30 @@ Optional backend engines install behind extras so the core stays light:
 cd frontend && pnpm e2e     # boots backend + Vite, drives the UI in Chromium
 ```
 
-A smoke suite (`frontend/e2e/`) covers the greenfield empty state, loading the sample,
-note-reference hyperlinks, and uploading a document as an analyst.
+`frontend/e2e/smoke.spec.ts` covers the greenfield empty state, loading the sample,
+note-reference hyperlinks, uploading a PDF and a spreadsheet as an analyst,
+integrity → extract end to end, role gating on the config surfaces, ontology / netting /
+criteria / threshold edits persisting, publishing an edited template workbook, the
+rulebook-in-force labelling, review filtering, accepting a finding across a reload, and the
+coverage band's counts. One test currently fails — it drives the removed "Additional items"
+Workspace tab; see
+[`docs/architecture/06-testing-and-roadmap.md`](docs/architecture/06-testing-and-roadmap.md).
 
 ## The screens
 
-Upload → Integrity → Page Scope → **Workspace** (side-by-side source ↔ template, inline
-edit + formulas, confidence scores) → Review Queue (balance/subtotal/sign/note-recon
-checks) → All Notes (note-to-face reconciliation) → **Analysis** (one-page financial
-commentary — ratios, **year-on-year trends**, strengths/risks) → Template & Ontology
-(incl. the note-netting rule) → **Settings** (admin) → Export (Excel/JSON).
-Upload/integrity/scope use the real pipeline; the other views render the backend's
-seeded demo project.
+Documents & Template → Integrity → Page Scope → **Extraction** (`/extraction`, step 4 — runs
+the pipeline and reports its stages and log while it runs, then the extracted rows with
+click-to-source) → **Workspace** (side-by-side source ↔ template, inline edit + formulas,
+confidence scores, KPIs) → All Notes (note-to-face reconciliation) → Review Queue
+(accounting checks + unmapped / off-template / low-confidence rows, with accept, flip-sign
+and **re-map** actions) → **Analysis** (one-page financial commentary — ratios,
+**year-on-year trends**, strengths/risks) → Template & Ontology (incl. the note-netting
+rule) → **Settings** (admin) → Export (Excel/JSON). Eleven in all
+(`frontend/src/screens/config.ts`), filtered per role by `GET /me`.
+
+Every one of them reads the **active uploaded document's own extraction** when there is one.
+The seeded sample is the fallback for the screens that have one, so the app is explorable
+before anything has been uploaded.
 
 ## Access control, config & languages
 
@@ -96,19 +126,27 @@ seeded demo project.
 
 ## Capabilities & where they live
 
-| Capability | Design | Code (this phase) |
-|---|---|---|
-| Excel / native-PDF / scanned ingest, per-page routing | ✅ | `app/stages/ingest.py` |
-| Upfront document-integrity report | ✅ | `app/stages/integrity.py` |
-| Locate face / notes pages first | ✅ | `app/stages/classify.py` |
-| Ontology-driven multi-strategy mapping (semantic/description/similarity) | ✅ | `app/services/mapping.py` |
-| Locale-aware number parsing + sign | ✅ | `app/services/numbers.py` |
-| **Note→face subtraction reconciliation** | ✅ | `app/services/reconcile.py` |
-| Confidence vector | ✅ | `app/core/models/confidence.py` |
-| Template + ontology schemas (frontend-authored, versioned) | ✅ | `app/schemas/` |
-| Multilingual parity (en/zh/ar/fr) | ✅ | `app/schemas/languages.py` |
-| Consolidated + standalone in one pass | ✅ (model) | `app/core/models/line_item.py` |
-| Side-by-side hyperlink provenance (normalized bbox) | ✅ | `app/core/models/geometry.py` |
-| OCR / table reconstruction, formulas, export, review queue | ✅ (design) | scaffolded, see roadmap |
+| Capability | Where it lives |
+|---|---|
+| Excel / native-PDF / scanned ingest, per-page routing | `app/stages/ingest.py` |
+| Upfront document-integrity report (nine checks, blockers gate the run) | `app/stages/integrity.py` |
+| Locate face / notes pages first (Viterbi decode over page evidence + document order) | `app/stages/classify.py` |
+| Table reconstruction — native text layer and OCR converge on one path | `app/services/row_reconstruct.py`, `app/services/pdf_extract.py`, `app/services/excel_extract.py` (all driven by `app/stages/extract.py`) |
+| OCR behind adapters (Docling / Azure DI / PaddleOCR / stub) | `app/adapters/`, selected by `[ocr].engine` |
+| Ontology-driven mapping — exact, rule, fuzzy and an LLM that decides by meaning | `app/services/mapping.py`, `app/stages/map_ontology.py` |
+| Locale-aware number parsing + sign normalization | `app/services/numbers.py`, `app/stages/normalize.py` |
+| A printed face line never disappears (residual sweep, rulebook-governed) | `app/stages/residual.py` |
+| **Note→face subtraction reconciliation** | `app/services/reconcile.py`, `app/stages/reconcile.py` |
+| Declared-arithmetic validation + the coverage contract | `app/services/structural_checks.py`, `app/services/checks.py`, `app/services/coverage.py` |
+| Review queue with persisted human judgements and a re-map action | `GET`/`POST /documents/{id}/review*` in `app/api/routes/documents.py`, `app/services/judgement.py` |
+| Confidence vector, per row **and** per value | `app/core/models/confidence.py` |
+| Template + ontology schemas, versioned; template authored as a workbook | `app/schemas/`, `app/services/template_xlsx.py` |
+| Multilingual parity (en/zh/ar/fr) | `app/schemas/languages.py` |
+| Consolidated + standalone in one pass | `app/core/models/line_item.py` (values keyed by basis × period) |
+| Side-by-side hyperlink provenance (normalized bbox / sheet+cell) | `app/core/models/geometry.py`, `GET /documents/{id}/pages/{n}/image`, `GET /documents/{id}/cell-context` |
+| Formulas (whitelisted AST, server-side) | `app/services/formula.py` |
+| Export — formatted Excel + JSON | `app/services/export.py` (openpyxl) |
+| Currency / units presentation | `app/services/fx.py` + the `/fx-rates` master; units are a display transform plus an export target |
 
-Full details in [`docs/architecture/`](docs/architecture/).
+Full details in [`docs/architecture/`](docs/architecture/), which also names what is
+**designed and not built** rather than describing it in the present tense.
