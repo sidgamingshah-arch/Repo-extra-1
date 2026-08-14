@@ -156,41 +156,41 @@ export const useDocuments = () => useQuery({ queryKey: ["documents"], queryFn: a
 export const useOntologies = () => useQuery({ queryKey: ["ontologies"], queryFn: api.ontologies });
 export const useTemplates = () => useQuery({ queryKey: ["templates"], queryFn: api.templates });
 
-/** The rulebook IN FORCE among the rows matching `pred` — the ONE copy of that rule on the client.
+/** The rulebook IN FORCE among the rows matching `pred` — READ from the server, never ranked here.
  *
  * It lives in the data layer because two screens ask the question (the index, to name the rulebook
  * a template row is described by; the extraction view, to decide which one a run defaults to) and
- * they were answering it differently: each had its own `version >` comparison, which is a third
- * and fourth spelling of a rule the server already owns.
+ * they were answering it differently: each had its own `version >` comparison, which is a third and
+ * fourth spelling of a rule the server already owns.
  *
- * `version` counts edits to ONE ontology_key, so it cannot rank two DIFFERENT rulebooks targeting
- * the same template. With v1 and the v2 that replaces it both seeded at version 1 the comparison
- * was a tie and the index named whichever row arrived first — the superseded v1, while the
- * extractor was using v2. Order, therefore: drop what has been replaced; then prefer a rulebook
- * that DECLARES it replaces something, so a generated skeleton of empty stubs cannot outrank the
- * adopted rulebook by having been saved a few more times; then the highest version; then the key,
- * so the answer is stable rather than a property of row order. This mirrors
- * `app/services/ontology_select.pick` — the extractor's own choice — deliberately, and the
- * server-computed `superseded` flag is read rather than re-derived so the two cannot disagree.
+ * THE DEFECT THIS CLOSES. Collapsing those two into one was right; the one was still wrong. It
+ * ranked `[declares a supersession, version, ontology_key]` under a comment claiming it mirrored the
+ * server's picker — a function that did not exist under that name, and whose actual rule is
+ * "whatever was stored last wins" (`app/services/ontology_select.select_for_template`). That rule
+ * turns on `created_at`, which this payload does not carry, so the client could not have applied it
+ * even in principle. The two sides therefore named DIFFERENT rulebooks: the run mapped against the
+ * one in force and the screen captioned it as pinned to an older one, telling an analyst their
+ * extraction had used something it had not.
+ *
+ * So the server states it: `OntologyRef.in_force`, computed by asking `select_for_template` itself.
+ * One implementation of the rule means there is nothing left to drift. Do not add a fallback
+ * ranking here — a guess that disagrees with the extractor is exactly the defect above, and a row
+ * whose payload predates the flag is better reported as "unknown" than named wrongly.
+ *
+ * `pred` narrows the candidates, normally to one target template, and the flag picks among them.
+ * Where a caller cannot name a template — the extraction view and the Workspace both fall back to
+ * an unfiltered call when no template is selected yet — several rows carry the flag, one per
+ * template, and this returns the first in list order (the server orders by `ontology_key`, so it is
+ * at least deterministic). That fallback names a rulebook for SOME template rather than the one
+ * being read, which is the pre-existing weakness of asking without a template; it is not made worse
+ * by reading the flag, and both callers use it only to have something to show before a template
+ * is chosen.
  */
 export function ontologyInForce(
   rows: OntologyRef[] | undefined,
   pred: (o: OntologyRef) => boolean = () => true,
 ): OntologyRef | undefined {
-  const matches = (rows ?? []).filter(pred);
-  if (!matches.length) return undefined;
-  // Every candidate superseded is still an answer: what a row is described by is the best of what
-  // EXISTS. Reporting nothing would read as "no rulebook", which is a different fact.
-  const live = matches.filter((o) => !o.superseded);
-  const rank = (o: OntologyRef): [number, number, string] =>
-    [o.supersedes ? 1 : 0, o.version, o.ontology_key];
-  return (live.length ? live : matches).reduce((best, o) => {
-    const [ad, av, ak] = rank(o);
-    const [bd, bv, bk] = rank(best);
-    if (ad !== bd) return ad > bd ? o : best;
-    if (av !== bv) return av > bv ? o : best;
-    return ak > bk ? o : best;
-  });
+  return (rows ?? []).filter(pred).find((o) => o.in_force);
 }
 
 /** Run (and fetch) the extraction for one uploaded document — its real line items with
