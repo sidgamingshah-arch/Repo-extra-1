@@ -260,9 +260,11 @@ def test_the_refresh_leaves_one_published_template_version(session):
 def test_the_shipped_key_cannot_also_be_named_as_retired(session, monkeypatch):
     """A contradiction that would retire the only current rulebook, refused before any write.
 
-    ``superseded_keys`` would then report the shipped rulebook as replaced: every stored run's
-    rulebook record reads "superseded" and ``select_for_template`` falls back to the whole list.
-    Loud at startup, unexplainable three screens away.
+    ``superseded_keys`` would then report the shipped rulebook as replaced. That no longer changes
+    WHICH rulebook runs — selection is "the latest stored wins" and filters nothing — but it still
+    mislabels: every run pinned to an older version of the only rulebook the deployment owns would
+    read "superseded", and the ontology list would show the shipped rulebook as replaced by nothing
+    in particular. Loud at startup, unexplainable three screens away.
     """
     from app.db.models import OntologyVersion
     from app.sample import reference
@@ -362,8 +364,10 @@ def test_a_retired_key_alone_in_the_database_is_still_usable(session):
     """Retirement needs the replacement to be PRESENT.
 
     A database whose reference data has not been refreshed holds only the legacy rulebook. Reporting
-    it as replaced would leave the selector nothing live to choose from and label every stored run
-    "superseded" — a filing mapped against the only rulebook the deployment owns.
+    it as replaced would label a run against the only rulebook the deployment owns "superseded". Note
+    what this no longer claims: the selector does not filter replaced rulebooks out (it takes the
+    latest stored, full stop), so a blanket retirement can no longer leave it with nothing to choose —
+    it can only make the answer's LABEL wrong, which is why the flag still has to be right.
     """
     from app.services.ontology_select import (
         rulebooks_for_template,

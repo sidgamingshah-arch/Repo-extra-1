@@ -458,16 +458,33 @@ def rulebook_record(session: Session, ontology_version_id: str | None) -> dict:
     siblings = rulebooks_for_template(session, row.target_template_key)
     superseded = row.ontology_key in superseded_keys(siblings)
     chosen = _in_force_for_template(session, row.target_template_key)
-    # A superseded rulebook is never "in force", even when it is the best answer the selector can
-    # give: with every stored rulebook for a template superseded, ``select_for_template`` falls
-    # back to the whole list and returns one of them, and calling that in force would tell a
-    # reviewer a figure came from the current rulebook when it came from a replaced one.
-    in_force = chosen is not None and chosen.id == row.id and not superseded
+    # BEING IN FORCE WINS OVER THE REPLACEMENT LABEL, because the two describe different things and
+    # only one of them decides what runs.
+    #
+    # Selection is now "the latest stored rulebook wins" (``ontology_select.select_for_template``),
+    # while ``superseded`` still answers "has some stored rulebook, or the repo's retirement list,
+    # declared this key replaced". Those can BOTH be true of one row: an admin re-uploads a rulebook
+    # under a key that another stored rulebook says it supersedes, or under one the repo retired, and
+    # that upload is now the newest thing stored — so it is what the next run maps against, whatever
+    # an older declaration says about the name.
+    #
+    # Reporting `superseded` in that state produced a sentence that contradicted itself: "this run
+    # used X, which has since been replaced — the rulebook in force is X". Naming one rulebook as
+    # both the replaced one and the current one tells a reviewer nothing and discredits the rest of
+    # the record. The rulebook that RUNS is in force; that is what "in force" means. A declared
+    # replacement is only worth reporting about a rulebook that is NOT the one running, which is
+    # exactly the case it was added for — a run pinned to an older rulebook someone has replaced.
+    #
+    # The flag is still served beside the status, because "in force, and its key was retired" is a
+    # true and mildly interesting thing to be able to say (the picker already says it —
+    # `tp.rb.inForceSuperseded`); it is just not the run's status.
+    in_force = chosen is not None and chosen.id == row.id
     record.update({
         "ontology_key": row.ontology_key, "version": row.version,
         "target_template_key": row.target_template_key,
-        "status": "superseded" if superseded else ("in_force" if in_force else "pinned"),
+        "status": "in_force" if in_force else ("superseded" if superseded else "pinned"),
         "in_force": in_force,
+        "superseded": superseded,
         "in_force_ontology_key": chosen.ontology_key if chosen is not None else "",
         "in_force_version": chosen.version if chosen is not None else 0,
     })

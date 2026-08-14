@@ -9,6 +9,17 @@ async function loginAs(page: Page, role: "admin" | "reviewer" | "analyst") {
   await expect(page.getByText(/FinExtract/)).toBeVisible();
 }
 
+/** End the session this browser holds, so `loginAs` reaches the sign-in screen again.
+ *
+ *  Needed only by a test that has to act as TWO roles in one page. Each test gets a fresh context, so
+ *  the first `loginAs` in a test always finds the sign-in buttons; a second one does not, because "/"
+ *  redirects a signed-in browser to /workspace and the buttons are simply not on the screen. The
+ *  session lives in localStorage, so clearing it is what a fresh context would have done — and it
+ *  also drops `finex-active-doc`, which the next role has no business inheriting. */
+async function signOut(page: Page) {
+  await page.evaluate(() => localStorage.clear());
+}
+
 /** Put the sample project into a known state. Whether it is loaded is a PERSISTED admin
  *  setting, so it carries across a restart and across suite runs — a test that needs it on or
  *  off has to say so rather than inherit whatever the last run left behind. */
@@ -66,6 +77,16 @@ async function indexRowFocusable(page: Page): Promise<boolean> {
   });
 }
 
+/** The review check types whose findings are about ONE EXTRACTED ROW.
+ *
+ *  Two things turn on the distinction, which is why it is spelled once rather than twice. These are
+ *  the types that carry a `remap` offer — the fix for "this row is on the wrong line" — while an
+ *  accounting finding, being a relation between several concepts, carries none and gives no answer to
+ *  WHICH concept to move. And these are the types with a review chip of their own: the tabs PARTITION
+ *  the queue (documents.py::_build_review), so everything else is counted by the accounting chip,
+ *  which is how the fixture near the end of this file finds that chip without naming it. */
+const ROW_SHAPED_TYPES = new Set(["unmapped", "low_confidence", "off_template"]);
+
 test.describe.configure({ mode: "serial" });
 
 test("greenfield: the app is empty before any project is loaded", async ({ page }) => {
@@ -80,11 +101,19 @@ test("greenfield: the app is empty before any project is loaded", async ({ page 
 
 test("admin can load the sample project and the workspace populates", async ({ page }) => {
   await loginAs(page, "admin");
-  await page.goto("/settings", DCL);
-  await page.getByText("Load sample project").click();
-  // Let the PATCH /settings + /me refetch settle before navigating.
-  await expect(page.getByText("Load sample project")).toBeVisible();
-  await page.waitForTimeout(600);
+  // "Not loaded" is the precondition of LOADING it, and "Load sample project" is a TOGGLE's title,
+  // not a button: against an already-loaded project this test would UNLOAD the sample and then
+  // assert that the workspace populates. It passed only because the test above happens to leave the
+  // flag off — an inherited precondition, on the one setting the file's own helper warns is
+  // persisted. Established here instead.
+  await setSampleLoaded(page, false);
+  const row = page.getByTestId("seed-demo");
+  await row.click();
+  // Wait for the SETTING, not for a stopwatch. This was `waitForTimeout(600)` — a guess about how
+  // long PATCH /settings plus the refetch takes on whatever machine the suite runs on, which is
+  // both slower than it needs to be and, on a loaded machine, not long enough. `data-on` flips off
+  // the refetched settings, so it flipping IS the server having stored the change.
+  await expect(row).toHaveAttribute("data-on", "true", { timeout: 15_000 });
   await page.goto("/workspace", DCL);
   await expect(page.getByText("Trade receivables").first()).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole("heading", { name: "No project yet" })).toHaveCount(0);
@@ -92,6 +121,9 @@ test("admin can load the sample project and the workspace populates", async ({ p
 
 test("note references are hyperlinks to the All Notes screen", async ({ page }) => {
   await loginAs(page, "admin");
+  // The note chips under test are the SAMPLE project's — no document is uploaded at this point — so
+  // the sample being loaded is this test's precondition and not the previous test's leftover.
+  await setSampleLoaded(page, true);
   await page.goto("/workspace", DCL);
   await expect(page.getByText("Trade receivables").first()).toBeVisible({ timeout: 15_000 });
   await page.getByRole("link").first().click();
@@ -600,13 +632,17 @@ test("real extraction: prior-year links, an edit that sticks, KPIs and Additiona
   await page.getByText("Current ratio").first().click();
   await expect(page.getByText(/numerator:/).first()).toBeVisible({ timeout: 15_000 });
 
-  // --- Additional items -------------------------------------------------------------------
-  await page.getByTestId("seg-additional_items").click();
-  await expect(page.getByTestId("seg-additional_items")).toHaveAttribute("data-on", "true");
-  await expect(page.getByTestId("seg-kpi")).toHaveAttribute("data-on", "false");
-
-  // Back to a statement: the magnitude selector returns, because these ARE amounts.
+  // --- and back to a statement: the magnitude selector returns, because these ARE amounts -----
+  // This used to hop through an "Additional items" tab on the way. That tab is gone front and back
+  // (Workspace.tsx's segment list and `_build_statement` both say so): the spread now renders the
+  // template's declared lines and nothing else, and a mapped figure the template does not declare is
+  // reported as an `off_template` review finding instead of appended to the statement. So the tab's
+  // ABSENCE is what is asserted — a returning tab would be the spread quietly gaining rows again —
+  // and the claim this block was written for is made directly, KPI → statement.
+  await expect(page.getByTestId("seg-additional_items")).toHaveCount(0);
   await page.getByTestId("seg-balance_sheet").click();
+  await expect(page.getByTestId("seg-balance_sheet")).toHaveAttribute("data-on", "true");
+  await expect(page.getByTestId("seg-kpi")).toHaveAttribute("data-on", "false");
   await expect(page.getByText("Units", { exact: true })).toBeVisible({ timeout: 15_000 });
 });
 
@@ -646,24 +682,38 @@ test("an analyst gets no template authoring affordances", async ({ page }) => {
   await expect(page.getByTestId("tpl-upload-xlsx")).toHaveCount(0);
 });
 
-test("the index names the rulebook IN FORCE, not the highest version number", async ({ page }) => {
+test("the index names the rulebook the SERVER says is in force, and ranks nothing itself",
+     async ({ page }) => {
   // The rulebooks are fixed for this test so the answer cannot depend on how many times earlier
-  // tests published a new version. The three rows are shaped to break the two rules the column
-  // used to apply: hkfrs_hk_china_v1 has been REPLACED yet carries the highest edit version (a
-  // `version >` comparison picks it), the skeleton draft of empty stubs carries the next highest
-  // and declares nothing (dropping only the superseded row picks it), and the adopted
-  // hkfrs_hk_china_v2 sits at version 1 — which is exactly the tie the seeded pair is in.
+  // tests published a new version.
+  //
+  // WHAT THIS NOW PROVES. The column used to be computed here, by ranking the served list — first on
+  // `version >`, later on [declares a supersession, version, key] — and this test's three rows were
+  // shaped to break those rankings. That whole approach was the defect: selection is the server's
+  // rule ("the latest stored rulebook wins", `ontology_select.select_for_template`), it turns on
+  // `created_at`, and this payload does not carry that field, so no ranking on this side could ever
+  // have agreed with the extractor. The two did disagree, and the screen named a rulebook the run had
+  // not used.
+  //
+  // So the flag is the answer and the rows are shaped to punish any attempt to second-guess it:
+  // `in_force` sits on the row that carries the LOWEST edit version, declares no supersession, and is
+  // itself reported as replaced — the row that every ranking the client has ever applied would have
+  // ranked last. If the column prints it, the column is reading the server's answer and nothing else.
+  //
+  // (A row both in force and superseded is a real state, not a contrivance: an admin republishing a
+  // rulebook whose key an older declaration named as replaced makes it the newest thing stored. The
+  // server resolves the two — running outranks the label — in extractions.rulebook_record.)
   await page.route("**/api/v1/ontologies", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await route.fulfill({
       json: [
         { id: "o-v1", ontology_key: "hkfrs_hk_china_v1", target_template_key: "hkfrs_hk_china_v1",
-          version: 9, schema_version: 1, supersedes: null, superseded: true },
+          version: 9, schema_version: 1, supersedes: null, superseded: true, in_force: false },
         { id: "o-draft", ontology_key: "hkfrs_hk_china_skeleton",
           target_template_key: "hkfrs_hk_china_v1", version: 4, schema_version: 2,
-          supersedes: null, superseded: false },
+          supersedes: null, superseded: false, in_force: false },
         { id: "o-v2", ontology_key: "hkfrs_hk_china_v2", target_template_key: "hkfrs_hk_china_v1",
-          version: 1, schema_version: 2, supersedes: "hkfrs_hk_china_v1", superseded: false },
+          version: 1, schema_version: 2, supersedes: null, superseded: true, in_force: true },
       ],
     });
   });
@@ -788,8 +838,18 @@ test("an analyst chooses which rulebook a run reads the filing against", async (
   const used = page.getByTestId("ex-rulebook-used");
   const values = await pick.locator("option").evaluateAll(
     (os) => os.map((o) => (o as HTMLOptionElement).value));
-  // The seeded pair (the adopted v2 and the v1 it replaces) is what makes pinning possible.
-  expect(values.length).toBeGreaterThan(1);
+  // MORE THAN ONE STORED RULEBOOK VERSION is what makes pinning possible, and where it comes from
+  // has changed. The comment here used to name "the seeded pair (the adopted v2 and the v1 it
+  // replaces)" — a pair that no longer exists: the repo consolidated to ONE rulebook and RETIRED
+  // both of those keys, and the pair was only ever present because the suite ran against a
+  // developer's pre-consolidation database. What the list holds now is several VERSIONS of the one
+  // shipped rulebook, published by the three inline-edit tests above in this serial file, and
+  // pinning an older version of one rulebook is the same question this screen exists to answer.
+  // Not established inside this test on purpose: publishing a rival rulebook would change what is in
+  // force for every test after it, and there is no endpoint to take one back.
+  expect(values.length,
+         "only one rulebook version is stored, so nothing can be pinned AGAINST the one in force — "
+         + "the ontology-edit tests above are what publish the others").toBeGreaterThan(1);
   const inForceId = await pick.inputValue();
   expect(posted).toContain(inForceId);
   await expect(used).toHaveAttribute("data-rulebook-id", inForceId, { timeout: 60_000 });
@@ -827,9 +887,29 @@ test("an analyst chooses which rulebook a run reads the filing against", async (
   await expect(usedAgain).toContainText(/not the rulebook in force/);
 });
 
+/** One row of GET /ontologies — only the fields this file reasons about, spelled here so a field the
+ *  server stops serving fails on the cast rather than arriving as `undefined`. */
+interface OntologyRow {
+  id: string; ontology_key: string; version: number; superseded: boolean;
+  // WHICH rulebook the next run maps against, stated by the server (routes/ontologies.py) because
+  // the rule is "the latest stored wins" and turns on `created_at`, which this payload does not
+  // carry. Read it; never rank the list to work it out.
+  in_force: boolean;
+  target_template_key: string; concept_count: number; alias_count: number;
+}
+
+/** An ontology_key the repo has RETIRED (app/sample/reference.py::RETIRED_ONTOLOGY_KEYS).
+ *
+ * One of the two pre-consolidation rulebook names. `superseded_keys` reports a stored rulebook under
+ * such a key as replaced the moment the shipped rulebook is also present — which is the only way a
+ * "superseded rulebook" can be brought into existence from a browser: there is no DELETE for an
+ * ontology, so publishing a rival that DECLARES it supersedes the shipped one would take the shipped
+ * one out of force for every test after this file's, irreversibly. A retired name replaces nothing. */
+const RETIRED_RULEBOOK_KEY = "hkfrs_hk_china_v2";
+
 test("a run that used a superseded rulebook says so, however the client sees the list",
      async ({ page }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   // The blocker this closes: the sentence naming the rulebook was written by the SCREEN, from the
   // ontology list and its own idea of which one was in force. So a reload after the adopted
   // rulebook changed hands described a run that had read the filing against a REPLACED rulebook as
@@ -837,21 +917,106 @@ test("a run that used a superseded rulebook says so, however the client sees the
   // it.
   //
   // Reproduce it by making the client's view disagree with the truth: the ids stay real, only the
-  // superseded flags are flipped, so the client picks (and pins) the rulebook the server knows has
-  // been replaced, while its own list insists that one is in force. Re-derivation on this page
-  // therefore says "in force"; the run's record says "replaced". The screen must print the record.
+  // `in_force` flag is moved, so the client picks (and pins) the rulebook the server knows has been
+  // replaced, while its own list insists that one is current. Re-derivation on this page therefore
+  // says "in force"; the run's record says "replaced". The screen must print the record.
+  //
+  // THE REPLACED RULEBOOK IS ESTABLISHED HERE, NOT INHERITED. This test used to flip the flags
+  // around the literal `hkfrs_hk_china_v1` and simply expect such a rulebook to be stored. It was —
+  // because the suite ran against the developer's `backend/finex.db`, seeded before the
+  // one-rulebook consolidation. Against the suite's own database (playwright.config.ts) it is not:
+  // the repo ships ONE rulebook, `hkfrs_hk_china`, and names both pre-consolidation keys as retired.
+  // So the state is now created through the real publish endpoint — and created as the state the
+  // shipped code documents at length, a database that still holds one of those retired rulebooks.
+  await loginAs(page, "admin");                     // publishing a rulebook is CONFIG_ONTOLOGY
+  const before = await apiGet<OntologyRow[]>(page, "/api/v1/ontologies");
+  // WHICH ROW IS IN FORCE is the server's decision (ontology_select.select_for_template): among the
+  // rows targeting one template that nothing has replaced, the SHIPPED key wins, then a declared
+  // supersession, then incumbency, and only then the highest edit version. This file cannot name the
+  // shipped key, so it does not re-implement that rule — it asserts the premise under which "the
+  // highest version" is the same answer, and says so out loud if the premise ever stops holding.
+  // WHICH ROW IS IN FORCE IS READ, NOT RE-DERIVED. The server states it (`in_force` on each row,
+  // computed by `ontology_select.select_for_template`), and this file must not re-implement the rule
+  // — it used to, as "among live rows the highest version", back when selection ranked on five tests
+  // (shipped key, declared supersession, incumbency, version). The rule is now simply "the latest
+  // stored rulebook wins", which turns on `created_at` — a field this payload does not carry, so no
+  // client-side ranking here could agree with the extractor even in principle.
+  const inForceRows = before.filter((o) => o.in_force);
+  expect(inForceRows.length, "no rulebook is in force at all, so there is nothing to publish a "
+                             + "retired copy of").toBeGreaterThan(0);
+  expect(new Set(inForceRows.map((o) => o.target_template_key)).size,
+         "more than one template has a rulebook in force, so 'the rulebook in force' is ambiguous "
+         + "for this test").toBe(1);
+  expect(inForceRows.length, "two rows claim to be in force for one template").toBe(1);
+  const inForce = inForceRows[0];
+  const shipped = await apiGet<{ definition: Record<string, unknown> }>(
+    page, `/api/v1/ontologies/${inForce.id}`);
+  // Byte-identical to the rulebook in force except for its KEY: what makes this one "replaced" is
+  // the name being one the repo retired, so nothing about how it maps differs and no later test's
+  // figures can move because this row exists.
+  const published = await apiSend(page, "POST", "/api/v1/ontologies", {
+    definition: { ...shipped.definition, ontology_key: RETIRED_RULEBOOK_KEY },
+  });
+  expect(published.status(), await published.text()).toBe(201);
+
+  // AND THEN THE SHIPPED RULEBOOK IS PUBLISHED AGAIN, which is what makes the retired copy pinnable
+  // as a REPLACED rulebook rather than as the current one.
+  //
+  // Latest-stored wins, so the POST above just made the retired copy the newest thing stored — i.e.
+  // in force. Pinning it would then record `in_force`, and the run this test needs would not exist.
+  // Re-publishing the shipped definition under its own key puts a newer row in front of it: the
+  // shipped KEY is in force again (at a higher version), and the retired copy is now both declared
+  // replaced and not the latest, which is exactly the state a reproduction run legitimately pins.
+  const republished = await apiSend(page, "POST", "/api/v1/ontologies", {
+    definition: shipped.definition,
+  });
+  expect(republished.status(), await republished.text()).toBe(201);
+
+  const after = await apiGet<OntologyRow[]>(page, "/api/v1/ontologies");
+  const legacyRows = after.filter((o) => o.ontology_key === RETIRED_RULEBOOK_KEY);
+  expect(legacyRows.length, `nothing is stored under ${RETIRED_RULEBOOK_KEY} after a 201`)
+    .toBeGreaterThan(0);
+  const legacy = legacyRows.reduce((best, o) => (o.version > best.version ? o : best));
+  // The three halves of "the state is what this test needs", asserted rather than assumed.
+  // (a) the published rulebook is one the SERVER calls replaced — without this the run below would
+  //     record `pinned` and this test would be a second copy of the one above it;
+  expect(legacy.superseded, `${RETIRED_RULEBOOK_KEY} is not reported as retired — this test needs a `
+                            + "rulebook the server calls replaced").toBe(true);
+  // (b) …and it is NOT the one in force, because being in force outranks the replacement label
+  //     (extractions.rulebook_record): a rulebook that runs is never reported as the replaced one.
+  expect(legacy.in_force, `${RETIRED_RULEBOOK_KEY} is still in force, so pinning it would record `
+                          + "in_force and there would be no superseded run to check").toBe(false);
+  // (c) the rulebook in force is the shipped KEY, so every later test runs against the same rules.
+  const stillInForce = after.find((o) => o.in_force);
+  expect(stillInForce, "nothing is in force after republishing").toBeTruthy();
+  expect(stillInForce!.ontology_key, "publishing the retired rulebook took the shipped key out of "
+                                     + "force, which would hand every later test different rules")
+    .toBe(inForce.ontology_key);
+  expect(stillInForce!.superseded, "the rulebook in force reports itself replaced").toBe(false);
+
+  // MAKE THE CLIENT'S VIEW DISAGREE WITH THE TRUTH. `in_force` is the flag the picker selects on
+  // (queries.ts::ontologyInForce reads it and no longer ranks the list itself), so that is the flag
+  // to lie about: the ids stay real, only this one boolean moves. The client therefore picks — and
+  // pins — the rulebook the server knows has been replaced, while its own list insists that one is
+  // current. Re-derivation on this page says "in force"; the run's record says "replaced". The
+  // screen must print the record.
   await page.route("**/api/v1/ontologies", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const res = await route.fetch();
     const rows = await res.json();
     await route.fulfill({
       response: res,
-      json: rows.map((o: { ontology_key: string }) => ({
-        ...o, superseded: o.ontology_key !== "hkfrs_hk_china_v1",
-      })),
+      json: rows.map((o: { id: string }) => ({ ...o, in_force: o.id === legacy.id })),
     });
   });
 
+  // Sign the admin out before signing the analyst in. `loginAs` starts at "/", which redirects a
+  // SIGNED-IN browser to /workspace — so with the admin's token still in localStorage the second
+  // login waits four minutes for a sign-in button that is not on the screen. Measured, not guessed:
+  // that is exactly how this test failed once the establish phase above was added. Clearing the
+  // store is what a fresh context does, and it also drops the admin's active document, which the
+  // analyst's browser has no business carrying.
+  await signOut(page);
   await loginAs(page, "analyst");
   await page.goto("/upload", DCL);
   await page.setInputFiles('input[type="file"]', "e2e/fixtures/sample.pdf");
@@ -865,16 +1030,18 @@ test("a run that used a superseded rulebook says so, however the client sees the
   const pick = page.getByTestId("ex-rulebook-pick");
   await expect(pick).toBeVisible();
   const chosen = await pick.locator("option:checked").textContent() ?? "";
-  expect(chosen).toContain("hkfrs_hk_china_v1");
+  expect(chosen).toContain(RETIRED_RULEBOOK_KEY);
   expect(chosen).toContain("in force");
 
   // …and the run, which is the only thing that knows, says it was read against a rulebook that has
-  // been replaced, and names what is actually in force instead.
+  // been replaced, and names what is actually in force instead. Both names come from the API rather
+  // than from literals here, because the claim is that the screen prints the server's record.
   const used = page.getByTestId("ex-rulebook-used");
   await expect(used).toHaveAttribute("data-rulebook-status", "superseded", { timeout: 60_000 });
-  await expect(used).toContainText("hkfrs_hk_china_v1 v1");
+  await expect(used).toContainText(`${RETIRED_RULEBOOK_KEY} v${legacy.version}`);
   await expect(used).toContainText(/has since been replaced/);
-  await expect(used).toContainText(/The rulebook in force is hkfrs_hk_china_v2/);
+  await expect(used).toContainText(
+    `The rulebook in force is ${stillInForce!.ontology_key} v${stillInForce!.version}`);
 
   // It survives a reload — the reload IS the failure this closes, and nothing about it is derived
   // from the list the browser holds.
@@ -907,7 +1074,9 @@ test("the upload screen describes the rulebook the run will use, not a fabricate
   const id = await card.getAttribute("data-rulebook-id");
   const ont = rows.find((o: { id: string }) => o.id === id);
   expect(ont, "the card must name a rulebook the server actually serves").toBeTruthy();
-  // A rulebook the server says has been replaced would be the wrong default to describe.
+  // And it must be the rulebook the server says is IN FORCE, not merely one that has not been
+  // replaced — those are different claims, and the card's whole job is to say what the run will use.
+  expect(ont.in_force, "the card names a rulebook the server does not report as in force").toBe(true);
   expect(ont.superseded).toBeFalsy();
   await expect(card).toHaveText(ont.ontology_key);
 
@@ -1013,6 +1182,11 @@ function leadingCount(text: string | null): number {
 interface ApiCheck {
   id: string; type: string; title: string; status: string;
   subject_key: string | null; evidence_digest?: string; fix_action: unknown | null;
+  // What the card tells the reader to DO, and the offer that lets them do it. `fix_action` is the
+  // one MECHANICAL correction (flip a mis-signed figure); `remap` is the row-shaped fix a human
+  // drives — pick the template line this row belongs on. Two different things, and a card carrying
+  // neither is the only card that says so in a sentence (Review.tsx: `!c.fix_action && !c.remap`).
+  fix: string; remap: unknown | null;
 }
 interface ApiCovRow {
   statement: string; label: string; status: string; status_label: string;
@@ -1034,6 +1208,9 @@ interface ApiReview {
   summary: { open: number; accepted: number; stale: number; passed: number };
   judgements: { orphaned: unknown[] };
   coverage: ApiCoverage;
+  // The template lines a row-shaped finding may be re-mapped onto, served ONCE per payload rather
+  // than per card. Empty when the run named no template, which is also when the offer is refused.
+  remap_targets: { canonical_key: string }[];
 }
 
 /** Put this document's queue back to "nobody has judged anything" before asserting on it.
@@ -1106,19 +1283,38 @@ test("a finding can be ACCEPTED, and the judgement is still there after a reload
   const accept = card.getByTestId("rv-accept");
   await expect(accept).toBeVisible();
 
-  // --- the fix that must NOT be offered ------------------------------------------------------
-  // A low-confidence mapping has no mechanical correction: confirming it IS the acceptance, and
-  // reassigning it needs a human to pick a concept. So the card carries a sentence and no
-  // control. Asserted against the payload as well as the DOM, so "no button" is the server's
-  // judgement rather than this test's assumption — and nothing is rendered disabled-and-grey,
-  // which would still advertise a capability that does not exist.
+  // --- the fix that must NOT be offered, and the one that must -------------------------------
+  // A low-confidence mapping has no MECHANICAL correction: nothing can be recomputed to settle "is
+  // this the right concept?", so no `fix_action` is derived and no flip-the-sign button is drawn.
+  // Asserted against the payload as well as the DOM, so "no button" is the server's judgement
+  // rather than this test's assumption — and nothing is rendered disabled-and-grey, which would
+  // still advertise a capability that does not exist.
   expect(target!.fix_action).toBeNull();
   // On this run the server derives no mechanical fix for any finding, so no card can show one.
   expect(rev.checks.filter((c) => c.fix_action !== null).length).toBe(0);
   await expect(card.getByTestId("rv-fix")).toHaveCount(0);
-  await expect(card.getByText(/No automatic correction/)).toBeVisible();
   await expect(page.getByTestId("rv-fix")).toHaveCount(0);
   await expect(page.getByText("Apply fix")).toHaveCount(0);   // the retired string, gone
+  // …and what IS offered instead. This block used to assert the sentence "No automatic correction —
+  // apply the fix above by hand", which Review.tsx renders only for a card with neither a fix nor a
+  // re-map offer. A row-shaped finding now carries one — reassigning it still needs a human to pick
+  // the concept, and that pick is a control now rather than advice — so asserting that sentence
+  // here would be asserting the ABSENCE of the fix this round added.
+  //
+  // Row-shaped, asserted rather than assumed: `target` is the first OPEN judgeable finding of any
+  // type, and the accounting types carry no offer at all. It holds today because this fixture raises
+  // exactly one finding and it is low-confidence; the day it raises an accounting one that sorts
+  // first, this line says so instead of blaming the re-map control for being legitimately absent.
+  expect(ROW_SHAPED_TYPES.has(target!.type),
+         `${target!.id} is a ${target!.type} finding, which carries no re-map offer — pick a `
+         + "row-shaped finding for the half of this test below").toBeTruthy();
+  expect(target!.remap, "a row-shaped finding must carry the re-map offer its fix text promises")
+    .toBeTruthy();
+  expect(rev.remap_targets.length,
+         "the run named a template, so there are lines to offer").toBeGreaterThan(0);
+  await expect(card.getByTestId("rv-remap")).toBeVisible();
+  await expect(card.getByTestId("rv-remap-select")).toBeVisible();
+  await expect(card.getByText(/No automatic correction/)).toHaveCount(0);
 
   // --- accepting ------------------------------------------------------------------------------
   // The reason is required, and the button says so by being unpressable rather than by letting a
@@ -1276,7 +1472,11 @@ test("the coverage band counts RELATIONS, and every number in it is the API's fo
   const card = page.getByTestId("rv-check").first();
   await expect(card).toHaveAttribute("data-status", /open|accepted|stale/, { timeout: 15_000 });
   await card.click();
-  await expect(card.getByText(/No automatic correction/)).toBeVisible();
+  // The card's OWN advice, off the payload — proof the body really expanded, so "no Accept button"
+  // below is a discrimination rather than an assertion about a collapsed card. This used to read the
+  // "No automatic correction" sentence, which Review.tsx now renders only for a card carrying
+  // neither a mechanical fix nor a re-map offer; a row-shaped finding carries the latter.
+  await expect(card).toContainText(rev.checks[0].fix);
   await expect(page.getByTestId("rv-accept")).toHaveCount(0);
   await expect(page.getByTestId("rv-withdraw")).toHaveCount(0);
   await expect(page.getByTestId("rv-reason")).toHaveCount(0);
@@ -1777,7 +1977,10 @@ test("a finding the queue cannot tell apart from another offers no acceptance an
   // no request, and a fabricated acceptance is exactly a POST nobody authorised.
   const posted: string[] = [];
   page.on("request", (r) => {
-    if (r.method() === "POST" && /\/review\/judgements$/.test(r.url())) posted.push(r.url());
+    // `(\?|$)`, not `$`: the client posts to `…/review/judgements?locale=en`, so an end-anchored
+    // pattern here matched nothing and this guard could never have caught the POST it exists to
+    // catch. The same oversight made the injected refusals in the test below never fire at all.
+    if (r.method() === "POST" && /\/review\/judgements(\?|$)/.test(r.url())) posted.push(r.url());
   });
 
   await page.route("**/api/v1/documents/*/review*", async (route) => {
@@ -1845,10 +2048,19 @@ test("a finding the queue cannot tell apart from another offers no acceptance an
     // The refusal, in the SERVER's own sentence — the screen composes no second version of it.
     await expect(c.getByTestId("rv-conflict")).toBeVisible();
     await expect(c.getByTestId("rv-conflict-message")).toHaveText(NOTE);
-    // No judgement path at all: not a disabled button, none.
+    // No ACCEPTANCE path at all: not a disabled button, none.
     await expect(c.getByTestId("rv-accept")).toHaveCount(0);
-    await expect(c.getByTestId("rv-withdraw")).toHaveCount(0);
     await expect(c.getByTestId("rv-reason")).toHaveCount(0);
+    // WITHDRAWAL IS NOT ACCEPTANCE, and this used to assert `rv-withdraw` was absent too. That was
+    // the shipped defect, not the fix: the payload here carries `judgement_withheld`, i.e. the
+    // server holds a real acceptance against this subject and refuses to attribute it to either
+    // card — and `withdraw_review_judgement` deliberately PERMITS taking that row back. Asserting
+    // the control's absence is asserting the state round 2's finding 5 closed, where a named
+    // acceptance stood with nothing anywhere able to remove it. So the control is required, and
+    // required to say which of the two withdrawable shapes it stands for. That it WORKS is driven
+    // for real one test below; what is asserted here is that a card refusing to show a verdict
+    // still offers the way out.
+    await expect(c.getByTestId("rv-withdraw")).toHaveAttribute("data-withheld", "true");
     // And no verdict, although the payload carried one. That is the fabrication itself: an actor,
     // a timestamp, a reason and another line's figures against a card whose numbers that person
     // never saw.
@@ -1917,8 +2129,19 @@ test("a refused acceptance is explained by the cause the server named, not the o
   await expect(card).toHaveAttribute("data-status", "open", { timeout: 20_000 });
   await card.click();
 
+  // The accept POST goes to `…/review/judgements?locale=en`, and a Playwright URL glob is matched
+  // against the WHOLE url, anchored at both ends (`globToRegexPattern`): the pattern here was
+  // `**/review/judgements`, which compiles to `^(.*\/)review\/judgements$` and therefore matched
+  // NOTHING. So none of the three refusals below was ever injected — the click reached the real
+  // endpoint, the acceptance was STORED, and this test asserted the client's reading of a 409 that
+  // never happened while quietly leaving a judgement behind for the next test to inherit.
+  //
+  // The trailing `*` compiles to `([^/]*)`, so it takes the query string and still cannot reach
+  // `…/review/judgements/{subject_key}` — the DELETE `clearJudgements` uses, which must go through.
+  // The method guard stays for the same belt-and-braces reason it always had.
+  const JUDGEMENTS_ROUTE = "**/review/judgements*";
   const refuse = (error: string) =>
-    page.route("**/review/judgements", async (route) => {
+    page.route(JUDGEMENTS_ROUTE, async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
       await route.fulfill({
         status: 409,
@@ -1933,7 +2156,7 @@ test("a refused acceptance is explained by the cause the server named, not the o
   await card.getByTestId("rv-accept").click();
   await expect(card.getByTestId("rv-error")).toContainText(/shares an identity/, { timeout: 15_000 });
   await expect(card.getByTestId("rv-error")).not.toContainText(/figures changed/);
-  await page.unroute("**/review/judgements");
+  await page.unroute(JUDGEMENTS_ROUTE);
 
   // A write that lost a race: nothing was stored, and it says so — not "the figures changed", of
   // figures that did not change.
@@ -1942,7 +2165,7 @@ test("a refused acceptance is explained by the cause the server named, not the o
   await expect(card.getByTestId("rv-error")).toContainText(/Nothing was recorded/,
                                                           { timeout: 15_000 });
   await expect(card.getByTestId("rv-error")).not.toContainText(/figures changed/);
-  await page.unroute("**/review/judgements");
+  await page.unroute(JUDGEMENTS_ROUTE);
 
   // A refused acceptance recorded nothing at all — the card is still open, here and on the
   // server, so the reviewer's next attempt starts from the truth.
@@ -2580,10 +2803,13 @@ test("a note that does not tie prints EVERY face line it failed to tie, and a gr
       // put a card in the list that no chip counts, i.e. a chip whose number is no longer the length
       // of the list clicking it produces. That is a defect the suite asserts against elsewhere, and
       // a fixture must not introduce it to prove something else.
-      if (!tb.types.includes("unmapped") && !tb.types.includes("low_confidence")) {
-        return { ...tb, types: [...tb.types, "note_tie"], count: tb.count + 1 };
-      }
-      return tb;
+      //
+      // Identified by ELIMINATION of the row-shaped tabs rather than by "the one that is not
+      // unmapped or low_confidence": the queue gained a third row-shaped tab this round (Off
+      // template), and that older test would have added note_tie to it as well — two chips selecting
+      // one card, which is the very partition break the paragraph above refuses to introduce.
+      if (tb.types.some((ty) => ROW_SHAPED_TYPES.has(ty))) return tb;
+      return { ...tb, types: [...tb.types, "note_tie"], count: tb.count + 1 };
     });
     await route.fulfill({ response: res, json: body });
   });
@@ -3435,7 +3661,8 @@ test("a confidence badge prints the measured percentage, and a row nothing score
   const RETIRED: Record<string, string> = { high: "96%", med: "78%", low: "54%" };
   // The premise of that discrimination, asserted rather than assumed: some measured page is scored at
   // a figure that is NOT its band's old literal, so "prints the measurement" and "prints the bucket's
-  // stand-in" are distinguishable outcomes on this run. Today it is p.1, in band 'med', scored 72.
+  // stand-in" are distinguishable outcomes on this run. Today it is p.1, in band 'high', scored 95 —
+  // one point off the retired 96%, which is exactly why the discrimination is asserted and not eyed.
   expect(measured.some((p) => RETIRED[p.conf] !== `${p.conf_pct}%`),
          "every measured page is scored at exactly its band's retired literal, so this run cannot "
          + "tell the served percentage apart from the bucket it used to be printed from")

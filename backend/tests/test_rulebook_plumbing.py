@@ -189,3 +189,57 @@ def test_a_run_read_against_a_superseded_rulebook_is_never_labelled_as_the_one_i
     assert current.status_code == 202, current.text
     rb2 = client.get(f"/api/v1/extractions/{current.json()['run_id']}").json()["rulebook"]
     assert rb2["status"] == "in_force" and rb2["in_force"] is True, rb2
+
+
+def test_the_rulebook_that_runs_is_never_also_reported_as_the_replaced_one(client):
+    """A run cannot be told "you used the replaced rulebook — the one in force is that same rulebook".
+
+    THE DEFECT THIS CLOSES, and it is one the latest-wins rule created. Selection asks "what was
+    stored last" (``ontology_select.select_for_template``); ``superseded`` asks "has anything declared
+    this key replaced". Both can be true of one row, and the reachable way in is ordinary: a rulebook
+    is superseded by a successor, then an admin publishes a NEW VERSION of the original — which is now
+    the newest thing stored, so it is what the next run maps against, whatever the older declaration
+    says about the name.
+
+    ``rulebook_record`` used to hand that state to the screen as ``status="superseded"`` with
+    ``in_force_ontology_key`` pointing back at the very same rulebook, so the extraction view printed
+    a sentence that refuted itself. Being the rulebook that RUNS now decides the status word — that is
+    what "in force" means — and the replacement flag rides alongside for the one thing it can still
+    honestly say.
+    """
+    from app.db.base import SessionLocal, init_db
+    from app.db.models import OntologyVersion
+
+    init_db()
+    template_key = f"tk-clash-{uuid.uuid4().hex[:8]}"
+    original = f"rb-original-{uuid.uuid4().hex[:8]}"
+    successor = f"rb-successor-{uuid.uuid4().hex[:8]}"
+    with SessionLocal() as s:
+        _seed_rulebook(s, original, template_key)                          # v1 of the original
+        _seed_rulebook(s, successor, template_key, supersedes=original)    # …declared replaced
+        s.commit()
+        # …and then the original is published again. Newest stored, so it is what runs — while the
+        # successor's declaration still names its key as replaced.
+        revived = OntologyVersion(ontology_key=original, target_template_key=template_key,
+                                  version=2, definition=_definition(original, template_key))
+        s.add(revived)
+        s.commit()
+        revived_id = revived.id
+
+    from app.api.routes.extractions import rulebook_record
+    with SessionLocal() as s:
+        # The premise: both facts hold of this row at once. Without this the test would silently
+        # become a second copy of the plain in-force case.
+        from app.services.ontology_select import rulebooks_for_template, superseded_keys
+        assert original in superseded_keys(rulebooks_for_template(s, template_key))
+        rb = rulebook_record(s, revived_id)
+
+    assert rb["status"] == "in_force", rb
+    assert rb["in_force"] is True, rb
+    # The replacement fact is still told, just not as the status.
+    assert rb["superseded"] is True, rb
+    # THE SENTENCE THAT REFUTED ITSELF: naming the same rulebook as the replaced one and the current
+    # one. Whatever the status says, these two must not describe one rulebook as both.
+    assert not (rb["status"] == "superseded"
+                and rb["in_force_ontology_key"] == rb["ontology_key"]), rb
+    assert rb["in_force_ontology_key"] == original and rb["in_force_version"] == 2, rb
