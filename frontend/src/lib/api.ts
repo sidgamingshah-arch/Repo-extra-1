@@ -48,6 +48,17 @@ export class ApiError extends Error {
   }
 }
 
+/** WHAT THE SERVER SAID IT REFUSED, for a screen that has to print it. `detail` is preferred over
+ *  the status line because it names the thing — the concept, the status, the missing run — and a
+ *  reader told only "500" has nothing to act on. Empty for anything that is not an error at all.
+ *
+ *  Lives here rather than in a screen because two of them print refusals the same way, and a second
+ *  copy of this is a second place for "the server's own words" to quietly become "Error: 500". */
+export function refusalText(err: unknown): string {
+  if (err instanceof ApiError) return err.detail ?? err.message;
+  return err instanceof Error ? err.message : "";
+}
+
 /** Pull FastAPI's `detail` out of an error body; undefined when it isn't a plain message. */
 function errorDetail(text: string): string | undefined {
   try {
@@ -100,6 +111,7 @@ import type {
   CellContext,
   Commentary,
   DemoUser,
+  DocumentRunStatus,
   ExtractionRunResponse,
   ExportFmt,
   FxRate,
@@ -259,6 +271,16 @@ export const api = {
   /** The latest extraction run for a document (drives the Export preview/counts). */
   documentRun: (documentId: string) =>
     req<ExtractionRunResponse>(`/documents/${documentId}/run`),
+  /** Whether a document has an extraction IN FLIGHT, and how far it has got — the per-document
+   *  question, asked with no run id.
+   *
+   *  `documentRun` above cannot answer it: that route 404s until a run has a RESULT, which is
+   *  exactly the state a working run is not in, and `getRun` needs an id a freshly loaded page does
+   *  not have. `status: "none"` is a normal 200 answer meaning this document has never been
+   *  extracted — never an error, so a caller does not have to read a status code to tell "extracting"
+   *  from "nothing here". */
+  documentRunStatus: (documentId: string) =>
+    req<DocumentRunStatus>(`/documents/${documentId}/run-status`),
   /** Real per-page classification for the Page Scope screen (available pre-extraction). */
   documentPages: (documentId: string) =>
     req<PagesResponse>(`/documents/${documentId}/pages`),

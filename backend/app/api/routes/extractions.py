@@ -4,6 +4,10 @@
 BackgroundTask; progress and results are read by polling ``GET /extractions/{run_id}`` (the
 frontend polls once a second while the run is ``running`` — see ``lib/queries.ts``).
 
+``GET /documents/{id}/run-status`` answers the same question for a caller that has no run id — a
+page loaded fresh mid-run — and answers it for a run that has produced nothing yet, which is the
+one thing the two reads above cannot do between them (see :func:`get_document_run_status`).
+
 There is no WebSocket stream. The earlier "stubbed WS contract" note in this docstring described
 something that was never built, and the run has not been synchronous since extraction moved to the
 background task.
@@ -26,7 +30,10 @@ from sqlalchemy.orm import Session
 from pathlib import Path
 
 from app.api.deps import db, settings as get_settings_dep
-from app.api.routes.documents import _can_access, authorized_document
+# ``_latest_run`` is imported rather than re-spelled here: "the latest run for a document" is one
+# ordering rule (``created_at`` descending), and a second copy of it would let this route and every
+# other per-document read disagree about which run they are describing.
+from app.api.routes.documents import _can_access, _latest_run, authorized_document
 from app.config import Settings
 from app.ports.object_store import LocalObjectStore
 from app.schemas.loader import load_ontology, load_template
@@ -777,3 +784,40 @@ def get_run(run_id: str, session: Session = Depends(db),
             "stages": (run.options or {}).get("stages") or pipeline_stage_names(),
             "log_tail": _log_tail((run.logs or "").splitlines()),
             "result": run.result}
+
+
+@router.get("/documents/{document_id}/run-status",
+            dependencies=[Depends(require(Permission.EXTRACTION_VIEW)),
+                          Depends(authorized_document)])
+def get_document_run_status(document_id: str, session: Session = Depends(db)) -> dict:
+    """DOES THIS DOCUMENT HAVE AN EXTRACTION IN FLIGHT? — for its latest run, answered without a
+    run id.
+
+    Neither existing read can answer it. ``GET /documents/{id}/run`` refuses until a run has a
+    RESULT (``documents.py::get_document_run`` — ``if run is None or not run.result``), which is
+    exactly the state a running run is not in, and ``GET /extractions/{run_id}`` needs an id the
+    caller may not have: a hard reload arrives with an empty query cache and no run id anywhere.
+    So a screen loaded FRESH mid-run could report only what the 404 alone proved — "this document
+    has not been extracted" — while the pipeline was working on it. That is the wrong answer, and
+    it is the one that reads as "nothing happened".
+
+    ``none`` IS AN ANSWER, served 200. "This document has never been extracted" is information the
+    caller asked for, not a failure of the request; making it an error is what left one 404 standing
+    for two different facts and forced every reader to guess which one it meant.
+
+    The run's own ``status`` word is passed through rather than mapped onto an expected set: a
+    status this route does not recognise is a run it cannot describe, and folding one into
+    ``running`` or ``failed`` would be this endpoint inventing the answer.
+
+    Deliberately NOT the result, the stage list or the log: this is the question a caller with no
+    run id can ask, and ``run_id`` is what it hands back so the caller can then read the run itself
+    through ``get_run`` — one shape for the run's detail, not a second half-copy of it here.
+    """
+    run = _latest_run(session, document_id)
+    if run is None:
+        return {"status": "none", "run_id": "", "progress": None}
+    return {"status": run.status, "run_id": run.id,
+            # Null rather than a half-record for a run that predates the progress contract — the
+            # same rule :func:`get_run` applies (see :func:`_served_progress`), so the two reads of
+            # one run cannot disagree about whether it has progress to report.
+            "progress": _served_progress(run.progress)}

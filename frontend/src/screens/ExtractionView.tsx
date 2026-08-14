@@ -10,17 +10,17 @@
  * against the rulebook in force for the selected template, or whichever one the reader pins here
  * instead — and the rulebook the run RECORDED is named above the rows, from the run's own record
  * (see RulebookPicker). Distinct from the demo-driven workspace: this reads a live extraction run. */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Button, Card } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { ExcelSourcePanel, PagedSource, toPicked, type Picked } from "../components/SourceViewer";
 import { useT } from "../i18n";
-import { ApiError } from "../lib/api";
+import { refusalText } from "../lib/api";
 import {
-  ontologyInForce, useDocumentAnalysis, useDocumentRun, useExtraction, useOntologies, useReextract,
-  useTemplates,
+  ontologyInForce, useDocumentAnalysis, useDocumentRunStatus, useExtraction, useOntologies,
+  useReextract, useTemplates,
 } from "../lib/queries";
 import { useCan } from "../lib/rbac";
 import { useUI } from "../store";
@@ -633,25 +633,79 @@ export default function ExtractionView() {
   // WHICH RUN THE SCREEN IS SHOWING, AND HOW IT GOT IT. An analyst comes here TO run the extraction,
   // so `useExtraction` POSTs once per (document, rulebook, template) and polls it. A reviewer holds
   // `extraction:view` and NOT `pipeline:run` — that POST is a 403 for them — and this screen is in
-  // all three working roles' nav, so for a role that cannot start a run the latest one is READ
-  // instead (`GET /documents/{id}/run`, the same response shape). A screen that 403s on arrival is
-  // not a screen its reader was given.
+  // all three working roles' nav, so a role that cannot start a run watches whatever run the
+  // per-document read names. A screen that 403s on arrival is not a screen its reader was given.
   const canRun = useCan("pipeline:run");
-  const extr = useExtraction(id, ont?.id, tpl?.id, ready && canRun);
-  const latest = useDocumentRun(canRun ? undefined : id);
-  const data = canRun ? extr.data : (latest.data?.result ? latest.data : undefined);
-  const rulebook = canRun ? extr.rulebook : (latest.data?.rulebook ?? undefined);
-  const progress = (canRun ? extr.progress : latest.data?.progress) ?? undefined;
-  const stages = canRun ? extr.stages : latest.data?.stages;
-  const logTail = canRun ? extr.logTail : latest.data?.log_tail;
-  const isPending = canRun ? extr.isPending : latest.isPending;
-  // The read serves a run only once it HAS a result, so a 404 there means there is nothing to read —
-  // a different fact from a run that failed, and the only one available to a reader who cannot
-  // start one.
-  const noRun = !canRun && latest.isError
-    && latest.error instanceof ApiError && latest.error.status === 404;
-  const isError = (canRun ? extr.isError : latest.isError) && !noRun;
-  const error = (canRun ? extr.error : latest.error) as Error | undefined;
+  // DOES THIS DOCUMENT ALREADY HAVE A RUN IN FLIGHT? A hard reload arrives with an empty query
+  // cache, so the start query had nothing and POSTed — a SECOND pipeline over the one already
+  // working on the same document, and the reader watching the newer of the two. This read answers
+  // without a run id and answers for a run that has produced nothing yet, so the run in flight can
+  // be adopted instead of raced.
+  const runQ = useDocumentRunStatus(id);
+  // ANSWERED THIS VISIT, not out of the cache. The status query holds the previous visit's answer
+  // while it refetches, and acting on that is how the duplicate comes straight back: a re-extract
+  // started from the Workspace leaves `succeeded` in the cache, and a screen that trusted it would
+  // POST over the run that is working right now.
+  const answered = runQ.isFetchedAfterMount && runQ.isSuccess;
+  const latestRunId = (answered && runQ.data?.run_id) || undefined;
+  const inFlight = answered && runQ.data?.status === "running";
+  // ADOPTED ONCE AND KEPT — per document, because this screen reads the ACTIVE document from the
+  // store and does not remount when that changes. Kept, because the read stops saying `running` the
+  // moment the run settles: re-deriving this every render would drop the run just as its spread
+  // arrived and re-enable the POST, replacing what the reader waited for with a run of this
+  // screen's own. It also records the PIN it was adopted under — see `startBlocked`.
+  const [adopted, setAdopted] = useState<{ doc: string; runId: string; pin: string } | null>(null);
+  useEffect(() => {
+    if (inFlight && latestRunId && id) {
+      setAdopted((prev) => (prev && prev.doc === id
+        ? prev : { doc: id, runId: latestRunId, pin: pinnedId }));
+    }
+  }, [inFlight, latestRunId, id, pinnedId]);
+  const mine = adopted && adopted.doc === id ? adopted : null;
+  // A reader who cannot start a run has no run of their own to wait for, so they watch the latest one
+  // whatever state it is in — which is how they see a run at all before it has a result.
+  const watching = mine?.runId ?? (canRun ? undefined : latestRunId);
+  // WHY THE POST IS HELD, kept separate from WHICH RUN IS WATCHED, because pinning changes one and
+  // must not change the other. Choosing another rulebook is the reader asking for this filing read
+  // against different rules — a run this screen may start — so the block lifts; the adopted run
+  // merely FINISHING is not, so it does not. The screen goes on reporting the run it adopted
+  // throughout, and the new pick's run starts when that one ends rather than racing it (`!inFlight`).
+  const startBlocked = !!mine && mine.pin === pinnedId;
+  // NO ANSWER, NO RUN. A read that has not landed — or that failed — cannot say whether a pipeline
+  // is already working on this document, and starting one on that basis is the duplicate above.
+  const starting = ready && canRun && answered && !inFlight && !startBlocked;
+  const extr = useExtraction(id, ont?.id, tpl?.id, starting, watching);
+  const data = extr.data;
+  const rulebook = extr.rulebook;
+  const progress = extr.progress;
+  const stages = extr.stages;
+  const logTail = extr.logTail;
+  // "none" is the read's own 200 answer — this document has never been extracted — and it is the
+  // only thing to say to a reader who cannot start one. It is no longer inferred from a 404, which
+  // was the same response the route gave for a run that was working.
+  const noRun = !canRun && answered && runQ.data?.status === "none";
+  // A READ THAT FAILED IS NOT A RUN THAT FAILED, and the two must not share a panel: `ex.failed`
+  // asserts the pipeline broke and offers to start another one, so serving it for a status read that
+  // 500d would report a failure nothing observed and invite a second run over one that may be
+  // working. Kept apart, each says only what it knows.
+  //
+  // And it is only worth saying while this screen holds no run: with one being polled, that run's own
+  // progress is the better answer to the same question, and hiding it behind "we cannot tell whether
+  // a run is in flight" would suppress the report of a run visibly in flight.
+  const readFailed = runQ.isError && !extr.runId;
+  const isError = extr.isError;
+  const error = extr.error;
+  // WHAT THE SCREEN IS WAITING ON, and they are different things. For a reader who can start a run,
+  // everything before the spread IS the run — the lists settling, the read that decides whether to
+  // start one or adopt one, the POST, the pipeline — so one panel covers the lot and says "starting"
+  // until the run reports otherwise. For a reader who cannot, only the read saying a run is in flight
+  // makes this an extraction in progress; waiting on the read itself is loading, and describing that
+  // as a run would attribute one to someone who may have none.
+  //
+  // Both are exclusive of `data` and of each other: these are branches of "what is there to show",
+  // and a panel saying the run is starting must not stack above the spread that arrived.
+  const awaitingRun = !data && !isError && !readFailed && (canRun || inFlight);
+  const awaitingRead = !canRun && !data && !isError && !readFailed && !inFlight && !noRun;
   const failedStage = currentStage(progress);
   const reextract = useReextract(id);
 
@@ -691,30 +745,55 @@ export default function ExtractionView() {
                       lineHeight: 1.6 }}>
             {t("ex.readOnly.none")}
           </p>
-          {/* The read is a single fetch — a run finishing does not push anything at this reader, and
-              the endpoint serves nothing at all until it has. So the way forward is a control that
-              asks again, rather than a sentence telling them to reload the browser. */}
+          {/* The read polls only while a run is RUNNING, and there is no run here — so nothing will
+              tell this reader when someone else starts one. The way forward is a control that asks
+              again, rather than a sentence telling them to reload the browser. */}
           <div style={{ marginTop: 12 }}>
             <Button variant="secondary" testid="ex-recheck"
-                    disabled={latest.isFetching}
-                    onClick={() => { void latest.refetch(); }}
+                    disabled={runQ.isFetching}
+                    onClick={() => { void runQ.refetch(); }}
                     style={{ fontSize: 12, padding: "7px 14px" }}>
-              {latest.isFetching ? t("ex.run.retryPending") : t("ex.readOnly.recheck")}
+              {runQ.isFetching ? t("ex.run.retryPending") : t("ex.readOnly.recheck")}
             </Button>
           </div>
         </div>
       )}
 
-      {/* The progress panel belongs to the path that RUNS the extraction. `!ready` is before the run
-          exists at all (the ontology/template lists have not settled, so nothing has been POSTed
-          yet) — the panel says "starting" for it, because that is all that is true. */}
-      {canRun && (isPending || !ready) && !isError && (
+      {/* The read that says whether a run is in flight did not answer, so neither "extracting" nor
+          "not extracted" can be claimed — and neither can "the extraction failed". What is offered is
+          the one thing that helps: ask again. */}
+      {readFailed && (
+        <div data-testid="ex-run-unknown" style={{ marginTop: 6 }}>
+          <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 5 }}>
+            {t("ex.pending.unknownTitle")}
+          </h1>
+          <p style={{ margin: 0, color: color.sec2, fontSize: 12.5, maxWidth: 620,
+                      lineHeight: 1.6 }}>
+            {t("ex.pending.unknownBody")}
+          </p>
+          <p style={{ fontFamily: font.mono, fontSize: 11, color: color.muted, maxWidth: 620,
+                      margin: "6px 0 0", wordBreak: "break-word" }}>
+            {refusalText(runQ.error)}
+          </p>
+          <div style={{ marginTop: 12 }}>
+            <Button variant="secondary" testid="ex-run-unknown-recheck"
+                    disabled={runQ.isFetching}
+                    onClick={() => { void runQ.refetch(); }}
+                    style={{ fontSize: 12, padding: "7px 14px" }}>
+              {runQ.isFetching ? t("ex.run.retryPending") : t("ex.readOnly.recheck")}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* A run — this reader's own, or the one already in flight that this screen adopted rather
+          than raced. Before either exists the panel says "starting", because that is all that is
+          true. */}
+      {awaitingRun && (
         <RunProgress progress={progress} stages={stages} logTail={logTail} t={t} />
       )}
-      {/* The read path is a fetch, not a run: while it is in flight the screen is LOADING, and
-          describing that as an extraction in progress would attribute a run to a reader who cannot
-          start one and may not have one. */}
-      {!canRun && isPending && !noRun && (
+      {/* A fetch, not a run. */}
+      {awaitingRead && (
         <div style={{ padding: 50, textAlign: "center", color: color.muted }}>
           {t("empty.loading")}
         </div>

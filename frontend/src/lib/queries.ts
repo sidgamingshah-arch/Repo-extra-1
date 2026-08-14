@@ -202,6 +202,14 @@ export function useExtraction(
   ontologyId?: string,
   templateId?: string,
   enabled = true,
+  /** A run this caller did NOT start, polled as if it had: the run `useDocumentRunStatus` found
+   *  already in flight for the document. Without it, a screen that arrives mid-run has to choose
+   *  between starting a second pipeline over the first and showing nothing at all.
+   *
+   *  A run we started still wins when both are present — a caller holding a run of its own is
+   *  watching that one — but the two are not meant to coexist: the caller passing this is expected
+   *  to keep `enabled` false for as long as it holds an adopted run. */
+  adoptRunId?: string,
 ) {
   const start = useQuery({
     queryKey: ["extraction-start", documentId, ontologyId ?? null, templateId ?? null],
@@ -212,12 +220,18 @@ export function useExtraction(
     staleTime: Infinity,
     retry: false,
   });
-  const runId = start.data?.run_id;
+  const runId = start.data?.run_id ?? adoptRunId;
   const poll = useQuery({
+    // Keyed on the run, not on how the caller came by it, so an adopted run and a started one share
+    // one cache entry — two polls of the same run would double the request rate on a live pipeline.
     queryKey: ["extraction-run", runId],
     queryFn: () => api.getRun(runId as string),
     enabled: !!runId,
-    retry: false,
+    // No `retry: false` here, though the start above keeps it: a failed POST must never be repeated
+    // (that is a second pipeline), while a failed poll is one request that told us nothing about a
+    // run still going. `poll.isError` reaches the caller as a FAILED RUN — with a re-run button under
+    // it — so a single dropped request mid-extraction announced a failure the pipeline never had, and
+    // went on announcing it, because the interval below stops when there is no data to poll on.
     // Keep polling while the background job is running; stop once it settles.
     refetchInterval: (q) => (q.state.data?.status === "running" ? 1000 : false),
   });
@@ -286,8 +300,13 @@ export function useReextract(documentId: string | undefined) {
         ["extraction-start", documentId, vars?.ontologyId ?? null, vars?.templateId ?? null],
         started,
       );
-      for (const key of ["document-statement", "document-run", "document-review",
-                         "document-analysis", "document-commentary", "document-notes"]) {
+      // `document-run-status` included because it is what every screen now asks "is a run in
+      // flight?" — and it stops polling on a terminal answer, so a cached `succeeded`/`failed` from
+      // the run this one replaces would describe the document as idle for as long as the entry
+      // lived, while the new run was working.
+      for (const key of ["document-statement", "document-run", "document-run-status",
+                         "document-review", "document-analysis", "document-commentary",
+                         "document-notes"]) {
         qc.invalidateQueries({ queryKey: [key, documentId] });
       }
     },
@@ -548,6 +567,40 @@ export const useDocumentRun = (documentId: string | undefined) =>
     queryFn: () => api.documentRun(documentId as string),
     enabled: !!documentId,
     retry: false,
+  });
+
+/** Whether a document has an extraction IN FLIGHT — polled while it has one, and left alone the
+ *  moment it settles (the `useExtraction` poll's own shape: `refetchInterval` returns false).
+ *
+ *  This is the question a page loaded FRESH could not ask. `useExtraction`'s poll covers a run
+ *  within one session because that session started it and holds its id; a hard reload has an empty
+ *  cache and no run id, and `useDocumentRun` 404s until a run has a RESULT — so "being extracted
+ *  right now" and "never extracted" arrived as the same answer, and a screen had to print the
+ *  second. `status: "none"` is data here, not an error.
+ *
+ *  READ-ONLY, and that is load-bearing: the Workspace mounts this, and opening the Workspace must
+ *  never POST a run just by being looked at. Nothing in this hook can start one.
+ *
+ *  NO `retry: false`, unlike the reads beside it. They decline retries because a 404 is one of their
+ *  ordinary ANSWERS and repeating it is pure waste; here every answer is a 200, so an error is a
+ *  genuine failure — and a transient one must not strand the caller, which it would: the interval
+ *  below stops for anything that is not `running`, and with no data there is nothing for it to poll
+ *  on, so one dropped request would leave a screen unable to say whether a run exists at all. */
+export const useDocumentRunStatus = (documentId: string | undefined) =>
+  useQuery({
+    queryKey: ["document-run-status", documentId],
+    queryFn: () => api.documentRunStatus(documentId as string),
+    enabled: !!documentId,
+    // NEVER SERVED FROM CACHE WITHOUT ASKING AGAIN. The client's default is `staleTime: 30_000`
+    // (main.tsx), and this answer goes out of date the moment a run starts: an analyst who starts a
+    // run and walks to the Workspace inside that window would be read the cached "none" — told the
+    // document has not been extracted while their own run works on it, which is the exact sentence
+    // this hook exists to stop. And because the interval below stops for every answer but `running`,
+    // nothing would ever correct it. `staleTime: 0` makes every mount ask.
+    staleTime: 0,
+    // Poll while the run is working; stop the moment it settles. A terminal answer does not change
+    // by itself, and a document nobody is extracting must not be polled once a second for ever.
+    refetchInterval: (q) => (q.state.data?.status === "running" ? 1000 : false),
   });
 export const useIntegrity = (locale: Locale = "en", enabled = true) =>
   useQuery({ queryKey: ["integrity", locale], queryFn: () => api.integrity(locale), enabled });
