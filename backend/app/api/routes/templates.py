@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import db
 from app.schemas.loader import load_template, unknown_keys, validate_template
 from app.security import Permission, require
+from app.services.review_lines import is_statement_line
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
@@ -70,7 +71,13 @@ def _publish(session: Session, definition: dict) -> dict:
     session.commit()
     return {"id": row.id, "template_key": template.template_key, "name": template.name,
             "version": version,
-            "line_items": len([n for n in template.all_nodes() if n.role.value != "header"])}
+            # A line is a node that CARRIES A FIGURE — this codebase's one predicate for that
+            # (`review_lines`, which the review header counts both routes' populations with).
+            # `get_template_detail`'s walk and `export._emit_nodes` ask it too, so the count an upload
+            # reports, the count the Template screen prints and the rows the workbook holds cannot
+            # drift. Spelled `!= "header"` here, a spacer was published as a line item.
+            "line_items": len([n for n in template.all_nodes()
+                               if is_statement_line({"role": n.role.value})])}
 
 
 @router.post("", status_code=201, dependencies=[Depends(require(Permission.CONFIG_TEMPLATE))])
@@ -211,7 +218,19 @@ def get_template_detail(template_id: str, locale: str = "en",
     ont_row = select_for_template(session, row.template_key)
     by_key = {}
     netting_rules: list[dict] = []
+    # The concepts the rulebook DECLARES, read off the stored definition rather than off the loaded
+    # object below, because that is the list the editor's writes are checked against: every one of
+    # them looks the key up in `definition["mappings"]` (ontologies.edit_ontology_mapping, its
+    # `confusable_with` guard, edit_netting_rule) with no resolve step. Taken from `by_key` instead,
+    # a definition that VALIDATES but cannot be resolved — one `inherits` naming a section that is
+    # not there — would empty this set through the `except` below and have the screen tell the reader
+    # the rulebook declares no concept for any of its lines, while the server went on accepting the
+    # very edits the screen had disabled.
+    declared: set[str] = set()
     if ont_row:
+        declared = {m.get("canonical_key")
+                    for m in ((ont_row.definition or {}).get("mappings") or [])
+                    if isinstance(m, dict)}
         try:
             ont = load_ontology(ont_row.definition, resolve=True)
             for m in ont.mappings:
@@ -246,23 +265,27 @@ def get_template_detail(template_id: str, locale: str = "en",
         the screen resolved the click to an unrelated concept and showed that concept's rules under
         the heading of the line the analyst had clicked.
 
-        The role test is exactly ``== "header"``, matching ``export._emit_nodes`` and ``_publish``'s
-        own ``line_items`` count above, so all three agree on what a line is. ``LineRole.SPACER``
-        gets no third treatment here for that reason: a fourth opinion about it, in a fourth place,
-        is how these counts drifted apart to begin with, and no shipped template declares one.
+        Whether a node carries a figure is asked with ``review_lines.is_statement_line`` — the
+        predicate ``export._emit_nodes`` and ``_publish``'s ``line_items`` count above now read as
+        well, so all three agree on what a line is without three literals that have to keep
+        matching. That is what gives ``LineRole.SPACER`` its treatment rather than a fourth opinion
+        about it: a spacer is a presentational gap, so it reaches the tree as an unselectable row
+        like a heading. Tested as ``== "header"``, it came out as a selectable LINE with a
+        ``node_config`` entry — a blank gap in the statement offered as a concept to alias and give a
+        sign convention to.
 
         Children are walked BELOW A LINE as well as below a heading, which ``_emit_nodes`` does not
-        do — every non-heading node is a concept the ontology maps, and a concept that reaches no
-        ``node_config`` entry is a concept the screen cannot answer about. It also keeps ``leaves``
-        equal to every keyed non-heading node for any template, not just for one nested no deeper
-        than the shipped file. (An export that skips such a node is an export bug, not a reason for
-        this screen to hide it.)
+        do — every node that carries a figure is a concept the rulebook may map (see ``mapped``
+        below), and a concept that reaches no ``node_config`` entry is a concept the screen cannot
+        answer about. It also keeps ``leaves`` equal to every keyed line for any template, not just
+        for one nested no deeper than the shipped file. (An export that skips such a node is an
+        export bug, not a reason for this screen to hide it.)
         """
         nonlocal leaves
         for node in nodes:
             label = _loc(node, locale)
             children = node.get("children") or []
-            if node.get("role") == "header":
+            if not is_statement_line(node):
                 tree.append({"id": f"sec:{node.get('node_id', label)}", "label": label,
                              "lvl": lvl, "head": True})
                 emit(children, lvl + 1, [*trail, label], stmt_label)
@@ -300,6 +323,15 @@ def get_template_detail(template_id: str, locale: str = "en",
                 "breadcrumb": " / ".join([stmt_label, *trail]),
                 "label": label,
                 "canonical_key": key,
+                # Does the RULEBOOK IN FORCE map this line? A template node no mapping mentions has
+                # nothing for the editor to write to: the concept PATCH answers 404 "not in this
+                # ontology", and offering the key in the confusable-with or netting pickers gets a
+                # 422 for naming an unknown concept. The screen reads this to render such a node
+                # read-only and say why, instead of an editor whose Save is always refused. The
+                # shipped template has two — `bs_liabilities__total_liabilities` and
+                # `bs_equity__equity_attributable_to_owners` — and making the calculated totals
+                # selectable at all is what put the first of them in front of an analyst.
+                "mapped": key in declared,
                 "aliases_locale": aliases_locale,
                 "aliases": (m.aliases_for(locale) if m else [])[:12],
                 "sign": (

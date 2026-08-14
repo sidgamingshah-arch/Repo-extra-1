@@ -704,7 +704,12 @@ function NodeRules({ cfg, canonicalKey, ontologyId, concepts, locale, canEdit, o
     }
   }, [storedKey, stored, cfg.sign, storedCriteria]);
 
-  const editable = canEdit && !!ontologyId && !!canonicalKey;
+  // A template line the rulebook in force does not map has no mapping entry to PATCH: the save
+  // answers 404 "not in this ontology", and the confusable-with picker 422s on the key. So the whole
+  // editor is read-only for it rather than a Save that is always refused — the detail's header says
+  // why. `mapped === false` is the server SAYING it is unmapped; a payload that omits the field
+  // predates it and described nodes that were mapped, so absent stays editable.
+  const editable = canEdit && !!ontologyId && !!canonicalKey && cfg.mapped !== false;
   // What a save would persist: the committed chips plus any alias still sitting in the input.
   // Folding the draft in here (rather than relying on the input's blur firing before the
   // button's click) means typing an alias and clicking Save directly can never drop it.
@@ -940,9 +945,13 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
   // aliases, sign and criteria under the heading of the line that was clicked, with no row
   // highlighted to give it away. An analyst editing that is editing the wrong concept.
   const cfg: NodeConfig | undefined = data ? data.node_config[tplSel] : undefined;
-  // Every concept this template maps, in statement order — the only legal values for
-  // `confusable_with` and for a netting rule's keys, so both are picked from here.
+  // Every concept the RULEBOOK IN FORCE maps, in statement order — the only legal values for
+  // `confusable_with` and for a netting rule's keys, so both are picked from here. A template line
+  // the rulebook does not declare is left out: the server rejects any key that is not a concept of
+  // the ontology (422, "names unknown concepts"), so offering it would be a picker entry whose only
+  // possible outcome is a refused save. The shipped template has two such lines.
   const concepts: Concept[] = Object.entries(data?.node_config ?? {})
+    .filter(([, c]) => c.mapped !== false)
     .map(([key, c]) => ({ key, label: c.label || key }));
 
   // Open ON a line: the detail's job is to show a concept's rules, so arriving with nothing
@@ -1090,9 +1099,20 @@ function TemplateDetail({ id, tpl, locale, canEdit, onDismiss, t }: {
                       {t("tp.viewOnly")}
                     </span>
                   )}
+                  {/* Not the same statement as "View only", which is about the READER's permission:
+                      this line has no rules to edit at all, and an admin has to be told which of the
+                      two is why the editor below is inert. */}
+                  {cfg.mapped === false && (
+                    <span data-testid="tpl-node-unmapped"
+                          style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: radius.pill,
+                                   background: color.amberBg, color: color.amberFg }}>
+                      {t("tp.notMapped")}
+                    </span>
+                  )}
                 </div>
                 <p style={{ margin: "0 0 20px", color: color.sec2, fontSize: 12.5 }}>
-                  {canEdit ? t("tp.editorSubhead") : t("tp.viewOnlyHint")}
+                  {cfg.mapped === false ? t("tp.notMappedHint")
+                    : canEdit ? t("tp.editorSubhead") : t("tp.viewOnlyHint")}
                 </p>
 
                 {/* Editable ontology rules for this concept (aliases + sign + mapping criteria),

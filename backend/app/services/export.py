@@ -13,6 +13,7 @@ import json
 
 from app.sample.demo import CONF_PCT
 from app.services.periods import concept_value, split_current_prior
+from app.services.review_lines import is_statement_line
 
 # Statement titles for the formatted export, localized like the rest of the app. Line-item
 # labels come from the TEMPLATE's label_i18n, so the export is fully template-driven.
@@ -676,12 +677,23 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
         row = group[0] if group else None
         label = _label(node, locale)
 
-        if role == "header":
-            hc = ws.cell(r, 1, label)
-            hc.font = Font(bold=True, color=ink)
-            for c in range(1, src_col + 1):
-                ws.cell(r, c).fill = section_fill
-            r += 1
+        # A node that carries no figure: a section heading, or a `LineRole.SPACER` gap. Asked with the
+        # same predicate `routes.templates` asks for its tree walk and its `line_items` count, so the
+        # workbook's rows and the Template screen's lines cannot disagree about what a line is.
+        # Tested as `== "header"`, a spacer fell through to the figure branch below and was written
+        # out as a ROW — a label, a note cell, a value cell per period and a canonical_key `by_key`
+        # would happily attach an extracted figure to: a blank line in the filing exported as a line
+        # item of the spread. (`documents._template_skeleton`, which the review grid walks, still
+        # branches on "has keyed children" rather than on role, so a spacer would reach that grid as
+        # a line and disagree with this sheet. No shipped template declares one, and that walk is not
+        # this module's to reconcile.)
+        if not is_statement_line(node):
+            if role == "header":
+                hc = ws.cell(r, 1, label)
+                hc.font = Font(bold=True, color=ink)
+                for c in range(1, src_col + 1):
+                    ws.cell(r, c).fill = section_fill
+            r += 1                     # a spacer leaves its row empty — the gap IS what it declares
             # Emit EVERY child (all line items in the template), extracted or not.
             for child in node.get("children", []):
                 r = _emit_nodes(ws, [child], by_key, period_cols, first_val, conf_col, src_col,

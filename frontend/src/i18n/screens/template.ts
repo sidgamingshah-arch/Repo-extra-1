@@ -68,6 +68,11 @@ export const template: Record<Locale, Record<string, string>> = {
     "tp.viewOnly": "View only",
     "tp.viewOnlyHint":
       "The rules that map source descriptions here, treat the sign, and net note detail against the face value. Editing templates is an admin task — you can select which template a run uses on the Documents & Template screen.",
+    // Read-only for a reason the reader cannot otherwise see: the rulebook simply has no entry for
+    // this line, so every write this editor could offer would come back refused.
+    "tp.notMapped": "Not in the rulebook",
+    "tp.notMappedHint":
+      "The rulebook in force for this template declares no concept for this line, so there are no rules here to change — a save would be refused, and the line is offered in no confusable-with or netting picker. Add the concept to the rulebook (upload an ontology for this template) to edit it here.",
     "tp.emptyTitle": "No template loaded yet",
     "tp.emptyHint":
       "Start a project from the Documents & Template screen — upload a document and choose an output template. The chosen template's structure and rules will appear here.",
@@ -226,6 +231,9 @@ export const template: Record<Locale, Record<string, string>> = {
     "tp.viewOnly": "仅查看",
     "tp.viewOnlyHint":
       "这些规则决定哪些源描述映射到此处、如何处理正负号，以及如何将附注明细与账面金额抵销。编辑模板属于管理员操作——您可在“文档与模板”页面选择某次运行使用的模板。",
+    "tp.notMapped": "规则手册中无此概念",
+    "tp.notMappedHint":
+      "本模板现行的规则手册未为此行声明任何概念，因此这里没有可修改的规则——保存会被拒绝，该行也不会出现在“易混淆”或净额抵销的选择列表中。请先将该概念加入规则手册（为本模板上传本体），之后即可在此编辑。",
     "tp.emptyTitle": "尚未加载模板",
     "tp.emptyHint":
       "请在“文档与模板”页面开始项目——上传文档并选择输出模板。所选模板的结构与规则将显示在此处。",
@@ -380,6 +388,9 @@ export const template: Record<Locale, Record<string, string>> = {
     "tp.viewOnly": "عرض فقط",
     "tp.viewOnlyHint":
       "القواعد التي تحدد أي أوصاف المصدر تُربط هنا، وكيفية معالجة الإشارة، وتسوية تفاصيل الإيضاح مقابل القيمة الاسمية. تحرير القوالب مهمة للمسؤول — يمكنك اختيار القالب المستخدم في التشغيل من شاشة «المستندات والقالب».",
+    "tp.notMapped": "غير موجود في الأنطولوجيا",
+    "tp.notMappedHint":
+      "الأنطولوجيا السارية على هذا القالب لا تعلن أي مفهوم لهذا البند، فلا توجد هنا قواعد قابلة للتغيير — سيُرفض أي حفظ، ولا يُعرض البند في قوائم «قابل للالتباس» أو قواعد التسوية. أضِف المفهوم إلى الأنطولوجيا (ارفع أنطولوجيا لهذا القالب) لتتمكن من تحريره هنا.",
     "tp.emptyTitle": "لم يتم تحميل أي قالب بعد",
     "tp.emptyHint":
       "ابدأ مشروعًا من شاشة «المستندات والقالب» — ارفع مستندًا واختر قالب إخراج. ستظهر بنية القالب المختار وقواعده هنا.",
@@ -536,6 +547,9 @@ export const template: Record<Locale, Record<string, string>> = {
     "tp.viewOnly": "Lecture seule",
     "tp.viewOnlyHint":
       "Les règles qui associent les descriptions sources ici, traitent le signe et compensent le détail des notes avec la valeur nominale. La modification des modèles est réservée à l'administrateur — vous pouvez choisir le modèle utilisé pour une extraction sur l'écran Documents et modèle.",
+    "tp.notMapped": "Absent de l'ontologie",
+    "tp.notMappedHint":
+      "L'ontologie en vigueur pour ce modèle ne déclare aucun concept pour ce poste : il n'y a donc ici aucune règle à modifier — un enregistrement serait refusé, et le poste n'est proposé dans aucune liste « confusions possibles » ni de compensation. Ajoutez le concept à l'ontologie (téléversez une ontologie pour ce modèle) pour le modifier ici.",
     "tp.emptyTitle": "Aucun modèle chargé pour l'instant",
     "tp.emptyHint":
       "Démarrez un projet depuis l'écran Documents et modèle — téléversez un document et choisissez un modèle de sortie. La structure et les règles du modèle choisi apparaîtront ici.",
