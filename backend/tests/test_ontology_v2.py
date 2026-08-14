@@ -448,6 +448,60 @@ def test_an_uploaded_replacement_supersedes_the_shipped_rulebook(client):
             s.commit()
 
 
+def test_the_list_says_which_rulebook_is_in_force_and_it_is_the_pickers_answer(client):
+    """``GET /ontologies`` DECLARES the rulebook in force; the client no longer works it out.
+
+    THE DEFECT THIS CLOSES. The Template screen ranked the served list itself, on
+    ``[declares a supersession, version, ontology_key]``, under a comment claiming it mirrored the
+    server's picker. It did not. The rule is latest-stored-wins, which needs ``created_at`` — a
+    field this payload has never carried, so the client could not have replicated it even in
+    principle. The two sides therefore named DIFFERENT rulebooks: the run mapped against the one in
+    force, and the screen captioned it "pinned to an older rulebook", telling an analyst their
+    extraction had used something it had not.
+
+    So the assertion here is not "the flag equals my expectations" — it is "the flag equals
+    ``select_for_template``". Anything weaker would let the two drift apart again.
+
+    Uploaded under a key that sorts EARLIER and declares no supersession, so the row that must be
+    flagged is exactly the row the OLD client ranking would have ranked LAST.
+    """
+    from app.db.base import SessionLocal
+    from app.db.models import OntologyVersion
+    from app.services.ontology_select import select_for_template
+
+    later = {**_v2(), "ontology_key": "aaa_in_force_probe"}
+    later["metadata"] = {k: v for k, v in later["metadata"].items() if k != "supersedes"}
+    created = client.post("/api/v1/ontologies", json={"definition": later})
+    assert created.status_code == 201, created.text
+    try:
+        rows = client.get("/api/v1/ontologies").json()
+        flagged = {r["id"] for r in rows if r["in_force"]}
+        with SessionLocal() as s:
+            picked = {
+                row.id
+                for key in {r["target_template_key"] for r in rows if r["target_template_key"]}
+                if (row := select_for_template(s, key)) is not None
+            }
+        assert flagged == picked
+        # …and concretely, for this template that is the newcomer — the row a
+        # [supersedes, version, key] ranking would have placed last of the two.
+        by_id = {r["id"]: r for r in rows}
+        mine = created.json()["id"]
+        assert by_id[mine]["in_force"] is True
+        assert by_id[mine]["supersedes"] is None
+        shipped = next(r for r in rows if r["ontology_key"] == "hkfrs_hk_china")
+        assert shipped["in_force"] is False
+        # Exactly one rulebook per template is in force — the flag is a choice, not a label that
+        # several rows can wear.
+        assert len([r for r in rows
+                    if r["target_template_key"] == by_id[mine]["target_template_key"]
+                    and r["in_force"]]) == 1
+    finally:
+        with SessionLocal() as s:
+            s.delete(s.get(OntologyVersion, created.json()["id"]))
+            s.commit()
+
+
 def test_supersession_only_counts_when_the_replacement_is_actually_stored():
     """A rulebook naming one that was never loaded must not exclude anything, and a v1 does not
     become unusable because some v2 exists elsewhere."""

@@ -3,8 +3,8 @@
 Kept intentionally compact for this foundation: the entities the API needs now
 (Document, versioned Template/Ontology, ExtractionRun). The full relational model
 (Statement, LineItem, NotesTable, FaceNoteLink, ReviewItem, EditEvent, RuleResult,
-Export) is documented in docs/architecture/02-data-model.md and lands with the
-extraction persistence phase.
+Export) is documented in docs/architecture/02-data-model-and-schemas.md and lands
+with the extraction persistence phase.
 """
 from __future__ import annotations
 

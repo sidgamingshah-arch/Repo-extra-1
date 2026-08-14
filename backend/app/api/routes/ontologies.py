@@ -123,27 +123,36 @@ def create_ontology(body: OntologyCreate, session: Session = Depends(db)) -> dic
 def list_ontologies(session: Session = Depends(db)) -> list[dict]:
     from app.db.models import OntologyVersion
 
-    # ORDERED, because two consumers pick a rulebook by scanning this list and both break ties by
-    # whichever row arrived first. With v1 and v2 both seeded at version 1 against the same
-    # template, an unordered query made which rulebook the product used a property of row order.
-    # Ordering does not make the choice right — that needs an explicit picker — but it makes it
-    # STABLE, so the behaviour is at least reproducible while the picker is outstanding.
-    from app.services.ontology_select import superseded_keys
+    from app.services.ontology_select import select_for_template, superseded_keys
 
-    rows = session.execute(
+    rows = list(session.execute(
         select(OntologyVersion)
         .order_by(OntologyVersion.ontology_key, OntologyVersion.version.desc())
-    ).scalars().all()
+    ).scalars().all())
     # `superseded` says this rulebook has been REPLACED by another one that is present. The client
     # picks which ontology a run uses, and `version` alone cannot tell it apart from an unrelated
     # rulebook targeting the same template — so the declaration travels with the row rather than
     # being re-derived, differently, on the other side of the wire.
-    dead = superseded_keys(list(rows))
+    dead = superseded_keys(rows)
+    # `in_force` is the SERVER'S answer to "which rulebook will the next run map against", asked of
+    # the one function that decides it. The client used to rank the list itself, on
+    # `[declares a supersession, version, key]`, under a comment claiming it mirrored the server —
+    # and it did not: the rule is now latest-stored-wins (`ontology_select.select_for_template`),
+    # which needs `created_at`, a field this payload never carried. So the two sides could name
+    # different rulebooks, and the screen would caption a run "pinned to an older rulebook" when the
+    # run had faithfully used the one in force. A declaration the client cannot compute is a
+    # declaration the server has to make.
+    in_force = {
+        row.id
+        for key in {r.target_template_key for r in rows if r.target_template_key}
+        if (row := select_for_template(session, key)) is not None
+    }
     return [{"id": r.id, "ontology_key": r.ontology_key,
              "target_template_key": r.target_template_key, "version": r.version,
              "schema_version": (r.definition or {}).get("schema_version", 1),
              "supersedes": ((r.definition or {}).get("metadata") or {}).get("supersedes") or None,
              "superseded": r.ontology_key in dead,
+             "in_force": r.id in in_force,
              **_sizes(r.definition or {})}
             for r in rows]
 

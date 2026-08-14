@@ -118,3 +118,57 @@ def test_session_is_authoritative_over_role_header(auth, anon_client, monkeypatc
     # The header only acts as a fallback when there is NO session.
     me2 = anon_client.get("/api/v1/me", headers={"X-Role": "admin"}).json()
     assert me2["role"] == "admin" and me2["via"] == "role-header"
+
+
+def test_a_reviewer_can_read_an_analysts_run_including_its_stages_and_log(auth, anon_client):
+    """The reviewer is GRANTED the extraction screen without ``pipeline:run`` — read a run, don't
+    start one — and ``rbac.SCREENS_BY_ROLE`` says so in a comment naming what they read: "its stages,
+    its log, its rows". This pins that claim, because two separate gates have to hold for it and
+    neither is obvious from the grant: ``EXTRACTION_VIEW`` (the reviewer holds it) AND the OWNERSHIP
+    predicate on the run's document (``documents._can_access``), which the reviewer clears only
+    because reviewers are elevated — they work every analyst's queue. A comment that promises a
+    reader something the authorization path refuses is worse than no comment.
+
+    The run is written directly rather than extracted: what is under test is the authorization of a
+    read, not the pipeline, and a run owned by SOMEONE ELSE is the whole point.
+    """
+    from datetime import datetime, timezone
+
+    from app.api.routes.extractions import _progress_payload
+    from app.db.base import SessionLocal
+    from app.db.models import Document, ExtractionRun
+
+    with SessionLocal() as s:
+        doc = Document(filename="reviewer-reads.pdf", fmt="pdf", byte_size=1,
+                       object_key="rbac/reviewer-reads.pdf",
+                       content_hash="rbac-reviewer-read", owner="analyst")
+        s.add(doc)
+        s.flush()
+        # Built by the pipeline's OWN writer, so the record satisfies the served contract
+        # (`_served_progress` refuses a partial one, correctly) and this test stays a statement
+        # about authorization rather than about the progress shape.
+        progress = _progress_payload("structural", 100.0,
+                                     started_at=datetime.now(timezone.utc), stage_count=2,
+                                     stages_done=["ingest", "structural"])
+        run = ExtractionRun(document_id=doc.id, status="succeeded", progress=progress,
+                            logs="ingest: ok\nstructural: ok",
+                            options={"stages": ["ingest", "structural"]})
+        s.add(run)
+        s.commit()
+        doc_id, run_id = doc.id, run.id
+    try:
+        got = anon_client.get(f"/api/v1/extractions/{run_id}", headers=auth("reviewer"))
+        assert got.status_code == 200, got.text
+        body = got.json()
+        assert body["progress"] is not None          # the stage progress the screen ticks off
+        assert body["stages"] == ["ingest", "structural"]
+        assert body["log_tail"]                       # what the pipeline said while it worked
+        # And the reviewer cannot START one: the grant is the screen, not the permission.
+        me = anon_client.get("/api/v1/me", headers=auth("reviewer")).json()
+        assert "extraction" in me["screens"]
+        assert "pipeline:run" not in me["permissions"]
+    finally:
+        with SessionLocal() as s:
+            s.delete(s.get(ExtractionRun, run_id))
+            s.delete(s.get(Document, doc_id))
+            s.commit()

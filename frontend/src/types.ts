@@ -193,9 +193,15 @@ export type FxRateResolution =
       reason: "no_rate_configured";
       detail: string;
     };
-/** The views the Workspace can show. The first four are statements the document prints; the
- *  last two are determined by its figures — the KPIs computed off the statements, and everything
- *  extracted that reaches no face statement. Both are real-extraction only. */
+/** The views the Workspace can show: the four statements the document prints, plus `kpi` — the
+ *  ratios computed off those statements, which is real-extraction only (nothing computes them for
+ *  the demo payload).
+ *
+ *  There used to be a sixth, "Additional items", holding every extracted figure that reached no
+ *  face statement. It is gone, and this comment described it for a while after: an off-template row
+ *  is now a REVIEW finding carrying a re-map offer (`ReviewCheck.remap`), because a bucket the
+ *  template does not declare is a figure nobody will ever reconcile — it looked extracted and was
+ *  in fact unplaced. */
 export type StatementKey = "balance_sheet" | "profit_and_loss" | "cash_flow"
   | "changes_in_equity" | "kpi";
 /** Views that exist only for a real extraction (there is no demo data behind them). */
@@ -623,6 +629,15 @@ export interface OntologyRef {
   supersedes?: string | null;
   /** True when another rulebook that is actually present declares it replaces this one. */
   superseded?: boolean;
+  /** True for the ONE rulebook per target template that the next run will map against.
+   *
+   *  Served by the server, never re-derived here. The rule is "whatever was stored last wins", which
+   *  needs `created_at` — a field this payload does not carry and should not, because then two
+   *  implementations of the rule would exist and could disagree. The client used to rank the list
+   *  itself on `[supersedes, version, ontology_key]` under a comment claiming it mirrored the
+   *  server's picker; it did not, so the screen could name a different rulebook than the one a run
+   *  actually used. Read this flag; do not sort. */
+  in_force?: boolean;
   /** How big the rulebook is: concepts it declares, and aliases across every locale. Counted by
    *  the server off the stored definition, so a screen describing a rulebook's size never has to
    *  invent one. */
@@ -859,7 +874,10 @@ export interface ReviewCheck {
    *  un-removable. */
   judgement_withheld: boolean;
   fix_action: FixAction | null;
-  /** Row-shaped findings only (unmapped / low confidence) — see `RemapOffer`. */
+  /** Row-shaped findings only — see `RemapOffer`. Those are `unmapped`, `low_confidence`, and
+   *  `off_template`: a printed row the extraction placed on no template line, which the server now
+   *  raises here instead of parking in a Workspace bucket. `off_template` is the case the offer
+   *  matters most for, since re-mapping is the ONLY way such a row reaches a statement at all. */
   remap: RemapOffer | null;
   /** Structural checks only. `run.result["structural"]` is written once by the pipeline and is
    *  never recomputed on an edit, so the relation is not re-evaluated until the next extraction:
