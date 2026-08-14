@@ -25,7 +25,7 @@ import {
 import { useCan } from "../lib/rbac";
 import { useUI } from "../store";
 import { SCREENS } from "./config";
-import { color, font, radius } from "../theme";
+import { color, fmtElapsed, font, radius } from "../theme";
 import type { ExtractionProgress, ExtractionRow, Locale, OntologyRef, RulebookRecord } from "../types";
 
 const GRID = "1.8fr 56px 1.3fr 1.1fr";
@@ -381,11 +381,6 @@ function currentStage(progress: ExtractionProgress | undefined): string {
 /** How long the run has been going, from the elapsed time the RUN reports. Deliberately not a
  *  clock this screen starts on mount: a second timer disagrees with the first the moment a poll is
  *  late or the tab is backgrounded, and the pipeline's own figure is the one that means anything. */
-function fmtElapsed(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
-}
-
 /** WHAT THE RUN IS DOING, WHILE IT IS DOING IT.
  *
  *  For the whole of a multi-stage run this screen printed one static caption — "Extracting…" — over
@@ -840,6 +835,9 @@ export default function ExtractionView() {
       {data && (() => {
         const res = data.result;
         const u = res.units;
+        // The finished run's own elapsed figure. `progress` is the record the run settled with, so
+        // this is the run's measurement rather than anything this screen times itself.
+        const settledElapsed = fmtElapsed(progress?.elapsed_ms);
         // Statement filter options: the canonical-key prefixes actually present, plus
         // All / Unmapped. Prefix-based so it tracks whatever template the run used.
         const prefixes = Array.from(
@@ -859,6 +857,13 @@ export default function ExtractionView() {
               <span style={{ fontFamily: font.mono }}>{res.filename}</span>
               {"  ·  "}{res.format.toUpperCase()}
               {"  ·  "}{res.line_item_count} {t("ex.count")}
+              {/* HOW LONG THE RUN TOOK, once it is over. The progress panel carries this while a
+                  run is in flight and that panel is gone the moment `data` arrives (`awaitingRun`),
+                  so a finished extraction reported its duration nowhere — on the screen whose job is
+                  to account for the run. Read off the run's OWN final progress record, the same
+                  field the live gauge read, so the two cannot disagree; absent for a run stored
+                  before that contract existed, and then simply not printed. */}
+              {settledElapsed && <>{"  ·  "}{t("ex.run.elapsed")} {settledElapsed}</>}
               {u?.currency && <>{"  ·  "}<b>{u.currency}</b></>}
               {u?.units_label && <>{"  ·  "}{t("ex.inUnits")} {u.units_label}</>}
             </p>

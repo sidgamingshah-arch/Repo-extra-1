@@ -623,6 +623,11 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             input_tokens=ctx.llm_input_tokens if used_llm else None,
             output_tokens=ctx.llm_output_tokens if used_llm else None,
             status="succeeded",
+            # Timed from `began`, the run row's own created_at — the same instant the progress
+            # records are timed from, so the trail and the live gauge cannot disagree about when the
+            # run started. It is the WHOLE run, pipeline and persistence both, which is the duration
+            # a reader asking "how long did this take" means.
+            duration_ms=audit_svc.elapsed_ms(began),
         ))
     except Exception as exc:  # noqa: BLE001 — record failure on the run, don't crash the worker
         run = session.get(ExtractionRun, run_id)
@@ -645,6 +650,10 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             run_id=run_id, entity=entity, action="extraction",
             provider=provider, model=model_fallback,
             input_tokens=None, output_tokens=None, status="failed",
+            # A failed run's duration is how long it ran BEFORE failing, which is the useful half of
+            # the question: a pipeline that died at once and one that died after four minutes are
+            # different problems.
+            duration_ms=audit_svc.elapsed_ms(began),
         ))
     finally:
         session.close()

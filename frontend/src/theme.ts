@@ -112,6 +112,22 @@ export function confStyle(cat: ConfCat): { bg: string; fg: string } {
   return { bg: color.redBg, fg: color.redFg };
 }
 
+/** A duration in milliseconds as a person reads it: "8s", "2m 04s".
+ *
+ * Lives here beside the other formatters because THREE surfaces print a duration and they must not
+ * disagree about how one looks: the extraction screen's live gauge, the same screen's settled header,
+ * and the Analysis screen's audit trail. It was a module-local helper in ExtractionView while only
+ * that screen had one.
+ *
+ * Null/undefined — an instantaneous event, or an entry recorded before durations existed — is the
+ * empty string, so a caller renders its own "—" rather than this inventing "0s" for something nobody
+ * measured. */
+export const fmtElapsed = (ms: number | null | undefined): string => {
+  if (ms == null || !Number.isFinite(ms)) return "";
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+};
+
 /** Indian-grouping accounting formatter: negatives in parentheses, e.g. 12,68,100
  * and (1,210). Used for read-only monetary display (statement conventions). */
 export const fmtIN = (n: number | null | undefined): string => {

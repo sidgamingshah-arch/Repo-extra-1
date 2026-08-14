@@ -73,6 +73,14 @@ export interface AuditEntry {
   output_tokens: number | null;
   total_tokens: number | null;
   status: "succeeded" | "failed";
+  /** How long the run took, in milliseconds, as measured by whoever ran it.
+   *
+   *  Null for something INSTANTANEOUS (a submission handed to a reviewer) and on entries recorded
+   *  before the field existed — both render as "—", never as "0 ms", which would read as a measured
+   *  run that took no time. This is the only place a FINISHED run's duration can be read: the
+   *  extraction screen's live gauge shows `ExtractionProgress.elapsed_ms` while a run is in flight
+   *  and is gone once results arrive. */
+  duration_ms?: number | null;
   created_at: string;
 }
 export interface AuditResponse {

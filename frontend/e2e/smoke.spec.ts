@@ -2365,9 +2365,18 @@ test("the export footer counts the list it heads on both paths, and the invented
   await page.goto("/export", DCL);
   await expect(page.getByRole("heading", { name: "Export" })).toBeVisible({ timeout: 15_000 });
   await expect(footer).not.toBeEmpty({ timeout: 20_000 });
-  await expect(footer).toContainText(`${rows.length} line items`);
+  // "LINES", not "line items" — the real path's own population. `rows` is what the run produced,
+  // the subtotals the mapper promotes included, which is a WIDER set than the line items a template
+  // declares and than the item rows the sample counts on the other path above (2331). One word over
+  // both was the second half of this finding: the number was right and the label claimed a
+  // population it had not counted. This assertion is what the rename was missing — it still demanded
+  // "line items" here after the footer had been corrected, so the suite contradicted the fix.
+  await expect(footer).toContainText(`${rows.length} lines`);
   await expect(footer).toContainText(`${unmappedOrFlagged} unmapped or flagged`);
   const realText = (await footer.innerText()).trim();
+  // …and it must not ALSO say "line items", or the two populations have converged again under one
+  // word, which is the state this test exists to keep out.
+  expect(realText).not.toMatch(/line items/i);
   expect(realText).not.toMatch(/\b148\b/);
   expect(realText).not.toContain("%");
   // The sample's backlog is not this path's quantity, so its label must not appear here either.

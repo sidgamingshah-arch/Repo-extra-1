@@ -182,6 +182,14 @@ export const api = {
   commentary: (locale: Locale = "en") =>
     req<Commentary>(`/projects/${PROJECT}/commentary?locale=${locale}`),
   audit: () => req<AuditResponse>(`/projects/${PROJECT}/audit`),
+  /** One uploaded document's audit trail — the runs against THAT filing.
+   *
+   *  A separate route because the trail is keyed by what was run against, and runs against a
+   *  document have always been recorded under its id. Asking the demo project's route for them (the
+   *  only thing the Analysis screen used to do) returned the sample's rows and never a real run's,
+   *  so extraction and credit-narrative entries were written and never readable. */
+  documentAudit: (documentId: string) =>
+    req<AuditResponse>(`/documents/${encodeURIComponent(documentId)}/audit`),
   runAnalysis: () =>
     req<{ entry: AuditEntry; result: unknown }>(`/projects/${PROJECT}/analysis`, { method: "POST" }),
   project: () => req<ProjectResponse>(`/projects/${PROJECT}`),

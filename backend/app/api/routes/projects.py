@@ -486,14 +486,15 @@ def get_commentary(project_id: str, locale: str = Query("en")) -> dict:
 @router.get("/{project_id}/audit",
             dependencies=[Depends(require(Permission.COMMENTARY_VIEW))])
 def get_audit(project_id: str) -> dict:
-    """Audit trail of LLM/extraction runs for the project, with per-run token usage."""
+    """Audit trail of LLM/extraction runs for the SAMPLE PROJECT, with token usage and duration.
+
+    An uploaded document's trail is a different key and a different route — see
+    ``GET /documents/{id}/audit``. This one folds in the seeded rows, which describe the sample.
+    """
     from app.services import audit as audit_svc
 
     seeded = deepcopy(DEMO["audit"]) if (project_id == "demo" and _active()) else []
-    live = [e.to_dict() for e in audit_svc.recorded(project_id)]
-    entries = live + seeded
-    entries.sort(key=lambda e: e.get("created_at", ""), reverse=True)
-    return {"entries": entries}
+    return audit_svc.served_trail(project_id, seeded)
 
 
 @router.post("/{project_id}/analysis",
@@ -506,15 +507,21 @@ def run_project_analysis(project_id: str) -> dict:
     from app.services import audit as audit_svc
     from app.services.analysis_llm import build_demo_payload, run_analysis
 
+    from datetime import datetime, timezone
+
     settings = get_settings()
     entity = DEMO["project"]["entity"]
     run_id = audit_svc.make_run_id(entity)
     provider_id = settings.llm.provider
+    # Timed from before the provider is even resolved, so a failure that never reached the model
+    # still reports the interval the caller waited — and success and failure measure the same thing.
+    began = datetime.now(timezone.utc)
 
     def _fail(detail: str):
         audit_svc.record(project_id, audit_svc.AuditEntry(
             run_id=run_id, entity=entity, action="analysis", provider=provider_id,
             model=settings.llm.model, input_tokens=None, output_tokens=None, status="failed",
+            duration_ms=audit_svc.elapsed_ms(began),
         ))
         raise HTTPException(status_code=502, detail=detail)
 
@@ -532,7 +539,7 @@ def run_project_analysis(project_id: str) -> dict:
         run_id=run_id, entity=entity, action="analysis", provider=provider_id,
         model=meta.get("model", settings.llm.model),
         input_tokens=meta.get("input_tokens"), output_tokens=meta.get("output_tokens"),
-        status="succeeded",
+        status="succeeded", duration_ms=audit_svc.elapsed_ms(began),
     ))
     return {"entry": entry.to_dict(), "result": result.model_dump(mode="json")}
 
@@ -557,8 +564,11 @@ def submit_for_review(project_id: str, document_id: str | None = Query(default=N
     is REFUSED (422) rather than falling back to the demo name: "I do not know whose filing this is"
     is the true answer, and the fallback is exactly the defect.
 
-    Recorded under ``project_id`` regardless, because the audit log is keyed by project and the
-    Audit view reads that one key; the entry says which entity and which run it is about.
+    Recorded under the DOCUMENT's key when one is named, so the submission appears in that
+    document's own trail beside the extraction it is a submission of (``GET /documents/{id}/audit``).
+    It used to go under ``project_id`` regardless — correct while the only audit view read the demo
+    project's key, and wrong the moment a per-document trail existed, because a real filing's
+    submission would have been the one event missing from its own history.
     """
     from app.api.routes.documents import _can_access, _latest_run
     from app.db.base import SessionLocal
@@ -585,9 +595,11 @@ def submit_for_review(project_id: str, document_id: str | None = Query(default=N
         entity = DEMO["project"]["entity"]
         run_id = audit_svc.make_run_id(entity)
 
-    entry = audit_svc.record(project_id, audit_svc.AuditEntry(
+    entry = audit_svc.record(document_id or project_id, audit_svc.AuditEntry(
         run_id=run_id, entity=entity, action="submit_review",
         provider="—", model="—", input_tokens=None, output_tokens=None, status="succeeded",
+        # No duration: handing output to a reviewer is an instant, not an interval. None renders as
+        # "—" rather than "0 ms", which would read as a measured run that took no time.
     ))
     return {"ok": True, "entry": entry.to_dict()}
 

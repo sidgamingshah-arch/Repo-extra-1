@@ -128,8 +128,17 @@ export function useSubmitForReview() {
 // --- project data ---
 export const useCommentary = (locale: Locale = "en") =>
   useQuery({ queryKey: ["commentary", locale], queryFn: () => api.commentary(locale) });
-export const useAudit = () =>
-  useQuery({ queryKey: ["audit"], queryFn: api.audit });
+/** The audit trail for whatever is being worked on: an uploaded document's runs, or the sample's.
+ *
+ * `documentId` decides WHICH trail, and it has to, because the trail is keyed by what was run
+ * against. Without it this hook always asked the demo project's route — so on a real filing the
+ * Analysis screen showed the sample's rows, or nothing, while every extraction and credit-narrative
+ * run against that filing sat unread under the document's own key. */
+export const useAudit = (documentId?: string) =>
+  useQuery({
+    queryKey: ["audit", documentId ?? null],
+    queryFn: () => (documentId ? api.documentAudit(documentId) : api.audit()),
+  });
 
 /** Trigger a live LLM analysis run; refreshes the audit log on completion. */
 export function useRunAnalysis() {

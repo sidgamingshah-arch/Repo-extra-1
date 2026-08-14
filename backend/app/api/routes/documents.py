@@ -2384,6 +2384,31 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
     }
 
 
+@router.get("/{document_id}/audit",
+            dependencies=[Depends(require(Permission.COMMENTARY_VIEW)),
+                          Depends(authorized_document)])
+def get_document_audit(document_id: str) -> dict:
+    """This document's audit trail — every run against it, with token usage and how long it took.
+
+    THE GAP THIS CLOSES. Runs against an uploaded document have always been recorded, under the
+    DOCUMENT's id: extraction (both outcomes) in ``extractions._run_extraction_task``, and the credit
+    narrative in ``generate_credit_narrative`` below. Nothing served that key. The only audit route
+    was ``/projects/{id}/audit`` and the client asked it for the demo project, so every real run
+    wrote an entry into a bucket no screen could reach — an audit trail that existed and could not be
+    read, which is indistinguishable from not keeping one.
+
+    Same permission as the project trail (COMMENTARY_VIEW — the Analysis screen is where both are
+    shown) and the same ownership predicate as every other read of a document, so one analyst cannot
+    read another's runs and a document they may not see answers 404 rather than 403.
+
+    No seeded rows are folded in, unlike the project route: those describe the sample, and mixing
+    them into a real filing's trail would put runs that never happened under this document's name.
+    """
+    from app.services import audit as audit_svc
+
+    return audit_svc.served_trail(document_id)
+
+
 @router.get("/{document_id}/run", dependencies=[Depends(authorized_document)])
 def get_document_run(document_id: str, session: Session = Depends(db)) -> dict:
     """The latest extraction result for a document (drives the Export preview/counts for a
@@ -2448,6 +2473,8 @@ def run_credit_narrative_endpoint(document_id: str, locale: str = Query("en"),
     factors and report signals and only writes grounded prose (see analysis_llm.CREDIT_SYSTEM).
     Requires a real LLM provider (config ``llm.provider``); returns 409 when none is configured
     so the caller can keep using the deterministic summary. The run is written to the audit log."""
+    from datetime import datetime, timezone
+
     from app.config import get_settings
     from app.ports.registry import registry as reg
     from app.services import audit as audit_svc
@@ -2481,20 +2508,26 @@ def run_credit_narrative_endpoint(document_id: str, locale: str = Query("en"),
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # Timed around the provider call itself — the only part that takes any time, and the part a
+    # reader comparing a slow narrative to a fast one is asking about. Started before the try so the
+    # failure path measures the same interval as the success path.
+    began = datetime.now(timezone.utc)
     try:
         result, meta = run_credit_narrative(provider, credit, entity=entity, locale=locale,
                                             max_tokens=settings.llm.max_tokens)
     except Exception as exc:  # provider unreachable / no key / bad response
         audit_svc.record(document_id, audit_svc.AuditEntry(
             run_id=run_id, entity=entity, action="credit_narrative", provider=provider_id,
-            model=settings.llm.model, input_tokens=None, output_tokens=None, status="failed"))
+            model=settings.llm.model, input_tokens=None, output_tokens=None, status="failed",
+            duration_ms=audit_svc.elapsed_ms(began)))
         raise HTTPException(status_code=502, detail=f"Credit narrative failed: {exc}") from exc
 
     model = meta.get("model", settings.llm.model)
     audit_svc.record(document_id, audit_svc.AuditEntry(
         run_id=run_id, entity=entity, action="credit_narrative", provider=provider_id,
         model=model, input_tokens=meta.get("input_tokens"),
-        output_tokens=meta.get("output_tokens"), status="succeeded"))
+        output_tokens=meta.get("output_tokens"), status="succeeded",
+        duration_ms=audit_svc.elapsed_ms(began)))
 
     # Persist the narrative on the run so the Excel/JSON export can fold it in. Reassigning
     # the JSON column marks it dirty for the commit.
