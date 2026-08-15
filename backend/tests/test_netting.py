@@ -92,8 +92,16 @@ def test_resolve_netting_is_llm_gated_and_grounded():
 
 
 def test_template_detail_exposes_netting_rules(client):
-    tpls = client.get("/api/v1/templates").json()
-    tid = tpls[0]["id"]
+    # THE SHIPPED TEMPLATE, NAMED. `templates[0]` used to be it by accident: the list came back in
+    # insertion order, so the seeded v1 sorted first. The list is now newest-first per key
+    # (routes/templates.py), which is what every screen needs to default correctly — and after any
+    # earlier test publishes a revision, the first row is that draft rather than the reference
+    # template this test is about. The suite already learned this once, in the e2e template-index
+    # test; asserted here the same way, on the template it means.
+    tpls = [t for t in client.get("/api/v1/templates").json()
+            if t["template_key"] == "hkfrs_hk_china_v1"]
+    assert tpls, "the shipped template is not stored"
+    tid = next(t["id"] for t in tpls if t["is_latest"])
     d = client.get(f"/api/v1/templates/{tid}/detail").json()
     assert "netting_rules" in d
     rule = next((r for r in d["netting_rules"]

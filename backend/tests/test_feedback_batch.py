@@ -121,9 +121,16 @@ def test_detect_entity_name_from_running_header():
 
 # --- admin template detail renders a REAL configured template (#13) -------------------------
 def test_template_detail_renders_real_template(client):
-    templates = client.get("/api/v1/templates").json()
+    # THE SHIPPED TEMPLATE, NAMED. `templates[0]` used to be it by accident: the list came back in
+    # insertion order, so the seeded v1 sorted first. The list is now newest-first per key
+    # (routes/templates.py), which is what every screen needs to default correctly — and after any
+    # earlier test publishes a revision, the first row is that draft rather than the reference
+    # template this test is about. The suite already learned this once, in the e2e template-index
+    # test; asserted here the same way, on the template it means.
+    templates = [t for t in client.get("/api/v1/templates").json()
+                 if t["template_key"] == "hkfrs_hk_china_v1"]
     assert templates, "the reference template should be seeded"
-    tid = templates[0]["id"]
+    tid = next(t["id"] for t in templates if t["is_latest"])
     detail = client.get(f"/api/v1/templates/{tid}/detail").json()
     assert detail["tree"], "a configured template must render a non-empty tree"
     assert detail["template"]["line_items"] > 0

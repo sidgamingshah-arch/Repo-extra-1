@@ -160,11 +160,39 @@ def template_xlsx_columns() -> dict:
 
 @router.get("")
 def list_templates(session: Session = Depends(db)) -> list[dict]:
+    """Every stored template version, NEWEST FIRST per key, each saying whether it is the latest.
+
+    THE TWO DEFECTS THIS CLOSES, both caused by serving an unordered list of versions and leaving the
+    client to make sense of it.
+
+    This query had no ``ORDER BY``, so it came back in insertion order — v1, v2, v3, v4 — and the
+    Upload screen's picker took ``find(x => x.template_key === selectedKey)``. That is the FIRST row
+    with the key, which is v1, the oldest. So the screen named v1 as the active template no matter how
+    many revisions had been published, and the extraction view resolved the run's template the same
+    way — meaning a re-extraction ran against v1 and could not produce the revised statement order,
+    whatever the analyst had chosen. Worse, every row in the picker set the same ``template_key``, so
+    selecting v2 selected nothing: it stored the key it already held and the list re-answered v1.
+
+    ``is_latest`` is the SERVER'S answer to "which version is current for this key", so the client
+    reads it rather than ranking versions itself — the same rule as ``in_force`` on the ontology list,
+    and for the same reason: one implementation cannot disagree with itself. The ordering is here too,
+    because a list whose order carries meaning must not depend on how rows happened to be inserted.
+    """
     from app.db.models import TemplateVersion
 
-    rows = session.execute(select(TemplateVersion)).scalars().all()
+    rows = list(session.execute(
+        select(TemplateVersion)
+        .order_by(TemplateVersion.template_key, TemplateVersion.version.desc())
+    ).scalars().all())
+    # Highest version per key. Computed off the rows just read, so it cannot describe a different
+    # set from the one being served.
+    latest: dict[str, int] = {}
+    for r in rows:
+        if r.version > latest.get(r.template_key, -1):
+            latest[r.template_key] = r.version
     return [{"id": r.id, "template_key": r.template_key, "name": r.name,
-             "version": r.version, "is_published": r.is_published} for r in rows]
+             "version": r.version, "is_published": r.is_published,
+             "is_latest": r.version == latest.get(r.template_key)} for r in rows]
 
 
 @router.get("/{template_id}")

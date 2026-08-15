@@ -662,11 +662,18 @@ export interface OntologyRef {
   alias_count?: number;
 }
 export interface TemplateRef {
+  /** The TEMPLATE VERSION's id. This is what identifies a template to a run
+   *  (`template_version_id`), and what a selection has to store — a `template_key` cannot
+   *  distinguish v1 from v4, which is exactly how selecting a version came to be impossible. */
   id: string;
   template_key: string;
   name: string;
   version: number;
   is_published: boolean;
+  /** True for the newest version of this key. Served by the server (`routes/templates.py`) so the
+   *  client never ranks versions itself — the same contract as `OntologyRef.in_force`. Read it to
+   *  default a selection; do not sort. */
+  is_latest?: boolean;
 }
 
 export interface IntegrityStat {

@@ -17,7 +17,7 @@ import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseA
 import { DERIVED_STATEMENTS } from "../types";
 import type { Basis, FxRateResolution, StatementColumn, StatementKey, StatementResponse, StatementRow, SupersededTemplate } from "../types";
 import { ApiError, refusalText } from "../lib/api";
-import { ontologyInForce, useDocumentRunStatus, useDocumentStatement, useEditDocumentLineItem, useFxRateResolution, useOntologies, useReextract, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded, useTemplates } from "../lib/queries";
+import { activeTemplate, ontologyInForce, useDocumentRunStatus, useDocumentStatement, useEditDocumentLineItem, useFxRateResolution, useOntologies, useReextract, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded, useTemplates } from "../lib/queries";
 import { useCan } from "../lib/rbac";
 import { useUI } from "../store";
 import { useT } from "../i18n";
@@ -721,12 +721,18 @@ function InspectorEditor({
 function useRunDefaults() {
   const ontQ = useOntologies();
   const tplQ = useTemplates();
-  const selectedTemplateKey = useUI((s) => s.selectedTemplateKey);
-  const ont = ontologyInForce(ontQ.data, (o) => o.target_template_key === selectedTemplateKey)
+  const selectedTemplateId = useUI((s) => s.selectedTemplateId);
+  const selectedKey = activeTemplate(tplQ.data, selectedTemplateId)?.template_key ?? null;
+  const ont = ontologyInForce(ontQ.data, (o) => o.target_template_key === selectedKey)
     ?? ontologyInForce(ontQ.data);
-  // The template list serves the CURRENT version per key, which is exactly what a re-extract is
-  // for: the run being replaced is pinned to the version it was launched against.
-  const tpl = ont ? tplQ.data?.find((tt) => tt.template_key === ont.target_template_key) : undefined;
+  // The version a RE-EXTRACT should use: the analyst's selection when it belongs to this rulebook's
+  // template, else the latest. The comment here used to say the list "serves the CURRENT version per
+  // key" — it does not, it serves every version, and `find` by key took the first, i.e. the oldest.
+  // So the one action whose entire purpose is "rebuild against the current template" was rebuilding
+  // against v1. `activeTemplate` is the same rule the Upload and extraction screens use.
+  const tpl = ont
+    ? activeTemplate(tplQ.data, selectedTemplateId, ont.target_template_key)
+    : undefined;
   return { ont, tpl };
 }
 

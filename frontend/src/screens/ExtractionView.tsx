@@ -19,7 +19,7 @@ import { ExcelSourcePanel, PagedSource, toPicked, type Picked } from "../compone
 import { useT } from "../i18n";
 import { refusalText } from "../lib/api";
 import {
-  ontologyInForce, useDocumentAnalysis, useDocumentRunStatus, useExtraction, useOntologies,
+  activeTemplate, ontologyInForce, useDocumentAnalysis, useDocumentRunStatus, useExtraction, useOntologies,
   useReextract, useTemplates,
 } from "../lib/queries";
 import { useCan } from "../lib/rbac";
@@ -578,7 +578,10 @@ export default function ExtractionView() {
 
   const ontQ = useOntologies();
   const tplQ = useTemplates();
-  const selectedTemplateKey = useUI((s) => s.selectedTemplateKey);
+  const selectedTemplateId = useUI((s) => s.selectedTemplateId);
+  // The KEY of the selected version — what a rulebook targets. Derived from the one selection rather
+  // than stored beside it, so the two cannot drift out of step.
+  const selectedKey = activeTemplate(tplQ.data, selectedTemplateId)?.template_key ?? null;
   const ready = ontQ.isFetched && tplQ.isFetched;   // don't POST until the lists settle
   // The rulebook a run DEFAULTS to: the one in force for the template the analyst selected on the
   // Upload screen, and failing that the one in force among everything stored. "In force" is one
@@ -591,7 +594,7 @@ export default function ExtractionView() {
   // run's own record is what exposed it, reporting `superseded` while this screen was still calling
   // it in force. A named key cannot follow an adoption; the shared rule can, so it decides.
   const inForce =
-    ontologyInForce(ontQ.data, (o) => o.target_template_key === selectedTemplateKey) ||
+    ontologyInForce(ontQ.data, (o) => o.target_template_key === selectedKey) ||
     ontologyInForce(ontQ.data);
   // …and the one the reader PINNED, which outranks it. Empty means "follow whatever is in force",
   // so publishing a new rulebook moves an unpinned reader forward rather than freezing them.
@@ -619,7 +622,15 @@ export default function ExtractionView() {
   // A pin naming a rulebook that is no longer served (deleted, or a stale shared link) must not
   // leave the screen blank: fall through to what is in force, which is also what the picker shows.
   const ont = (pinnedId ? ontQ.data?.find((o) => o.id === pinnedId) : undefined) ?? inForce;
-  const tpl = ont ? tplQ.data?.find((tt) => tt.template_key === ont.target_template_key) : undefined;
+  // THE VERSION THE RUN IS LAUNCHED AGAINST, and the reason a re-extraction could not pick up a
+  // revised template. `find(tt => tt.template_key === ...)` matched a KEY over a list carrying every
+  // version of it and took the first row — v1 on an unordered payload — so the pipeline validated and
+  // shaped output against the OLDEST template no matter what had been published or chosen since.
+  // Now: the analyst's selection when it belongs to this rulebook's template, else the latest for it
+  // (`activeTemplate`, the same rule the Upload screen shows).
+  const tpl = ont
+    ? activeTemplate(tplQ.data, selectedTemplateId, ont.target_template_key)
+    : undefined;
   // `rulebook` is what THIS run recorded — keyed on this document and this choice, so switching the
   // pick cannot leave the previous run's rulebook labelling the new one. `progress`, `stages` and
   // `logTail` come back BESIDE `data` because `data` stays undefined until the run succeeds, which
@@ -725,7 +736,7 @@ export default function ExtractionView() {
         <RulebookPicker
           rows={ontQ.data} inForce={inForce} chosen={ont} record={rulebook}
           onChoose={setPinnedId} canChoose={canRun}
-          templateKey={selectedTemplateKey ?? tpl?.template_key} t={t}
+          templateKey={selectedKey ?? tpl?.template_key} t={t}
         />
       )}
 

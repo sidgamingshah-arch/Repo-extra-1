@@ -240,12 +240,41 @@ test("analyst cannot reach the config template screen but can select a template"
   // But the analyst still SELECTS a template on the Documents & Template (Upload) screen.
   await page.goto("/upload", DCL);
   await expect(page.getByText("Selected")).toBeVisible({ timeout: 15_000 }); // a template is active
+
+  // WHICH VERSION IS ACTIVE BY DEFAULT: the latest, which is what the server flags. This test used
+  // to click a row and assert only that the picker CLOSED — so it passed throughout the period when
+  // the screen defaulted to v1 and no click could change the selection, because neither claim was
+  // ever checked. `find(x => x.template_key === key)` over a list of every version answered the
+  // oldest row, and every option stored that same key.
+  const served = await apiGet<{ id: string; template_key: string; version: number;
+                               is_latest: boolean }[]>(page, "/api/v1/templates");
+  const active = page.getByTestId("tpl-active-meta");
+  const latest = served.filter((x) => x.is_latest);
+  expect(latest.length, "no template is flagged latest").toBeGreaterThan(0);
+  const shown = (await active.innerText()).trim();
+  const [shownKey] = shown.split(" · ");
+  const latestForShown = latest.find((x) => x.template_key === shownKey);
+  expect(latestForShown, `nothing flagged latest for ${shownKey}`).toBeTruthy();
+  expect(shown).toBe(`${latestForShown!.template_key} · v${latestForShown!.version}`);
+
+  // …AND A DIFFERENT VERSION CAN ACTUALLY BE CHOSEN. Only meaningful where a second version of the
+  // shown template exists; earlier tests publish one, and this says so rather than passing silently.
+  const siblings = served.filter((x) => x.template_key === shownKey)
+                         .sort((a, b) => b.version - a.version);
   await page.getByRole("button", { name: "Choose another" }).click();
   const options = page.getByTestId("tpl-option");
-  await expect(options.first()).toBeVisible({ timeout: 15_000 });            // real templates listed
-  await options.first().click();
-  // Selecting closes the picker (button returns to "Choose another") — selection is wired.
-  await expect(page.getByRole("button", { name: "Choose another" })).toBeVisible();
+  await expect(options.first()).toBeVisible({ timeout: 15_000 });
+  if (siblings.length > 1) {
+    const older = siblings[1];
+    await options.filter({ hasText: `v${older.version}` }).first().click();
+    await expect(page.getByRole("button", { name: "Choose another" })).toBeVisible();
+    // The selection MOVED — the assertion the old test was missing.
+    await expect(active).toHaveText(`${older.template_key} · v${older.version}`);
+  } else {
+    expect(siblings.length, "only one version stored, so version selection is untested here").toBe(1);
+    await options.first().click();
+    await expect(page.getByRole("button", { name: "Choose another" })).toBeVisible();
+  }
 });
 
 test("the template screen is an index first: a row opens the detail, which dismisses back",

@@ -1,7 +1,7 @@
 /** React Query hooks — the data layer each screen consumes. */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { Basis, FxRateInput, Locale, OntologyRef, SettingsPatch, StatementKey } from "../types";
+import type { Basis, FxRateInput, Locale, OntologyRef, SettingsPatch, StatementKey, TemplateRef } from "../types";
 import { useUI } from "../store";
 import { api, downloadOntologySkeleton } from "./api";
 
@@ -164,6 +164,33 @@ export const useDocuments = () => useQuery({ queryKey: ["documents"], queryFn: a
 
 export const useOntologies = () => useQuery({ queryKey: ["ontologies"], queryFn: api.ontologies });
 export const useTemplates = () => useQuery({ queryKey: ["templates"], queryFn: api.templates });
+
+/** The template VERSION in play: the one selected, else the LATEST the server names.
+ *
+ * ONE spelling, because three surfaces ask it — the Upload screen's template card, the rulebook card
+ * beside it, and the extraction view when it resolves the version a run is launched against. They
+ * each had their own copy, all of the same broken shape: `find(x => x.template_key === selectedKey)`
+ * over a list holding EVERY version of that key, which answers the first row. Unordered, that was
+ * v1 — so the screens named the oldest version as active and a run extracted against it, however
+ * many revisions had been published.
+ *
+ * `is_latest` is the server's answer and is read, not re-derived (see `TemplateRef`). `list[0]` is
+ * the last resort for a payload predating the flag, and the list is served newest-first so even that
+ * degrades to something defensible.
+ *
+ * `key` narrows to one template when the caller knows which — the extraction view does, from the
+ * rulebook's target — so a selection belonging to a DIFFERENT template cannot be returned as though
+ * it were this one's. */
+export function activeTemplate(
+  list: TemplateRef[] | undefined,
+  selectedId: string | null | undefined,
+  key?: string,
+): TemplateRef | undefined {
+  const rows = (list ?? []).filter((t) => !key || t.template_key === key);
+  return rows.find((t) => t.id === selectedId)
+    ?? rows.find((t) => t.is_latest)
+    ?? rows[0];
+}
 
 /** The rulebook IN FORCE among the rows matching `pred` — READ from the server, never ranked here.
  *

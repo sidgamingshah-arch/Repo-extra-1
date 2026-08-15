@@ -28,7 +28,11 @@ interface UIState {
   note: number; // selected note (All Notes)
   openCheck: string; // expanded review check
   tplSel: string; // selected template node
-  selectedTemplateKey: string | null; // active output template for the next run (null = default)
+  // The template VERSION chosen for the next run (null = whatever the server says is latest).
+  // A key was stored here once, which could not name a version: the picker set the key it already
+  // held, so choosing v2 changed nothing, and the run resolved the key to whichever row came back
+  // first — the oldest. One field, holding the thing a run actually needs.
+  selectedTemplateId: string | null;
   exportFmt: ExportFmt;
 
   setLocale: (l: Locale) => void;
@@ -46,7 +50,7 @@ interface UIState {
   setNote: (n: number) => void;
   toggleCheck: (id: string) => void;
   setTpl: (id: string) => void;
-  setSelectedTemplateKey: (k: string | null) => void;
+  setSelectedTemplateId: (id: string | null) => void;
   setFmt: (f: ExportFmt) => void;
 }
 
@@ -63,7 +67,7 @@ export const useUI = create<UIState>((set) => ({
   note: 12,
   openCheck: "bs",
   tplSel: "trade_recv",
-  selectedTemplateKey: null,
+  selectedTemplateId: null,
   exportFmt: "excel",
 
   setLocale: (locale) => set({ locale }),
@@ -87,7 +91,7 @@ export const useUI = create<UIState>((set) => ({
   setNote: (note) => set({ note }),
   toggleCheck: (id) => set((s) => ({ openCheck: s.openCheck === id ? "" : id })),
   setTpl: (tplSel) => set({ tplSel }),
-  setSelectedTemplateKey: (selectedTemplateKey) => set({ selectedTemplateKey }),
+  setSelectedTemplateId: (selectedTemplateId) => set({ selectedTemplateId }),
   setFmt: (exportFmt) => set({ exportFmt }),
 }));
 

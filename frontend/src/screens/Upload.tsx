@@ -7,6 +7,7 @@ import { Button, Card } from "../components/ui";
 import { color, font, radius } from "../theme";
 import type { ExtractMode, SourceDoc, TemplateRef } from "../types";
 import {
+  activeTemplate,
   ontologyInForce,
   useDeleteDocument,
   useDocumentIntegrity,
@@ -202,13 +203,24 @@ function TemplateCard({
 }) {
   const t = useT();
   const { data: templates, isPending } = useTemplates();
-  const selectedKey = useUI((s) => s.selectedTemplateKey);
-  const setSelectedKey = useUI((s) => s.setSelectedTemplateKey);
+  const selectedId = useUI((s) => s.selectedTemplateId);
+  const setSelectedId = useUI((s) => s.setSelectedTemplateId);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const list: TemplateRef[] = templates ?? [];
-  // Active template: the stored selection, else the first available template.
-  const active = list.find((x) => x.template_key === selectedKey) ?? list[0];
+  // THE ACTIVE TEMPLATE VERSION: the one chosen, else the LATEST the server names.
+  //
+  // Both halves were wrong. `find(x => x.template_key === selectedKey)` matched on a KEY over a list
+  // holding every version of it, so it answered the FIRST row — v1, the oldest — however many
+  // revisions existed; and `list[0]` fell back to whatever insertion order happened to put first,
+  // which is the same v1 rather than anything meaning "current". Selecting was worse than
+  // ineffective: every row in the picker stored the same key, so choosing v2 re-stored the key
+  // already held and the list re-answered v1, with the row highlight moving nowhere.
+  //
+  // `is_latest` is read, never re-derived (see `TemplateRef`); `list[0]` remains only as the answer
+  // when a payload predates that flag, and the list is now newest-first so even that is the sensible
+  // one rather than an accident.
+  const active = activeTemplate(list, selectedId);
 
   return (
     <Card>
@@ -232,7 +244,9 @@ function TemplateCard({
           <div style={{ fontSize: 12.5, fontWeight: 600 }}>
             {active ? active.name : isPending ? t("u.loadingTemplates") : t("u.noTemplates")}
           </div>
-          <div style={{ fontSize: 11, color: color.sec2 }}>
+          {/* Testid because "which VERSION is active" is the claim this line makes, and it had no
+              way of being asserted — the e2e test could only see that the picker closed. */}
+          <div data-testid="tpl-active-meta" style={{ fontSize: 11, color: color.sec2 }}>
             {active ? `${active.template_key} · v${active.version}` : t("u.templateMeta")}
           </div>
         </div>
@@ -246,13 +260,15 @@ function TemplateCard({
             <div style={{ padding: 12, fontSize: 11.5, color: color.muted }}>{t("u.noTemplates")}</div>
           )}
           {list.map((tpl) => {
-            const on = active?.template_key === tpl.template_key;
+            // Per VERSION, so the highlight tracks the row that is actually selected. Keyed on
+            // template_key it marked every version of the active template at once.
+            const on = active?.id === tpl.id;
             return (
               <div
                 key={tpl.id}
                 role="button"
                 data-testid="tpl-option"
-                onClick={() => { setSelectedKey(tpl.template_key); setPickerOpen(false); }}
+                onClick={() => { setSelectedId(tpl.id); setPickerOpen(false); }}
                 style={{
                   display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", cursor: "pointer",
                   background: on ? color.indigoTint : "#fff",
@@ -315,12 +331,12 @@ function OntologyCard({ canOntology, onManage }: { canOntology: boolean; onManag
   const locale = useAppLocale();
   const { data: rows, isPending } = useOntologies();
   const { data: templates } = useTemplates();
-  const selectedKey = useUI((s) => s.selectedTemplateKey);
+  const selectedId = useUI((s) => s.selectedTemplateId);
   const list: TemplateRef[] = templates ?? [];
-  // The same "which template is active" rule TemplateCard uses: the stored selection, else the
-  // first one served. A rulebook targets ONE template, so scoping to it is what makes the answer
-  // the run's answer; the rulebook in force overall would describe a different extraction.
-  const activeKey = (list.find((x) => x.template_key === selectedKey) ?? list[0])?.template_key;
+  // The same "which template version is active" rule the card above uses — one function, not a
+  // second copy of it (`activeTemplate`). A rulebook targets ONE template KEY, so that is what is
+  // taken from the version; the rulebook in force overall would describe a different extraction.
+  const activeKey = activeTemplate(list, selectedId)?.template_key;
   const ont = ontologyInForce(rows, (o) => !activeKey || o.target_template_key === activeKey);
   const num = (n: number) => n.toLocaleString(locale);
   // Absent counts are left out rather than shown as 0 — an older server that does not serve them
