@@ -1527,7 +1527,25 @@
    "confusable_with": [
     "bs_non_current_assets__financial_assets_at_fair_value_through_profit_or_loss",
     "bs_non_current_assets__others"
-   ]
+   ],
+   "is_gross_parent": true,
+   "children_if_decomposed": [
+    "bs_non_current_assets__financial_assets_at_fair_value_through_profit_or_loss"
+   ],
+   "regex_hints": [
+    "^other\\s+financial\\s+assets?$",
+    "^其他金融资产$"
+   ],
+   "exclude_hints": [
+    "financial liabilities",
+    "金融负债",
+    "trade receivables",
+    "贸易应收",
+    "cash equivalents",
+    "现金等价物"
+   ],
+   "aggregation_note": "Specific measurement-category and derivative captions override generic other financial assets. Use the generic parent only for source rows that are genuinely described as other financial assets and are not claimed by a dedicated category. The generic parent excludes all amounts assigned to dedicated financial-asset concepts.",
+   "decomposition_rule": "Do not sweep a clearly identified financial instrument into general Other assets merely because its dedicated concept was not initially matched."
   },
   {
    "canonical_key": "bs_non_current_assets__deferred_income_tax_assets",
@@ -1756,7 +1774,8 @@
    "aliases": [
     "Cash and cash equivalents",
     "Cash and bank balances",
-    "Cash at bank and on hand"
+    "Cash at bank and on hand",
+    "Bank balances and cash"
    ],
    "aliases_i18n": {
     "en": [
@@ -1767,7 +1786,8 @@
     "zh": [
      "现金及现金等价物",
      "现金及银行结余",
-     "银行存款及现金"
+     "银行存款及现金",
+     "银行结余及现金"
     ]
    },
    "confusable_with": [
@@ -1781,8 +1801,26 @@
     "受限制",
     "pledged",
     "已抵押",
-    "other than"
-   ]
+    "other than",
+    "cash flow statement",
+    "statement of cash flows",
+    "现金流量表",
+    "cash generated from operations",
+    "经营所得现金"
+   ],
+   "is_gross_parent": true,
+   "children_if_decomposed": [
+    "bs_current_assets__restricted_cash",
+    "bs_current_assets__pledged_deposits",
+    "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents"
+   ],
+   "regex_hints": [
+    "^cash\\s+(?:and|&)\\s+bank\\s+balances?$",
+    "^cash\\s+at\\s+bank\\s+(?:and|&)\\s+on\\s+hand$",
+    "^bank\\s+balances?\\s+(?:and|&)\\s+cash$"
+   ],
+   "aggregation_note": "A combined cash and bank balance caption must not automatically populate cash and cash equivalents. Remove explicitly disclosed restricted cash, pledged deposits and deposits that do not meet the cash-equivalent definition. Populate cash and cash equivalents only from the disclosed eligible component or a supported reconciliation. Combined cash and bank balances are validation evidence when dedicated cash categories are populated.",
+   "decomposition_rule": "Unclassified bank balances are not Other current assets. Keep them in the closest supported bank-balance concept or route to review."
   },
   {
    "canonical_key": "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
@@ -1868,7 +1906,6 @@
    "aliases": [
     "Trade receivables",
     "Trade and bills receivables",
-    "Trade and other receivables",
     "Accounts receivable"
    ],
    "aliases_i18n": {
@@ -1961,7 +1998,10 @@
     "Prepayments and other receivables",
     "Prepayments, deposits and other receivables",
     "Deposits and prepayments",
-    "Other receivables"
+    "Other receivables",
+    "Trade and other receivables",
+    "Trade receivables, prepayments and other receivables",
+    "Deposits, prepayments and other receivables"
    ],
    "aliases_i18n": {
     "en": [
@@ -1976,7 +2016,10 @@
      "预付款项及其他应收款项",
      "预付款项、按金及其他应收款项",
      "按金及预付款项",
-     "其他应收款项"
+     "其他应收款项",
+     "贸易及其他应收款",
+     "贸易应收款、预付款项及其他应收款",
+     "按金、预付款项及其他应收款"
     ]
    },
    "exclude": [
@@ -1995,8 +2038,32 @@
     "tax",
     "税",
     "related",
-    "关联"
-   ]
+    "关联",
+    "non-current",
+    "长期",
+    "非流动",
+    "contract liabilities",
+    "合同负债",
+    "trade and other payables",
+    "贸易及其他应付款"
+   ],
+   "is_gross_parent": true,
+   "children_if_decomposed": [
+    "bs_current_assets__trade_receivables",
+    "bs_current_assets__due_from_related_parties",
+    "bs_current_assets__contract_assets",
+    "bs_current_assets__prepaid_income_tax",
+    "bs_current_assets__other_financial_assets"
+   ],
+   "regex_hints": [
+    "^(?:trade|accounts?)\\s+(?:and\\s+)?other\\s+receivables?$",
+    "^trade\\s+receivables?\\s*[,]?\\s*prepayments?\\s+(?:and|&)\\s+other\\s+receivables?$",
+    "^deposits?\\s*[,]?\\s*prepayments?\\s+(?:and|&)\\s+other\\s+receivables?$",
+    "^贸易及其他应收款项?$",
+    "^贸易应收款项?[、,，]?预付款项及其他应收款项?$"
+   ],
+   "aggregation_note": "Treat the printed amount as a combined parent. Populate dedicated children only from explicit face or note breakdowns. Allocate the difference to the applicable other-receivables parent only after all evidenced children have been deducted. Never assign the complete combined amount to trade receivables. The combined parent and its decomposed children are mutually exclusive for calculation.",
+   "decomposition_rule": "Only itemised source rows that remain unclaimed after dedicated-child matching may enter the section residual. A difference created by an incomplete or unavailable note is an unallocated_gap, not Others."
   },
   {
    "canonical_key": "bs_current_assets__financial_assets_at_fair_value_through_other_comprehensive_income",
@@ -3331,7 +3398,27 @@
    ],
    "confusable_with": [
     "bs_current_liabilities__others"
-   ]
+   ],
+   "is_gross_parent": true,
+   "children_if_decomposed": [
+    "bs_current_liabilities__current_borrowings",
+    "bs_current_liabilities__current_portion_of_long_term_debt",
+    "bs_current_liabilities__current_lease_liabilities"
+   ],
+   "regex_hints": [
+    "^other\\s+financial\\s+liabilities$",
+    "^其他金融负债$"
+   ],
+   "exclude_hints": [
+    "financial assets",
+    "金融资产",
+    "trade payables",
+    "贸易应付",
+    "contract liabilities",
+    "合同负债"
+   ],
+   "aggregation_note": "Specific debt, lease and derivative concepts override generic other financial liabilities. Current or non-current classification must follow the issuer's reported section. The generic parent excludes all amounts allocated to dedicated financial-liability concepts.",
+   "decomposition_rule": "A clearly identified borrowing, lease or derivative item must not sweep into Other liabilities."
   },
   {
    "canonical_key": "bs_current_liabilities__current_trade_payables",
@@ -3343,7 +3430,6 @@
     "Current trade payables",
     "Trade payables",
     "Trade and bills payables",
-    "Trade and other payables",
     "Accounts and bills payable"
    ],
    "aliases_i18n": {
@@ -3598,7 +3684,9 @@
     "Other payables and accrued expenses",
     "Accruals and other payables",
     "Accruals",
-    "Other payables"
+    "Other payables",
+    "Trade and other payables",
+    "Trade payables, other payables and accruals"
    ],
    "aliases_i18n": {
     "en": [
@@ -3612,7 +3700,10 @@
      "其他应付款项及应计费用",
      "其他应付款项",
      "应计费用及其他应付款项",
-     "应计费用"
+     "应计费用",
+     "贸易及其他应付款",
+     "贸易应付款、其他应付款及应计费用",
+     "其他应付款及应计费用"
     ]
    },
    "exclude": [
@@ -3625,7 +3716,33 @@
     "bs_current_liabilities__current_trade_payables",
     "bs_current_liabilities__due_to_related_parties",
     "bs_current_liabilities__others"
-   ]
+   ],
+   "is_gross_parent": true,
+   "children_if_decomposed": [
+    "bs_current_liabilities__current_trade_payables",
+    "bs_current_liabilities__due_to_related_parties",
+    "bs_current_liabilities__contract_liabilities",
+    "bs_current_liabilities__current_income_tax_liabilities",
+    "bs_current_liabilities__other_current_financial_liabilities"
+   ],
+   "regex_hints": [
+    "^(?:trade|accounts?)\\s+(?:and\\s+)?other\\s+payables?$",
+    "^trade\\s+payables?\\s*[,]?\\s*other\\s+payables?\\s+(?:and|&)\\s+accruals?$",
+    "^other\\s+payables?\\s+(?:and|&)\\s+accrued\\s+expenses?$",
+    "^贸易及其他应付款项?$",
+    "^贸易应付款项?[、,，]?其他应付款项?及应计(?:费用|款项)$"
+   ],
+   "exclude_hints": [
+    "non-current",
+    "长期",
+    "非流动",
+    "trade and other receivables",
+    "贸易及其他应收款",
+    "contract assets",
+    "合同资产"
+   ],
+   "aggregation_note": "Treat the printed amount as a combined parent. Populate trade payables and other dedicated children only from explicit face or note evidence. Do not allocate the complete caption to trade payables. Use either the combined reported amount or the decomposed children in calculation, never both.",
+   "decomposition_rule": "Only itemised unclaimed rows may sweep. An unexplained gap between the combined caption and extracted note components remains an unallocated_gap."
   },
   {
    "canonical_key": "bs_current_liabilities__contract_liabilities",
@@ -4041,7 +4158,8 @@
     "Other income and gains, net",
     "Other gains",
     "Other revenue and gains",
-    "Other operating income"
+    "Other operating income",
+    "Other income and other gains"
    ],
    "aliases_i18n": {
     "en": [
@@ -4057,7 +4175,8 @@
      "其他收入及收益",
      "其他收入及收益净额",
      "其他收益",
-     "其他经营收入"
+     "其他经营收入",
+     "其他收入及其他收益"
     ]
    },
    "exclude": [
@@ -4070,7 +4189,27 @@
     "pl_non_operating_expenses__investment_income",
     "pl_exceptional_items__fair_value_change_gains",
     "pl_income__others"
-   ]
+   ],
+   "is_gross_parent": true,
+   "children_if_decomposed": [
+    "pl_non_operating_expenses__interest_income",
+    "pl_exceptional_items__gains_on_asset_disposal",
+    "pl_exceptional_items__fair_value_change_gains"
+   ],
+   "regex_hints": [
+    "^other\\s+income\\s+(?:and|&)\\s+(?:other\\s+)?gains?(?:\\s*[,]?\\s*net)?$",
+    "^其他收入及(?:其他)?收益(?:净额)?$"
+   ],
+   "exclude_hints": [
+    "total income",
+    "revenue",
+    "营业收入",
+    "总收入",
+    "finance income",
+    "融资收入"
+   ],
+   "aggregation_note": "Retain the face caption as a gross parent where it combines several income and gain categories. Populate dedicated children only from an explicit note breakdown. Do not place the entire combined amount into Other income and also populate its children. The face parent is validation evidence when its children are decomposed.",
+   "decomposition_rule": "An itemised note row that does not qualify for a dedicated income or gain concept may remain in Other income. A missing note component is an unallocated_gap."
   },
   {
    "canonical_key": "pl_income__others",
@@ -4444,7 +4583,8 @@
     "zh": [
      "销售成本总额",
      "销售成本合计",
-     "营业成本合计"
+     "营业成本合计",
+     "已售货品成本"
     ]
    },
    "exclude": [
@@ -4454,7 +4594,20 @@
    "confusable_with": [
     "pl_expenses__cost_of_goods_sold",
     "pl_expenses__total_operating_cost"
-   ]
+   ],
+   "regex_hints": [
+    "^(?:销售成本|营业成本|已售货品成本)$"
+   ],
+   "exclude_hints": [
+    "selling expenses",
+    "distribution expenses",
+    "finance costs",
+    "销售费用",
+    "分销费用",
+    "财务费用"
+   ],
+   "aggregation_note": "A reported cost-of-sales total must not be added to separately populated cost-of-goods-sold or purchase components. Component extraction is permitted only when the face presentation shows additive components or the note explicitly reconciles to the reported total. The aggregate and its components are mutually exclusive for computation.",
+   "decomposition_rule": "An unexplained difference to cost of sales is an unallocated_gap and must not be placed in Other operating costs."
   },
   {
    "canonical_key": "pl_expenses__other_operating_costs",
@@ -4515,7 +4668,9 @@
     "Other expenses",
     "Other expense",
     "Sundry expenses",
-    "Other charges"
+    "Other charges",
+    "Other expenses and losses",
+    "Other expenses, net"
    ],
    "aliases_i18n": {
     "en": [
@@ -4528,7 +4683,10 @@
      "其他开支",
      "其他费用",
      "其他支出",
-     "杂项开支"
+     "杂项开支",
+     "其他费用及亏损",
+     "其他经营费用",
+     "其他费用净额"
     ]
    },
    "confusable_with": [
@@ -4540,7 +4698,8 @@
    ],
    "regex_hints": [
     "^other (expenses|charges)$",
-    "^其他(开支|费用|支出)$"
+    "^其他(开支|费用|支出)$",
+    "^其他(?:经营)?费用(?:及亏损)?(?:净额)?$"
    ],
    "exclude_hints": [
     "administrative",
@@ -4552,8 +4711,23 @@
     "经营",
     "income",
     "收入",
-    "收益"
-   ]
+    "收益",
+    "administrative expenses",
+    "selling expenses",
+    "finance costs",
+    "income tax expense",
+    "行政费用",
+    "销售费用",
+    "财务费用",
+    "所得税费用"
+   ],
+   "is_gross_parent": true,
+   "children_if_decomposed": [
+    "pl_exceptional_items__credit_impairment_losses",
+    "pl_exceptional_items__asset_impairment_losses"
+   ],
+   "aggregation_note": "A combined other-expense caption is a parent. Dedicated impairment, fair-value, exchange and disposal-loss concepts may be populated only from explicit line-item or note evidence. Do not add the combined parent to its decomposed children.",
+   "decomposition_rule": "Only genuinely unclassified itemised expense rows remain in Other expenses. Do not use Other expenses to plug a difference to a reported operating-expense total."
   },
   {
    "canonical_key": "pl_expenses__depreciation_and_amortisation_expense",
@@ -4645,7 +4819,8 @@
    "aliases": [
     "Total operating expenses",
     "Total operating expenditure",
-    "Total other operating expenses"
+    "Total other operating expenses",
+    "Operating expenses"
    ],
    "aliases_i18n": {
     "en": [
@@ -4656,7 +4831,9 @@
     "zh": [
      "营业费用总额",
      "营业费用合计",
-     "经营费用合计"
+     "经营费用合计",
+     "经营费用",
+     "经营成本总额"
     ]
    },
    "exclude": [
@@ -4666,7 +4843,20 @@
    "confusable_with": [
     "pl_expenses__total_operating_cost",
     "pl_expenses__total_cost_of_sales"
-   ]
+   ],
+   "regex_hints": [
+    "^(?:经营费用总额|经营费用|经营成本总额)$"
+   ],
+   "exclude_hints": [
+    "cost of sales",
+    "finance costs",
+    "income tax expense",
+    "销售成本",
+    "财务费用",
+    "所得税费用"
+   ],
+   "aggregation_note": "The operating-expense total is an aggregate. Use either the aggregate or its mutually exclusive components in calculation. By-nature note disclosures must not be added to by-function face expenses unless an explicit reconciliation supports decomposition. The aggregate and all listed components are mutually exclusive for computation.",
+   "decomposition_rule": "Operating-expense Others contains only itemised, unclaimed operating-expense rows. It must never be calculated as a balancing plug."
   },
   {
    "canonical_key": "pl_expenses__total_operating_cost",
@@ -5467,8 +5657,22 @@
     "已付",
     "payable",
     "应付",
-    "应交"
-   ]
+    "应交",
+    "income tax paid",
+    "已付所得税",
+    "tax payable",
+    "应付税项",
+    "deferred tax asset",
+    "递延税项资产",
+    "deferred tax liability",
+    "递延税项负债"
+   ],
+   "regex_hints": [
+    "^(?:income\\s+)?tax(?:ation)?\\s*(?:expense|charge|credit)?$",
+    "^(?:所得税费用|税项|税项开支)$"
+   ],
+   "aggregation_note": "The face tax amount is the aggregate. Decompose into current and deferred tax only from a successfully parsed tax note. Assign the full aggregate to current tax only where positive evidence confirms that no deferred-tax component exists. The total tax expense and its current and deferred components are mutually exclusive in calculation.",
+   "decomposition_rule": "An unresolved tax-note difference remains an unallocated_gap. It must not sweep into Other expenses or Current tax."
   },
   {
    "canonical_key": "pl_oci__items_not_reclassified",
@@ -6056,7 +6260,8 @@
     "Total comprehensive income for the year",
     "Total comprehensive loss for the year",
     "Total comprehensive income/(loss) for the year",
-    "Total comprehensive income for the period"
+    "Total comprehensive income for the period",
+    "Total comprehensive income"
    ],
    "aliases_i18n": {
     "en": [
@@ -6070,7 +6275,8 @@
      "年内全面收益总额",
      "年内全面收入/（亏损）总额",
      "全面亏损总额",
-     "全面收益总额"
+     "全面收益总额",
+     "本年度全面收益总额"
     ]
    },
    "confusable_with": [
@@ -6082,7 +6288,9 @@
    "section_disambiguation": "Declared with a higher match_priority than pl_profit_for_the_year so that a reassembled or bare 'LOSS FOR THE YEAR' fragment beneath a 'TOTAL COMPREHENSIVE' caption resolves here. Identity pl_tci_tie must then hold; if it does not, both bottom lines are re-examined rather than one being coerced.",
    "regex_hints": [
     "total comprehensive (income|loss)",
-    "全面(亏损|收益|收入).{0,10}总额"
+    "全面(亏损|收益|收入).{0,10}总额",
+    "^total\\s+comprehensive\\s+income(?:\\s+for\\s+the\\s+year)?$",
+    "^(?:本年度全面收益总额|全面收益总额)$"
    ],
    "exclude_hints": [
     "attributable",
@@ -6090,8 +6298,14 @@
     "other comprehensive",
     "其他全面",
     "reserve",
-    "储备"
-   ]
+    "储备",
+    "profit attributable",
+    "应占溢利",
+    "other comprehensive income attributable",
+    "应占其他全面收益"
+   ],
+   "aggregation_note": "Total comprehensive income is an aggregate of profit for the year and total other comprehensive income. Attribution to owners and non-controlling interests is a separate decomposition and must not be added to the consolidated total. Do not add total comprehensive income to profit and OCI or to attribution components.",
+   "decomposition_rule": "Unclassified OCI rows may enter the OCI residual only when itemised. A difference to total comprehensive income is an unallocated_gap."
   },
   {
    "canonical_key": "pl_profit_for_the_year",
