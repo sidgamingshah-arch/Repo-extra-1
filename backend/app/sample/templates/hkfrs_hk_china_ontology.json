@@ -1528,10 +1528,6 @@
     "bs_non_current_assets__financial_assets_at_fair_value_through_profit_or_loss",
     "bs_non_current_assets__others"
    ],
-   "is_gross_parent": true,
-   "children_if_decomposed": [
-    "bs_non_current_assets__financial_assets_at_fair_value_through_profit_or_loss"
-   ],
    "regex_hints": [
     "^other\\s+financial\\s+assets?$",
     "^其他金融资产$"
@@ -3398,12 +3394,6 @@
    ],
    "confusable_with": [
     "bs_current_liabilities__others"
-   ],
-   "is_gross_parent": true,
-   "children_if_decomposed": [
-    "bs_current_liabilities__current_borrowings",
-    "bs_current_liabilities__current_portion_of_long_term_debt",
-    "bs_current_liabilities__current_lease_liabilities"
    ],
    "regex_hints": [
     "^other\\s+financial\\s+liabilities$",

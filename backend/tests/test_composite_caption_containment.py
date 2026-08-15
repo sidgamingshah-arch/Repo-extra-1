@@ -17,26 +17,41 @@ from __future__ import annotations
 
 import json
 import pathlib
+from decimal import Decimal
 
 import pytest
 
-from app.schemas.loader import resolve_inherits
+from app.core.models.document import DocumentModel, PageSource
+from app.core.models.enums import Basis, LineRole
+from app.core.models.geometry import BBox, Provenance
+from app.core.models.line_item import ExtractedValue, LineItem
+from app.core.stage import PipelineContext
+from app.schemas.loader import load_ontology, resolve_inherits
 from app.schemas.ontology import OntologyDefinition
-from app.stages.map_ontology import _pairs_to_keep_apart
+from app.stages.map_ontology import MapOntologyStage, _pairs_to_keep_apart
 
 ONTOLOGY_PATH = (pathlib.Path(__file__).resolve().parent.parent
                  / "app/sample/templates/hkfrs_hk_china_ontology.json")
 
-# The seven containments the translation switched on: each parent is a COMPOSITE PRINTED CAPTION
+# The five containments the translation switched on: each parent is a COMPOSITE PRINTED CAPTION
 # that stands instead of a breakdown, so unfiling it when its components appear is correct.
 TRANSLATED = {
     "bs_current_assets__prepayments_other_receivables_and_other_assets": 5,
     "bs_current_liabilities__other_payables_and_accruals": 5,
     "bs_current_assets__cash_and_cash_equivalents": 3,
-    "bs_non_current_assets__other_non_current_financial_assets": 1,
-    "bs_current_liabilities__other_current_financial_liabilities": 3,
     "pl_income__other_income": 3,
     "pl_expenses__other_expenses": 2,
+}
+
+# The two rules that turned out to be neither containment nor subtotal, but caption PRECEDENCE:
+# "Specific measurement-category and derivative captions override generic other financial assets."
+# Nothing is contained — the rule stops a generic concept claiming a caption a specific one should
+# win, which is what exclude_hints does. Marking them gross parents built a containment CHAIN
+# (other payables → other current financial liabilities → borrowings) whose outcome depended on the
+# order concepts sat in the file; see test_no_containment_chain_exists.
+PRECEDENCE_PARENTS = {
+    "bs_non_current_assets__other_non_current_financial_assets",
+    "bs_current_liabilities__other_current_financial_liabilities",
 }
 # The two the rulebook already carried, which must not be disturbed.
 PRE_EXISTING = {"bs_equity__reserves", "pl_exceptional_items__share_of_profit_of_associates_and_jvs"}
@@ -123,6 +138,40 @@ def test_no_concept_is_contained_by_two_parents(by_key):
             claimed[child] = key
 
 
+def test_no_containment_chain_exists(ontology):
+    """No concept may be both an aggregate and a component of another aggregate.
+
+    THE DEFECT THIS CLOSES. Rules 4 and 5 were first wired as containments, which made
+    ``bs_current_liabilities__other_current_financial_liabilities`` a child of
+    ``..._other_payables_and_accruals`` and simultaneously a parent of ``..._current_borrowings``.
+    On a page printing all three — combined payables 900, other financial liabilities 500,
+    borrowings 300 — the middle concept was unfiled first, so the outer aggregate then saw no
+    component present and was KEPT: the 900 and the 300 both stayed filed, double-counting the very
+    figure the pass exists to protect. Moving the middle concept later in the file produced a
+    different answer.
+
+    Two things fix it and both are held: the two rules are precedence rules, not containments (below),
+    and ``_enforce_containment`` now judges every pair against a snapshot taken before it unfiles
+    anything, so a chain in an UPLOADED rulebook resolves the same way whichever order it is written.
+    """
+    pairs = _pairs_to_keep_apart(ontology)
+    aggregates = {a for a, _c, _w in pairs}
+    components = {c for _a, comps, _w in pairs for c in comps}
+    chained = sorted(aggregates & components)
+    assert not chained, (
+        f"containment chain: {chained} are each both an aggregate and a component, which makes the "
+        f"outcome depend on the order concepts sit in the rulebook file")
+
+
+def test_a_precedence_rule_is_not_wired_as_containment(by_key):
+    """Rules 4 and 5 override a generic caption with a specific one. That is exclude_hints, not
+    containment — and wiring it as containment is what built the chain above."""
+    for key in PRECEDENCE_PARENTS:
+        m = by_key[key]
+        assert not m.is_gross_parent, f"{key} is a precedence rule, not a containment"
+        assert m.exclude_hints, f"{key} carries no exclude_hints, so its precedence is unenforced"
+
+
 def test_a_parent_is_never_its_own_child(by_key):
     """`netting_finance_costs` named `..._interest_expense` as a child of a parent that resolves to
     `..._interest_expense`. Collapsing a rule onto itself is why it was dropped rather than wired."""
@@ -198,6 +247,58 @@ def test_no_parent_claims_a_caption_another_concept_exclusively_owns(ontology):
             assert not shared, (
                 f"{m.canonical_key} and its child {child} both claim {sorted(shared)}; the caption "
                 f"cannot decide between an aggregate and a component of it")
+
+
+def _bs_row(ordinal: int, label: str, key: str, value: int) -> LineItem:
+    li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE, canonical_key=key)
+    li.set_value(ExtractedValue(
+        value=Decimal(value), value_raw=Decimal(value), basis=Basis.CONSOLIDATED,
+        period_label="current",
+        provenance=Provenance(page_index=0,
+                              bbox=BBox(x0=0.1, y0=0.1 * ordinal, x1=0.9, y1=0.1 * ordinal + 0.02))))
+    return li
+
+
+@pytest.mark.parametrize("swap_order", [False, True], ids=["as-written", "reordered"])
+def test_a_containment_chain_resolves_the_same_whichever_order_it_is_written_in(swap_order):
+    """The machinery half of the chain fix, tested on a rulebook that DOES chain.
+
+    The shipped rulebook no longer chains, but an admin-uploaded one may, so the pass must not read
+    its answer off the order concepts happen to sit in the file. Before the snapshot, the as-written
+    order left the 900 combined caption AND the 300 detail both filed — a double count — while the
+    reordered one filed only the 300. Both orders must now agree, and must keep only the innermost
+    printed detail.
+    """
+    parent = "bs_current_liabilities__other_payables_and_accruals"
+    middle = "bs_current_liabilities__other_current_financial_liabilities"
+    child = "bs_current_liabilities__current_borrowings"
+
+    raw = json.loads(ONTOLOGY_PATH.read_text(encoding="utf-8"))
+    by = {c["canonical_key"]: c for c in raw["mappings"]}
+    by[middle]["is_gross_parent"] = True              # force the chain the shipped file forbids
+    by[middle]["children_if_decomposed"] = [child]
+    if swap_order:
+        rows = raw["mappings"]
+        i = next(k for k, c in enumerate(rows) if c["canonical_key"] == middle)
+        j = next(k for k, c in enumerate(rows) if c["canonical_key"] == parent)
+        rows.insert(j + 1, rows.pop(i))
+
+    doc = DocumentModel(filename="f.pdf", locale="en")
+    doc.pages = [PageSource(index=0, statement="balance_sheet")]
+    doc.line_items = [_bs_row(0, "Other payables and accruals", parent, 900),
+                      _bs_row(1, "Other financial liabilities", middle, 500),
+                      _bs_row(2, "Bank and other borrowings", child, 300)]
+
+    MapOntologyStage._enforce_containment(doc, load_ontology(raw, resolve=True),
+                                          PipelineContext(raw_bytes=b""))
+
+    still_filed = [li.canonical_key for li in doc.line_items if li.canonical_key]
+    assert still_filed == [child], (
+        f"expected only the innermost printed detail to stay filed, got {still_filed}")
+    # Neither aggregate is lost: both keep their value and provenance as evidence.
+    for li in doc.line_items[:2]:
+        assert li.values, "an unfiled aggregate must keep its figure as evidence"
+        assert any(f.startswith("alloc:") for f in li.confidence.flags)
 
 
 def test_the_netting_rules_as_written_would_still_be_rejected():

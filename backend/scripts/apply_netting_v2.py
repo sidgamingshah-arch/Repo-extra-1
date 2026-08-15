@@ -171,7 +171,7 @@ RULES = [
         "strip_from": {},
     },
     {
-        "id": "netting_other_financial_assets", "mechanism": "containment",
+        "id": "netting_other_financial_assets", "mechanism": "precedence",
         # `bs_non_current_assets__other_financial_assets` → `..._other_non_current_financial_assets`.
         # Three of four children (current FVTPL, and derivative financial assets current and
         # non-current) name concepts the rulebook does not have, so only the non-current parent
@@ -197,7 +197,7 @@ RULES = [
                  "FVTPL concept. Only the non-current generic parent is wired."),
     },
     {
-        "id": "netting_other_financial_liabilities", "mechanism": "containment",
+        "id": "netting_other_financial_liabilities", "mechanism": "precedence",
         # `bs_non_current_liabilities__other_non_current_financial_liabilities` does not exist at
         # all, so the non-current half of this rule has no parent to hang on.
         "parent": "bs_current_liabilities__other_current_financial_liabilities",
