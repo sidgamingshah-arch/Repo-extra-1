@@ -37,7 +37,7 @@ ONTOLOGY_PATH = (pathlib.Path(__file__).resolve().parent.parent
 # that stands instead of a breakdown, so unfiling it when its components appear is correct.
 TRANSLATED = {
     "bs_current_assets__prepayments_other_receivables_and_other_assets": 5,
-    "bs_current_liabilities__other_payables_and_accruals": 5,
+    "bs_current_liabilities__other_payables_and_accruals": 4,
     "bs_current_assets__cash_and_cash_equivalents": 3,
     "pl_income__other_income": 3,
     "pl_expenses__other_expenses": 2,
@@ -275,7 +275,13 @@ def test_a_containment_chain_resolves_the_same_whichever_order_it_is_written_in(
 
     raw = json.loads(ONTOLOGY_PATH.read_text(encoding="utf-8"))
     by = {c["canonical_key"]: c for c in raw["mappings"]}
-    by[middle]["is_gross_parent"] = True              # force the chain the shipped file forbids
+    # Build the WHOLE chain here rather than borrowing half of it from the shipped rulebook: this
+    # test is about the machinery, and it must keep testing the machinery after the data stops
+    # chaining. (It previously took `parent contains middle` from the shipped file, so dropping that
+    # child silently turned the test into a no-chain case that could no longer fail.)
+    by[parent]["is_gross_parent"] = True
+    by[parent]["children_if_decomposed"] = [middle]
+    by[middle]["is_gross_parent"] = True
     by[middle]["children_if_decomposed"] = [child]
     if swap_order:
         rows = raw["mappings"]

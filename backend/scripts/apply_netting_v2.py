@@ -112,7 +112,13 @@ RULES = [
             "bs_current_liabilities__due_to_related_parties",
             "bs_current_liabilities__contract_liabilities",
             "bs_current_liabilities__current_income_tax_liabilities",
-            "bs_current_liabilities__other_current_financial_liabilities",
+            # `..._other_current_financial_liabilities` was listed as a fifth child and is dropped on
+            # the reviewer's instruction. "Trade and other payables" is an operating-payables
+            # caption; other current financial liabilities is a financing/derivative caption printed
+            # BESIDE it, not inside it — unfiling the combined payables figure because a derivative
+            # line appeared would lose a printed number for no accounting reason. Dropping it also
+            # removes the last way that concept could be both a component here and (under rule 5,
+            # were it ever re-wired as containment) a parent of borrowings.
         ],
         "captions_en": [
             "Trade and other payables",

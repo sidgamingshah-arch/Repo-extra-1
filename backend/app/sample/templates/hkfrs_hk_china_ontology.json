@@ -3712,8 +3712,7 @@
     "bs_current_liabilities__current_trade_payables",
     "bs_current_liabilities__due_to_related_parties",
     "bs_current_liabilities__contract_liabilities",
-    "bs_current_liabilities__current_income_tax_liabilities",
-    "bs_current_liabilities__other_current_financial_liabilities"
+    "bs_current_liabilities__current_income_tax_liabilities"
    ],
    "regex_hints": [
     "^(?:trade|accounts?)\\s+(?:and\\s+)?other\\s+payables?$",
