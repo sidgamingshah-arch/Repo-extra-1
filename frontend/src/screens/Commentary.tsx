@@ -9,7 +9,7 @@ import {
 import { EmptyState } from "../components/EmptyState";
 import { useCan } from "../lib/rbac";
 import { useAppLocale, useUI } from "../store";
-import { color, fmtIN, font, radius } from "../theme";
+import { color, fmtElapsed, fmtIN, font, radius } from "../theme";
 import type {
   AuditEntry, CommentaryMetric, CommentaryTrend, CreditAnalysis, CreditTone, Locale,
 } from "../types";
@@ -93,10 +93,22 @@ function tok(n: number | null): string {
   return n === null || n === undefined ? "—" : n.toLocaleString();
 }
 
-function AuditLog({ t }: { t: (k: string) => string }) {
-  const { data } = useAudit();
+/** A duration, or an em-dash when the entry describes something instantaneous (or predates the
+ *  field). Never "0s" for an unmeasured run — see `theme.fmtElapsed`. */
+function dur(ms: number | null | undefined): string {
+  return fmtElapsed(ms) || "—";
+}
+
+/** The audit trail for what is being worked on.
+ *
+ *  `documentId` is what makes this the REAL filing's trail. Runs against an uploaded document are
+ *  recorded under that document's id — extraction, both outcomes, and the credit narrative — and
+ *  this panel used to ask the demo project's route unconditionally, so on a real filing it showed
+ *  the sample's rows or nothing at all while every run against that filing sat unread. */
+function AuditLog({ t, documentId }: { t: (k: string) => string; documentId?: string }) {
+  const { data } = useAudit(documentId);
   const entries = data?.entries ?? [];
-  const AUDIT_GRID = "1.7fr 1.1fr 0.8fr 1.3fr 0.9fr 0.9fr 0.8fr";
+  const AUDIT_GRID = "1.6fr 1.05fr 0.8fr 1.2fr 0.7fr 0.85fr 0.85fr 0.75fr";
   return (
     <div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "4px 2px 10px" }}>
@@ -117,6 +129,7 @@ function AuditLog({ t }: { t: (k: string) => string }) {
           <span>{t("cm.col.time")}</span>
           <span>{t("cm.col.action")}</span>
           <span>{t("cm.col.model")}</span>
+          <span style={{ textAlign: "right" }}>{t("cm.col.took")}</span>
           <span style={{ textAlign: "right" }}>{t("cm.col.inTok")}</span>
           <span style={{ textAlign: "right" }}>{t("cm.col.outTok")}</span>
           <span style={{ textAlign: "right" }}>{t("cm.col.totTok")}</span>
@@ -151,6 +164,10 @@ function AuditLog({ t }: { t: (k: string) => string }) {
               </span>
             </span>
             <span style={{ fontFamily: font.mono, fontSize: 10.5, color: color.sec }}>{e.model}</span>
+            <span style={{ fontFamily: font.mono, fontSize: 11.5, textAlign: "right",
+                           color: color.sec2 }}>
+              {dur(e.duration_ms)}
+            </span>
             <span style={{ fontFamily: font.mono, fontSize: 11.5, textAlign: "right", color: color.ink }}>
               {tok(e.input_tokens)}
             </span>
@@ -430,7 +447,7 @@ export default function CommentaryScreen() {
 
       {/* Audit log — LLM/extraction runs with per-run input/output token usage */}
       <div style={{ marginTop: 20 }}>
-        <AuditLog t={t} />
+        <AuditLog t={t} documentId={activeDocumentId ?? undefined} />
       </div>
     </div>
   );

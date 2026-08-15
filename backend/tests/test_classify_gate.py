@@ -63,16 +63,24 @@ def test_chinese_hk_prc_titles_and_note_patterns():
     import re
 
     from app.stages.classify import (
-        _NOTE_REF, _NOTES_HEADERS, _NUMBERED_HEADING, _face_title_at_top)
+        _NOTES_BANNER, _NUMBERED_HEADING, _resolve_statement, _title_candidates, _title_zone)
 
-    assert _face_title_at_top("合并资产负债表\n货币资金 1,204")
-    assert _face_title_at_top("綜合現金流量表")
-    assert _face_title_at_top("合并利润表")
-    # A Chinese prose sentence that merely mentions a statement name is not a title heading.
-    assert not _face_title_at_top("独立核数师报告\n我们审计了合并利润表及合并现金流量表。")
-    assert any(re.search(rx, "合并财务报表附注") for rx in _NOTES_HEADERS)
+    def title(*lines):
+        """Resolve a heading through the stage's REAL path: title zone → heading-shaped candidates →
+        resolution. Going straight to _resolve_statement would skip the heading filter, which is the
+        very thing the prose case below is asserting."""
+        raw = [{"text": t, "y": float(i * 20), "size": 14.0, "bold": True}
+               for i, t in enumerate(lines)]
+        return _resolve_statement(_title_candidates(_title_zone(raw)))[0]
+
+    assert title("合并资产负债表", "货币资金 1,204") == "balance_sheet"
+    assert title("綜合現金流量表") == "cash_flow"
+    assert title("合并利润表") == "profit_and_loss"
+    # A Chinese prose sentence that merely mentions a statement name is not a title heading: it ends
+    # in a full stop, so it is not heading-shaped, and the narrative gate on the page rejects it too.
+    assert title("独立核数师报告", "我们审计了合并利润表及合并现金流量表。") is None
+    assert any(re.search(rx, "合并财务报表附注") for rx in _NOTES_BANNER)
     assert _NUMBERED_HEADING.search("14. 現金及現金等價物")
-    assert _NOTE_REF.search("附註 14") and _NOTE_REF.search("note 14")
 
 
 def test_running_header_report_regions(client):

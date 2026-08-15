@@ -1,6 +1,6 @@
 /** Screen 8: Export — deliver the extracted, reviewed and reconciled dataset. */
 import { useState } from "react";
-import { useDocumentRun, useExportOptions, useProjectLoaded, useSubmitForReview } from "../lib/queries";
+import { useDocumentRun, useExportOptions, useProject, useProjectLoaded, useSubmitForReview } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { downloadDocumentExport, downloadExport } from "../lib/api";
 import { useUI } from "../store";
@@ -44,27 +44,29 @@ function FormatCard({
   );
 }
 
-/** A single include-checklist row. Presentational: reflects option.on. */
-function IncludeRow({ label, on }: { label: string; on: boolean }) {
+/** One include-checklist row, for both the real and the sample export — ONE spelling of one
+ *  control. The sample rows used to be a separate presentational component with no onChange,
+ *  wrapped in `pointerEvents: auto` for an admin, so they advertised a choice and delivered none
+ *  (and the sample download posted `include: {}`, discarding it anyway). */
+function IncludeRow({ label, on, onToggle }: { label: string; on: boolean; onToggle: () => void }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}>
+    <div
+      onClick={onToggle}
+      data-testid="e-include"
+      data-on={on}
+      style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 0", cursor: "pointer" }}
+    >
       <span
         style={{
-          width: 17,
-          height: 17,
-          borderRadius: 5,
-          background: on ? color.indigo : color.surface,
-          border: `1.5px solid ${on ? color.indigo : color.dashed}`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#fff",
-          fontSize: 11,
+          width: 15, height: 15, borderRadius: 4, flex: "0 0 auto",
+          border: `2px solid ${on ? color.indigo : color.dashed}`,
+          background: on ? color.indigo : "#fff", color: "#fff",
+          fontSize: 11, lineHeight: "11px", textAlign: "center",
         }}
       >
         {on ? "✓" : ""}
       </span>
-      <span style={{ fontSize: 12.5, color: color.ink2 }}>{label}</span>
+      <span style={{ fontSize: 12 }}>{label}</span>
     </div>
   );
 }
@@ -86,111 +88,6 @@ function PresField({ label, value }: { label: string; value: string }) {
         {value}
       </div>
     </div>
-  );
-}
-
-const EXCEL_ROWS: string[][] = [
-  ["1", "Property, plant and equipment", "4,23,180", "N3", "96%"],
-  ["2", "Trade receivables", "84,500", "N12", "78%"],
-  ["3", "Cash and cash equivalents", "39,100", "N13", "96%"],
-  ["4", "Total current assets", "3,30,800", "", "ƒ"],
-  ["5", "TOTAL ASSETS", "12,68,100", "", "ƒ"],
-];
-const GRID_COLS = "30px 1fr 80px 46px 62px";
-
-const JSON_TEXT = `{
-  "entity": "Reliance Industries Ltd",
-  "period": "FY2024-25",
-  "dataset": "consolidated",
-  "units": "INR_crore",
-  "balance_sheet": [
-    {
-      "item": "Trade receivables",
-      "value": 84500,
-      "note_ref": "12",
-      "confidence": 0.78,
-      "sign": "positive",
-      "formula": "Note12.total - Note12.3",
-      "source": { "page": 142, "note_page": 171 }
-    }
-  ]
-}`;
-
-function ExcelPreview() {
-  const t = useT();
-  const head = ["", t("e.col.lineitem"), "FY25", t("e.col.note"), t("e.col.conf")];
-  return (
-    <div style={{ fontFamily: font.mono, fontSize: 11 }}>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: GRID_COLS,
-          background: color.excelGreen,
-          color: "#fff",
-          fontWeight: 600,
-        }}
-      >
-        {head.map((h, i) => (
-          <div
-            key={i}
-            style={{
-              padding: "6px 8px",
-              borderRight: "1px solid #1a5c37",
-              textAlign: i > 1 ? "right" : "left",
-            }}
-          >
-            {h}
-          </div>
-        ))}
-      </div>
-      {EXCEL_ROWS.map((row, ri) => {
-        const isTotal = row[0] === "5";
-        return (
-          <div
-            key={ri}
-            style={{
-              display: "grid",
-              gridTemplateColumns: GRID_COLS,
-              background: ri % 2 ? "#f6f8f6" : "#fff",
-              borderBottom: "1px solid #e6ebe6",
-            }}
-          >
-            {row.map((c, ci) => (
-              <div
-                key={ci}
-                style={{
-                  padding: "6px 8px",
-                  borderRight: "1px solid #eef1ee",
-                  textAlign: ci > 1 ? "right" : "left",
-                  fontWeight: isTotal ? 700 : 400,
-                  color: ci === 4 ? color.amberFg : "#333",
-                }}
-              >
-                {c}
-              </div>
-            ))}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function JsonPreview() {
-  return (
-    <pre
-      style={{
-        margin: 0,
-        padding: "14px 16px",
-        fontFamily: font.mono,
-        fontSize: 11,
-        lineHeight: 1.6,
-        color: color.ink,
-        whiteSpace: "pre-wrap",
-      }}
-    >
-      {JSON_TEXT}
-    </pre>
   );
 }
 
@@ -223,7 +120,12 @@ function RealPreview({ rows, isExcel }: { rows: ExtractionRow[]; isExcel: boolea
       </pre>
     );
   }
-  const head = ["", t("e.col.lineitem"), "Value", t("e.col.note"), t("e.col.conf"), t("e.col.source")];
+  // Six headers, six localized strings. The third was the English literal "Value" between five
+  // translated ones, so a zh reader saw "行项目 | Value | 附注 | 置信度 | 来源" — the missing-key half
+  // of this array was fixed while the untranslated-literal half stayed in the same expression.
+  const head = [
+    "", t("e.col.lineitem"), t("e.col.value"), t("e.col.note"), t("e.col.conf"), t("e.col.source"),
+  ];
   const cols = "30px 1fr 90px 46px 56px 80px";
   return (
     <div style={{ fontFamily: font.mono, fontSize: 11 }}>
@@ -261,6 +163,9 @@ export default function ExportScreen() {
   const activeDocumentId = useUI((s) => s.activeDocumentId);
   const usingReal = !!activeDocumentId;
   const loaded = useProjectLoaded();
+  // The sample footer's counts, as the demo project itself reports them — the same payload
+  // useProjectLoaded already reads, so no extra request and no second copy of the figures.
+  const sampleProgress = useProject().data?.project.progress;
   const { data, isPending } = useExportOptions();
   const runQ = useDocumentRun(activeDocumentId ?? undefined);
   const exportFmt = useUI((s) => s.exportFmt);
@@ -272,6 +177,10 @@ export default function ExportScreen() {
     note_details: true, ratios: true, disclosures: true,
   });
   const includeKeys = Object.keys(inc).filter((k) => inc[k]);
+  // The SAMPLE export's checklist. Null until the user touches it, so the boxes start at whatever
+  // the server declared (`option.on`) instead of a second default kept here — and the map that is
+  // shown is the map that is posted, which the sample download used to drop on the floor.
+  const [sampleInc, setSampleInc] = useState<Record<string, boolean> | null>(null);
   // Target presentation unit for a real export (empty = as reported). Conversion applies only
   // when the document declared its source units, which the run reports.
   const [targetUnits, setTargetUnits] = useState<string>("");
@@ -287,7 +196,12 @@ export default function ExportScreen() {
   }
 
   const realRows: ExtractionRow[] = usingReal ? (runQ.data?.result.rows ?? []) : [];
+  // Rows this export would carry with no canonical mapping, or carrying an extraction flag. That
+  // is NOT the sample path's review backlog, so the footer labels the two separately.
   const realFlagged = realRows.filter((r) => !r.canonical_key || (r.flags?.length ?? 0) > 0).length;
+  // Server defaults until the user overrides one, per option — never a client-side copy of them.
+  const sampleInclude: Record<string, boolean> =
+    sampleInc ?? Object.fromEntries((data?.options ?? []).map((o) => [o.key, o.on]));
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto", padding: "26px 30px 60px" }}>
@@ -325,16 +239,8 @@ export default function ExportScreen() {
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
                 <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
                   {(["note_details", "ratios", "disclosures"] as const).map((k) => (
-                    <div key={k} onClick={() => setInc((s) => ({ ...s, [k]: !s[k] }))}
-                         style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 0", cursor: "pointer" }}>
-                      <span style={{ width: 15, height: 15, borderRadius: 4, flex: "0 0 auto",
-                                     border: `2px solid ${inc[k] ? color.indigo : color.dashed}`,
-                                     background: inc[k] ? color.indigo : "#fff", color: "#fff",
-                                     fontSize: 11, lineHeight: "11px", textAlign: "center" }}>
-                        {inc[k] ? "✓" : ""}
-                      </span>
-                      <span style={{ fontSize: 12 }}>{t(`e.sheet.${k}`)}</span>
-                    </div>
+                    <IncludeRow key={k} label={t(`e.sheet.${k}`)} on={inc[k]}
+                                onToggle={() => setInc((s) => ({ ...s, [k]: !s[k] }))} />
                   ))}
                 </div>
               </Card>
@@ -345,7 +251,13 @@ export default function ExportScreen() {
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 11 }}>{t("e.include")}</div>
                 <div style={{ opacity: canConfig ? 1 : 0.55, pointerEvents: canConfig ? "auto" : "none" }}>
                   {data.options.map((o) => (
-                    <IncludeRow key={o.key} label={t(`e.opt.${o.key}`)} on={o.on} />
+                    <IncludeRow
+                      key={o.key}
+                      label={t(`e.opt.${o.key}`)}
+                      on={sampleInclude[o.key] ?? o.on}
+                      onToggle={() =>
+                        setSampleInc({ ...sampleInclude, [o.key]: !(sampleInclude[o.key] ?? o.on) })}
+                    />
                   ))}
                 </div>
               </Card>
@@ -417,13 +329,16 @@ export default function ExportScreen() {
             <span style={{ fontSize: 11, color: color.muted }}>{t("e.previewMeta")}</span>
           </div>
           <div style={{ flex: 1, overflow: "auto", background: isExcel ? "#fff" : "#fbfcfd" }}>
-            {usingReal ? (
-              <RealPreview rows={realRows} isExcel={isExcel} />
-            ) : isExcel ? (
-              <ExcelPreview />
-            ) : (
-              <JsonPreview />
-            )}
+            {/* One preview, of the loaded extraction. The sample path used to render a mock built
+                from five hardcoded Reliance rows under an "FY25" header — figures, note refs and
+                confidences belonging to no extraction this product has ever produced, on the screen
+                whose whole job is showing what the file will contain. There is nothing to preview
+                without a document, and saying so is the honest answer. */}
+            {usingReal
+              ? <RealPreview rows={realRows} isExcel={isExcel} />
+              : <div style={{ padding: 22, fontSize: 12, color: color.muted, lineHeight: 1.6 }}>
+                  {t("e.previewNeedsDoc")}
+                </div>}
           </div>
           <div
             style={{
@@ -434,10 +349,34 @@ export default function ExportScreen() {
               justifyContent: "space-between",
             }}
           >
-            <span style={{ fontSize: 11.5, color: color.muted }}>
+            {/* Each path names the quantity IT counts — BOTH figures, not just the second one.
+                "flagged" used to label the real path's rows-with-no-mapping-or-a-flag and the
+                sample's review backlog alike — one word over two different quantities, which is how
+                a 12 the payload no longer contained went on reading as "flagged" after the literals
+                were deleted from this markup. The first figure had the same fault left in it: one
+                word, "line items", over the sample's served count of ITEM rows and over
+                `realRows.length`.
+
+                THOSE ARE NOT THE SAME POPULATION. A served row's `role` is the extractor's
+                (routes/extractions.py::_serialize_rows over LineItem.role): `line`, or the
+                `subtotal` the mapper promotes a row to when it lands on a subtotal concept
+                (stages/map_ontology.py, the only place a role ever changes) — and a caption word
+                never becomes a line item at all, so no row here is one. `realRows.length` is
+                therefore exactly the statement LINES that services/review_lines.py defines for both
+                routes, the population the Review header's third tile counts within on this same run,
+                while a subtotal is a line and is NOT a line item — which is why the sample's own
+                count leaves its subtotal and total rows out. So the number needs no filtering and
+                did not change: the WORD was the half asserting a membership its number did not have.
+                Nothing is printed until the query resolves: a pending request is not an empty
+                project. */}
+            <span data-testid="e-footer-counts" style={{ fontSize: 11.5, color: color.muted }}>
               {usingReal
-                ? `${realRows.length} ${t("e.footer.lineitems")} · ${realFlagged} ${t("e.footer.flagged")}`
-                : `148 ${t("e.footer.lineitems")} · 48 ${t("e.footer.notes")} · 12 ${t("e.footer.flagged")}`}
+                ? `${realRows.length} ${t("e.footer.lines")} · `
+                  + `${realFlagged} ${t("e.footer.unmappedOrFlagged")}`
+                : sampleProgress
+                  ? `${sampleProgress.line_items} ${t("e.footer.lineitems")} · `
+                    + `${sampleProgress.in_review} ${t("e.footer.inReview")}`
+                  : ""}
             </span>
             {canExport ? (
               // Reviewer/admin, or analyst when the review step is off: deliver the file.
@@ -451,7 +390,9 @@ export default function ExportScreen() {
                         basis: "consolidated",
                         currency: "INR",
                         units: "crore",
-                        include: {},
+                        // What the checklist above shows. It was `{}`, so the workbook ignored
+                        // every box the screen had just presented as a choice.
+                        include: sampleInclude,
                       })
                 }
                 style={{
@@ -469,7 +410,9 @@ export default function ExportScreen() {
                 </span>
               ) : (
                 <button
-                  onClick={() => submitReview.mutate()}
+                  // The document being submitted, so the audit entry names the filing's own entity
+                  // rather than the demo company's. Undefined for the sample project.
+                  onClick={() => submitReview.mutate(activeDocumentId ?? undefined)}
                   disabled={submitReview.isPending}
                   style={{
                     fontSize: 13, fontWeight: 600, color: "#fff",

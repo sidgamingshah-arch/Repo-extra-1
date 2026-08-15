@@ -31,6 +31,9 @@ ocr = ["paddleocr>=2.7", "opencv-python-headless>=4.9", "Pillow>=10.2"]
 embeddings = ["sentence-transformers>=2.6"]
 llm = ["anthropic>=0.25"]
 lang = ["fasttext-wheel>=0.9.2"]
+# Traditional<->Simplified Han folding for CJK filings. Optional: app/services/han.py falls
+# back to a built-in table of financial-statement variant pairs when this is absent.
+cjk = ["opencc-python-reimplemented>=0.1.7"]
 dev = [
     "pytest>=8.1",
     "pytest-asyncio>=0.23",

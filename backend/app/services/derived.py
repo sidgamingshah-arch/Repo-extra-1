@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import re
 
+from app.services.periods import concept_value
+
 # --- 1. Ratios -------------------------------------------------------------
 # Each ratio references canonical keys; num/den are (key, sign) so we can net inventories
 # out of the quick ratio etc. A ratio is computed only when ALL its inputs are present.
@@ -24,8 +26,8 @@ _DEBT = [
     ("bs_non_current_liabilities__non_current_notes_payable", 1, "opt"),
     ("bs_non_current_liabilities__non_current_lease_liabilities", 1, "opt"),
     ("bs_current_liabilities__current_borrowings", 1, "opt"),
-    ("bs_current_liabilities__current_potion_of_long_term_debt", 1, "opt"),
-    ("bs_current_liabilities__cuurent_notes_payable", 1, "opt"),
+    ("bs_current_liabilities__current_portion_of_long_term_debt", 1, "opt"),
+    ("bs_current_liabilities__current_notes_payable", 1, "opt"),
     ("bs_current_liabilities__current_lease_liabilities", 1, "opt"),
 ]
 _CASH = [
@@ -33,13 +35,24 @@ _CASH = [
     ("bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents", 1, "opt"),
 ]
 # EBITDA = EBIT (required anchor) + depreciation & amortisation (optional add-back).
-_EBITDA = [("pl_operating_profit_ebit", 1), ("pl_expenses__depreciation_and_amortisation_expense", 1, "opt")]
+#
+# The add-back's sign is -1 BECAUSE EXPENSES ARE STORED NEGATIVE (global_rules.sign_convention:
+# "expenses and outflows are stored NEGATIVE"). `_side` computes a signed sum, so +1 on a D&A of
+# -30 SUBTRACTED the charge a second time and returned an EBITDA below EBIT — arithmetically
+# impossible, and it shipped as +1. It only fired on a filing that printed an operating-profit
+# line, which IFRS does not require; now that EBIT is computed from the template it fires on
+# almost every filing, which is how it was found.
+_EBITDA = [("pl_operating_profit_ebit", 1),
+           ("pl_expenses__depreciation_and_amortisation_expense", -1, "opt")]
 _CFO = "cf_cash_flow_from_operating_activities__net_cash_from_operating_activities"
 _CAPEX = "cf_cash_flow_from_investing_activities__purchase_of_property_plant_and_equipment"
 _INTEREST_PAID = "cf_cash_flow_from_financing_activities__interest_paid"
 _REPAYMENT = "cf_cash_flow_from_financing_activities__repayment_of_borrowings"
 _EQUITY = "bs_equity__total_equity"
 _TCL = "bs_current_liabilities__total_current_liabilities"
+# Interest expense, stored NEGATIVE like every other expense. Every coverage ratio divides by it,
+# so each one carries sign -1 to divide by the CHARGE rather than its negation: at +1 a profitable,
+# comfortably-covered company was served an interest coverage of -6.25x.
 _INTEREST = "pl_non_operating_expenses__interest_expense"
 # Cost base for the inventory/payables day-cycle: prefer the explicit cost-of-goods-sold line,
 # but many statement formats don't break it out — fall back to the total operating cost
@@ -121,20 +134,20 @@ _RATIOS = [
     {"key": "interest_coverage", "label": "EBIT interest coverage", "unit": "x", "category": "Coverage",
      "label_i18n": {"zh": "利息保障倍数（EBIT）", "ar": "تغطية الفائدة (EBIT)",
                     "fr": "Couverture des intérêts (EBIT)"},
-     "num": [("pl_operating_profit_ebit", 1)], "den": [(_INTEREST, 1)],
+     "num": [("pl_operating_profit_ebit", 1)], "den": [(_INTEREST, -1)],
      "formula": "Operating profit (EBIT) / Interest expense"},
     {"key": "ebitda_interest_coverage", "label": "EBITDA interest coverage", "unit": "x",
      "category": "Coverage",
      "label_i18n": {"zh": "利息保障倍数（EBITDA）", "ar": "تغطية الفائدة (EBITDA)",
                     "fr": "Couverture des intérêts (EBITDA)"},
-     "num": list(_EBITDA), "den": [(_INTEREST, 1)],
+     "num": list(_EBITDA), "den": [(_INTEREST, -1)],
      "formula": "EBITDA / Interest expense"},
     {"key": "debt_service_coverage", "label": "Debt-service coverage (DSCR)", "unit": "x",
      "category": "Coverage",
      "label_i18n": {"zh": "偿债保障倍数", "ar": "تغطية خدمة الدين", "fr": "Couverture du service de la dette"},
      "num": list(_EBITDA),
-     "den": [(_INTEREST, 1),
-             ("bs_current_liabilities__current_potion_of_long_term_debt", 1, "opt"),
+     "den": [(_INTEREST, -1),
+             ("bs_current_liabilities__current_portion_of_long_term_debt", 1, "opt"),
              ("bs_current_liabilities__current_borrowings", 1, "opt")],
      "formula": "EBITDA / (Interest expense + current portion of long-term debt + current borrowings)"},
     {"key": "cfo_to_total_debt", "label": "Cash flow to total debt", "unit": "%", "category": "Coverage",
@@ -146,27 +159,27 @@ _RATIOS = [
      "category": "Coverage",
      "label_i18n": {"zh": "现金流利息保障倍数", "ar": "تغطية الفائدة من التدفق النقدي",
                     "fr": "Couverture des intérêts par les flux de trésorerie"},
-     "num": [(_CFO, 1)], "den": [(_INTEREST, 1)],
+     "num": [(_CFO, 1)], "den": [(_INTEREST, -1)],
      "formula": "Net cash from operating activities / Interest expense"},
     {"key": "fcf_to_total_debt", "label": "Free cash flow to total debt", "unit": "%",
      "category": "Coverage",
      "label_i18n": {"zh": "自由现金流/总债务", "ar": "التدفق النقدي الحر إلى إجمالي الدين",
                     "fr": "Flux de trésorerie disponible / Dette totale"},
-     "num": [(_CFO, 1), (_CAPEX, -1, "opt")], "den": list(_DEBT),
+     "num": [(_CFO, 1), (_CAPEX, 1, "opt")], "den": list(_DEBT),
      "formula": "(Net cash from operations − Capex) / Total debt"},
     {"key": "ffo_to_total_debt", "label": "Funds from operations to debt (FFO/debt)", "unit": "%",
      "category": "Coverage",
      "label_i18n": {"zh": "经营资金/总债务", "ar": "الأموال من العمليات إلى الدين",
                     "fr": "Fonds provenant de l'exploitation / Dette totale"},
      "num": [("pl_profit_for_the_year", 1),
-             ("pl_expenses__depreciation_and_amortisation_expense", 1, "opt")],
+             ("pl_expenses__depreciation_and_amortisation_expense", -1, "opt")],
      "den": list(_DEBT),
      "formula": "(Profit for the year + depreciation & amortisation) / Total debt"},
     {"key": "cash_debt_service_coverage", "label": "Cash debt-service coverage", "unit": "x",
      "category": "Coverage",
      "label_i18n": {"zh": "现金偿债保障倍数", "ar": "تغطية خدمة الدين النقدية",
                     "fr": "Couverture du service de la dette par la trésorerie"},
-     "num": [(_CFO, 1)], "den": [(_INTEREST_PAID, 1), (_REPAYMENT, 1, "opt")],
+     "num": [(_CFO, 1)], "den": [(_INTEREST_PAID, -1), (_REPAYMENT, -1, "opt")],
      "formula": "Net cash from operating activities / (Interest paid + repayment of borrowings)"},
 
     # ---- Efficiency (working-capital cycle) ------------------------------------------
@@ -186,13 +199,13 @@ _RATIOS = [
     {"key": "dio", "label": "Days inventory outstanding (DIO)", "unit": "days", "category": "Efficiency",
      "label_i18n": {"zh": "存货周转天数", "ar": "أيام بقاء المخزون", "fr": "Délai d'écoulement des stocks (jours)"},
      "num": [("bs_current_assets__inventories", 1)],
-     "den": [(_COST_BASE, 1)],
+     "den": [(_COST_BASE, -1)],
      "formula": "Inventories / Cost of goods sold (or total operating cost) × 365"},
     {"key": "dpo", "label": "Days payables outstanding (DPO)", "unit": "days", "category": "Efficiency",
      "label_i18n": {"zh": "应付账款周转天数", "ar": "أيام سداد الذمم الدائنة",
                     "fr": "Délai de paiement fournisseurs (jours)"},
      "num": [("bs_current_liabilities__current_trade_payables", 1)],
-     "den": [(_COST_BASE, 1)],
+     "den": [(_COST_BASE, -1)],
      "formula": "Trade payables / Cost of goods sold (or total operating cost) × 365"},
 
     # ---- Profitability ---------------------------------------------------------------
@@ -226,6 +239,95 @@ _RATIOS = [
 ]
 
 
+# --- 1b. The same catalog, declared by a template -------------------------------------------
+# ``_RATIOS`` above is the BUILT-IN catalog: it ships with the product and a user cannot revise it
+# without a release. A template may declare its own (``schemas.template.KpiBlock``), and when it
+# does that block IS the catalog for that template's runs — which is the whole point of putting the
+# KPIs in the template. Both catalogs are evaluated by the code below, in the same terms, so a
+# declared ratio cannot compute differently from a built-in one.
+
+
+def template_kpis(template_def: dict | None):
+    """A template's declared KPI catalog as a validated ``KpiBlock``, or None when it declares none.
+
+    None is the signal to fall back to ``_RATIOS`` — every template authored before the block
+    existed, and every stored run against one, therefore behaves exactly as it does today.
+
+    The pydantic error is NOT caught. The block's shape is refused at the upload gate
+    (``routes.templates._publish``), so a stored block that no longer validates is a defect in what
+    was stored, and quietly substituting the built-in catalog would serve an analyst a set of KPIs
+    they did not author while telling them the opposite.
+    """
+    from app.schemas.template import KpiBlock
+
+    raw = (template_def or {}).get("kpis")
+    if not raw:
+        return None
+    block = KpiBlock.model_validate(raw)
+    # Intermediates with no ratio built on them compute nothing anybody can see, so a block that
+    # declares no ratios is not a catalog.
+    return block if block.ratios else None
+
+
+def _terms_of(terms) -> list[tuple]:
+    """``KpiTerm``s in the ``(keyspec, sign[, "opt"])`` shape the built-in catalog is written in.
+
+    One term shape for both catalogs, so ``_side`` and ``_side_inputs`` are the only things that
+    know how a side is added up — a second evaluator for declared ratios is a second answer to
+    "what is this KPI".
+    """
+    out: list[tuple] = []
+    for t in terms:
+        keyspec = (t.key, *t.fallback_keys) if t.fallback_keys else t.key
+        out.append((keyspec, t.sign, "opt") if t.optional else (keyspec, t.sign))
+    return out
+
+
+def _catalog_of(block) -> list[dict]:
+    """A ``KpiBlock``'s ratios as catalog entries, in the shape ``_RATIOS`` uses.
+
+    No ``formula`` key: a declared ratio's formula is derived from its own terms at compute time
+    (:func:`_formula_of`), because a prose formula authored beside the arithmetic can contradict it.
+    """
+    return [{"key": r.key, "label": r.label, "label_i18n": dict(r.label_i18n),
+             "unit": r.unit, "category": r.category,
+             "num": _terms_of(r.numerator), "den": _terms_of(r.denominator)}
+            for r in block.ratios]
+
+
+def _intermediate_order(defs: dict[str, list[tuple]]) -> list[str]:
+    """Intermediate keys in dependency order — net debt after the total debt it is written from.
+
+    A cycle cannot be evaluated at all; the upload gate refuses one
+    (``schemas.loader._validate_kpis``) and this is the read-path backstop for a definition stored
+    before that gate: the keys in the cycle are still emitted, and each resolves its cyclic input to
+    None, so every ratio built on them reports unavailable instead of recursing or inventing a
+    figure.
+    """
+    order: list[str] = []
+    state: dict[str, int] = {}
+    for key in defs:
+        stack = [(key, False)]
+        while stack:
+            node, expanded = stack.pop()
+            if state.get(node) == 2:
+                continue
+            if expanded:
+                state[node] = 2
+                order.append(node)
+                continue
+            if state.get(node) == 1:
+                continue                              # a cycle; the input resolves to None
+            state[node] = 1
+            stack.append((node, True))
+            for term in defs[node]:
+                spec = term[0]
+                for cand in (spec if isinstance(spec, tuple) else (spec,)):
+                    if cand in defs and state.get(cand) != 2:
+                        stack.append((cand, False))
+    return order
+
+
 def _num(v) -> float | None:
     if v is None:
         return None
@@ -235,41 +337,74 @@ def _num(v) -> float | None:
         return None
 
 
+def _group_by_key(rows: list[dict]) -> dict[str, list[dict]]:
+    """Extracted rows grouped by the concept they map to — several printed lines can share one."""
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        k = r.get("canonical_key")
+        if k:
+            out.setdefault(k, []).append(r)
+    return out
+
+
 def _value(by_key: dict, key: str, basis: str, period: str) -> float | None:
-    row = by_key.get(key)
-    if not row:
+    """One concept's figure, read the same way the statement grid reads it — summed across every
+    printed line that maps to the concept, or the analyst's manual value where one replaced it.
+    A ratio computed off a different number than the statement shows is not a ratio of that
+    statement."""
+    group = by_key.get(key)
+    if not group:
         return None
-    for v in row.get("values") or []:
-        if (v.get("basis") or "consolidated") == basis and v.get("period_label") == period:
-            return _num(v.get("value"))
+    return concept_value(group if isinstance(group, list) else [group], basis, period)
+
+
+def _term_value(by_key, keyspec, basis, period, derived=None, shown=None) -> float | None:
+    """Resolve a term's value. ``keyspec`` is a single canonical key, or a tuple/list of
+    candidate keys tried in order (first one present wins) — used for a graceful fallback,
+    e.g. cost of goods sold → total operating cost when a filing doesn't break out COGS.
+
+    ``derived`` holds the figures for a template's KPI intermediates (EBITDA, net debt, …), which
+    no filing prints and no row carries. They are consulted first and then fall through to the
+    extracted rows, so a candidate list may mix the two; an intermediate that came out unavailable
+    is absent exactly like an unextracted line, which is what keeps a ratio built on it unavailable
+    rather than partial.
+
+    ``shown`` is every concept's figure as the STATEMENT SHOWS IT (``rollups.figures_as_shown``):
+    manual, else computed from the template, else printed. It is consulted before the raw rows, and
+    it is what stops a KPI disagreeing with the spread it is computed from — a calculated line the
+    filing does not print has a figure on the face and, before this, none in the ratios. Absent when
+    no template was passed, and then a term resolves off the printed rows exactly as it used to.
+    """
+    keys = keyspec if isinstance(keyspec, (tuple, list)) else (keyspec,)
+    for k in keys:
+        if derived and k in derived:
+            v = derived[k]
+        elif shown is not None and k in shown:
+            v = shown[k]
+        else:
+            v = _value(by_key, k, basis, period)
+        if v is not None:
+            return v
     return None
 
 
-def _term_value(by_key, keyspec, basis, period) -> float | None:
-    """Resolve a term's value. ``keyspec`` is a single canonical key, or a tuple/list of
-    candidate keys tried in order (first one present wins) — used for a graceful fallback,
-    e.g. cost of goods sold → total operating cost when a filing doesn't break out COGS."""
-    if isinstance(keyspec, (tuple, list)):
-        for k in keyspec:
-            v = _value(by_key, k, basis, period)
-            if v is not None:
-                return v
-        return None
-    return _value(by_key, keyspec, basis, period)
-
-
-def _side(by_key, terms, basis, period) -> float | None:
+def _side(by_key, terms, basis, period, derived=None, shown=None) -> float | None:
     """Sum one side of a ratio. Each term is ``(key, sign)`` — required, missing => whole side
     None — or ``(key, sign, "opt")`` — optional component, missing => treated as 0 (so an
     aggregate like 'total debt' still computes when a company reports only some components).
     A term's key may itself be a tuple of fallback candidates (see ``_term_value``). The side
-    is None if no term contributed a value at all (nothing to measure)."""
+    is None if no term contributed a value at all (nothing to measure).
+
+    This is also how a KPI INTERMEDIATE is computed — an intermediate is one side and nothing more —
+    so a declared "EBITDA = EBIT + depreciation (optional)" is unavailable when EBIT was never
+    extracted, instead of being served as the add-back alone.
+    """
     total = 0.0
     present = False
     for term in terms:
         key, sign = term[0], term[1]
         mode = term[2] if len(term) > 2 else "req"
-        val = _term_value(by_key, key, basis, period)
+        val = _term_value(by_key, key, basis, period, derived, shown)
         if val is None:
             if mode == "opt":
                 continue                     # optional component absent → contributes 0
@@ -277,6 +412,62 @@ def _side(by_key, terms, basis, period) -> float | None:
         total += sign * val
         present = True
     return total if present else None
+
+
+def _term_label(by_key, key, labels=None) -> str:
+    """A readable name for a ratio input: the caption the document printed for it when the line
+    was extracted, else the canonical key made readable.
+
+    ``labels`` carries the template's own label for a KPI intermediate, which is the only name it
+    has — nothing printed it, so there is no source caption to prefer over the declaration.
+    """
+    keys = list(key) if isinstance(key, (tuple, list)) else [key]
+    for k in keys:
+        if labels and k in labels:
+            return labels[k]
+    for k in keys:
+        group = by_key.get(k)
+        if group:
+            rows = group if isinstance(group, list) else [group]
+            lbl = next((r.get("source_label") for r in rows if r.get("source_label")), None)
+            if lbl:
+                return lbl
+    tail = str(keys[0]).split("__")[-1]
+    return tail.replace("_", " ").capitalize()
+
+
+def _resolved_key(by_key, keyspec, basis, period) -> str:
+    """Which canonical key a term actually resolved to.
+
+    A term may name several candidates tried in order (cost of goods sold → total operating cost),
+    so the key that carried the figure is the one the analyst has to be able to click through to.
+    Falls back to the first candidate when none had a value, so the row still names what it wanted.
+    """
+    keys = list(keyspec) if isinstance(keyspec, (tuple, list)) else [keyspec]
+    for k in keys:
+        if _value(by_key, k, basis, period) is not None:
+            return str(k)
+    return str(keys[0]) if keys else ""
+
+
+def _side_inputs(by_key, terms, basis, period, derived=None, shown=None) -> list[dict]:
+    """Every input that went into one side of a ratio, with the value actually used.
+
+    A ratio the analyst cannot take apart is a number to be taken on trust. Listing the inputs —
+    each with its own canonical key, its sign and its figure — makes the arithmetic checkable
+    against the statement, and an absent input visibly absent rather than silently zero.
+    """
+    out = []
+    for term in terms:
+        key, sign = term[0], term[1]
+        mode = term[2] if len(term) > 2 else "req"
+        val = _term_value(by_key, key, basis, period, derived, shown)
+        out.append({
+            "canonical_key": _resolved_key(by_key, key, basis, period),
+            "label": _term_label(by_key, key), "sign": sign, "value": val,
+            "optional": mode == "opt",
+        })
+    return out
 
 
 # unit → (multiplier applied to num/den, suffix formatter)
@@ -298,32 +489,101 @@ def _display(value: float | None, unit: str) -> str:
 _CATEGORY_ORDER = ["Liquidity", "Leverage", "Coverage", "Efficiency", "Profitability"]
 
 
+def _formula_of(by_key, entry: dict, inter_labels: dict[str, str] | None = None) -> str:
+    """A declared KPI's formula, rendered FROM its terms.
+
+    There is no authored prose to print: ``KpiRatio`` deliberately has no ``formula`` field, because
+    a sentence written beside the arithmetic can be edited out of step with it and nothing can detect
+    that the stated derivation has become a lie. So the sentence is generated, every time, from the
+    same terms the value was computed from.
+    """
+    def side(terms) -> str:
+        parts: list[str] = []
+        for term in terms:
+            key, sign = term[0], term[1]
+            name = (inter_labels or {}).get(key if isinstance(key, str) else "") \
+                or _term_label(by_key, key, inter_labels)
+            parts.append(f"{'− ' if sign < 0 else ('+ ' if parts else '')}{name}")
+        return " ".join(parts).strip()
+
+    num, den = side(entry["num"]), side(entry["den"])
+    return f"({num}) ÷ ({den})" if den else num
+
+
 def compute_ratios(rows: list[dict], *, basis: str = "consolidated", period: str = "current",
-                   locale: str = "en") -> list[dict]:
-    """Compute the ratio catalog from the extracted values. Ratios missing an input are
-    returned as unavailable (never fabricated), so the UI/export can show the full set,
-    grouped by category (liquidity / leverage / coverage / efficiency / profitability)."""
-    by_key = {r["canonical_key"]: r for r in rows if r.get("canonical_key")}
+                   locale: str = "en", template_def: dict | None = None) -> list[dict]:
+    """Compute the KPI catalog from the extracted values.
+
+    WHICH catalog is the template's choice. A template that declares a ``kpis`` block owns the KPI
+    set for its own runs — that is the whole point of declaring them there, since a user revising a
+    template can then change which KPIs exist and how each is derived without a release. A template
+    that declares none falls back to the built-in ``_RATIOS``, so every template authored before the
+    block, and every stored run, behaves exactly as it did.
+
+    Each entry says which catalog it came from (``source``): "template" and "built-in" are different
+    facts about whether a user can revise it, and a screen that cannot tell them apart would offer
+    an edit that goes nowhere.
+
+    A KPI missing a required input, or dividing by zero, is returned UNAVAILABLE — never fabricated
+    and never quietly reported as 0. Which KPIs a filing cannot support is itself a finding.
+    """
+    by_key = _group_by_key(rows)
+    # Every figure as the statement shows it, so a ratio is a ratio OF the spread on screen. None
+    # without a template: there is nothing to compute a calculated line from, and a term then
+    # resolves off the printed rows as before.
+    from app.services.rollups import figures_as_shown
+
+    shown = (figures_as_shown(template_def, rows, basis, period, locale)
+             if template_def else None)
+    block = template_kpis(template_def)
+    catalog = _catalog_of(block) if block is not None else _RATIOS
+    source = "template" if block is not None else "built-in"
+
+    # A template's intermediates are figures no filing prints (EBITDA, net debt, capital employed),
+    # so they are evaluated FIRST and in dependency order — net debt after the total debt it is
+    # written from — and then stand in for a canonical key wherever a ratio's terms name them.
+    derived_vals: dict[str, float | None] = {}
+    inter_labels: dict[str, str] = {}
+    if block is not None:
+        defs = {i.key: _terms_of(i.terms) for i in block.intermediates}
+        for key in _intermediate_order(defs):
+            derived_vals[key] = _side(by_key, defs[key], basis, period, derived_vals,
+                                      shown)
+        for i in block.intermediates:
+            inter_labels[i.key] = ((i.label_i18n.get(locale) if locale != "en" else None)
+                                   or i.label)
+
     computed: dict[str, float | None] = {}
     out: list[dict] = []
-    for d in _RATIOS:
+    for d in catalog:
         label = (d.get("label_i18n", {}).get(locale) if locale != "en" else None) or d["label"]
-        num = _side(by_key, d["num"], basis, period)
-        den = _side(by_key, d["den"], basis, period)
+        num = _side(by_key, d["num"], basis, period, derived_vals, shown)
+        den = _side(by_key, d["den"], basis, period, derived_vals, shown)
         unit = d["unit"]
         available = num is not None and den not in (None, 0)
         value = round((num / den) * _UNIT_SCALE[unit], 2) if available else None
         computed[d["key"]] = value
         out.append({
             "key": d["key"], "label": label, "category": d.get("category", "Profitability"),
-            "unit": unit, "formula": d["formula"], "value": value,
+            "unit": unit,
+            # A declared KPI has no authored prose formula — it is rendered from the terms, so an
+            # author who edits the arithmetic cannot leave a sentence behind that contradicts it.
+            "formula": d.get("formula") or _formula_of(by_key, d, inter_labels),
+            "value": value, "source": source,
             "display": _display(value, unit), "available": available,
+            # The arithmetic, openable: which extracted figures were used, and with what sign.
+            "inputs": {
+                "numerator": _side_inputs(by_key, d["num"], basis, period, derived_vals, shown),
+                "denominator": _side_inputs(by_key, d["den"], basis, period, derived_vals, shown)},
         })
 
     # Cash conversion cycle is a combination of the day-based ratios (DSO + DIO − DPO), so it is
-    # derived after the loop from their computed values rather than from raw keys.
+    # derived after the loop from their computed values rather than from raw keys. It belongs to the
+    # BUILT-IN catalog only: a template declaring its own KPIs decides for itself whether it wants
+    # one, and appending it regardless would put a KPI in the set that the template never declared
+    # and its author cannot remove.
     dso, dio, dpo = computed.get("dso"), computed.get("dio"), computed.get("dpo")
-    if dso is not None and dio is not None and dpo is not None:
+    if block is None and dso is not None and dio is not None and dpo is not None:
         ccc = round(dso + dio - dpo, 2)
         out.append({
             "key": "cash_conversion_cycle",
@@ -505,7 +765,8 @@ def _loc_map(table: dict, key: str, locale: str) -> str:
 
 
 def build_credit_analysis(rows: list[dict], disclosures: list[dict] | None = None, *,
-                          basis: str = "consolidated", locale: str = "en") -> dict:
+                          basis: str = "consolidated", locale: str = "en",
+                          template_def: dict | None = None) -> dict:
     """Detailed credit assessment from the extracted values PLUS the report narrative.
 
     Numeric factors (leverage / coverage / liquidity / profitability) are bucketed against
@@ -513,7 +774,11 @@ def build_credit_analysis(rows: list[dict], disclosures: list[dict] | None = Non
     concern, qualified opinion, contingents, guarantees, litigation). The overall stance
     blends both — a going-concern or qualified-opinion signal caps an otherwise-strong read.
     """
-    ratios = {r["key"]: r for r in compute_ratios(rows, basis=basis)}
+    # The template travels with the rows so the credit factors are bucketed against the SAME
+    # figures the KPI screen and the spread show. Without it a calculated line the filing does not
+    # print was missing here while present there, and the two surfaces read the same filing
+    # differently.
+    ratios = {r["key"]: r for r in compute_ratios(rows, basis=basis, template_def=template_def)}
     factors: list[dict] = []
     tone_score = 0
     pos = neg = 0
@@ -708,10 +973,11 @@ def _fmt(n: float | None) -> str:
     return "—" if n is None else f"{n:,.0f}"
 
 
-def build_free_notes(rows: list[dict], *, basis: str = "consolidated", locale: str = "en") -> list[dict]:
+def build_free_notes(rows: list[dict], *, basis: str = "consolidated", locale: str = "en",
+                     template_def: dict | None = None) -> list[dict]:
     """Plain-language notes generated strictly from the extracted numbers: period movements
     for headline lines, and a one-line read on liquidity/profitability from the ratios."""
-    by_key = {r["canonical_key"]: r for r in rows if r.get("canonical_key")}
+    by_key = _group_by_key(rows)
     notes: list[dict] = []
 
     for key, label_en, label_i18n in _NOTE_LINES:
@@ -732,7 +998,7 @@ def build_free_notes(rows: list[dict], *, basis: str = "consolidated", locale: s
             notes.append({"title": label,
                           "text": _tr("flat", locale).format(label=label, cur=_fmt(cur))})
 
-    ratios = {r["key"]: r for r in compute_ratios(rows, basis=basis)}
+    ratios = {r["key"]: r for r in compute_ratios(rows, basis=basis, template_def=template_def)}
     cr = ratios.get("current_ratio")
     if cr and cr["available"]:
         stance = _tr("stance_comfortable" if cr["value"] >= 1.5

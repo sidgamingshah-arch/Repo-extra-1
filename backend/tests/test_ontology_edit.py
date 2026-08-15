@@ -6,9 +6,20 @@ API = "/api/v1"
 
 
 def _seeded_ontology(client) -> dict:
-    rows = client.get(f"{API}/ontologies").json()
-    assert rows, "the reference ontology should be seeded"
-    return next(r for r in rows if r["ontology_key"] == "hkfrs_hk_china_v1")
+    """The rulebook IN FORCE for the reference template, as the PRODUCT reports it.
+
+    Read off the template detail rather than re-derived here. Pinning it to hkfrs_hk_china_v1 by
+    name made these tests edit one rulebook and assert against the screen showing another, once v2
+    was adopted. Re-deriving it from GET /ontologies was no better: my first attempt took the
+    highest version among the non-superseded rows and so picked a five-times-republished skeleton
+    DRAFT — 188 empty stubs, no aliases — while the product was using v2. A test that reimplements
+    the rule it is testing against can disagree with the product and still pass.
+    """
+    tpl = next(x for x in client.get(f"{API}/templates").json()
+               if x["template_key"] == "hkfrs_hk_china_v1")
+    ont = client.get(f"{API}/templates/{tpl['id']}/detail?locale=en").json().get("ontology")
+    assert ont, "the reference template should have a rulebook in force"
+    return ont
 
 
 def _definition(client, oid: str) -> dict:
@@ -20,7 +31,7 @@ def _definition(client, oid: str) -> dict:
 def test_get_ontology_returns_full_definition(client):
     ont = _seeded_ontology(client)
     body = client.get(f"{API}/ontologies/{ont['id']}").json()
-    assert body["ontology_key"] == "hkfrs_hk_china_v1"
+    assert body["ontology_key"] == ont["ontology_key"]
     assert body["target_template_key"] == "hkfrs_hk_china_v1"
     assert len(body["definition"]["mappings"]) > 100    # the real 142-concept rulebook
 
@@ -43,7 +54,7 @@ def test_edit_aliases_publishes_a_new_version_and_leaves_the_old_intact(client):
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["version"] > ont["version"]
-    assert out["ontology_key"] == "hkfrs_hk_china_v1"
+    assert out["ontology_key"] == ont["ontology_key"]     # the edit stays on the rulebook edited
 
     # The NEW version carries the edit...
     after_m = next(m for m in _definition(client, out["id"])["mappings"]
@@ -107,7 +118,9 @@ def test_edit_sign_convention_round_trips_to_the_template_screen(client):
                if x["template_key"] == "hkfrs_hk_china_v1")
     detail = client.get(f"{API}/templates/{tpl['id']}/detail?locale=en").json()
     assert detail["node_config"][key]["sign"] == "expense_contra"
-    assert detail["ontology"]["ontology_key"] == "hkfrs_hk_china_v1"
+    # The screen reads the rulebook in force, which is the one the edit was applied to. Naming a
+    # literal key here is what made this test edit one rulebook and assert against another.
+    assert detail["ontology"]["ontology_key"] == ont["ontology_key"]
 
 
 def test_unknown_concept_and_bad_sign_are_rejected(client):
@@ -130,18 +143,63 @@ def test_detail_exposes_raw_per_locale_aliases_for_editing(client):
     cfg = detail["node_config"]["bs_non_current_assets__property_plant_and_equipment"]
     assert cfg["canonical_key"] == "bs_non_current_assets__property_plant_and_equipment"
     # Raw zh list contains only Chinese aliases; the merged display list also has English.
+    # Asserted structurally, not against one rulebook's exact wording: the point is that the raw
+    # per-locale list is Chinese-only while the merged display list also carries the English
+    # fallbacks. Pinning the literal "Property, Plant and Equipment" tied this to v1's casing and
+    # broke on adoption of v2, which spells the same alias "Property, plant and equipment".
+    from app.services.han import has_han
+
     assert cfg["aliases_locale"]
-    assert all(a not in cfg["aliases_locale"] for a in ["Property, Plant and Equipment"])
-    assert "Property, Plant and Equipment" in cfg["aliases"]
+    assert all(has_han(a) for a in cfg["aliases_locale"]), cfg["aliases_locale"]
+    english = [a for a in cfg["aliases"] if not has_han(a)]
+    assert english, cfg["aliases"]                       # merged list keeps the English fallbacks
+    assert any(a not in cfg["aliases_locale"] for a in english)
 
 
 def test_editing_the_ontology_requires_admin(anon_client, auth):
     rows = anon_client.get(f"{API}/ontologies").json()
-    oid = next(r["id"] for r in rows if r["ontology_key"] == "hkfrs_hk_china_v1")
-    payload = {"canonical_key": "bs_non_current_assets__property_plant_and_equipment",
-               "aliases": ["nope"]}
+    oid = next(r["id"] for r in rows if r["ontology_key"] == "hkfrs_hk_china")
+    key = "bs_non_current_assets__property_plant_and_equipment"
     url = f"{API}/ontologies/{oid}/mappings"
-    assert anon_client.patch(url, json=payload).status_code == 401
-    assert anon_client.patch(url, json=payload, headers=auth("analyst")).status_code == 403
-    assert anon_client.patch(url, json=payload, headers=auth("reviewer")).status_code == 403
-    assert anon_client.patch(url, json=payload, headers=auth("admin")).status_code == 200
+
+    # The refused calls never reach the database, so their payload can be anything.
+    denied = {"canonical_key": key, "aliases": ["nope"]}
+    assert anon_client.patch(url, json=denied).status_code == 401
+    assert anon_client.patch(url, json=denied, headers=auth("analyst")).status_code == 403
+    assert anon_client.patch(url, json=denied, headers=auth("reviewer")).status_code == 403
+
+    # The ACCEPTED one does, and this test is about authorisation, not content: it published a
+    # version whose PPE aliases were ["nope"], which any later test reading the latest ontology
+    # then had to survive. Resending the concept's existing aliases proves admin is allowed
+    # through while leaving what the next test reads exactly as it found it.
+    definition = anon_client.get(f"{API}/ontologies/{oid}",
+                                 headers=auth("admin")).json()["definition"]
+    current = next(m for m in definition["mappings"] if m["canonical_key"] == key)
+    unchanged = {"canonical_key": key, "aliases": current.get("aliases") or [],
+                 "aliases_i18n": current.get("aliases_i18n") or {}}
+    assert anon_client.patch(url, json=unchanged, headers=auth("admin")).status_code == 200
+
+
+def test_the_list_reports_each_rulebook_s_real_size(client):
+    """`concept_count` / `alias_count` are counted from the stored definition.
+
+    They exist because the upload screen described the rulebook a run would use as
+    "1,240 rules · 380 aliases" under a sample filename — numbers plausible enough to go
+    unquestioned and true of nothing. A screen naming a rulebook now has its size to read.
+    """
+    rows = client.get(f"{API}/ontologies").json()
+    assert rows, "the reference rulebooks should be seeded"
+    for row in rows:
+        definition = _definition(client, row["id"])
+        mappings = definition["mappings"]
+        assert row["concept_count"] == len(mappings)
+        # Aliases across every locale, since a rulebook can carry most of its vocabulary in zh.
+        expected = sum(len(m.get("aliases") or []) for m in mappings) + sum(
+            len(v or []) for m in mappings for v in (m.get("aliases_i18n") or {}).values())
+        assert row["alias_count"] == expected
+
+    # And the counts are load-bearing, not zeroes that happen to match: the adopted rulebook is a
+    # real one, so it declares concepts and names them in more than one way.
+    ont = _seeded_ontology(client)
+    live = next(r for r in rows if r["id"] == ont["id"])
+    assert live["concept_count"] > 100 and live["alias_count"] > live["concept_count"]

@@ -31,6 +31,11 @@ class PipelineContext:
     llm_output_tokens: int = 0
     llm_calls: int = 0
     llm_model: str = ""
+    # How ontology mapping actually ran, and why. A run with no LLM configured silently falls
+    # back to the deterministic ensemble, which is materially weaker — recording it means a
+    # degraded run is never mistaken for a full-capability one downstream.
+    mapping_strategy: str = ""
+    mapping_strategy_reason: str = ""
 
     def log(self, message: str) -> None:
         self.logs.append(message)

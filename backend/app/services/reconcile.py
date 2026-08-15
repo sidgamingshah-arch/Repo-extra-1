@@ -36,6 +36,53 @@ class ReconcileInput:
     tolerance_abs: Decimal = Decimal(1)
     tolerance_rel: Decimal = Decimal("0.001")
     coverage: Decimal = Decimal(1)          # for 1-note→N-face partitioning
+    # How close the note total must come to the face figure before we accept that the note
+    # really is a DECOMPOSITION of that figure. See ``tie_status`` below.
+    corroboration_rel: Decimal = Decimal("0.05")
+
+
+# A note table either decomposes the face figure or it does not, and the difference decides
+# whether a mismatch is a defect or a non-event:
+#   tied         — the note total equals the face figure within tolerance.
+#   untied       — the note total is close enough to be plainly the SAME quantity, yet does
+#                  not tie: a real, actionable discrepancy (rounding, sign, a missed row).
+#   unconfirmed  — the note total is nowhere near the face figure. Most notes are not
+#                  decompositions at all (an analysis of profit before tax, a segment table,
+#                  a commitments schedule), and a face line can cite several tables of which
+#                  only one is the breakdown. Claiming "does not tie" here would accuse the
+#                  filing of an error we have no evidence for, so it is recorded, not raised.
+TIE_TIED = "tied"
+TIE_UNTIED = "untied"
+TIE_UNCONFIRMED = "unconfirmed"
+
+# The default corroboration band. A fresh run uses the CONFIGURED band (the reconcile stage
+# passes ``extraction.recon_corroboration_rel``); this constant is what ``tie_status`` falls back
+# to when grading an entry stored before the grade existed. Deliberately a constant and not the
+# live setting: an old run's grade should reconstruct what that run would have said, not shift
+# because an admin has since moved the slider.
+CORROBORATION_REL = Decimal("0.05")
+
+
+def tie_status(entry: dict) -> str:
+    """The grade of a reconciliation entry as stored in a run result.
+
+    Runs persisted before the grade existed carry only ``within_tolerance``, and those are
+    precisely the runs whose entries were ungraded. The grade is fully determinable from the
+    numbers already stored, so it is derived here rather than requiring re-extraction. Every
+    consumer (review queue, checks engine, export) goes through this function so they cannot
+    disagree about whether a note ties.
+    """
+    stored = entry.get("tie_status")
+    if stored:
+        return str(stored)
+    if entry.get("within_tolerance"):
+        return TIE_TIED
+    try:
+        face = abs(Decimal(str(entry.get("raw_face") or 0)))
+        resid = abs(Decimal(str(entry.get("residual") or 0)))
+    except (TypeError, ValueError, ArithmeticError):
+        return TIE_UNCONFIRMED
+    return TIE_UNTIED if resid <= CORROBORATION_REL * face else TIE_UNCONFIRMED
 
 
 @dataclass
@@ -47,6 +94,7 @@ class ReconcileOutput:
     reconciled: Decimal
     residual: Decimal
     within_tolerance: bool
+    tie_status: str = TIE_UNCONFIRMED
     warnings: list[str] = field(default_factory=list)
 
 
@@ -60,6 +108,9 @@ def reconcile_face(inp: ReconcileInput) -> ReconcileOutput:
     ``reconciled = raw_face - Σ(detail.value for details that map to a distinct
     template line)``. The ``residual`` is what remains after also accounting for the
     *full* note (i.e. how far the note total is from the face) — surfaced for review.
+
+    ``tie_status`` grades the residual, because a large one usually means the note is not a
+    breakdown of this figure rather than that the filing disagrees with itself.
     """
     warnings: list[str] = []
 
@@ -83,6 +134,16 @@ def reconcile_face(inp: ReconcileInput) -> ReconcileOutput:
     tol = tolerance(inp.raw_face_value, inp.tolerance_abs, inp.tolerance_rel)
     within = abs(residual) <= tol
 
+    # Corroboration decides whether a non-tie is a finding or simply not a breakdown.
+    # A zero face figure has no meaningful relative band, so tolerance alone decides.
+    band = inp.corroboration_rel * abs(inp.raw_face_value)
+    if within:
+        tie_status = TIE_TIED
+    elif abs(residual) <= band:
+        tie_status = TIE_UNTIED
+    else:
+        tie_status = TIE_UNCONFIRMED
+
     if reconciled < 0:
         warnings.append(
             "reconciled face value is negative — likely over-subtraction or a sign error"
@@ -96,5 +157,6 @@ def reconcile_face(inp: ReconcileInput) -> ReconcileOutput:
         reconciled=reconciled,
         residual=residual,
         within_tolerance=within,
+        tie_status=tie_status,
         warnings=warnings,
     )

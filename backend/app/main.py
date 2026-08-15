@@ -13,6 +13,7 @@ from app.api.routes import (
     auth,
     documents,
     extractions,
+    fx_rates,
     languages,
     ontologies,
     projects,
@@ -38,6 +39,11 @@ def create_app() -> FastAPI:
     @application.on_event("startup")
     def _startup() -> None:  # pragma: no cover - trivial
         init_db()
+        # Re-apply the administrator's saved settings (feature flags, LLM config, extraction
+        # thresholds) onto this process. After init_db so the table exists on a fresh database.
+        from app.services.settings_state import load_persisted
+
+        load_persisted()
         # Seed the reference template + ontology so uploaded docs can be mapped out of the box.
         from app.db.base import SessionLocal
         from app.sample.reference import ensure_reference_data
@@ -54,6 +60,7 @@ def create_app() -> FastAPI:
     application.include_router(extractions.router, prefix=prefix)
     application.include_router(templates.router, prefix=prefix)
     application.include_router(ontologies.router, prefix=prefix)
+    application.include_router(fx_rates.router, prefix=prefix)
     application.include_router(languages.router, prefix=prefix)
     application.include_router(projects.router, prefix=prefix)
     application.include_router(auth.router, prefix=prefix)

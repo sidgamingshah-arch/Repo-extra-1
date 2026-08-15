@@ -4,7 +4,6 @@ export const commentary: Record<Locale, Record<string, string>> = {
   en: {
     "cm.title": "Financial analysis",
     "cm.subhead": "Automated one-page commentary derived from the extracted statements — indicative, not investment advice.",
-    "cm.assessment": "Assessment",
     "cm.metrics": "Key metrics",
     "cm.trends": "Year-on-year trends",
     "cm.trendVs": "vs",
@@ -21,6 +20,7 @@ export const commentary: Record<Locale, Record<string, string>> = {
     "cm.col.time": "TIME",
     "cm.col.action": "ACTION",
     "cm.col.model": "MODEL",
+    "cm.col.took": "TOOK",
     "cm.col.inTok": "INPUT TOKENS",
     "cm.col.outTok": "OUTPUT TOKENS",
     "cm.col.totTok": "TOTAL",
@@ -41,7 +41,6 @@ export const commentary: Record<Locale, Record<string, string>> = {
   zh: {
     "cm.title": "财务分析",
     "cm.subhead": "基于提取报表自动生成的一页式评述——仅供参考，非投资建议。",
-    "cm.assessment": "总体评估",
     "cm.metrics": "关键指标",
     "cm.trends": "同比趋势",
     "cm.trendVs": "对比",
@@ -58,6 +57,7 @@ export const commentary: Record<Locale, Record<string, string>> = {
     "cm.col.time": "时间",
     "cm.col.action": "操作",
     "cm.col.model": "模型",
+    "cm.col.took": "耗时",
     "cm.col.inTok": "输入 Token",
     "cm.col.outTok": "输出 Token",
     "cm.col.totTok": "合计",
@@ -78,7 +78,6 @@ export const commentary: Record<Locale, Record<string, string>> = {
   ar: {
     "cm.title": "التحليل المالي",
     "cm.subhead": "تعليق آلي من صفحة واحدة مُستمد من القوائم المستخرجة — إرشادي وليس نصيحة استثمارية.",
-    "cm.assessment": "التقييم",
     "cm.metrics": "المؤشرات الرئيسية",
     "cm.trends": "الاتجاهات السنوية",
     "cm.trendVs": "مقابل",
@@ -95,6 +94,7 @@ export const commentary: Record<Locale, Record<string, string>> = {
     "cm.col.time": "الوقت",
     "cm.col.action": "الإجراء",
     "cm.col.model": "النموذج",
+    "cm.col.took": "المدة",
     "cm.col.inTok": "رموز الإدخال",
     "cm.col.outTok": "رموز الإخراج",
     "cm.col.totTok": "الإجمالي",
@@ -115,7 +115,6 @@ export const commentary: Record<Locale, Record<string, string>> = {
   fr: {
     "cm.title": "Analyse financière",
     "cm.subhead": "Commentaire automatique d'une page, dérivé des états extraits — indicatif, pas un conseil en investissement.",
-    "cm.assessment": "Évaluation",
     "cm.metrics": "Indicateurs clés",
     "cm.trends": "Tendances annuelles",
     "cm.trendVs": "contre",
@@ -132,6 +131,7 @@ export const commentary: Record<Locale, Record<string, string>> = {
     "cm.col.time": "HEURE",
     "cm.col.action": "ACTION",
     "cm.col.model": "MODÈLE",
+    "cm.col.took": "DURÉE",
     "cm.col.inTok": "JETONS ENTRÉE",
     "cm.col.outTok": "JETONS SORTIE",
     "cm.col.totTok": "TOTAL",

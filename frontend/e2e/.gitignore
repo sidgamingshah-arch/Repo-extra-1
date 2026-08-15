@@ -1,0 +1,4 @@
+# The suite's own throwaway database + object store (see playwright.config.ts). Deleted and
+# recreated on every run, so there is never a version of it worth keeping — and the root
+# .gitignore's `*.db` would cover the database but not SQLite's journal files beside it.
+.scratch/

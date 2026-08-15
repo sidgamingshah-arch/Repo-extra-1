@@ -27,7 +27,9 @@ from .geometry import Provenance
 class UnitContext(BaseModel):
     """Detected scale + currency for a value, at its most-specific scope."""
 
-    currency: str = "INR"
+    # Empty when the document declares no currency — asserting one (this used to default to INR)
+    # mislabels every filing that isn't from that jurisdiction. Consumers render "" as unknown.
+    currency: str = ""
     scale_factor: Decimal = Decimal(1)   # lakh=1e5, crore=1e7, thousand=1e3, million=1e6
     units_label: str | None = None
     source_bbox_page: int | None = None
@@ -48,6 +50,13 @@ class ValueKey(BaseModel, frozen=True):
 class ExtractedValue(BaseModel):
     value_raw: Decimal | None = None      # exactly as printed (paren-negatives applied)
     value: Decimal | None = None          # sign-normalized (units NOT applied)
+    # True when the sign of ``value`` was FLIPPED away from ``value_raw`` by the rulebook's
+    # ``global_rules.sign_convention.unsigned_source`` rule — a filing that prints its expenses as
+    # unsigned positives. The rulebook asks for the transformation to be recorded on the fact ("set
+    # sign_normalised: true on the fact so the transformation is auditable") precisely because it is
+    # the one place the engine changes a reported number's sign: ``value_raw`` still holds what the
+    # page said, so the two together are the audit trail.
+    sign_normalised: bool = False
     reconciled: Decimal | None = None     # after §20 subtraction; always derived from raw
     basis: Basis
     period_end: date | None = None
@@ -72,6 +81,11 @@ class LineItem(BaseModel):
 
     source_label: str = ""                # text exactly as printed
     display_label: str | None = None      # canonical label (locale-resolved)
+    # The section banner this row was printed under ("NON-CURRENT LIABILITIES", 流動負債).
+    # A statement prints the same caption under two sections — "Interest-bearing bank and other
+    # borrowings" appears once as non-current and once as current — so the caption alone cannot
+    # say which concept it is. Mapping uses this to tell them apart.
+    section_hint: str | None = None
     canonical_key: str | None = None
     template_node_id: str | None = None
     ordinal: int = 0

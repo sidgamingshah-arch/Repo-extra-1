@@ -13,7 +13,12 @@ export const SCREENS: Record<string, ScreenDef> = {
   upload: { id: "upload", path: "/upload", label: "Documents & Template", icon: "▤", step: 1 },
   integrity: { id: "integrity", path: "/integrity", label: "Document Integrity", icon: "◎", step: 2 },
   scope: { id: "scope", path: "/scope", label: "Page Scope", icon: "▦", step: 3 },
-  workspace: { id: "workspace", path: "/workspace", label: "Workspace", icon: "▤", step: 4 },
+  // Extraction is the step, and the Workspace is what you read afterwards. This entry is what
+  // makes the extraction findable at all: the screen existed at /documents/:id with no registry
+  // entry, so it was in no nav group, held no stepper slot, and `screenIdForPath` answered
+  // "workspace" for it — the rail highlighted the wrong row the whole time you were on it.
+  extraction: { id: "extraction", path: "/extraction", label: "Extraction", icon: "◈", step: 4 },
+  workspace: { id: "workspace", path: "/workspace", label: "Workspace", icon: "▤" },
   notes: { id: "notes", path: "/notes", label: "All Notes", icon: "☰" },
   review: { id: "review", path: "/review", label: "Review Queue", icon: "✓", step: 5 },
   commentary: { id: "commentary", path: "/commentary", label: "Analysis", icon: "✦" },
@@ -27,7 +32,10 @@ export const STEPPER: { id: string; label: string; step: number; path: string }[
   { id: "upload", label: "Upload", step: 1, path: "/upload" },
   { id: "integrity", label: "Integrity", step: 2, path: "/integrity" },
   { id: "scope", label: "Scope", step: 3, path: "/scope" },
-  { id: "workspace", label: "Extract", step: 4, path: "/workspace" },
+  // Step 4 is the extraction itself, so the stepper points at the screen that runs it and reports
+  // its progress. It used to point at /workspace and be labelled "Extract", which is how the
+  // extraction came to be read as a Workspace tab.
+  { id: "extraction", label: "Extract", step: 4, path: "/extraction" },
   { id: "review", label: "Review", step: 5, path: "/review" },
   { id: "export", label: "Export", step: 6, path: "/export" },
 ];
@@ -36,7 +44,7 @@ export const STEPPER: { id: string; label: string; step: number; path: string }[
 export const NAV_GROUPS: { group: string; items: string[] }[] = [
   { group: "SETUP", items: ["upload"] },
   { group: "PRE-FLIGHT", items: ["integrity", "scope"] },
-  { group: "EXTRACT", items: ["workspace", "notes"] },
+  { group: "EXTRACT", items: ["extraction", "workspace", "notes"] },
   { group: "QUALITY", items: ["review"] },
   { group: "ANALYSIS", items: ["commentary"] },
   { group: "CONFIGURE", items: ["template", "settings"] },
@@ -47,4 +55,25 @@ export const NAV_GROUPS: { group: string; items: string[] }[] = [
 export function screenIdForPath(pathname: string): string {
   const found = Object.values(SCREENS).find((s) => pathname.startsWith(s.path));
   return found?.id ?? "workspace";
+}
+
+/** For a screen that is not itself a step, the step it sits at.
+ *
+ * The stepper answers "how far through the run am I", which is not the same question the nav rail
+ * answers. Screens like the Workspace and All Notes are what you read AFTER the extraction, so they
+ * sit AT the Extract step — and when the Workspace stopped being step 4, nothing claimed its place
+ * and `curIdx` went to -1, which blanked every step in the bar for the screen an analyst spends most
+ * of their time on. A screen outside the flow entirely (Template, Settings) maps to nothing and
+ * correctly leaves the bar unmarked.
+ */
+const STEP_FOR_SCREEN: Record<string, string> = {
+  workspace: "extraction",
+  notes: "extraction",
+  commentary: "review",
+};
+
+/** The stepper id for a pathname — the screen's own step, or the step it sits at. */
+export function stepIdForPath(pathname: string): string {
+  const id = screenIdForPath(pathname);
+  return STEP_FOR_SCREEN[id] ?? id;
 }

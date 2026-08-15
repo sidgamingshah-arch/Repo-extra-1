@@ -116,6 +116,10 @@ TR: dict[str, dict[str, str]] = {
     "P&L": {"zh": "利润表", "ar": "الأرباح والخسائر", "fr": "Résultat"},
     "Notes": {"zh": "附注", "ar": "الإيضاحات", "fr": "Notes"},
     "Excluded": {"zh": "已排除", "ar": "مستبعد", "fr": "Exclu"},
+    # The four Page Scope filter chips (app/services/page_scope.py FILTER_LABELS). "Notes" and
+    # "Other" are already above; these two are the labels that set replaced.
+    "All pages": {"zh": "全部页面", "ar": "كل الصفحات", "fr": "Toutes les pages"},
+    "Face": {"zh": "表内", "ar": "وجه القوائم", "fr": "Face"},
 
     # ---- Notes ----
     "Property, plant & equipment": {"zh": "物业、厂房及设备", "ar": "الممتلكات والآلات والمعدات", "fr": "Immobilisations corporelles"},
@@ -267,6 +271,16 @@ TR: dict[str, dict[str, str]] = {
         "fr": "Les marges se sont élargies sur un an, le résultat avant impôt progressant plus vite que le chiffre d'affaires.",
     },
 }
+
+
+# The coverage contract's one sample-path sentence: the seeded project has no structural
+# validation run, so the Review screen's coverage band says so instead of showing zeros.
+TR.update({
+    "The seeded sample project carries no structural validation run.":
+        {"zh": "内置示例项目没有结构性校验运行记录。",
+         "ar": "المشروع النموذجي المُهيَّأ لا يحتوي على تشغيل تحقق بنيوي.",
+         "fr": "Le projet de démonstration ne comporte aucun traitement de validation structurelle."},
+})
 
 
 def tr(text: str | None, locale: str) -> str | None:

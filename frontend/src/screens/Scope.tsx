@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { Button, Toggle } from "../components/ui";
+import { Button, Toggle, confReadout } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { SCREENS } from "./config";
 import {
@@ -55,6 +55,13 @@ function PageCardTile(
     included: boolean; onToggle?: () => void; onSelect?: () => void; selected?: boolean },
 ) {
   const cc = confStyle(p.conf);
+  // The classifier's own confidence in this page's class. It used to print `confStyle(cat).pct` —
+  // the bucket's representative literal — so a page the classifier scored 0.40 announced "54%" and
+  // a page it never scored announced "78%", both as measurements of the very page they sat on. The
+  // served percentage is printed instead; with no percentage the tile names the BAND ("Medium"), in
+  // muted chrome, because a band is what the payload actually knows and a word cannot be misread as
+  // a measurement of this page.
+  const conf = confReadout({ cat: p.conf, pct: p.conf_pct }, t);
   const scanned = p.scan === "scanned";
   return (
     <div
@@ -125,7 +132,19 @@ function PageCardTile(
           <span style={{ fontSize: 11.5, fontWeight: 600, color: included ? color.ink : color.muted2 }}>
             {p.cls}
           </span>
-          <span style={{ fontSize: 10, fontFamily: font.mono, color: cc.fg }}>{cc.pct}</span>
+          <span
+            data-testid="scope-conf"
+            data-measured={String(conf.measured)}
+            title={conf.title}
+            style={{
+              fontSize: 10,
+              fontFamily: conf.measured ? font.mono : font.sans,
+              fontStyle: conf.measured ? undefined : "italic",
+              color: conf.measured ? cc.fg : color.muted,
+            }}
+          >
+            {conf.text}
+          </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 10.5, color: color.muted2 }}>
@@ -278,7 +297,7 @@ export default function ScopeScreen() {
         <Button variant="secondary" onClick={() => nav(SCREENS.integrity.path)}>
           ← {t("sc.back")}
         </Button>
-        <Button onClick={() => nav(usingReal ? `/documents/${activeDocumentId}` : SCREENS.workspace.path)}>
+        <Button onClick={() => nav(usingReal ? SCREENS.extraction.path : SCREENS.workspace.path)}>
           {t("sc.extract")} {focused} {t("sc.pages")} →
         </Button>
       </div>

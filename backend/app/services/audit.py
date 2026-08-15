@@ -47,16 +47,46 @@ def make_run_id(entity: str, *, at: datetime | None = None) -> str:
     return run_id
 
 
+def elapsed_ms(since: datetime) -> int:
+    """Milliseconds from ``since`` to now — ONE spelling of "how long did this take".
+
+    Every recording site measures the same quantity the same way, so two entries in one trail cannot
+    mean different things by their duration. Never negative: a clock that has gone backwards should
+    report "no time at all", not a negative elapsed that renders as a nonsense figure.
+
+    A NAIVE ``since`` IS READ AS UTC, which is what ``_now`` and every other stamp in this codebase
+    means. It is not hypothetical: the extraction task reconstructs its start from an ISO string
+    (``_run_extraction_task``'s ``started_at``), a stamp that need not carry a zone, and subtracting a
+    naive datetime from an aware one raises ``TypeError``. Raising HERE would be raising inside the
+    recording of a run's outcome — including the failure path, which would abandon the run row at
+    ``running`` and leave a polling client waiting on it for ever. The same normalisation the progress
+    payload already applies, for the same reason (``routes.extractions._as_utc``).
+    """
+    at = since if since.tzinfo is not None else since.replace(tzinfo=timezone.utc)
+    return max(0, int((_now() - at).total_seconds() * 1000))
+
+
 @dataclass
 class AuditEntry:
     run_id: str
     entity: str
-    action: str                       # "analysis" | "extraction"
+    action: str                       # "analysis" | "extraction" | "credit_narrative" | …
     provider: str                     # "anthropic" | "openai" | "local" | "stub" | …
     model: str
     input_tokens: int | None          # None when the run used no LLM
     output_tokens: int | None
     status: str = "succeeded"         # "succeeded" | "failed"
+    # HOW LONG THE RUN TOOK, in milliseconds, measured by whoever ran it (see :func:`elapsed_ms`).
+    #
+    # Optional and honestly optional: an entry for something INSTANTANEOUS — a submission handed to
+    # a reviewer — has no duration to report, and None renders as "—" rather than as "0 ms", which
+    # would read as a measurement of a run that took no time. It stays None on old entries too.
+    #
+    # Recorded here because the trail is the only place a finished run's duration can be read. The
+    # extraction screen's live progress carries `elapsed_ms` while a run is in flight, and that panel
+    # is gone the moment results arrive — so "how long did that extraction take?" had no answer at
+    # all once it had finished, on the screen whose job is to account for the run.
+    duration_ms: int | None = None
     created_at: str = field(default_factory=lambda: _now().isoformat())
 
     @property
@@ -82,6 +112,18 @@ def record(project_id: str, entry: AuditEntry) -> AuditEntry:
 
 def recorded(project_id: str) -> list[AuditEntry]:
     return list(_LOG[project_id])
+
+
+def served_trail(key: str, seeded: list[dict] | None = None) -> dict:
+    """The audit payload for one key — newest first, seeded rows folded in.
+
+    ONE spelling, because two routes serve this: the seeded sample project by its project id, and an
+    uploaded document by its document id. Assembling and sorting it separately in each is how the two
+    come to disagree about ordering — and ordering is the whole readability of a trail.
+    """
+    entries = [e.to_dict() for e in recorded(key)] + list(seeded or [])
+    entries.sort(key=lambda e: e.get("created_at", ""), reverse=True)
+    return {"entries": entries}
 
 
 def clear(project_id: str | None = None) -> None:

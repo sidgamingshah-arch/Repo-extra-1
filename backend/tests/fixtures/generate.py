@@ -77,6 +77,127 @@ def make_dual_basis_pdf() -> bytes:
     return buf.getvalue()
 
 
+def make_group_company_pdf() -> bytes:
+    """A native PDF headed the way an HKEX filing heads its balance sheet: "Group" over one pair
+    of dated columns and "Company" over another, with the scale declared in the statement header.
+
+    This is the layout the engine used to read as single-basis — the Company's figures were filed
+    as the Group's and added to them — because the detector only knew the words "Consolidated" and
+    "Standalone"."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _, height = A4
+    y = height - 72
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(72, y, "Consolidated Statement of Financial Position")
+    c.setFont("Helvetica-Bold", 9)
+    y -= 24
+    c.drawString(300, y, "Group")
+    c.drawString(445, y, "Company")
+    c.setFont("Helvetica", 9)
+    y -= 14
+    for x, text in ((330, "2024"), (400, "2023"), (475, "2024"), (545, "2023")):
+        c.drawRightString(x, y, text)
+    y -= 12
+    c.drawRightString(330, y, "RMB'000")
+    c.setFont("Helvetica", 10)
+    rows = [
+        ("Investments in subsidiaries", ("", "", "8,000", "7,500")),
+        ("Trade receivables", ("3,410", "2,900", "310", "270")),
+        ("Cash and cash equivalents", ("1,204", "980", "105", "90")),
+        ("Total assets", ("4,614", "3,880", "8,415", "7,860")),
+    ]
+    for label, cells in rows:
+        y -= 22
+        c.drawString(72, y, label)
+        for x, text in zip((330, 400, 475, 545), cells):
+            if text:
+                c.drawRightString(x, y, text)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def make_group_and_company_note_pdf() -> bytes:
+    """A NOTES page whose prose names both entities in one sentence — "The Group and the Company
+    had no material contingent liabilities" — above a small table.
+
+    The negative case for basis banding: a sentence that mentions both is not a two-basis column
+    header, and reading it as one splits the comparative so last year's figures are reported as
+    this year's for a second entity."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _, height = A4
+    y = height - 72
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(72, y, "34. Contingent liabilities")
+    c.setFont("Helvetica", 10)
+    y -= 22
+    c.drawString(72, y, "The Group and the Company had no material contingent liabilities as at")
+    y -= 16
+    c.drawString(72, y, "31 December 2024 other than the guarantees set out below.")
+    y -= 24
+    for x, text in ((430, "2024"), (510, "2023")):
+        c.drawRightString(x, y, text)
+    for label, cur, pri in (("Guarantees to banks", "1,200", "900"),
+                            ("Guarantees to suppliers", "450", "500"),
+                            ("Other guarantees", "30", "40"),
+                            ("Total guarantees", "1,680", "1,440")):
+        y -= 22
+        c.drawString(72, y, label)
+        c.drawRightString(430, y, cur)
+        c.drawRightString(510, y, pri)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def make_company_limited_header_pdf() -> bytes:
+    """A single-basis face page whose RUNNING HEADER names a "Group" on the left and ends in
+    "Company Limited" on the right, where the value columns are.
+
+    The other negative case, and the one that isolates the geometric test: both words a two-basis
+    header needs are on one line, in separate runs, with no amount on it — and the page still has
+    one basis, because a basis caption bands the figures it stands OVER and "Group" here stands
+    over the caption column. Banding on the filer's own name would split the comparative, so last
+    year's figures would be reported as this year's for a second entity."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _, height = A4
+    y = height - 50
+    c.setFont("Helvetica", 8)
+    c.drawString(72, y, "Sunrise Group Holdings Limited")
+    c.drawRightString(523, y, "Sunrise Company Limited")
+    c.setFont("Helvetica-Bold", 13)
+    y -= 26
+    c.drawString(72, y, "Statement of Financial Position")
+    c.setFont("Helvetica", 9)
+    y -= 22
+    c.drawRightString(430, y, "2024")
+    c.drawRightString(510, y, "2023")
+    c.setFont("Helvetica", 10)
+    for label, cur, pri in (("Inventories", "2,000", "1,800"),
+                            ("Trade receivables", "3,410", "2,900"),
+                            ("Cash and cash equivalents", "1,204", "980"),
+                            ("Total assets", "6,614", "5,680")):
+        y -= 22
+        c.drawString(72, y, label)
+        c.drawRightString(430, y, cur)
+        c.drawRightString(510, y, pri)
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
 def make_rich_pdf() -> bytes:
     """A fuller native PDF: BS totals + P&L headline + a notes page with qualitative
     disclosures — so derived ratios, the disclosure scan, and free-form notes all populate."""
@@ -293,4 +414,45 @@ def make_xlsx() -> bytes:
 
     buf = io.BytesIO()
     wb.save(buf)
+    return buf.getvalue()
+
+def make_comparative_pdf() -> bytes:
+    """A two-column comparative balance sheet — this year beside last year.
+
+    Deliberately includes a line printed for the PRIOR YEAR ONLY ("Pledged deposits", released
+    during the year). That row is the one a positional reader mis-files as the current year, and
+    it is also the case a reviewer has to be able to click through to last year's page for.
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    _, height = A4
+    y = height - 72
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(72, y, "Consolidated Statement of Financial Position")
+    y -= 20
+    c.setFont("Helvetica-Bold", 9)
+    c.drawRightString(430, y, "31 December 2024")
+    c.drawRightString(520, y, "31 December 2023")
+    c.setFont("Helvetica", 10)
+    rows = [
+        ("Property, plant and equipment", "Note 5", "12,800", "11,400"),
+        ("Inventories", "Note 8", "2,150", "1,980"),
+        ("Trade receivables", "Note 15", "3,410", "3,120"),
+        ("Cash and cash equivalents", "Note 14", "1,204", "990"),
+        ("Pledged deposits", "Note 14", "", "2,031"),          # prior year only
+        ("Total assets", "", "19,564", "21,521"),
+    ]
+    for label, note, cur, prior in rows:
+        y -= 24
+        c.drawString(72, y, label)
+        c.drawString(300, y, note)
+        if cur:
+            c.drawRightString(430, y, cur)
+        if prior:
+            c.drawRightString(520, y, prior)
+    c.showPage()
+    c.save()
     return buf.getvalue()

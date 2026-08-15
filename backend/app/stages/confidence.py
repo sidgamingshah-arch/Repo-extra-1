@@ -60,10 +60,13 @@ class ConfidenceStage:
                     failed += 1
                     ev.confidence.flags.append("balance_mismatch")
 
-        # Note→face ties that failed lower the face value's validation signal.
+        # Note→face ties that failed lower the face value's validation signal. Only a
+        # corroborated breakdown that does not tie counts: an "unconfirmed" entry means the
+        # cited note is not a breakdown of this figure (an analysis or segment note), which
+        # says nothing about whether the figure is right.
         if doc.reconciliation is not None:
             bad = {(e.face_item_id, e.basis, e.period_label)
-                   for e in doc.reconciliation.entries if not e.within_tolerance}
+                   for e in doc.reconciliation.entries if e.tie_status == "untied"}
             if bad:
                 for li in doc.line_items:
                     for ev in li.values.values():

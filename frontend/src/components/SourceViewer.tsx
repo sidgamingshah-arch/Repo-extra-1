@@ -122,8 +122,13 @@ function PageSlot({ documentId, index, picked, pickedRef }: {
 /** Bare scrollable stack of the document's pages — no panel chrome, so a host (the Workspace's
  *  dark viewer column) can place it in its own layout. Picking a value scrolls its page into
  *  view and highlights the bbox. */
-export function PageStack({ documentId, pageCount, picked, maxHeight = "78vh" }: {
+export function PageStack({ documentId, pageCount, picked, maxHeight = "78vh", scale = 1 }: {
   documentId: string; pageCount: number; picked: PdfPick | null; maxHeight?: number | string;
+  /** Page-column width multiplier — what a zoom IS here. Each page's image is width-driven and
+   *  the bbox highlight is expressed in percentages of the page box, so widening the column
+   *  scales the page and its highlight together and provenance geometry is untouched. Default 1
+   *  leaves every other caller (the Extraction view, the Notes viewer) exactly as it was. */
+  scale?: number;
 }) {
   const pickedRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -134,10 +139,14 @@ export function PageStack({ documentId, pageCount, picked, maxHeight = "78vh" }:
 
   const n = Math.max(1, pageCount);
   return (
-    <div style={{ maxHeight, overflowY: "auto", paddingRight: 4 }}>
-      {Array.from({ length: n }).map((_, i) => (
-        <PageSlot key={i} documentId={documentId} index={i} picked={picked} pickedRef={pickedRef} />
-      ))}
+    // `overflow: auto` rather than overflowY, so a page column widened past 100% can be panned
+    // horizontally instead of being clipped.
+    <div style={{ maxHeight, overflow: "auto", paddingRight: 4 }}>
+      <div style={{ width: `${scale * 100}%` }}>
+        {Array.from({ length: n }).map((_, i) => (
+          <PageSlot key={i} documentId={documentId} index={i} picked={picked} pickedRef={pickedRef} />
+        ))}
+      </div>
     </div>
   );
 }

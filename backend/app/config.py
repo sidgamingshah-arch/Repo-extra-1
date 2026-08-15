@@ -66,15 +66,36 @@ class FeatureSettings(BaseModel):
 
 
 class LlmSettings(BaseModel):
-    """Configuration for the selected LLM adapter (used for mapping disambiguation)."""
+    """Configuration for the selected LLM adapter (used for mapping disambiguation).
 
-    provider: str = "stub"            # anthropic | openai | local | stub
-    model: str = "claude-opus-4-8"
+    The default is GPT-5 mini on Azure OpenAI. Every field here is editable at run time from the
+    Settings screen and persisted (see services.settings_state), so the default is a starting point
+    rather than a commitment — switching model, deployment, region or provider is configuration, not
+    a code change. The KEY is never configuration: only the NAME of the environment variable holding
+    it is stored, so a credential cannot end up in the database or in a settings export.
+    """
+
+    provider: str = "azure_openai"    # azure_openai | anthropic | openai | openai_compatible | stub
+    model: str = "gpt-5-mini"
     temperature: float = 0.0
     max_tokens: int = 4096
     timeout_seconds: int = 60
     base_url: str = ""                # empty = provider default
-    api_key_env: str = "ANTHROPIC_API_KEY"  # env var the key is read from (not the key)
+    api_key_env: str = "AZURE_OPENAI_API_KEY"  # env var the key is read from (not the key)
+
+    # Azure OpenAI only. Azure does not address a model by name on a shared endpoint the way OpenAI
+    # does — it addresses a DEPLOYMENT on your own resource, at
+    # {azure_endpoint}/openai/deployments/{deployment}/chat/completions?api-version=...
+    # so the resource and the api-version are part of the address and cannot be inferred.
+    azure_endpoint: str = ""          # e.g. https://<resource>.openai.azure.com
+    azure_api_version: str = "2024-12-01-preview"
+    # The deployment NAME, which an operator chooses when deploying and which is frequently not the
+    # model name. Left empty it falls back to `model`, which is the common case where someone named
+    # the deployment after the model it serves.
+    azure_deployment: str = ""
+
+    def azure_deployment_name(self) -> str:
+        return (self.azure_deployment or self.model or "").strip()
 
 
 class OcrSettings(BaseModel):
@@ -108,25 +129,54 @@ class ExtractionSettings(BaseModel):
     native_min_text_coverage: float = 0.02
     low_dpi_threshold: int = 150
     # Mapping ensemble thresholds (see services/mapping.py).
-    fuzzy_accept: float = 0.90        # rapidfuzz score to auto-accept
-    fuzzy_candidate: float = 0.60     # minimum score to keep as a candidate
+    # Fuzzy scores are coverage-weighted (see services.mapping._fuzzy_score), so this
+    # threshold sits on that combined scale — not on a raw rapidfuzz ratio.
+    #
+    # 0.55 is measured, not guessed. Swept against a real 270-page filing with the template's
+    # own subtotals as the oracle: 0.70 → 0.55 changes not one mapping and every rollup keeps
+    # tying, while 0.48 breaks three subtotals and 0.40 breaks five — and the extra mappings
+    # those buy are all wrong ("Loss on disposal of investment properties" → ADDITIONS to
+    # investment properties, "Gain on disposal of subsidiaries" → ACQUISITION of subsidiaries).
+    #
+    # The reason lowering it cannot help is structural: a caption with no good concept now has a
+    # correct home in its section's residual bucket (stages/residual.py). A looser bar does not
+    # rescue an unmapped line, it steals a correctly-routed one and asserts something false
+    # about it. Mapping those by MEANING is the LLM tier's job, not a string threshold's.
+    fuzzy_accept: float = 0.55        # combined fuzzy score to auto-accept, alone
+    # …and the caption must also explain this much of the matched alias, so a heading that
+    # is merely contained in a longer concept name can never auto-accept.
+    fuzzy_min_alias_coverage: float = 0.45
+    fuzzy_candidate: float = 0.45     # minimum score to keep as a candidate
     embedding_accept: float = 0.82    # cosine similarity to accept
     mapping_margin: float = 0.08      # winner must beat runner-up by this margin
     # Confidence + reconciliation.
     auto_accept_confidence: float = 0.80
     recon_abs_tolerance: float = 1.0
     recon_rel_tolerance: float = 0.005
+    # How close a note total must come to the face figure before we accept that the note really
+    # is a BREAKDOWN of it. Beyond this the note is graded "unconfirmed" rather than asserted as
+    # a mismatch — most cited notes are analyses or segment tables, not decompositions. Raising
+    # it turns more near-misses into review items; lowering it reports fewer.
+    recon_corroboration_rel: float = 0.05
     # Mapping strategy. When an LLM provider is configured, mapping is DESCRIPTION-BASED:
     # the model chooses the canonical concept by meaning (using each candidate's
     # description), not string similarity. The lexical/fuzzy tiers only pre-shortlist
     # candidates. Set false to force the deterministic ensemble even with an LLM present.
     llm_mapping: bool = True
     llm_candidate_cap: int = 40   # max candidate concepts shown to the LLM per line
-    # Mapping granularity. "per_statement" (default, most accurate) maps all of a
-    # statement's lines in ONE LLM call so cross-line judgements — parent/child
-    # containment, residualisation, "Others" handling — have full context. "per_line"
-    # maps each line independently (cheaper, less context-aware).
+    # Mapping granularity. "per_statement" (default, most accurate) batches lines into ONE LLM
+    # call so cross-line judgements — parent/child containment, residualisation, "Others"
+    # handling — have context. The batch is one SOURCE PAGE in practice, so a statement spanning
+    # two pages is decided in two calls; the name states the intent rather than the unit (see
+    # services.mapping.match_batch). "per_line" maps each line independently (cheaper, less
+    # context-aware).
     mapping_scope: Literal["per_statement", "per_line"] = "per_statement"
+    # Gap closing. When a section subtotal computed from the template's lines differs from the
+    # one the document printed, offer the model the extracted lines that reached no statement and
+    # ask which belong in that section's "Others". Arithmetic bounds the choice — an option must
+    # close the difference in BOTH periods — but the placement is the model's judgement. Off, or
+    # with no provider configured, the difference stays a review item instead.
+    llm_gap_routing: bool = True
 
 
 class Settings(BaseSettings):

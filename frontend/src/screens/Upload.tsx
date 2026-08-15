@@ -7,9 +7,12 @@ import { Button, Card } from "../components/ui";
 import { color, font, radius } from "../theme";
 import type { ExtractMode, SourceDoc, TemplateRef } from "../types";
 import {
+  activeTemplate,
+  ontologyInForce,
   useDeleteDocument,
   useDocumentIntegrity,
   useDocuments,
+  useOntologies,
   useProject,
   useTemplates,
   useUploadDocument,
@@ -200,13 +203,24 @@ function TemplateCard({
 }) {
   const t = useT();
   const { data: templates, isPending } = useTemplates();
-  const selectedKey = useUI((s) => s.selectedTemplateKey);
-  const setSelectedKey = useUI((s) => s.setSelectedTemplateKey);
+  const selectedId = useUI((s) => s.selectedTemplateId);
+  const setSelectedId = useUI((s) => s.setSelectedTemplateId);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const list: TemplateRef[] = templates ?? [];
-  // Active template: the stored selection, else the first available template.
-  const active = list.find((x) => x.template_key === selectedKey) ?? list[0];
+  // THE ACTIVE TEMPLATE VERSION: the one chosen, else the LATEST the server names.
+  //
+  // Both halves were wrong. `find(x => x.template_key === selectedKey)` matched on a KEY over a list
+  // holding every version of it, so it answered the FIRST row — v1, the oldest — however many
+  // revisions existed; and `list[0]` fell back to whatever insertion order happened to put first,
+  // which is the same v1 rather than anything meaning "current". Selecting was worse than
+  // ineffective: every row in the picker stored the same key, so choosing v2 re-stored the key
+  // already held and the list re-answered v1, with the row highlight moving nowhere.
+  //
+  // `is_latest` is read, never re-derived (see `TemplateRef`); `list[0]` remains only as the answer
+  // when a payload predates that flag, and the list is now newest-first so even that is the sensible
+  // one rather than an accident.
+  const active = activeTemplate(list, selectedId);
 
   return (
     <Card>
@@ -230,7 +244,9 @@ function TemplateCard({
           <div style={{ fontSize: 12.5, fontWeight: 600 }}>
             {active ? active.name : isPending ? t("u.loadingTemplates") : t("u.noTemplates")}
           </div>
-          <div style={{ fontSize: 11, color: color.sec2 }}>
+          {/* Testid because "which VERSION is active" is the claim this line makes, and it had no
+              way of being asserted — the e2e test could only see that the picker closed. */}
+          <div data-testid="tpl-active-meta" style={{ fontSize: 11, color: color.sec2 }}>
             {active ? `${active.template_key} · v${active.version}` : t("u.templateMeta")}
           </div>
         </div>
@@ -244,13 +260,15 @@ function TemplateCard({
             <div style={{ padding: 12, fontSize: 11.5, color: color.muted }}>{t("u.noTemplates")}</div>
           )}
           {list.map((tpl) => {
-            const on = active?.template_key === tpl.template_key;
+            // Per VERSION, so the highlight tracks the row that is actually selected. Keyed on
+            // template_key it marked every version of the active template at once.
+            const on = active?.id === tpl.id;
             return (
               <div
                 key={tpl.id}
                 role="button"
                 data-testid="tpl-option"
-                onClick={() => { setSelectedKey(tpl.template_key); setPickerOpen(false); }}
+                onClick={() => { setSelectedId(tpl.id); setPickerOpen(false); }}
                 style={{
                   display: "flex", alignItems: "center", gap: 9, padding: "9px 12px", cursor: "pointer",
                   background: on ? color.indigoTint : "#fff",
@@ -299,6 +317,120 @@ function TemplateCard({
   );
 }
 
+/** Rulebook card: the ontology a run started from this screen will actually read the filing
+ * against — named, sized, and with its standing said plainly.
+ *
+ * It used to print the sample project's ontology FILENAME over a fixed "1,240 rules · 380
+ * aliases" and a green "Valid" badge: three claims about no rulebook this product has ever held,
+ * sitting on the screen where the analyst decides whether the run is configured correctly. Every
+ * one of them now comes off the rulebook in force for the selected template, which is the same
+ * question, asked the same way (`ontologyInForce`), that the extraction view's picker defaults to
+ * — so the description on this screen and the rulebook the run records cannot drift apart. */
+function OntologyCard({ canOntology, onManage }: { canOntology: boolean; onManage: () => void }) {
+  const t = useT();
+  const locale = useAppLocale();
+  const { data: rows, isPending } = useOntologies();
+  const { data: templates } = useTemplates();
+  const selectedId = useUI((s) => s.selectedTemplateId);
+  const list: TemplateRef[] = templates ?? [];
+  // The same "which template version is active" rule the card above uses — one function, not a
+  // second copy of it (`activeTemplate`). A rulebook targets ONE template KEY, so that is what is
+  // taken from the version; the rulebook in force overall would describe a different extraction.
+  const activeKey = activeTemplate(list, selectedId)?.template_key;
+  const ont = ontologyInForce(rows, (o) => !activeKey || o.target_template_key === activeKey);
+  const num = (n: number) => n.toLocaleString(locale);
+  // Absent counts are left out rather than shown as 0 — an older server that does not serve them
+  // would otherwise have this card reporting an empty rulebook.
+  const size = [
+    ont?.concept_count == null ? null : `${num(ont.concept_count)} ${t("u.ontConcepts")}`,
+    ont?.alias_count == null ? null : `${num(ont.alias_count)} ${t("u.ontAliases")}`,
+  ].filter(Boolean).join(" · ");
+  const standing = ont?.superseded ? t("u.ontReplaced") : t("u.ontInForce");
+
+  return (
+    <Card>
+      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 5 }}>{t("u.ontology")}</div>
+      <p style={{ margin: "0 0 11px", fontSize: 11.5, color: color.sec2, lineHeight: 1.5 }}>
+        {t("u.ontologyExplainer")}
+      </p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: 11,
+          border: `1px solid ${color.hairline3}`,
+          borderRadius: 9,
+          marginBottom: 10,
+        }}
+      >
+        <span
+          style={{
+            width: 30,
+            height: 30,
+            borderRadius: 7,
+            background: ont?.superseded ? color.amberBg : color.greenBg2,
+            color: ont?.superseded ? color.amberFg : color.greenFg,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 13,
+            flex: "0 0 auto",
+          }}
+        >
+          ◆
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div data-testid="u-rulebook" data-rulebook-id={ont?.id}
+               style={{ fontSize: 12.5, fontWeight: 600 }}>
+            {ont ? ont.ontology_key : isPending ? t("u.ontLoading") : t("u.ontNone")}
+          </div>
+          <div data-testid="u-rulebook-meta" style={{ fontSize: 11, color: color.muted }}>
+            {/* While the list is in flight this line says NOTHING. "This template has no ontology
+                yet" is a fact, and it is not one that is known until the rulebooks arrive — it read
+                that way under "Loading rulebooks…", asserting an absence it had not established. */}
+            {ont ? [`v${ont.version}`, size].filter(Boolean).join(" · ")
+                 : isPending ? "" : t("u.ontNoneHint")}
+          </div>
+        </div>
+        {ont && (
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 600,
+              padding: "3px 8px",
+              borderRadius: radius.pill,
+              background: ont.superseded ? color.amberBg : color.greenBg2,
+              color: ont.superseded ? color.amberFg : color.greenFg,
+            }}
+          >
+            {standing}
+          </span>
+        )}
+      </div>
+      {canOntology && (
+        <button
+          onClick={onManage}
+          style={{
+            width: "100%",
+            fontSize: 11.5,
+            fontWeight: 600,
+            color: color.ink2,
+            background: "#fff",
+            border: `1px dashed ${color.dashed}`,
+            borderRadius: radius.control,
+            padding: 9,
+            cursor: "pointer",
+            fontFamily: font.sans,
+          }}
+        >
+          {t("u.replaceOntology")}
+        </button>
+      )}
+    </Card>
+  );
+}
+
 export default function UploadScreen() {
   const navigate = useNavigate();
   const t = useT();
@@ -325,7 +457,6 @@ export default function UploadScreen() {
     );
   }
 
-  const { project } = data;
   // Real uploaded documents take precedence; fall back to the sample's docs when loaded.
   const realDocs = docsData?.documents ?? [];
   const documents: SourceDoc[] = realDocs.length ? realDocs : data.documents;
@@ -436,74 +567,10 @@ export default function UploadScreen() {
             onAuthor={() => navigate(SCREENS.template.path)}
           />
 
-          <Card>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 5 }}>{t("u.ontology")}</div>
-            <p style={{ margin: "0 0 11px", fontSize: 11.5, color: color.sec2, lineHeight: 1.5 }}>
-              {t("u.ontologyExplainer")}
-            </p>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: 11,
-                border: `1px solid ${color.hairline3}`,
-                borderRadius: 9,
-                marginBottom: 10,
-              }}
-            >
-              <span
-                style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: 7,
-                  background: color.greenBg2,
-                  color: color.greenFg,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 13,
-                  flex: "0 0 auto",
-                }}
-              >
-                ◆
-              </span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600 }}>{project.ontology.file}</div>
-                <div style={{ fontSize: 11, color: color.muted }}>1,240 rules · 380 aliases</div>
-              </div>
-              <span
-                style={{
-                  fontSize: 10.5,
-                  fontWeight: 600,
-                  padding: "3px 8px",
-                  borderRadius: radius.pill,
-                  background: color.greenBg2,
-                  color: color.greenFg,
-                }}
-              >
-                {t("u.valid")}
-              </span>
-            </div>
-            {canOntology && (
-              <button
-                style={{
-                  width: "100%",
-                  fontSize: 11.5,
-                  fontWeight: 600,
-                  color: color.ink2,
-                  background: "#fff",
-                  border: `1px dashed ${color.dashed}`,
-                  borderRadius: radius.control,
-                  padding: 9,
-                  cursor: "pointer",
-                  fontFamily: font.sans,
-                }}
-              >
-                {t("u.replaceOntology")}
-              </button>
-            )}
-          </Card>
+          <OntologyCard
+            canOntology={canOntology}
+            onManage={() => navigate(SCREENS.template.path)}
+          />
         </div>
       </div>
 
@@ -534,10 +601,11 @@ export default function UploadScreen() {
         </div>
       </Card>
 
+      {/* There is no "Save draft" here any more: there was nowhere to save to. The document is
+          already persisted server-side by the upload, and everything else this screen holds
+          (extraction mode, the active document) is durable client state — so the button could
+          only ever have pretended. */}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
-        <Button variant="secondary" style={{ padding: "10px 18px" }}>
-          {t("u.saveDraft")}
-        </Button>
         {/* Fast path: skip the integrity REVIEW screen and go straight to extraction. The
             check itself still stands — a BLOCKER document (corrupt/encrypted) can't be
             skipped, and there must be an active uploaded document to extract. */}
@@ -554,7 +622,7 @@ export default function UploadScreen() {
               title={title}
               onClick={() =>
                 activeDocumentId &&
-                navigate(extractMode === "auto" ? `/documents/${activeDocumentId}` : SCREENS.scope.path)
+                navigate(extractMode === "auto" ? SCREENS.extraction.path : SCREENS.scope.path)
               }
             >
               {t("u.extractDirectly")} →

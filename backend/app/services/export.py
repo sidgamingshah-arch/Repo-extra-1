@@ -12,6 +12,8 @@ import io
 import json
 
 from app.sample.demo import CONF_PCT
+from app.services.periods import concept_value, split_current_prior
+from app.services.review_lines import is_statement_line
 
 # Statement titles for the formatted export, localized like the rest of the app. Line-item
 # labels come from the TEMPLATE's label_i18n, so the export is fully template-driven.
@@ -43,6 +45,44 @@ def _col(term: str, locale: str) -> str:
     return term if locale == "en" else _COL.get(term, {}).get(locale, term)
 
 
+# The validation banner's vocabulary. A sheet that says nothing was checked has to say it in the
+# reader's language, or the one warning on the workbook is the one line they cannot read.
+_EXPORT_TR = {
+    "Validation status is unknown for this export.": {
+        "zh": "本次导出的校验状态未知。", "ar": "حالة التحقق غير معروفة لهذا التصدير.",
+        "fr": "Le statut de validation est inconnu pour cet export."},
+    "No template relations were checked on this filing.": {
+        "zh": "本报表未执行任何模板关系校验。",
+        "ar": "لم يتم التحقق من أي علاقات في القالب لهذا الملف.",
+        "fr": "Aucune relation du modèle n'a été vérifiée sur ce dépôt."},
+    "A blocking rule could not be enforced on this filing.": {
+        "zh": "本报表存在无法执行的阻断性规则。",
+        "ar": "تعذّر تطبيق قاعدة مانعة على هذا الملف.",
+        "fr": "Une règle bloquante n'a pu être appliquée à ce dépôt."},
+    "The template declares no relations for this filing, so none was checked.": {
+        "zh": "模板未为本报表声明任何关系，因此未做校验。",
+        "ar": "لا يعلن القالب أي علاقات لهذا الملف، فلم يتم التحقق من شيء.",
+        "fr": "Le modèle ne déclare aucune relation pour ce dépôt : rien n'a été vérifié."},
+    "No template relation could be evaluated — nothing here is validated.": {
+        "zh": "没有任何模板关系可被评估——此处内容均未经校验。",
+        "ar": "لم يكن بالإمكان تقييم أي علاقة في القالب — لا شيء هنا مُتحقَّق منه.",
+        "fr": "Aucune relation du modèle n'a pu être évaluée — rien ici n'est validé."},
+    "of": {"zh": "/", "ar": "من", "fr": "sur"},
+    "relations checked did not hold; see the review queue.": {
+        "zh": "项已校验的关系不成立；请见审核队列。",
+        "ar": "علاقة تم التحقق منها لم تتحقق؛ راجع قائمة المراجعة.",
+        "fr": "relations vérifiées ne tiennent pas ; voir la file de revue."},
+    "relations could be checked; the rest were not evaluable.": {
+        "zh": "项关系可被校验；其余无法评估。",
+        "ar": "علاقة أمكن التحقق منها؛ الباقي غير قابل للتقييم.",
+        "fr": "relations ont pu être vérifiées ; les autres n'étaient pas évaluables."},
+    "relations checked held.": {
+        "zh": "项已校验的关系成立。", "ar": "علاقة تم التحقق منها وتحققت.",
+        "fr": "relations vérifiées tiennent."},
+    "Validation": {"zh": "校验", "ar": "التحقق", "fr": "Validation"},
+}
+
+
 def _prov_str(prov: dict | None) -> str:
     if not prov:
         return ""
@@ -67,7 +107,8 @@ def _netting_block(rows: list[dict], netting_rules: list | None) -> list[dict]:
 def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] | None = None,
                     note_details: list[dict] | None = None, reconciliation: list[dict] | None = None,
                     locale: str = "en", credit_narrative: dict | None = None,
-                    netting_rules: list | None = None) -> bytes:
+                    netting_rules: list | None = None, coverage: dict | None = None,
+                    template_def: dict | None = None) -> bytes:
     """JSON export of a REAL extraction: every line item with its mapping, confidence, any
     edited formula, and the exact source location of each value (sheet/cell or page/bbox),
     plus a derived-analysis block (ratios / disclosures / credit) and the note detail +
@@ -103,7 +144,7 @@ def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] 
         "analysis": {
             "ratios": [{"key": x["key"], "label": x["label"], "category": x.get("category"),
                         "value": x["value"], "display": x["display"], "available": x["available"]}
-                       for x in compute_ratios(rows, locale=locale)],
+                       for x in compute_ratios(rows, locale=locale, template_def=template_def)],
             "disclosures": disc,
             "credit": credit,
             # Face-line containment netting (target line net of contained lines) + the formula.
@@ -111,6 +152,14 @@ def build_rows_json(rows: list[dict], *, filename: str, disclosures: list[dict] 
         },
         "note_details": note_details or [],
         "reconciliation": reconciliation or [],
+        # What these figures were verified against, verbatim from the report the review screen is
+        # served — a machine-readable consumer must be able to tell a validated extraction from one
+        # where no relation could be evaluated, which it could not before.
+        "validation": {
+            "coverage": coverage,
+            "caption": (lambda b: None if b is None else {"text": b[0], "severe": b[1]})(
+                validation_caption(coverage, locale)),
+        },
     }
     return json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
 
@@ -151,11 +200,12 @@ def build_rows_xlsx(rows: list[dict], *, filename: str, scale: float = 1.0) -> b
     headers = ["#", "Line item", "Note", "Mapped to", "Method", "Confidence",
                "Current", "Prior", "Formula", "Source"]
     ws.append(headers)
+    formula_col = headers.index("Formula") + 1
     for i, r in enumerate(rows, start=1):
         values = r.get("values") or []
-        by_period = {v.get("period_label"): v.get("value") for v in values}
-        current = by_period.get("current") or (values[0].get("value") if values else None)
-        prior = by_period.get("prior") or (values[1].get("value") if len(values) > 1 else None)
+        cur_v, prior_v = split_current_prior(values)
+        current = (cur_v or {}).get("value")
+        prior = (prior_v or {}).get("value")
         conf = r.get("mapping_confidence")
         ws.append([
             i,
@@ -168,6 +218,12 @@ def build_rows_xlsx(rows: list[dict], *, filename: str, scale: float = 1.0) -> b
             r.get("formula") or "",                       # edited-item formula, if any
             _prov_str(values[0].get("provenance")) if values else "",
         ])
+        # The formula is carried for AUDIT, as the analyst typed it — it is not a live cell.
+        # openpyxl promotes any string starting with "=" to a real formula, and this one's
+        # references are canonical line-item keys resolved server-side (services/formula.py), not
+        # cell addresses, so Excel opened the workbook showing #NAME? exactly where an audit trail
+        # was intended. Forcing the string type keeps the expression readable.
+        ws.cell(row=ws.max_row, column=formula_col).data_type = "s"
     ws.freeze_panes = "A2"
     for col, width in zip("ABCDEFGHIJ", (5, 34, 8, 28, 12, 11, 14, 14, 18, 16)):
         ws.column_dimensions[col].width = width
@@ -186,13 +242,34 @@ def _label(node: dict, locale: str) -> str:
     return (node.get("label_i18n") or {}).get(locale) or node.get("label") or node.get("canonical_key") or ""
 
 
-def _cell_value(row: dict | None, basis: str, period: str):
-    if not row:
+def _cell_value(group, basis: str, period: str):
+    """The figure for one concept in one (basis, period) — read through the same resolver the
+    statement view and the accounting checks use, so the workbook cannot disagree with the
+    screen: the SUM when several printed lines map to the concept, or the analyst's manual
+    value when one replaced it."""
+    if not group:
         return None
-    for v in row.get("values") or []:
-        if (v.get("basis") or "consolidated") == basis and v.get("period_label") == period:
-            return _num(v.get("value"))
-    return None
+    rows = [r for r in (group if isinstance(group, list) else [group]) if r]
+    return concept_value(rows, basis, period)
+
+
+def _contribution_note(group: list[dict], basis: str, period: str) -> str | None:
+    """The audit trail for a combined figure: every contributing caption with its own amount and
+    the page it was printed on. A combined figure matches no single line in the document, so
+    without this the workbook shows a number the reader cannot find anywhere."""
+    if not group or len(group) <= 1:
+        return None
+    lines = [f"Combined from {len(group)} printed lines:"]
+    for row in group:
+        amount = _cell_value([row], basis, period)
+        vals = row.get("values") or []
+        where = _prov_str(vals[0].get("provenance")) if vals else ""
+        shown = "—" if amount is None else f"{amount:,.0f}"
+        lines.append(f"  {row.get('source_label') or ''} = {shown}"
+                     + (f"  [{where}]" if where else ""))
+    total = _cell_value(group, basis, period)
+    lines.append(f"  Total = {'—' if total is None else f'{total:,.0f}'}")
+    return "\n".join(lines)
 
 
 def _num(s):
@@ -209,13 +286,70 @@ def _bases_present(rows: list[dict]) -> list[str]:
     return [b for b in ("consolidated", "standalone") if b in found] or ["consolidated"]
 
 
+def validation_caption(coverage: dict | None, locale: str = "en") -> tuple[str, bool] | None:
+    """What this workbook's figures were actually verified against — or None when everything held.
+
+    A filing whose template relations could not be evaluated used to export as a workbook
+    indistinguishable from a fully validated one: the numbers look the same, the formatting is the
+    same, and nothing on the sheet says the arithmetic behind them was never checked. That is the
+    export equivalent of reading "3 relations passed" as "the statement is verified", which the
+    coverage contract exists to prevent on screen.
+
+    Every figure here is read from the coverage report the review screen is served — no second
+    computation, so the sheet and the queue cannot disagree. `severe` marks the cases where nothing
+    was verified, or a BLOCKING rule could not be enforced, as opposed to a partial check.
+    """
+    def L(s: str) -> str:
+        return _EXPORT_TR.get(s, {}).get(locale, s)
+
+    if coverage is None:
+        # The flat row layout, or a run stored before coverage existed. Silence here would be the
+        # defect: an absent report is not a clean one.
+        return L("Validation status is unknown for this export."), True
+    if not coverage.get("available"):
+        return (str(coverage.get("reason_label")
+                    or L("No template relations were checked on this filing.")), True)
+
+    agg = coverage.get("aggregate") or {}
+    status = str(agg.get("status") or "")
+    passed, failed = int(agg.get("passed") or 0), int(agg.get("failed") or 0)
+    evaluated, declarable = int(agg.get("evaluated") or 0), int(agg.get("declarable") or 0)
+    unenforceable = [a for a in (coverage.get("alarms") or [])
+                     if a.get("code") == "BLOCKING_RULE_UNENFORCEABLE"]
+
+    parts: list[str] = []
+    severe = False
+    if unenforceable:
+        parts.append(L("A blocking rule could not be enforced on this filing."))
+        severe = True
+    if status == "ABSENT" or declarable == 0:
+        parts.append(L("The template declares no relations for this filing, so none was checked."))
+        severe = True
+    elif status == "UNVALIDATED" or evaluated == 0:
+        parts.append(L("No template relation could be evaluated — nothing here is validated."))
+        severe = True
+    elif status == "FAILED":
+        parts.append(f"{failed} {L('of')} {evaluated} "
+                     f"{L('relations checked did not hold; see the review queue.')}")
+        severe = True
+    elif status == "PARTIAL":
+        parts.append(f"{evaluated} {L('of')} {declarable} "
+                     f"{L('relations could be checked; the rest were not evaluable.')}")
+    elif status == "PASSED" and not unenforceable:
+        return None                          # every declarable relation ran and held
+    else:
+        parts.append(f"{passed} {L('of')} {evaluated} {L('relations checked held.')}")
+    return " ".join(parts), severe
+
+
 def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: str = "en",
                              filename: str = "", disclosures: list[dict] | None = None,
                              note_details: list[dict] | None = None,
                              reconciliation: list[dict] | None = None,
                              include: set[str] | None = None,
                              scale: float = 1.0, units_caption: str | None = None,
-                             credit_narrative: dict | None = None) -> bytes:
+                             credit_narrative: dict | None = None,
+                             coverage: dict | None = None) -> bytes:
     """A formatted, statement-shaped workbook: one sheet per statement in the template, with
     its sections / subtotals / totals, localized line labels, and consolidated + standalone
     columns side by side, plus Note details / Ratios / Disclosures sheets. Purely
@@ -224,8 +358,27 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
-    by_key = {r["canonical_key"]: r for r in rows if r.get("canonical_key")}
+    # What these figures were verified against, derived once from the report the review screen is
+    # served. None means every declarable relation ran and held, and the sheet needs no warning.
+    banner = validation_caption(coverage, locale)
+
+    # Grouped, not overwritten. Several printed lines legitimately share one concept — three
+    # depreciation lines, two tax payments, a section's residual "Others" bucket — and keeping
+    # only the last silently dropped the rest from the exported statement.
+    by_key: dict[str, list[dict]] = {}
+    for r in rows:
+        if r.get("canonical_key"):
+            by_key.setdefault(r["canonical_key"], []).append(r)
     bases = _bases_present(rows)
+
+    # The template's CALCULATED lines, evaluated from their components — the same evaluation the
+    # statement view uses, so the workbook and the screen cannot show a different subtotal. What
+    # the document printed goes into the cell's comment instead of the cell: a subtotal that
+    # contradicts its own components is a finding, not the figure to hand to a reader.
+    from app.services.rollups import evaluate_rows
+
+    calc = {(b, p): evaluate_rows(template_def, rows, b, p, locale)
+            for b in bases for p in ("current", "prior")}
 
     ink = "1f2937"
     section_fill = PatternFill("solid", fgColor="EEF1F6")
@@ -259,11 +412,24 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
 
         ws.cell(1, 1, filename).font = Font(size=9, color="8A94A6")
         ws.cell(2, 1, _STMT_TITLE.get(stype, {}).get(locale, stype)).font = Font(bold=True, size=13, color=ink)
+        nxt = 3
         if units_caption:
-            ws.cell(3, 1, units_caption).font = Font(size=9, italic=True, color="6B7280")
+            ws.cell(nxt, 1, units_caption).font = Font(size=9, italic=True, color="6B7280")
+            nxt += 1
+        if banner:
+            # Above the figures, not on a sheet of its own: a reader who opens the balance sheet and
+            # scrolls has to pass it. A workbook whose arithmetic was never checked looked exactly
+            # like one that was, and this is the only line that says otherwise.
+            text, severe = banner
+            cell = ws.cell(nxt, 1, f"⚠ {_EXPORT_TR.get('Validation', {}).get(locale, 'Validation')}"
+                                   f": {text}")
+            cell.font = Font(bold=True, size=9, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="B42318" if severe else "B54708")
+            cell.alignment = Alignment(vertical="center", wrap_text=False)
+            nxt += 1
 
-        # Header band (row 4: basis groups; row 5: column names).
-        hb, hc = 4, 5
+        # Header band (basis groups, then column names).
+        hb, hc = nxt, nxt + 1
         ws.cell(hb, 1, filename and "" or "")
         for idx, b in enumerate(bases):
             c0 = first_val + idx * 2
@@ -282,7 +448,7 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
         r = hc + 1
         r = _emit_nodes(ws, stmt.get("sections", []), by_key, period_cols, first_val, conf_col,
                         src_col, locale, r, section_fill, total_fill, thin_top, dbl_top, right,
-                        num_fmt, ink, scale)
+                        num_fmt, ink, scale, calc)
 
         ws.freeze_panes = ws.cell(hc + 1, 1)
         ws.column_dimensions["A"].width = 46
@@ -296,8 +462,11 @@ def build_statement_workbook(rows: list[dict], template_def: dict, *, locale: st
         ws = wb.create_sheet("Extraction")
         ws.cell(1, 1, "No extracted line items for this document.")
 
+    # The template travels through so a template-declared KPI catalog reaches the Ratios sheet;
+    # without it the sheet would show the built-in catalog for a template that declares its own.
     _add_analysis_sheets(wb, rows, disclosures or [], note_details or [], locale,
-                         reconciliation or [], include, credit_narrative)
+                         reconciliation or [], include, credit_narrative,
+                         template_def=template_def)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -317,7 +486,8 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
                          note_details: list[dict], locale: str,
                          reconciliation: list[dict] | None = None,
                          include: set[str] | None = None,
-                         credit_narrative: dict | None = None) -> None:
+                         credit_narrative: dict | None = None,
+                         template_def: dict | None = None) -> None:
     """Note details / Ratios / Disclosures / Credit Analysis sheets, each gated by the Include
     set (all on when include is None). ``credit_narrative`` is the optional stored LLM narrative
     (``run.result['credit_narrative']``) — folded into the Credit Analysis sheet when present."""
@@ -374,21 +544,31 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
         ri += 1
         for row in note.get("rows", []):
             vals = row.get("values") or []
-            by = {v.get("period_label"): v for v in vals}
-            cur = (by.get("current") or (vals[0] if vals else {})) or {}
-            prior = (by.get("prior") or (vals[1] if len(vals) > 1 else {})) or {}
+            cur_v, prior_v = split_current_prior(vals)
+            cur, prior = cur_v or {}, prior_v or {}
             lab = ws.cell(ri, 1, row.get("label", "")); lab.alignment = Alignment(indent=1)
             c = ws.cell(ri, 2, _num(cur.get("value"))); c.number_format = num_fmt; c.alignment = right
             c = ws.cell(ri, 3, _num(prior.get("value"))); c.number_format = num_fmt; c.alignment = right
             ri += 1
         e = recon.get(str(note.get("no")))               # note→face reconciliation (§20)
         if e is not None:
-            tie = ("ties to the face figure" if e.get("within_tolerance")
-                   else "does NOT tie to the face figure")
-            txt = f"Reconciliation: note total {tie} (residual {_num(e.get('residual')) or 0:,.0f})."
+            from app.services.reconcile import tie_status
+
+            status = tie_status(e)
+            resid = _num(e.get("residual")) or 0
+            if status == "unconfirmed":
+                # Saying "does NOT tie" about an analysis or segment note reads as an error in
+                # the filing; it only means the note is not a breakdown of that figure.
+                txt = ("Reconciliation: this note is not a breakdown of the face figure it is "
+                       "cited from, so no tie is asserted.")
+            else:
+                tie = ("ties to the face figure" if status == "tied"
+                       else "does NOT tie to the face figure")
+                txt = f"Reconciliation: note total {tie} (residual {resid:,.0f})."
             rc = ws.cell(ri, 1, txt)
             rc.font = Font(italic=True, size=9,
-                           color=("2E7D52" if e.get("within_tolerance") else "C0362C"))
+                           color=("2E7D52" if status == "tied"
+                                  else "8A8F98" if status == "unconfirmed" else "C0362C"))
             ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=3)
             ri += 1
         ri += 1                                          # blank spacer row between notes
@@ -402,7 +582,7 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
     cat_fill = PatternFill("solid", fgColor="EEF1F6")
     ri = 2
     last_cat = None
-    for r in compute_ratios(rows, locale=locale):
+    for r in compute_ratios(rows, locale=locale, template_def=template_def):
         cat = r.get("category") or ""
         if cat != last_cat:
             hc = ws.cell(ri, 1, cat); hc.font = Font(bold=True, color="1f2937")
@@ -486,26 +666,39 @@ def _add_analysis_sheets(wb, rows: list[dict], disclosures: list[dict],
 
 
 def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, locale, r,
-                section_fill, total_fill, thin_top, dbl_top, right, num_fmt, ink, scale=1.0):
+                section_fill, total_fill, thin_top, dbl_top, right, num_fmt, ink, scale=1.0,
+                calc=None):
     from openpyxl.styles import Alignment, Font
 
     for node in nodes:
         role = node.get("role")
         key = node.get("canonical_key")
-        row = by_key.get(key)
+        group = by_key.get(key) or []
+        row = group[0] if group else None
         label = _label(node, locale)
 
-        if role == "header":
-            hc = ws.cell(r, 1, label)
-            hc.font = Font(bold=True, color=ink)
-            for c in range(1, src_col + 1):
-                ws.cell(r, c).fill = section_fill
-            r += 1
+        # A node that carries no figure: a section heading, or a `LineRole.SPACER` gap. Asked with the
+        # same predicate `routes.templates` asks for its tree walk and its `line_items` count, so the
+        # workbook's rows and the Template screen's lines cannot disagree about what a line is.
+        # Tested as `== "header"`, a spacer fell through to the figure branch below and was written
+        # out as a ROW — a label, a note cell, a value cell per period and a canonical_key `by_key`
+        # would happily attach an extracted figure to: a blank line in the filing exported as a line
+        # item of the spread. (`documents._template_skeleton`, which the review grid walks, still
+        # branches on "has keyed children" rather than on role, so a spacer would reach that grid as
+        # a line and disagree with this sheet. No shipped template declares one, and that walk is not
+        # this module's to reconcile.)
+        if not is_statement_line(node):
+            if role == "header":
+                hc = ws.cell(r, 1, label)
+                hc.font = Font(bold=True, color=ink)
+                for c in range(1, src_col + 1):
+                    ws.cell(r, c).fill = section_fill
+            r += 1                     # a spacer leaves its row empty — the gap IS what it declares
             # Emit EVERY child (all line items in the template), extracted or not.
             for child in node.get("children", []):
                 r = _emit_nodes(ws, [child], by_key, period_cols, first_val, conf_col, src_col,
                                 locale, r, section_fill, total_fill, thin_top, dbl_top, right,
-                                num_fmt, ink, scale)
+                                num_fmt, ink, scale, calc)
             continue
 
         is_bold = role in ("subtotal", "total")
@@ -514,9 +707,31 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
         lab.alignment = Alignment(indent=0 if is_bold else 1)
         ws.cell(r, 2, (row or {}).get("note") or "")
 
+        calc_notes: list[str] = []
         for (b, p) in period_cols:
             ci = first_val + period_cols.index((b, p))
-            val = _cell_value(row, b, p)
+            printed = _cell_value(group, b, p)
+            computed = ((calc or {}).get((b, p), {}) or {}).get(key)
+            if computed is not None and computed.computable and not (row or {}).get("edited"):
+                # A calculated line carries its computed figure. The printed one is recorded in
+                # the comment, and named as a difference when it disagrees.
+                val = computed.value
+                label_p = _col("Current" if p == "current" else "Prior", locale)
+                bits = [f"{label_p}: computed {val:,.0f} = {computed.formula}"]
+                if printed is not None and abs(printed - val) > 0.5:
+                    bits.append(f"document printed {printed:,.0f} "
+                                f"(difference {printed - val:,.0f})")
+                elif printed is not None:
+                    bits.append(f"agrees with the printed {printed:,.0f}")
+                else:
+                    bits.append("the document did not print this subtotal")
+                calc_notes.append(" · ".join(bits))
+            else:
+                val = printed
+                if computed is not None and not computed.computable and printed is not None:
+                    calc_notes.append(f"{_col('Current' if p == 'current' else 'Prior', locale)}: "
+                                      f"printed {printed:,.0f}; none of this line's components "
+                                      f"were extracted, so it could not be recomputed")
             if val is not None and scale != 1.0:
                 val = round(val * scale)
             cell = ws.cell(r, ci, val)
@@ -526,15 +741,41 @@ def _emit_nodes(ws, nodes, by_key, period_cols, first_val, conf_col, src_col, lo
                 cell.font = Font(bold=True)
 
         if row is not None:
-            conf = row.get("mapping_confidence")
-            ws.cell(r, conf_col, f"{round(conf * 100)}%" if isinstance(conf, (int, float)) else "")
-            vals = row.get("values") or []
-            ws.cell(r, src_col, _prov_str(vals[0].get("provenance")) if vals else "")
+            confs = [x.get("mapping_confidence") for x in group
+                     if isinstance(x.get("mapping_confidence"), (int, float))]
+            conf = min(confs) if confs else None
+            ws.cell(r, conf_col, f"{round(conf * 100)}%" if conf is not None else "")
+            # Every page a contributing line came from, so the source column stays truthful for
+            # a combined figure instead of naming only the first.
+            srcs = []
+            for x in group:
+                vals = x.get("values") or []
+                where = _prov_str(vals[0].get("provenance")) if vals else ""
+                if where and where not in srcs:
+                    srcs.append(where)
+            ws.cell(r, src_col, " · ".join(srcs))
+            notes = []
             # Edited items carry their formula into the workbook as a cell note (the value is
             # the applied result; the formula is preserved for audit).
             if row.get("edited") and row.get("formula"):
+                notes.append(f"Edited · formula: {row['formula']}")
+            for slot, meta in sorted((row.get("edit_comments") or {}).items()):
+                if (meta or {}).get("text"):
+                    who = f" — {meta['by']}" if meta.get("by") else ""
+                    when = f" ({meta['at']})" if meta.get("at") else ""
+                    notes.append(f"Edit note [{slot}]{who}{when}: {meta['text']}")
+            trace = _contribution_note(group, *period_cols[0]) if period_cols else None
+            if trace:
+                notes.append(trace)
+            notes += calc_notes
+            if notes:
                 from openpyxl.comments import Comment
-                lab.comment = Comment(f"Edited · formula: {row['formula']}", "FinExtract")
+                lab.comment = Comment("\n\n".join(notes), "FinExtract")
+        elif calc_notes:
+            # A calculated line the document never printed has no extracted row of its own, so
+            # this is the only place its arithmetic can be recorded.
+            from openpyxl.comments import Comment
+            lab.comment = Comment("\n\n".join(calc_notes), "FinExtract")
 
         if role == "subtotal":
             for c in range(1, src_col + 1):

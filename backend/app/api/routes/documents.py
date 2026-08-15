@@ -1,7 +1,9 @@
 """Document endpoints: upload (+ upfront integrity/classification) and fetch."""
 from __future__ import annotations
 
+import copy
 import re
+from collections.abc import Iterable
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
@@ -13,6 +15,12 @@ from app.api.deps import db, object_store
 from app.ports.object_store import LocalObjectStore
 from app.security import Permission, Principal, Role, current_principal, require
 from app.services.documents import analyze_document, content_hash
+from app.services import review_lines
+from app.services.page_scope import normalise_kind, scope_counts
+from app.services.periods import (
+    basis_values as _basis_values_of, concept_value as _concept_value, edited_for as _edited_for,
+    names_a_component, period_displays, slot_for, split_current_prior)
+from app.services.reconcile import tie_status
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -43,6 +51,25 @@ def authorized_document(
 # a real run localizes like the demo path. Dynamic parts (source labels, finding messages)
 # stay verbatim — they're data, not chrome.
 _TR: dict[str, dict[str, str]] = {
+    # KPI / Additional-items views
+    "KPIs": {"zh": "关键指标", "ar": "المؤشرات الرئيسية", "fr": "Indicateurs clés"},
+    "Computed KPIs": {"zh": "计算得出的关键指标", "ar": "مؤشرات محسوبة",
+                      "fr": "Indicateurs calculés"},
+    "Extracted, not on a statement": {"zh": "已提取，但不在报表中",
+                                      "ar": "مستخرج، وليس في أي قائمة",
+                                      "fr": "Extrait, hors états financiers"},
+    "computed": {"zh": "计算值", "ar": "محسوب", "fr": "calculé"},
+    "unmapped": {"zh": "未映射", "ar": "غير مُعيَّن", "fr": "non mappé"},
+    "inputs not extracted": {"zh": "输入项未提取", "ar": "المدخلات غير مستخرجة",
+                             "fr": "entrées non extraites"},
+    "numerator": {"zh": "分子", "ar": "البسط", "fr": "numérateur"},
+    "denominator": {"zh": "分母", "ar": "المقام", "fr": "dénominateur"},
+    "Not mapped to any concept": {"zh": "未映射到任何概念", "ar": "غير مُعيَّن إلى أي مفهوم",
+                                  "fr": "Non rattaché à un concept"},
+    "Mapped, but not on any statement in this template":
+        {"zh": "已映射，但不在此模板的任何报表中",
+         "ar": "مُعيَّن، لكنه ليس في أي قائمة في هذا القالب",
+         "fr": "Rattaché, mais absent des états de ce modèle"},
     # integrity grades
     "Not analyzed": {"zh": "未分析", "ar": "لم يُحلَّل", "fr": "Non analysé"},
     "Blocked": {"zh": "已阻止", "ar": "محظور", "fr": "Bloqué"},
@@ -120,6 +147,281 @@ _TR.update({
     "Hidden worksheet": {"zh": "隐藏的工作表", "ar": "ورقة عمل مخفية", "fr": "Feuille masquée"},
     "No pages found": {"zh": "未找到页面", "ar": "لا توجد صفحات", "fr": "Aucune page trouvée"},
     "Blank page": {"zh": "空白页", "ar": "صفحة فارغة", "fr": "Page vierge"},
+})
+
+
+# structural validation (template rollups / identities)
+_TR.update({
+    "Figure does not equal its template components":
+        {"zh": "数字与模板组成部分不符", "ar": "الرقم لا يساوي مكوناته في القالب",
+         "fr": "Le montant ne correspond pas à ses composantes du modèle"},
+    "Reported": {"zh": "已报告", "ar": "المُبلَّغ", "fr": "Déclaré"},
+    "Sum of template components": {"zh": "模板组成部分合计", "ar": "مجموع مكونات القالب",
+                                   "fr": "Somme des composantes du modèle"},
+    "The reported figure does not equal the components the template says it is made of, so a "
+    "value is on the wrong line. Check the components and the total against the document.":
+        {"zh": "报告的数字与模板所述的组成部分不相等，说明某个数值被放在了错误的行。请将各组成部分及合计与文档核对。",
+         "ar": "الرقم المُبلَّغ لا يساوي المكونات التي يحددها القالب، أي أن قيمة وُضعت في السطر الخطأ. راجع المكونات والمجموع مقابل المستند.",
+         "fr": "Le montant déclaré ne correspond pas aux composantes définies par le modèle : une valeur est sur la mauvaise ligne. Vérifiez les composantes et le total dans le document."},
+    "Flipping the sign of": {"zh": "改变符号的项目：", "ar": "قلب إشارة", "fr": "Inverser le signe de"},
+    "would make it balance.": {"zh": "即可使其平衡。", "ar": "سيجعلها متوازنة.",
+                               "fr": "permettrait d'équilibrer."},
+})
+
+
+# The Current/Prior fallback used when a filing's columns carry no printed header. Copied verbatim
+# from services/export.py:36-37 so the two modules cannot drift: without these entries
+# ``_t("Current", "zh")`` returned English, so a zh/ar/fr reader saw an English column header on
+# every native-PDF statement and on every note detail.
+_TR.update({
+    "Current": {"zh": "本期", "ar": "الحالية", "fr": "Actuel"},
+    "Prior": {"zh": "上期", "ar": "السابقة", "fr": "Précédent"},
+})
+
+
+# Coverage contract + review judgements. The coverage vocabulary is deliberately verbal rather
+# than numeric ("Nothing verified", not "0%"): the whole point of services/coverage.py is that a
+# count of passes read alone is how a barely-checked filing looks clean.
+_TR.update({
+    "All statements": {"zh": "所有报表", "ar": "جميع القوائم", "fr": "Tous les états"},
+    # statement coverage statuses
+    "Nothing verified": {"zh": "未验证任何项", "ar": "لم يُتحقَّق من شيء", "fr": "Rien de vérifié"},
+    "Partly verified": {"zh": "部分已验证", "ar": "تم التحقق جزئيًا", "fr": "Partiellement vérifié"},
+    "Failed": {"zh": "未通过", "ar": "فاشل", "fr": "En échec"},
+    "Fully verified": {"zh": "全部已验证", "ar": "تم التحقق بالكامل", "fr": "Entièrement vérifié"},
+    "Not in this filing": {"zh": "本次报告中不存在", "ar": "غير موجود في هذا التقرير",
+                           "fr": "Absent de ce dépôt"},
+    # skip-taxonomy buckets
+    "Inputs not extracted": {"zh": "输入项未提取", "ar": "المدخلات غير مستخرجة",
+                             "fr": "Entrées non extraites"},
+    "better extraction would recover these":
+        {"zh": "提升提取质量即可恢复这些关系", "ar": "استخراج أفضل سيستعيد هذه العلاقات",
+         "fr": "une meilleure extraction les récupérerait"},
+    "Fed by a derived value": {"zh": "由派生值驱动", "ar": "مُغذّى بقيمة مشتقة",
+                               "fr": "Alimenté par une valeur dérivée"},
+    "fed by a derived value — cannot fail, however good extraction gets":
+        {"zh": "由派生值驱动——无论提取质量多高都不可能失败",
+         "ar": "مُغذّى بقيمة مشتقة — لا يمكن أن يفشل، مهما تحسّن الاستخراج",
+         "fr": "alimenté par une valeur dérivée — ne peut pas échouer, quelle que soit la qualité de l'extraction"},
+    "No printed subtotal": {"zh": "文档未打印小计", "ar": "لا يوجد مجموع فرعي مطبوع",
+                            "fr": "Aucun sous-total imprimé"},
+    "the filing prints no subtotal to reconcile against":
+        {"zh": "该报告未打印可用于核对的小计", "ar": "لا يطبع التقرير مجموعًا فرعيًا للمطابقة",
+         "fr": "le dépôt n'imprime aucun sous-total à rapprocher"},
+    "Rule cannot run as authored": {"zh": "规则按当前写法无法运行",
+                                    "ar": "القاعدة لا يمكن تشغيلها كما صيغت",
+                                    "fr": "Règle inexécutable telle qu'écrite"},
+    "the rule cannot run as authored — an authoring defect, not an extraction gap":
+        {"zh": "该规则按当前写法无法运行——这是规则编写缺陷，而非提取缺口",
+         "ar": "القاعدة لا يمكن تشغيلها كما صيغت — عيب في الصياغة، لا فجوة استخراج",
+         "fr": "la règle ne peut pas s'exécuter telle qu'écrite — un défaut de rédaction, pas une lacune d'extraction"},
+    "Unclassified skip reason": {"zh": "未分类的跳过原因", "ar": "سبب تجاوز غير مصنَّف",
+                                 "fr": "Motif d'exclusion non classé"},
+    "a new skip reason nobody has classified":
+        {"zh": "出现了尚无人分类的新跳过原因", "ar": "سبب تجاوز جديد لم يصنّفه أحد",
+         "fr": "un nouveau motif d'exclusion que personne n'a classé"},
+    "Statement not in this filing": {"zh": "本次报告不含该报表",
+                                     "ar": "القائمة غير موجودة في هذا التقرير",
+                                     "fr": "État absent de ce dépôt"},
+    "not counted — this filing has no such statement":
+        {"zh": "不计入——本次报告没有该报表",
+         "ar": "غير محتسب — لا توجد مثل هذه القائمة في هذا التقرير",
+         "fr": "non compté — ce dépôt ne contient pas cet état"},
+    # alarms
+    "Blocking rule cannot be enforced": {"zh": "阻断性规则无法执行",
+                                         "ar": "قاعدة حاجبة لا يمكن إنفاذها",
+                                         "fr": "Règle bloquante inapplicable"},
+    "declared blocking and cannot run as authored, so it fires on no filing — this filing was "
+    "never checked against it.":
+        {"zh": "该规则被声明为阻断性，但按当前写法无法运行，因此对任何报告都不会触发——本次报告从未据此检查。",
+         "ar": "أُعلنت حاجبة ولا يمكن تشغيلها كما صيغت، فهي لا تُطلق على أي تقرير — ولم يُفحص هذا التقرير مقابلها أبدًا.",
+         "fr": "déclarée bloquante et inexécutable telle qu'écrite : elle ne se déclenche sur aucun dépôt — ce dépôt n'a jamais été contrôlé par elle."},
+    "Statement proved nothing": {"zh": "该报表未验证任何内容",
+                                 "ar": "القائمة لم تُثبت شيئًا", "fr": "État sans aucune vérification"},
+    "every relation declared for this statement was skipped, so it has no failures and has "
+    "proved nothing.":
+        {"zh": "为该报表声明的每一条关系都被跳过，因此它没有失败项，也没有验证任何内容。",
+         "ar": "تم تجاوز كل علاقة مُعلنة لهذه القائمة، فلا توجد بها إخفاقات ولم تُثبت شيئًا.",
+         "fr": "toutes les relations déclarées pour cet état ont été ignorées : il n'a aucun échec et n'a rien prouvé."},
+    "Mostly checking its own arithmetic": {"zh": "多数只是在核对自身算术",
+                                           "ar": "يتحقق في الغالب من حسابه الذاتي",
+                                           "fr": "Vérifie surtout sa propre arithmétique"},
+    "more relations were fed by derived values than were actually evaluated, so the validation "
+    "layer is largely confirming its own arithmetic.":
+        {"zh": "由派生值驱动的关系数量多于实际评估的关系数量，因此验证层多半只是在确认自身的算术。",
+         "ar": "عدد العلاقات المُغذّاة بقيم مشتقة يفوق عدد ما تم تقييمه فعليًا، فطبقة التحقق تؤكد في الغالب حسابها الذاتي.",
+         "fr": "plus de relations ont été alimentées par des valeurs dérivées qu'il n'y en a eu d'évaluées : la couche de validation confirme surtout sa propre arithmétique."},
+    "Pipeline defect": {"zh": "流水线缺陷", "ar": "عيب في خط المعالجة", "fr": "Défaut de traitement"},
+    "a rule that needs nothing of the filing still could not be run, so this is a defect in the "
+    "pipeline or the rulebook rather than a fact about the document.":
+        {"zh": "一条无需依赖报告内容的规则仍然无法运行，因此这是流水线或规则手册的缺陷，而不是关于该文档的事实。",
+         "ar": "قاعدة لا تحتاج شيئًا من التقرير لم يُمكن تشغيلها، فهذا عيب في خط المعالجة أو في دليل القواعد وليس واقعة عن المستند.",
+         "fr": "une règle qui n'exige rien du dépôt n'a pas pu s'exécuter : c'est un défaut du traitement ou du référentiel, pas un fait sur le document."},
+    # coverage unavailable
+    "This document has not been extracted, so no relation has been evaluated.":
+        {"zh": "该文档尚未提取，因此没有评估任何关系。",
+         "ar": "لم يُستخرج هذا المستند، لذا لم تُقيَّم أي علاقة.",
+         "fr": "Ce document n'a pas été extrait : aucune relation n'a été évaluée."},
+    "No template was attached to this run, so structural validation never ran.":
+        {"zh": "本次运行未附加模板，因此结构性校验从未运行。",
+         "ar": "لم يُرفق قالب بهذا التشغيل، لذا لم يُنفَّذ التحقق البنيوي إطلاقًا.",
+         "fr": "Aucun modèle n'était attaché à ce traitement : la validation structurelle n'a jamais eu lieu."},
+    "A template was attached but it declares no relation for this filing, so nothing was "
+    "checked. That is an authoring gap, not a clean result.":
+        {"zh": "已附加模板，但它没有为本次报告声明任何关系，因此什么都没有检查。这是规则编写的缺口，而不是干净的结果。",
+         "ar": "أُرفق قالب لكنه لا يعلن أي علاقة لهذا التقرير، فلم يُفحص شيء. هذه فجوة صياغة، وليست نتيجة سليمة.",
+         "fr": "Un modèle est attaché mais ne déclare aucune relation pour ce dépôt : rien n'a été contrôlé. C'est une lacune de rédaction, pas un résultat propre."},
+    "The seeded sample project carries no structural validation run.":
+        {"zh": "内置示例项目没有结构性校验运行记录。",
+         "ar": "المشروع النموذجي المُهيَّأ لا يحتوي على تشغيل تحقق بنيوي.",
+         "fr": "Le projet de démonstration ne comporte aucun traitement de validation structurelle."},
+    # the flip-sign edit comment + the edited-inputs caveat
+    "Sign flipped on the figure the structural check named as the one whose sign, reversed, "
+    "would satisfy the relation":
+        {"zh": "已对结构性校验指认的数字取反——该校验认为反转其符号即可使关系成立",
+         "ar": "تم قلب إشارة الرقم الذي حدده التحقق البنيوي بأن عكس إشارته يُحقّق العلاقة",
+         "fr": "Signe inversé sur le montant désigné par le contrôle structurel comme celui dont l'inversion satisferait la relation"},
+    "A figure this relation uses has been edited since it was evaluated. The relation is "
+    "re-evaluated on the next extraction.":
+        {"zh": "该关系所用的某个数字在其评估之后被修改过。该关系将在下一次提取时重新评估。",
+         "ar": "تم تعديل رقم تستخدمه هذه العلاقة بعد تقييمها. تُعاد تقييم العلاقة في الاستخراج التالي.",
+         "fr": "Un montant utilisé par cette relation a été modifié depuis son évaluation. La relation sera réévaluée lors de la prochaine extraction."},
+    # evidence-row labels for an accepted finding (same two-column shape as a check's `calc`).
+    # Several of these are also the labels on the live check cards, which were reaching a
+    # zh/ar/fr reader in English because they were never in this table.
+    "Total assets": {"zh": "资产总计", "ar": "إجمالي الأصول", "fr": "Total de l'actif"},
+    "Total equity and liabilities": {"zh": "权益与负债总计", "ar": "إجمالي حقوق الملكية والالتزامات",
+                                     "fr": "Total du passif et des capitaux propres"},
+    "Total equity per the balance sheet": {"zh": "资产负债表列示的权益总额",
+                                           "ar": "إجمالي حقوق الملكية حسب الميزانية العمومية",
+                                           "fr": "Total des capitaux propres selon le bilan"},
+    "Difference": {"zh": "差额", "ar": "الفرق", "fr": "Écart"},
+    "Face figure": {"zh": "表内数字", "ar": "الرقم في القائمة", "fr": "Montant au bilan"},
+    "Residual": {"zh": "余额差", "ar": "المتبقي", "fr": "Résidu"},
+    "Residual vs note total": {"zh": "与附注合计的差额", "ar": "المتبقي مقابل إجمالي الإيضاح",
+                               "fr": "Résidu par rapport au total de la note"},
+    "Yes": {"zh": "是", "ar": "نعم", "fr": "Oui"},
+    "No": {"zh": "否", "ar": "لا", "fr": "Non"},
+    "Closing balance": {"zh": "期末余额", "ar": "الرصيد الختامي", "fr": "Solde de clôture"},
+    "Computed": {"zh": "计算值", "ar": "محسوب", "fr": "Calculé"},
+    "Printed": {"zh": "文档打印值", "ar": "المطبوع", "fr": "Imprimé"},
+    "Value": {"zh": "数值", "ar": "القيمة", "fr": "Valeur"},
+    "Sign suspect": {"zh": "疑似符号错误项", "ar": "الإشارة المشتبه بها", "fr": "Signe suspect"},
+    "Components": {"zh": "组成部分", "ar": "المكونات", "fr": "Composantes"},
+    "Totals derived from the section subtotals":
+        {"zh": "合计由各分节小计推导得出", "ar": "المجاميع مشتقة من المجاميع الفرعية للأقسام",
+         "fr": "Totaux dérivés des sous-totaux de section"},
+    # orphaned-judgement subject phrasing
+    "Balance sheet identity": {"zh": "资产负债表恒等式", "ar": "معادلة الميزانية العمومية",
+                               "fr": "Équation du bilan"},
+    "Equity statement closing balance": {"zh": "权益变动表期末余额",
+                                         "ar": "الرصيد الختامي لقائمة التغيرات في حقوق الملكية",
+                                         "fr": "Solde de clôture de l'état des variations des capitaux propres"},
+    "Note": {"zh": "附注", "ar": "إيضاح", "fr": "Note"},
+    "Template relation": {"zh": "模板关系", "ar": "علاقة القالب", "fr": "Relation du modèle"},
+    "Printed subtotal": {"zh": "打印的小计", "ar": "المجموع الفرعي المطبوع",
+                         "fr": "Sous-total imprimé"},
+    "Unverified subtotal": {"zh": "未验证的小计", "ar": "مجموع فرعي غير مُتحقَّق منه",
+                            "fr": "Sous-total non vérifié"},
+    "Unmapped line": {"zh": "未映射的行", "ar": "سطر غير مُعيَّن", "fr": "Ligne non rattachée"},
+    "Low-confidence mapping": {"zh": "低置信度映射", "ar": "تعيين منخفض الثقة",
+                               "fr": "Rattachement à faible confiance"},
+    "A finding that is no longer raised": {"zh": "已不再提出的问题",
+                                           "ar": "ملاحظة لم تُعد تُرفع",
+                                           "fr": "Une anomalie qui n'est plus signalée"},
+})
+
+
+# A failed rulebook guard, and the one state in which the queue refuses to answer. Both are card
+# vocabulary, so both belong here: an untranslated string on a review card is a zh/ar/fr reader
+# being shown English, which is how several of the live check labels were reaching them before.
+_TR.update({
+    "Rulebook guard failed": {"zh": "规则手册的守卫检查未通过",
+                              "ar": "فشل شرط في كتاب القواعد",
+                              "fr": "Garde-fou du référentiel en échec"},
+    "Rule": {"zh": "规则", "ar": "القاعدة", "fr": "Règle"},
+    "Lines in violation": {"zh": "违反规则的行", "ar": "السطور المخالفة",
+                           "fr": "Lignes en infraction"},
+    # The low-confidence card's own subject matter: the mapping's method and how strong it was, plus
+    # the BAND the acceptance is fingerprinted on (`_confidence_evidence`). The band is labelled as a
+    # band in every locale, so nobody reads "40-49%" as the measured score.
+    "Source label": {"zh": "原始标签", "ar": "التسمية الأصلية", "fr": "Libellé source"},
+    "Mapped to": {"zh": "映射到", "ar": "مطابق إلى", "fr": "Rattaché à"},
+    "— (no confident match)": {"zh": "—（无可信匹配）", "ar": "— (لا تطابق موثوق)",
+                               "fr": "— (aucune correspondance fiable)"},
+    "Face lines that do not tie": {"zh": "未勾稽的报表行数", "ar": "سطور القوائم غير المطابَقة",
+                                   "fr": "Lignes non rapprochées"},
+    "Method": {"zh": "匹配方式", "ar": "طريقة المطابقة", "fr": "Méthode"},
+    "Confidence": {"zh": "置信度", "ar": "درجة الثقة", "fr": "Confiance"},
+    "Confidence band": {"zh": "置信度区间", "ar": "نطاق درجة الثقة",
+                        "fr": "Plage de confiance"},
+    # The note-tie card's at-a-glance magnitude. Translated here rather than left to fall back to
+    # English, for the reason the guard vocabulary above is: an untranslated card string is a
+    # zh/ar/fr reader shown English on the figure the card is titled after.
+    "Total break across the untied face lines":
+        {"zh": "未勾稽的报表行合计差额（取绝对值）",
+         "ar": "إجمالي الفروق على السطور غير المطابَقة (بالقيمة المطلقة)",
+         "fr": "Écart total sur les lignes non rapprochées (en valeur absolue)"},
+    "Violations": {"zh": "违反项数量", "ar": "عدد المخالفات", "fr": "Infractions"},
+    "The rulebook declares this must hold, and it does not for the lines listed. Check each one "
+    "against the document; the guard is re-evaluated on the next extraction.":
+        {"zh": "规则手册要求此条件必须成立，但所列各行并不满足。请逐行与文档核对；该守卫检查将在下次提取时重新评估。",
+         "ar": "يقرر كتاب القواعد أن هذا الشرط يجب أن يتحقق، ولم يتحقق للسطور المذكورة. راجع كل سطر مقابل المستند؛ ويُعاد تقييم الشرط في الاستخراج التالي.",
+         "fr": "Le référentiel exige que cette condition soit vérifiée ; elle ne l'est pas pour les lignes listées. Vérifiez chacune dans le document ; le garde-fou est réévalué à la prochaine extraction."},
+    "findings here share one identity but printed different figures, so the queue cannot tell "
+    "them apart. None of them can be accepted until the extraction distinguishes them.":
+        {"zh": "个问题共用同一标识，但打印的数字不同，因此队列无法区分它们。在提取能够区分它们之前，均不可被接受。",
+         "ar": "ملاحظات هنا تتشارك هوية واحدة لكنها طبعت أرقامًا مختلفة، فلا يمكن للقائمة التمييز بينها. لا يمكن قبول أي منها حتى يميّزها الاستخراج.",
+         "fr": "anomalies partagent ici une même identité mais affichent des montants différents : la file ne peut pas les distinguer. Aucune ne peut être acceptée avant que l'extraction ne les sépare."},
+    "A recorded acceptance for this identity is being withheld: it cannot be matched to one of "
+    "these findings, and attributing it to the wrong one would put a name against figures nobody "
+    "examined.":
+        {"zh": "针对该标识已记录的一项接受意见被暂缓采用：它无法与其中某一个问题对应，若归属错误，便会把某人的名字记在无人核对过的数字上。",
+         "ar": "قبولٌ مسجَّل لهذه الهوية مُعلَّق: لا يمكن مطابقته بإحدى هذه الملاحظات، ونسبته إلى الملاحظة الخطأ يضع اسمًا أمام أرقام لم يفحصها أحد.",
+         "fr": "Une acceptation enregistrée pour cette identité est suspendue : elle ne peut être rattachée à l'une de ces anomalies, et l'attribuer à la mauvaise apposerait un nom sur des montants que personne n'a examinés."},
+})
+
+
+# The off-template finding: a mapped row whose concept the run's own template does not put on any
+# statement. The statement grid no longer shows such a row (see `_build_statement`), so the card is
+# the ONLY place its figure appears — an untranslated string here is a zh/ar/fr reader given English
+# on the one card standing between a real extracted figure and silence.
+#
+# "Mapped, but not on any statement in this template" is reused verbatim from the deleted
+# Additional-items view rather than re-worded: it is the same claim about the same row, already
+# carried in all four locales, and a second wording would be a second name for one condition.
+_TR.update({
+    "Off template": {"zh": "不在模板中", "ar": "خارج القالب", "fr": "Hors modèle"},
+    # Why a statement is serving no rows — see `_statement_refusal`. Translated because this sentence
+    # replaces the grid, so an English-only version is a zh/ar/fr reader given a blank spread and no
+    # readable reason for it.
+    "This run's template declares no statement of this type, so none is shown. Extracted figures "
+    "that reach no statement are reported in the review queue; re-extract against a template that "
+    "declares it to see it here.":
+        {"zh": "本次运行所用模板未声明此类报表，因此不予显示。未进入任何报表的已提取数字会在复核队列中列出；如需在此查看，请使用声明了该报表的模板重新提取。",
+         "ar": "لا يعلن قالب هذا التشغيل أي قائمة من هذا النوع، لذا لا تُعرض. الأرقام المستخرجة التي لا تصل إلى أي قائمة تُدرج في قائمة المراجعة؛ أعِد الاستخراج مقابل قالب يعلنها لعرضها هنا.",
+         "fr": "Le modèle de cette exécution ne déclare aucun état de ce type : aucun n'est affiché. Les montants extraits qui n'atteignent aucun état sont signalés dans la file de revue ; relancez l'extraction sur un modèle qui le déclare pour le voir ici."},
+    "This run's template declares this statement but no line items under it, so there is nothing to "
+    "render. Fix the template and re-extract; the figures themselves are unaffected.":
+        {"zh": "本次运行所用模板声明了该报表，但其下没有任何项目，因此无内容可显示。请修正模板后重新提取；已提取的数字本身不受影响。",
+         "ar": "يعلن قالب هذا التشغيل هذه القائمة لكن دون أي بنود تحتها، فلا يوجد ما يُعرض. أصلِح القالب وأعِد الاستخراج؛ الأرقام نفسها غير متأثرة.",
+         "fr": "Le modèle de cette exécution déclare cet état mais aucun poste en dessous : il n'y a rien à afficher. Corrigez le modèle et relancez l'extraction ; les montants eux-mêmes ne sont pas affectés."},
+    "No figures were extracted for this statement on this basis. Check the page scope, or the other "
+    "basis.":
+        {"zh": "本报表在此基础下未提取到任何数字。请检查页面范围，或改用另一基础。",
+         "ar": "لم تُستخرج أي أرقام لهذه القائمة على هذا الأساس. راجع نطاق الصفحات، أو الأساس الآخر.",
+         "fr": "Aucun montant n'a été extrait pour cet état sur cette base. Vérifiez la portée des pages, ou l'autre base."},
+    "Line mapped off the template": {"zh": "映射到模板之外的行",
+                                     "ar": "سطر مُعيَّن خارج القالب",
+                                     "fr": "Ligne rattachée hors du modèle"},
+    "Not on this template": {"zh": "不在此模板中", "ar": "ليس في هذا القالب",
+                             "fr": "Absent de ce modèle"},
+    "This figure was mapped to a concept the run's template does not put on any statement, so it "
+    "appears on no spread. Re-map it to a template line item, or un-map it to record that it "
+    "belongs on none — or re-extract against the current template, which may already declare it.":
+        {"zh": "该数值被映射到本次运行所用模板未列入任何报表的概念，因此不会出现在任何报表上。请将其重新映射到某个模板项目，或取消映射以记录它不属于任何项目——也可以按当前模板重新提取，当前模板可能已经声明了它。",
+         "ar": "عُيِّن هذا الرقم إلى مفهوم لا يضعه قالب هذا التشغيل في أي قائمة، فلا يظهر في أي جدول. أعِد تعيينه إلى بند من القالب، أو ألغِ تعيينه لتسجيل أنه لا ينتمي إلى أي بند — أو أعِد الاستخراج مقابل القالب الحالي، فقد يكون يعلنه بالفعل.",
+         "fr": "Ce montant a été rattaché à un concept que le modèle de cette exécution ne place sur aucun état : il n'apparaît sur aucun tableau. Réattribuez-le à un poste du modèle, ou dé-rattachez-le pour enregistrer qu'il n'appartient à aucun — ou relancez l'extraction sur le modèle courant, qui le déclare peut-être déjà."},
 })
 
 
@@ -234,10 +536,14 @@ def delete_document(
     """Delete a document the caller owns (admins may delete any), along with its extraction
     runs. The stored blob is content-addressed and de-duplicated, so it's only removed when
     no other document still references it."""
-    from app.db.models import Document, ExtractionRun
+    from app.db.models import Document, ExtractionRun, ReviewJudgement
 
     object_key = doc.object_key
     session.execute(sql_delete(ExtractionRun).where(ExtractionRun.document_id == doc.id))
+    # Children before the parent: both tables carry a FK to documents.id, and SQLite tolerates
+    # the wrong order while Postgres raises on it — so a deployment on the real database would
+    # 500 on every delete of a reviewed document if this ran after session.delete(doc).
+    session.execute(sql_delete(ReviewJudgement).where(ReviewJudgement.document_id == doc.id))
     session.delete(doc)
     session.commit()
 
@@ -377,12 +683,182 @@ def _latest_run(session: Session, document_id: str):
     ).scalars().first()
 
 
+def _run_template_id(run) -> str | None:
+    """Which template version a run was launched against — ONE spelling of the answer.
+
+    The id is written in two places when the run is created (the ``template_version_id`` column
+    and ``options["template_version_id"]``, routes/extractions.py), and either can be the only one
+    populated: a run built straight from ``options`` (as several fixtures and callers do) leaves
+    the column None. Answering the question in two places meant ``_coverage_block`` read the
+    column while the check builders read the option, so one response served template-derived
+    findings above a band stating no template was attached — the exact misread the band exists to
+    prevent, inside a single payload.
+    """
+    return run.template_version_id or (run.options or {}).get("template_version_id")
+
+
 def _prov_label(prov: dict | None) -> str:
+    """The HUMAN-FACING source label a card prints. Page-level on purpose — "p.1" is what the
+    reader wants to see. It is display text and nothing else: never put it in a judgement subject,
+    because two printed lines on one page share it. Use ``_prov_anchor`` for identity."""
     if not prov:
         return "—"
     if prov.get("source_kind") == "spreadsheet" and prov.get("sheet"):
         return f"{prov['sheet']}!{prov.get('cell', '')}"
     return f"p.{(prov.get('page_index', 0) or 0) + 1}"
+
+
+# Grid the normalized bbox is snapped to for the identity anchor: thousandths of the page.
+#
+# THE TWO FAILURE DIRECTIONS ARE NOT SYMMETRIC, so this number is chosen against the worse one.
+# Too COARSE and two separately printed lines land on one anchor: they collide on one subject_key,
+# and accepting one attributes a named reviewer's verdict to the other — a fabricated judgement,
+# which is unacceptable. Too FINE and OCR/re-render jitter moves a line's box across a bucket
+# boundary between runs: the anchor changes, the finding reads as new and RE-OPENS, and a reviewer
+# is asked to look at something they already looked at — annoying, and safe.
+#
+# So: err fine. On an A4 page (~842pt tall) a thousandth is ~0.84pt vertically, while the shortest
+# line a filing prints is ~7pt — eight buckets tall — so two printed lines cannot share a y
+# bucket, and x0/x1 separate two sub-tables printed side by side on the same baseline. Jitter is
+# normally a fraction of a point and lands in the same bucket; when it straddles a boundary the
+# finding re-opens, which is the direction we chose.
+#
+# Quantized to an INT rather than kept as a float: the digest must not be hostage to float
+# repr ("0.30000000000000004" vs "0.3" hash differently while naming one position).
+_ANCHOR_GRID = 1000
+
+
+def _snap(box, keys: tuple[str, ...]) -> str:
+    """``keys`` of one normalized box, snapped to ``_ANCHOR_GRID``, or "" if the box is not one."""
+    if not isinstance(box, dict) or not all(isinstance(box.get(k), (int, float))
+                                            for k in ("x0", "y0", "x1", "y1")):
+        return ""
+    return "/".join(str(int(round(float(box[k]) * _ANCHOR_GRID))) for k in keys)
+
+
+def _prov_anchor(prov: dict | None) -> str:
+    """A PRECISE, content-derived source locator, for the judgement subject only.
+
+    ``_prov_label`` returns "p.1" for every line on page 1, and a subject built on it makes two
+    printed lines one identity — which is how accepting an unmapped "Others 1,234" came to stamp
+    the accepting reviewer's name, time and reason onto a different unmapped "Others 5,678". The
+    anchor is derived from the geometry the extractor recorded instead
+    (core/models/geometry.py::Provenance), snapped to ``_ANCHOR_GRID``.
+
+    IT ANCHORS ON THE ROW LABEL, NEVER ON THE FIGURE. A subject must be independent of the numbers
+    the card prints: evidence changing means "stale, come look again", while a subject changing means
+    "different finding", which the screen reports as the old one having been corrected or no longer
+    raised. ``Provenance.bbox`` is the VALUE word's box (services/row_reconstruct.py), and a figure's
+    box moves when the figure does — "Cash and cash equivalents" printed 1,204 gave
+    p0#b798/101/840/118 and the same line printed 12,048 gave p0#b789/…, nine buckets left, because
+    right-aligned numbers grow leftwards. So an acceptance on the two check types this whole layer
+    was built around ORPHANED on a re-priced figure instead of going stale. ``label_bbox`` is the
+    caption's own geometry: it does not move when the amount beside it does, and
+    routes/extractions.py::_prov_dict carries it precisely so it can be used here.
+
+    Three fallbacks, in order, each giving up discrimination rather than faking it:
+
+    * a spreadsheet cell is already an exact address that no figure can move, so sheet + cell
+      (or the label cell) is used verbatim;
+    * a paginated source with no label geometry falls back to the value box's VERTICAL BAND alone —
+      the printed line's y extent, which right-alignment does not touch — and deliberately drops x0
+      and x1, which do move with the digit count. Two sub-tables printed on one baseline then share
+      an anchor, and ``judgement.apply_judgements`` refuses to attribute a judgement to either. A
+      refusal is honest; an anchor that silently follows a figure is not;
+    * ``#noprov`` when the value carries no provenance at all, and ``#nobox`` for a paginated source
+      with no geometry whatsoever (an adapter reporting a page and nothing else). Both are
+      page-level, so two such lines on one page collide into that same refusal.
+    """
+    if not prov:
+        return "#noprov"
+    if prov.get("sheet"):
+        return f"{prov['sheet']}!{prov.get('cell') or prov.get('label_cell') or ''}"
+    page = int(prov.get("page_index") or 0)
+    label = _snap(prov.get("label_bbox"), ("x0", "y0", "x1", "y1"))
+    if label:
+        return f"p{page}#l{label}"
+    band = _snap(prov.get("bbox") or prov.get("value_bbox"), ("y0", "y1"))
+    return f"p{page}#" + (f"y{band}" if band else "nobox")
+
+
+def _row_ref(r: dict) -> str:
+    """A stable handle on ONE extracted row, for an action that has to find it again.
+
+    A run's rows carry no id, and the two handles already in the payload cannot serve: the check id
+    embeds the row's INDEX (a render key that moves whenever extraction composition changes) and the
+    canonical key is exactly what an unmapped row does not have. So the handle is the identity the
+    judgement layer already established for a row — its normalised caption plus ``_prov_anchor``, the
+    caption's own geometry — and nothing else. Deliberately NOT the subject key: that one folds in the
+    finding's KIND and the concept it was mapped to, so re-mapping a row would change the key of the
+    thing being re-mapped, and one row wearing two findings would have two handles.
+
+    Value-independent by construction, which is the property that matters: the analyst reads a figure,
+    picks a concept, and the row the server writes to must be the row they were looking at even if a
+    concurrent edit changed the amount.
+    """
+    from app.services import judgement
+
+    first = (r.get("values") or [{}])[0]
+    return judgement.subject_key({"k": "row",
+                                  "label": judgement.norm(r.get("source_label")),
+                                  "anchor": _prov_anchor(first.get("provenance"))})
+
+
+def _remap_targets(template_def: dict | None, locale: str = "en") -> list[dict]:
+    """Every template line a printed row may be re-mapped ONTO, in template order.
+
+    Two kinds of node are left out, and both would be a defect rather than a choice:
+
+    * a CALCULATED line (one declaring a ``rollup``). Mapping a printed row onto a computed subtotal
+      writes a figure the rollup then contradicts — the same reason ``_flip_sign_action`` refuses to
+      flip one;
+    * a section HEADER, which holds no figure at all.
+
+    ``section`` is carried so the client can group the list. 180-odd concepts in one flat select is a
+    list nobody can find anything in, and the section is the only grouping an analyst reads the
+    statement by.
+    """
+    from app.services.rollups import calculated_nodes, node_labels
+
+    labels = node_labels(template_def, locale)
+    computed = set(calculated_nodes(template_def))
+    out: list[dict] = []
+    for stmt in (template_def or {}).get("statements", []):
+        st = stmt.get("type", "")
+        for sec in stmt.get("sections") or []:
+            section = labels.get(sec.get("canonical_key") or "") or sec.get("label") or ""
+            for node in sec.get("children") or []:
+                key = node.get("canonical_key")
+                if not key or key in computed or node.get("role") in ("header", "spacer"):
+                    continue
+                out.append({"canonical_key": key, "label": labels.get(key, key),
+                            "statement": st, "section": section})
+    return out
+
+
+def _remap_offer(r: dict, locale: str = "en") -> dict:
+    """What a row-shaped finding needs to offer "map this to a different line item".
+
+    The candidate list is NOT in here — it is served once per payload as ``remap_targets``, because
+    it is the same 180-odd concepts for every card. What is per card is the handle on the row, the
+    caption the analyst is looking at, and where it is filed now.
+
+    A row already re-mapped by hand says so, with who and when: the finding it answered is gone from
+    the queue on the next fetch, so without this the only trace of a human decision would be the
+    absence of a card.
+    """
+    prior = r.get("remap") or {}
+    note = ""
+    if prior:
+        was = prior.get("from") or _t("unmapped", locale)
+        note = _t("Re-mapped by hand", locale) + f" — {was} → {prior.get('to') or ''}"
+        if prior.get("by"):
+            note += f" ({prior['by']})"
+    return {"row_ref": _row_ref(r),
+            "label": r.get("source_label") or "",
+            "current_key": r.get("canonical_key") or "",
+            "remapped": prior or None,
+            "remapped_note": note}
 
 
 def _low_conf_threshold() -> float:
@@ -393,68 +869,1223 @@ def _low_conf_threshold() -> float:
     return get_settings().extraction.auto_accept_confidence
 
 
+# Width, in printed percentage points, of one confidence band. See `_confidence_evidence`.
+_CONF_BAND = 10
+
+
+def _confidence_evidence(conf, method) -> dict:
+    """The mapping's strength and method, as the low-confidence card's fingerprint carries them.
+
+    A low-confidence finding is a statement ABOUT THE MAPPING — "this label really is this concept,
+    weak score notwithstanding" — and the card prints the score twice (its collapsed ``delta`` and
+    its "Confidence" row) plus the method. Leaving them out of the evidence made the one thing the
+    finding is about unable to move the digest: 0.41/'fuzzy' accepted, then 0.02/'llm' served as
+    'accepted' with ``changed == []`` while the card read "Method llm · Confidence 2%" under the
+    reviewer's name. Every other served type fingerprints what it prints.
+
+    They are QUANTIZED rather than omitted, the same answer ``_prov_anchor`` gave to the same worry:
+
+    * ``confidence_band`` is the printed percentage floored into ``_CONF_BAND``-point bands, so 41%
+      and 44% are one band and a collapse to 2% is four bands away. THE FAILURE DIRECTIONS ARE NOT
+      SYMMETRIC and this is chosen on them: too coarse and a collapse hides behind an acceptance
+      nobody re-made, which puts a named verdict on a mapping that is now barely a guess; too fine
+      and a re-scored 0.41→0.39 withdraws a sound acceptance and nags. 10 points is the coarsest
+      band that cannot contain a collapse — the queue only raises this finding below the
+      auto-accept threshold, so the whole reachable range is a handful of bands and any real
+      deterioration crosses one. Jitter that straddles a band edge re-opens the finding, which is
+      the direction worth accepting: it asks for another look rather than asserting one happened.
+    * ``method`` is EXACT, unbucketed. A method change is not jitter — 'fuzzy' and 'llm' are
+      different kinds of evidence for the same claim, and a reviewer who accepted a fuzzy alias
+      match has not thereby accepted a model's guess. There is nothing to quantize: the value is
+      one of a handful of names, and a re-run does not wobble between them by accident.
+
+    ``None`` for a card raised by the ``low_mapping_confidence`` flag with no score at all: the band
+    is absent rather than a fabricated number, and the card prints "—" over the same absence.
+
+    The band is stored as the RANGE it stands for ("40-49%") and not as a bucket index, because this
+    dict is also what the accepted-figures panel renders back to a reader (``_evidence_rows``): "4"
+    under a confidence label would be a number that means nothing it appears to mean.
+    """
+    band = None
+    if isinstance(conf, (int, float)):
+        lo = (int(round(conf * 100)) // _CONF_BAND) * _CONF_BAND
+        band = f"{lo}-{min(lo + _CONF_BAND - 1, 100)}%"
+    return {"confidence_band": band, "method": str(method or "")}
+
+
 def _row_value(rows: list[dict], key: str, basis: str = "consolidated", period: str = "current"):
-    for r in rows:
-        if r.get("canonical_key") != key:
+    """One concept's figure — exactly the figure the statement grid shows for it.
+
+    Read through ``concept_value`` so the accounting checks validate the number on screen: the
+    sum when several printed lines map to the concept, or the analyst's manual value when one
+    was entered. Checking a different number than the grid displays is worse than not checking.
+    """
+    return _concept_value([r for r in rows if r.get("canonical_key") == key], basis, period)
+
+
+_BALANCE_KEYS = {
+    "assets": "bs_total_assets",
+    "assets_derived": ("bs_non_current_assets__total_non_current_assets",
+                       "bs_current_assets__total_current_assets"),
+    "eqliab": "bs_total_equity_and_liabilities",
+    "eqliab_derived": ("bs_equity__total_equity",
+                       "bs_non_current_liabilities__total_non_current_liabilities",
+                       "bs_current_liabilities__total_current_liabilities"),
+}
+
+
+def _balance_sides(rows: list[dict], basis: str, period: str) -> tuple[float | None, float | None,
+                                                                      bool]:
+    """The two sides of the accounting identity, derived from subtotals when the filing does
+    not print the totals themselves.
+
+    Plenty of statements — HK/PRC ones especially — never print a "Total assets" line: they run
+    non-current assets, current assets, then "Total assets less current liabilities". Requiring
+    the printed total meant the identity check silently never ran on exactly those filings.
+    Both sides are reconstructed from the section subtotals instead, which the template already
+    defines, so the identity is genuinely checked. Returns (assets, equity+liabilities,
+    whether either side was derived, the concepts the two figures were actually read from).
+
+    That last element is what lets the queue say which extracted lines this finding NAMES without
+    a second function guessing at the same key list from the outside.
+    """
+    def v(key: str):
+        return _row_value(rows, key, basis, period)
+
+    used: list[str] = []
+    assets, derived = v(_BALANCE_KEYS["assets"]), False
+    if assets is not None:
+        used.append(_BALANCE_KEYS["assets"])
+    else:
+        nca, ca = (v(k) for k in _BALANCE_KEYS["assets_derived"])
+        if nca is not None and ca is not None:
+            assets, derived = nca + ca, True
+            used += list(_BALANCE_KEYS["assets_derived"])
+
+    eqliab = v(_BALANCE_KEYS["eqliab"])
+    if eqliab is not None:
+        used.append(_BALANCE_KEYS["eqliab"])
+    else:
+        eq, ncl, cl = (v(k) for k in _BALANCE_KEYS["eqliab_derived"])
+        if eq is not None and ncl is not None and cl is not None:
+            eqliab, derived = eq + ncl + cl, True
+            used += list(_BALANCE_KEYS["eqliab_derived"])
+    return assets, eqliab, derived, used
+
+
+def _flip_sign_action(res: dict, rows: list[dict], template_def: dict | None,
+                      locale: str) -> dict | None:
+    """The one MECHANICAL fix this product offers: reverse the sign of the single figure the
+    structural check already named as the culprit.
+
+    Every condition below refuses the button rather than offering one that would do the wrong
+    thing, because a button that lands on the wrong line is worse than prose telling the analyst
+    to look:
+
+    * the suspect is whichever concept ``_sign_suspect`` (structural_checks.py:510) named, and no
+      other. That function already declines to name a candidate when two tie, on the grounds that
+      a wrong pointer is worse than none; the judgement is reused here, never re-derived;
+    * exactly ONE printed row may map to the concept. PATCH replaces a multi-row concept's SUM
+      with the typed figure, so flipping a composed concept would destroy the composition — and
+      which of the printed lines carries the wrong sign is precisely what a human must decide;
+    * the slot must not already carry a typed figure. A machine flip must never overwrite an
+      analyst's value, which also means the button cannot be clicked twice; a revert brings
+      it back;
+    * the suspect must not be a template-CALCULATED subtotal. Flipping one writes an override the
+      rollup then honours, papering over the mis-signed component that is the actual defect.
+
+    Without ``template_def`` that last exclusion cannot be tested at all, and a fix that cannot
+    be checked is not offered.
+    """
+    from app.services.rollups import node_labels
+
+    d = res.get("details") or {}
+    suspect = d.get("sign_suspect")
+    basis, period = d.get("basis"), d.get("period_label")
+    if not template_def or not isinstance(suspect, str) or not suspect:
+        return None
+    if basis not in ("consolidated", "standalone") or not isinstance(period, str) or not period:
+        return None
+    group = [r for r in rows if r.get("canonical_key") == suspect]
+    if len(group) != 1 or _edited_for(group[0], basis, period):
+        return None
+    current = _concept_value(group, basis, period)
+    if not isinstance(current, (int, float)) or current == 0:
+        return None
+    if suspect in _calculated(rows, template_def, basis, period, locale):
+        return None
+    flipped = -float(current)
+    # The edit is recorded with the RULE that prompted it and the concept it names, so
+    # `edit_comments` says why the figure was changed rather than that it was.
+    reason = _t("Sign flipped on the figure the structural check named as the one whose sign, "
+                "reversed, would satisfy the relation", locale)
+    rule_id = res.get("rule_id") or ""
+    return {
+        "kind": "flip_sign", "canonical_key": suspect, "basis": basis, "period": period,
+        "label": node_labels(template_def, locale).get(suspect, suspect),
+        "from": float(current), "to": flipped,
+        # Formatted here, not in the browser: the card prints ':,.0f' everywhere and the client
+        # formats no figure — which is also why judgement.q quantizes evidence to whole units.
+        "from_display": f"{float(current):,.0f}", "to_display": f"{flipped:,.0f}",
+        "comment": f"{reason} ({rule_id}: {suspect})." if rule_id else f"{reason} ({suspect}).",
+    }
+
+
+def _structural_inputs_edited(d: dict, rows: list[dict], locale: str) -> dict:
+    """Whether a figure this relation uses has been typed over since the relation was evaluated.
+
+    ``run.result["structural"]`` is written once by the pipeline (routes/extractions.py:320) and
+    NOTHING recomputes it on an edit, so a structural card survives its own correction — including
+    the flip-sign fix — until the next extraction. Rather than let the card look like a button
+    that did nothing, it says so: after a successful flip ``fix_action`` becomes null (the slot is
+    now edited) and this note explains why the finding is still on screen.
+    """
+    # A guard's `target`/`components` are the FIRST violation and the rest, so on a guard the set
+    # that matters is `violations_keys` — every line the card lists. Naming only the first would
+    # under-report an edit exactly the way the guard's evidence used to under-report a violation.
+    keys = {d.get("target") or "", *(d.get("components") or []),
+            *(d.get("violations_keys") or [])}
+    basis, period = d.get("basis") or "consolidated", d.get("period_label")
+    edited = sorted({r.get("canonical_key") for r in rows
+                     if r.get("canonical_key") in keys and r.get("canonical_key")
+                     and _edited_for(r, basis, period)})
+    note = _t("A figure this relation uses has been edited since it was evaluated. The relation "
+              "is re-evaluated on the next extraction.", locale) if edited else ""
+    return {"inputs_edited": bool(edited), "inputs_edited_keys": edited,
+            "inputs_edited_note": note}
+
+
+def _guard_violation_label(v: dict) -> str:
+    """The lines one guard violation names, as the card's row label.
+
+    A violation dict is shaped by its predicate (``_guard_slot``): a signed key, an aggregate plus
+    the components loaded beside it, or a pair asserted equal. All of them are canonical keys, so
+    the label is locale-free by construction — the same reason a component list is keyed on
+    canonical_key rather than its localized label.
+    """
+    names = [str(x) for x in (v.get("key"), v.get("aggregate"), v.get("non_zero")) if x]
+    names += [str(x) for x in (v.get("equal") or [])]
+    names += [str(x) for x in (v.get("components") or [])]
+    label = " · ".join(dict.fromkeys(names))
+    return f"{label} ({v['expected']})" if v.get("expected") else label
+
+
+# The figure fields a violation can carry, in the order they are printed. Named explicitly rather
+# than "every numeric-looking value", so a new field in `_guard_slot` shows up as a missing figure
+# on the card (fix it here) instead of silently joining a fingerprint nobody displayed.
+_GUARD_FIGURE_FIELDS = ("value", "aggregate_value", "non_zero_value")
+
+
+def _guard_violations(d: dict) -> dict[str, str]:
+    """A guard's violation set as ``{lines: figures}`` — what the card prints and what the
+    evidence digest is taken over, so the two cannot disagree."""
+    from app.services import judgement
+
+    out: dict[str, str] = {}
+    for v in d.get("violations") or []:
+        figures = [f"{judgement.q(v[f]):,.0f}" for f in _GUARD_FIGURE_FIELDS
+                   if v.get(f) is not None]
+        out[_guard_violation_label(v)] = " / ".join(figures) if figures else "—"
+    return out
+
+
+def _guard_check(res: dict, d: dict, locale: str) -> dict:
+    """A failed rulebook GUARD as a review item, fingerprinted on its VIOLATION SET.
+
+    A guard leaves ``RuleResult.expected``/``actual``/``difference`` at their None defaults
+    (core/models/reports.py:38-40) and puts everything it asserts in ``details.violations`` /
+    ``violations_keys``. Built like an arithmetic relation, its card therefore printed "Reported 0
+    · Sum of template components 0 · Difference 0" — three numbers derived from nothing — and
+    fingerprinted exactly those constants. An acceptance on a guard could then NEVER go stale: a
+    mapping regression that took the same BLOCKING guard from one violated key to nine left the
+    subject unchanged and the evidence byte-identical, so nine violations came back as 'accepted'
+    by a person who examined one, dropped out of ``summary.open``, out of the red counter and out
+    of the commentary's data-quality count. The stale mechanism was structurally unreachable for
+    every guard kind — sign_expectation, consolidation_eliminated, mutually_exclusive,
+    equal_values, equal_while_third_non_zero.
+
+    So the card shows the violation set and the digest is taken over the same set: it moves when a
+    violation is added, removed, or its figure changes. ``delta`` is "—" rather than a computed
+    zero, because a guard has no difference to report.
+
+    THE SUBJECT IS THE GUARD, AND NOTHING THE VIOLATIONS OR THE RULEBOOK'S ORDER DECIDE. It used to
+    be ``{rule_id, scope, target}``, and both halves of that were wrong:
+
+    * ``rule_id`` is ``guard:{predicate}:{keys[0]}`` (structural_checks.py), so two rulebook
+      sentences sharing a predicate and a first key were ONE identity — verified against the real
+      loader with two ``equal to`` sentences both starting bs_equity__non_controlling_interests.
+      Run 1 fails sentence A and a reviewer accepts; run 2 sentence A passes and sentence B fails,
+      and B was served 'stale' carrying A's reviewer, A's reason and A's figures on a BLOCKING
+      finding nobody had examined. ``structural_checks._unique`` then made the id unique by
+      appending the sentence's 1-based ORDINAL among those sharing the base id — and an ordinal is a
+      fact about POSITION, about neither the guard nor its figures. Deleting an unrelated sentence A
+      renumbered a byte-identical, still-failing sentence B from ``…#2`` to ``…#1``, which moved
+      subject_key and orphaned the acceptance under "corrected, or no longer raised". So the id is
+      not in the identity at all: the sentence itself and the operands it names are, and those
+      cannot be moved by another sentence being edited, added or removed. The id stays on the card
+      (``id``/``where``) for the SCREEN's DOM key and coverage's per-rule alarms, which have only
+      the id — a stored judgement is not pinned to it;
+    * ``target`` is ``violations[0]["key"]`` for sign_expectation — DERIVED FROM THE FIGURES. One
+      more violated key changed the SUBJECT, so the acceptance detached and the screen reported the
+      finding as corrected or no longer raised while the blocking guard was failing on MORE lines
+      than when it was accepted. A subject must move only when the claim changes; a figure moving
+      belongs in the evidence, where it reads as 'stale' — come look again.
+
+    ``rule`` is whitespace/case-collapsed (``judgement.norm``): re-wrapping a rulebook sentence is
+    not a different assertion, while re-writing it is — and that legitimately withdraws an
+    acceptance made against what the sentence used to say.
+    """
+    from app.services import judgement
+
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    violations = _guard_violations(d)
+    keys = ", ".join(sorted(d.get("violations_keys") or []))
+    asserts = [str(k) for k in (d.get("guard_keys") or [])]
+    calc = [[L("Rule"), str(d.get("rule_text") or d.get("guard") or ""), False],
+            [L("Lines in violation"), keys or "—", True],
+            [L("Violations"), str(len(violations)), False]]
+    # The operands the SENTENCE names, printed because they are part of the identity a reviewer's
+    # acceptance is pinned to — and because they are what distinguishes this guard from another one
+    # the rulebook may state under the same predicate. sign_expectation names none: it scans every
+    # concept with a declared sign convention, and the row would be an empty assertion.
+    if asserts:
+        calc.append([L("Concepts the rule names"), " · ".join(asserts), False])
+    calc += [[label, figures, False] for label, figures in violations.items()]
+    return {
+        "id": f"chk-guard-{res.get('rule_id')}-{res.get('scope_key')}",
+        "type": "structural", "icon": "≠",
+        "title": L("Rulebook guard failed"),
+        "where": f"{res.get('rule_id')} · {res.get('scope_key')}",
+        "severity": L("Check failed"), "tone": "high",
+        # No difference exists for a guard: it asserts a condition, not an equality.
+        "delta": "—", "target": d.get("target") or "",
+        # Every line in the violation set — the card lists them all, so a finding stands against
+        # each. `target` is only the first of them.
+        "names": sorted(str(k) for k in (d.get("violations_keys") or []) if k),
+        "calc": calc,
+        "fix": L("The rulebook declares this must hold, and it does not for the lines listed. "
+                 "Check each one against the document; the guard is re-evaluated on the next "
+                 "extraction."),
+        # A guard is not an arithmetic relation, so it does not share the relation's subject kind:
+        # the two carry different fields, and one `k` over two shapes is how `target` came to mean
+        # "the declared total" on one card and "whichever key happened to break first" on the other.
+        "subject": {"k": "guard",
+                    "scope": str(res.get("scope_key") or ""),
+                    "predicate": str(d.get("guard") or d.get("op") or ""),
+                    "asserts": asserts,
+                    "rule": judgement.norm(d.get("rule_text") or "")},
+        "evidence": {
+            # The violation set, and its size beside it so a set that grew still moves the digest
+            # even if two violations were to render under one label.
+            "violations": violations,
+            "violation_count": len(violations),
+            "violations_keys": keys,
+        },
+        # A guard names no single suspect figure (`sign_suspect` is None by construction), so there
+        # is no mechanical fix to offer — and a button that cannot land on one line is not offered.
+        "fix_action": None,
+    }
+
+
+# ONE assertion a served card makes: this target, in this scope, is out by this much. Every finding
+# that reports a difference is suppressed on ASSERTIONS and never on bare targets, because "a card
+# mentions this target" and "a card already tells the reader about this difference" are different facts,
+# and only the second one makes a second card a duplicate. (The one finding that reports no difference
+# at all is asked the weaker question below.)
+#
+# `covered` used to be a set of bare target strings, and that cost two blocking findings on the
+# shipped rulebook. An equity-closing card whose target is bs_equity__total_equity — asserting a
+# 1,000 break between the equity statement's closing row and the balance sheet — suppressed
+# rollup:bs_equity__total_equity and section_reconciliation:bs_s5_equity, which assert a 2,500 break
+# between total equity and its own components. Same target, a different statement about it, and the
+# 2,500 was then reported NOWHERE while `failed_reported_elsewhere` counted it as raised above. The
+# key also carried no scope, so the consolidated balance card — hardcoded to consolidated/current —
+# deleted a 900 break in the STANDALONE column it makes no claim about at all.
+_Assertion = tuple[str, str, str, int]
+
+# ONE target a served card already has a card about, and THE COLUMN it has it in — the other, weaker
+# question: not "is this difference already reported" but "does this template line already have a card
+# here at all". It is the only question a finding that reports NO difference can be asked, which is why
+# it exists beside the assertion: an `uncomputed` card's delta is the literal "—".
+#
+# It carries the scope for the same reason the assertion does. Keyed on the bare template key, this set
+# let `chk-balance` — hardcoded consolidated/current — delete the STANDALONE column's card for the same
+# line, and nothing counts a dropped calculated card (`failed_reported_elsewhere` sums relations only),
+# so it left the queue with nothing anywhere saying it had.
+_Claim = tuple[str, str, str]
+
+# Where each card kind keeps the difference it prints — EVERY kind that prints one, because this map
+# is what a card declares about itself, read both to build the set of what is already on screen and to
+# ask whether a new card would restate it.
+#
+# A kind absent from this map declares NO assertion and therefore suppresses nothing, which is the
+# safe default and a real case rather than a hypothetical one: `uncomputed`'s delta is the literal "—"
+# because none of the components could be computed, so it makes no claim about a difference and cannot
+# be the duplicate of a relation that found one (it yields through the weaker question instead —
+# `_claimed_targets`). A guard is absent for a stronger reason still: see `_assertion_of`. A card type
+# added later without a key here over-reports; it cannot lose a finding.
+_ASSERTED_DIFF_KEY = {
+    "balance": "diff",
+    "equity_tie": "diff",
+    "structural": "diff",
+    "calculated_mismatch": "diff",
+}
+
+
+def _card_scope(check: dict) -> tuple[str, str] | None:
+    """The COLUMN a served card makes its claim about, as (basis, period) — or None when it names
+    none.
+
+    TWO VOCABULARIES, ONE QUESTION, ONE READER. The accounting cards declare the pair outright as
+    ``subject.basis``/``subject.period``; a relation card carries the evaluator's ``scope_key``, which
+    is that same pair spelled as one string (services/structural_checks.py::_scope). Both suppression
+    questions ask this, so it is answered here once: the suppression key that carried NO scope is how
+    a consolidated card came to delete a standalone-column break, and a second reader inventing a
+    third spelling of the pair is how that would come back.
+
+    None for the row-shaped findings (unmapped, off-template, low-confidence). Those are about one
+    printed line rather than a column, and their ``target`` is that line's CAPTION rather than a
+    template key — so they own no template line in any column and may silence nothing. Stated rather
+    than left to the fact that a caption does not usually collide with a canonical key.
+    """
+    subject = check.get("subject") or {}
+    basis, period = subject.get("basis"), subject.get("period")
+    if basis and period:
+        return str(basis), str(period)
+    # `scope_key` is "{basis}/{period}", with "—" for a period the slot could not name. Partitioned
+    # rather than split so a malformed value yields None and keeps the card it would have silenced.
+    basis, _, period = str(subject.get("scope") or "").partition("/")
+    return (basis, period) if basis and period else None
+
+
+def _assertion_of(check: dict) -> _Assertion | None:
+    """What this card tells the reader, or None when it does not say all of it.
+
+    None is not a failure — it means this card may not stand in for anything else. Every part has
+    to be present and comparable: a card that cannot name its scope cannot be shown to be about the
+    same column as the relation it would silence.
+    """
+    subject = check.get("subject") or {}
+    # A guard asserts a CONDITION rather than an equality, so it is not the duplicate of any
+    # arithmetic relation — and its own `target` is derived from the violations for several
+    # predicates, which must never decide whether another card exists.
+    if subject.get("k") == "guard":
+        return None
+    diff_key = _ASSERTED_DIFF_KEY.get(str(subject.get("k") or ""))
+    target, scope = check.get("target"), _card_scope(check)
+    if not (diff_key and target and scope):
+        return None
+    diff = (check.get("evidence") or {}).get(diff_key)
+    if diff is None:
+        return None
+    # Magnitude, not sign: a rollup computes target − sum where the balance identity computes
+    # assets − (equity + liabilities), so one break legitimately reaches the two cards with
+    # opposite signs. Matching on magnitude suppresses that true duplicate; it cannot merge two
+    # DIFFERENT differences, which is the failure this function exists to prevent.
+    return (str(target), *scope, abs(int(diff)))
+
+
+def _reported_assertions(checks: list[dict]) -> set[_Assertion]:
+    """Everything the cards above already tell the reader — the only grounds for dropping a card.
+
+    ``checks`` is the cards ALREADY SERVED, and never a list containing the card being tested against
+    it: every card asserts what it asserts, so a list including it answers "yes, that is reported" for
+    the card itself and drops it. Both callers pass the queue as it stands before the batch they are
+    about to build.
+    """
+    return {a for a in (_assertion_of(c) for c in checks) if a is not None}
+
+
+def _claimed_targets(checks: list[dict]) -> set[_Claim]:
+    """The (target, basis, period) triples served cards OWN — the only ones that may suppress a
+    second card about the same line in the same column.
+
+    Read by the one finding with no difference of its own to compare, so that this is the only
+    question it can be asked: ``uncomputed`` in ``_calculated_checks``. Everything that does report a
+    difference is compared on the difference (``_assertion_of``).
+
+    A GUARD OWNS NOTHING HERE, and that is the whole point of the function. A guard card's ``target``
+    is ``violations[0]["key"]`` under sign_expectation (services/structural_checks.py::_guard_slot),
+    derived from the FIGURES — so letting it into this set means WHICH LINE IS MIS-SIGNED decides
+    whether a different card exists: mis-sign bs_total_equity_and_liabilities and the "Printed subtotal
+    could not be verified" card for that very line disappears from the queue. That is the defect that
+    dropped the guard card itself (see ``_structural_checks``), one field along, and it got worse the
+    moment guards started being emitted unconditionally — so a guard is excluded from BOTH suppression
+    questions, here and in ``_assertion_of``.
+
+    Every other kind's ``target`` is DECLARED: the balance identity's side, a relation's template
+    target, a calculated line's key. Those may legitimately stop a second card about that line — but
+    only in the column the card actually looked at, which is what ``_card_scope`` supplies and what a
+    bare set of key strings could not say. A card that names no column names no claim at all.
+    """
+    claims = ((c.get("target"), _card_scope(c)) for c in checks
+              if (c.get("subject") or {}).get("k") != "guard")
+    return {(str(target), *scope) for target, scope in claims if target and scope}
+
+
+def _relation_reported_elsewhere(res: dict, reported: set[_Assertion]) -> bool:
+    """True when this failed ARITHMETIC relation's difference is already raised by a card above it.
+
+    ONE spelling of the suppression, read by the emitter (``_structural_checks``) and by the count
+    the coverage band prints beside its failed bucket (``failed_reported_elsewhere``). The two used
+    to be two expressions of one decision, and they disagreed about guards: the emitter dropped a
+    guard whose figure-derived ``details.target`` collided with a target the balance card owned,
+    while the count reported that guard as "reported elsewhere" when NOTHING reported it.
+
+    A GUARD IS NEVER SUPPRESSED — it asserts a condition rather than an equality, so it is not a
+    duplicate of any arithmetic card.
+
+    Suppression requires the SAME difference about the SAME target in the SAME column, and anything
+    short of that shows the card. That default is the point: a duplicate card is noise a reader can
+    see past, while a dropped one is a blocking finding reported nowhere — and if this relation's
+    scope is spelled in a vocabulary the cards do not use, "no match" is the answer that keeps it on
+    screen. ``period_label`` is the slot name (services/periods.py CURRENT/PRIOR), the same
+    vocabulary the card subjects carry, so the comparison is between like and like today.
+    """
+    d = res.get("details") or {}
+    if res.get("status") != "fail":
+        return False
+    if res.get("kind") == "guard" or d.get("guard"):
+        return False
+    target, basis, period = d.get("target"), d.get("basis"), d.get("period_label")
+    difference = res.get("difference")
+    if not (target and basis and period) or difference is None:
+        return False
+    try:
+        magnitude = abs(int(round(float(difference))))
+    except (TypeError, ValueError):
+        return False
+    return (str(target), str(basis), str(period), magnitude) in reported
+
+
+def _structural_checks(structural: list[dict], locale: str, covered: set[_Assertion],
+                       rows: list[dict] | None = None,
+                       template_def: dict | None = None) -> list[dict]:
+    """Failed template-structure relations as review items (from the structural stage).
+
+    Only ``fail`` rows become checks: a ``skipped`` row means the relation could not be
+    evaluated because a participant was never extracted, which is a coverage fact, not a
+    defect. A relation is left out only when a card above ALREADY REPORTS THE SAME DIFFERENCE
+    about the same target in the same column, so the analyst does not see one break twice —
+    never merely because some card mentions the same target, which silenced two blocking
+    breaks and a whole standalone column (see ``_relation_reported_elsewhere``).
+
+    The fix action and the edited-inputs note are derived HERE rather than by the caller because
+    the relation's ``details`` dict is what both need: carrying it out on the payload just so a
+    later pass could re-read it would be the same data in two places.
+
+    A GUARD is not an arithmetic relation and gets its own card — see ``_guard_check`` — and it is
+    emitted whatever is in ``covered``: see ``_relation_reported_elsewhere``.
+    """
+    from app.services import judgement
+
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    out: list[dict] = []
+    for res in structural:
+        d = res.get("details") or {}
+        if res.get("status") != "fail":
             continue
-        for v in r.get("values") or []:
-            if (v.get("basis") or "consolidated") == basis and v.get("period_label") == period:
-                try:
-                    return float(str(v.get("value")).replace(",", ""))
-                except (TypeError, ValueError):
-                    return None
-    return None
+        # THE GUARD BRANCH COMES FIRST, AND NO SUPPRESSION TEST RUNS BEFORE IT. `covered` used to be
+        # tested one line above this branch, and for sign_expectation `details.target` is
+        # `violations[0]["key"]` (services/structural_checks.py::_guard_slot) — derived from the
+        # FIGURES. So a run that mis-signed one more line could move the guard's target onto
+        # bs_total_assets, which the balance card owns, and the whole guard card vanished from the
+        # queue: the reviewer's acceptance was then reported as orphaned under "corrected, or no
+        # longer raised" while the rulebook rule was failing on two lines and nothing anywhere showed
+        # it. Whether a card EXISTS may not be decided by a figure-derived field.
+        if res.get("kind") == "guard" or d.get("guard"):
+            out.append({**_guard_check(res, d, locale),
+                        **_structural_inputs_edited(d, rows or [], locale)})
+            continue
+        if _relation_reported_elsewhere(res, covered):
+            continue
+        expected, actual = float(res.get("expected") or 0), float(res.get("actual") or 0)
+        suspect = d.get("sign_suspect")
+        calc = [[L("Reported"), f"{actual:,.0f}", False],
+                [L("Sum of template components"), f"{expected:,.0f}", True],
+                [L("Difference"), f"{actual - expected:,.0f}", False]]
+        calc += [[k, f"{float(v):,.0f}", False]
+                 for k, v in (d.get("component_values") or {}).items()]
+        fix = L("The reported figure does not equal the components the template says it is made "
+                "of, so a value is on the wrong line. Check the components and the total "
+                "against the document.")
+        if suspect:
+            fix = f"{fix} {L('Flipping the sign of')} {suspect} {L('would make it balance.')}"
+        out.append({
+            "id": f"chk-structural-{res.get('rule_id')}-{res.get('scope_key')}",
+            "type": "structural", "icon": "≠",
+            "title": L("Figure does not equal its template components"),
+            "where": f"{d.get('target')} · {res.get('scope_key')}",
+            "severity": L("Check failed"), "tone": "high",
+            "delta": f"{actual - expected:,.0f}", "target": d.get("target") or "",
+            # The total AND its components: the card prints every component's figure and tells the
+            # analyst to check them, so each of those lines is named by this finding.
+            "names": [k for k in [d.get("target") or "", *(d.get("components") or [])] if k],
+            "calc": calc, "fix": fix,
+            # WHAT THE RELATION ASSERTS, and ONLY that: the target, the operator and the components,
+            # in declared order (order carries the signs for a `diff`). An authored identity id is
+            # free text, so two rulebook entries can share one; with only {rule_id, scope, target} in
+            # the subject, run 1 failing entry A and run 2 failing entry B served B as 'stale' under
+            # A's reviewer and A's reason. Every field here is DECLARED by the template or the
+            # rulebook and moves only when the rule is re-authored — which is exactly when an
+            # acceptance made against what the rule used to assert should detach.
+            #
+            # `rule_id` is NOT here, for the same reason it left the guard subject (see
+            # `_guard_check`): `structural_checks._unique` disambiguates a repeated authored id by
+            # appending the entry's 1-based ORDINAL, which is a fact about POSITION in the rulebook.
+            # Deleting an unrelated entry that shared the id renumbers a byte-identical, still-failing
+            # relation from `dup#2` to `dup`, and a positional identity would then report that
+            # acceptance as "corrected, or no longer raised". The id stays on the card's `id` and
+            # `where`, which is what the screen and coverage's per-rule alarms key on.
+            # Nothing derived from the figures may go in either: see `_guard_check`.
+            "subject": {"k": "structural",
+                        "scope": str(res.get("scope_key") or ""),
+                        "target": str(d.get("target") or ""),
+                        "op": str(d.get("op") or ""),
+                        "components": [str(c) for c in (d.get("components") or [])]},
+            "evidence": {
+                "actual": judgement.q(actual), "expected": judgement.q(expected),
+                "diff": judgement.q(actual - expected),
+                "components": {k: judgement.q(float(v))
+                               for k, v in (d.get("component_values") or {}).items()},
+                "sign_suspect": suspect or None,
+            },
+            "fix_action": _flip_sign_action(res, rows or [], template_def, locale),
+            **_structural_inputs_edited(d, rows or [], locale),
+        })
+    return out
 
 
-def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str) -> list[dict]:
+def _accounting_checks(rows: list[dict], reconciliation: list[dict], locale: str,
+                       structural: list[dict] | None = None,
+                       template_def: dict | None = None,
+                       stats: dict | None = None) -> list[dict]:
     """Failed accounting validations for the review queue (Req 11): the balance-sheet
-    identity and note→face ties. Computed from the real extracted values."""
+    identity, note→face ties, the template's structural relations, and — since the face now
+    carries the COMPUTED figure for every calculated line — what the document printed instead.
+    Computed from the real extracted values.
+
+    Each check also carries a locale-free ``subject`` (WHAT is being asserted) and ``evidence``
+    (the figures asserted about it), because only the builder knows the semantics. They are what a
+    human judgement is keyed on — see services/judgement.py for why that is not the check id.
+
+    ``stats`` is an out-parameter for one quantity the caller cannot recompute without repeating
+    this function's work: how many failed relations were suppressed because their target already
+    has its own check. The coverage panel needs it, and deriving it from a second pass over the
+    same rows is exactly the two-places-computing-one-count bug.
+
+    Every check also carries ``names``: the canonical keys of the extracted lines the card actually
+    indicts. Only the builder knows them — the balance identity names both sides (the section
+    subtotals when a side was reconstructed from them), a guard names every line in its violation
+    set, a note tie names every face line that did not tie — and the review header's third tile
+    counts the lines NOT in any of them, so a second pass guessing at this list from the outside is
+    the two-places-computing-one-count bug again.
+    """
+    from app.services import judgement
+
     def L(s: str) -> str:
         return _t(s, locale)
 
     checks: list[dict] = []
-    a = _row_value(rows, "bs_total_assets")
-    e = _row_value(rows, "bs_total_equity_and_liabilities")
+    a, e, derived, sides = _balance_sides(rows, "consolidated", "current")
     if a is not None and e is not None and abs(a - e) > 1:
         checks.append({
             "id": "chk-balance", "type": "balance", "icon": "≠",
             "title": L("Balance sheet does not balance"), "where": L("Balance sheet identity"),
             "severity": L("Check failed"), "tone": "high", "delta": f"{a - e:,.0f}",
             "target": "bs_total_assets",
+            # BOTH sides, and the subtotals a reconstructed side was read from: the card prints
+            # each of those figures, so each of those lines has a finding against it.
+            "names": sides,
             "calc": [
                 [L("Total assets"), f"{a:,.0f}", False],
                 [L("Total equity and liabilities"), f"{e:,.0f}", True],
                 [L("Difference"), f"{a - e:,.0f}", False],
-            ],
+            ] + ([[L("Totals derived from the section subtotals"), "", False]] if derived else []),
             "fix": L("Assets do not equal equity plus liabilities. Check the extracted totals "
                      "and their components against the document."),
+            # basis/period are recorded explicitly even though this check is hardcoded to the
+            # consolidated current column today: if it ever runs per basis, an existing acceptance
+            # stays pinned to the pair it was made on instead of silently widening to cover both.
+            "subject": {"k": "balance", "basis": "consolidated", "period": "current"},
+            # `derived` is on the card ("Totals derived from the section subtotals"), so it is part
+            # of what the human judged — the same difference reached from printed totals is a
+            # different claim from one reached from reconstructed ones.
+            "evidence": {"assets": judgement.q(a), "eqliab": judgement.q(e),
+                         "diff": judgement.q(a - e), "derived": bool(derived)},
         })
-    for ent in reconciliation:
-        if ent.get("within_tolerance"):
-            continue
-        note = ent.get("note_number")
+    # The statement of changes in equity must END where the balance sheet says equity stands.
+    # It is the one relation that crosses two statements, and it is worth checking precisely
+    # because the two are extracted by completely different paths — a matrix reader and a
+    # two-column reader — so agreement is real evidence rather than a restatement.
+    eq_close, bs_equity = _equity_closing(rows, "consolidated"), _row_value(
+        rows, "bs_equity__total_equity")
+    if eq_close is not None and bs_equity is not None and abs(eq_close[1] - bs_equity) > 1:
         checks.append({
-            "id": f"chk-note-{note}-{ent.get('basis')}-{ent.get('period_label')}",
-            "type": "note_tie", "icon": "≠",
-            "title": L("Note does not tie to the face figure"),
-            "where": f"Note {note} · {ent.get('basis')}/{ent.get('period_label')}",
+            "id": "chk-equity-closing", "type": "equity_tie", "icon": "≠",
+            "title": L("Equity statement does not close at the balance sheet's equity"),
+            "where": L("Statement of changes in equity"),
             "severity": L("Check failed"), "tone": "high",
-            "delta": f"{float(ent.get('residual') or 0):,.0f}", "target": f"note:{note}",
+            "delta": f"{eq_close[1] - bs_equity:,.0f}", "target": "bs_equity__total_equity",
+            # BOTH lines: the balance sheet's equity total AND the equity statement's closing row.
+            # The comment here used to say the closing row "is a matrix row, not one of `rows`",
+            # which was false — `_equity_closing` iterates `_matrix_rows(rows, basis)`, which FILTERS
+            # `rows`, so the row it returns IS one of them. The card prints that row's caption and its
+            # figure and tells the analyst to check it, and the header tile was counting it as "a line
+            # with no finding" while this card indicted it. It is named by canonical_key when it has
+            # one and by its printed caption otherwise, which is the only handle an unmapped matrix
+            # row has (see `_build_review`, which matches rows on either).
+            "names": sorted({"bs_equity__total_equity", eq_close[2]} - {""}),
             "calc": [
-                [L("Face figure"), f"{float(ent.get('raw_face') or 0):,.0f}", False],
-                [L("Residual vs note total"), f"{float(ent.get('residual') or 0):,.0f}", True],
+                [eq_close[0], f"{eq_close[1]:,.0f}", False],
+                [L("Total equity per the balance sheet"), f"{bs_equity:,.0f}", True],
+                [L("Difference"), f"{eq_close[1] - bs_equity:,.0f}", False],
             ],
-            "fix": L("The note's detail rows do not sum to the face figure it supports. "
-                     "Verify the note breakdown and the face value."),
+            "fix": L("The closing balance of the equity statement should equal total equity on "
+                     "the balance sheet. Check both figures against the document."),
+            "subject": {"k": "equity_tie", "basis": "consolidated", "period": "current"},
+            # The CAPTION of the row taken as the closing balance is on the card (it is the first
+            # calc row's label), so it is fingerprinted: a re-run that picks a DIFFERENT closing row
+            # carrying the same figure is a different claim, and it used to keep the acceptance
+            # silently. Normalized, because re-parsing a page legitimately shifts a caption's
+            # spacing and that is not a different row. It is evidence and not subject: which row
+            # closes the statement is a figure-level fact this check discovers, not the thing being
+            # asserted, so a change means "come look again" rather than "different finding".
+            "evidence": {"closing_label": judgement.norm(eq_close[0]),
+                         "closing": judgement.q(eq_close[1]),
+                         "bs_equity": judgement.q(bs_equity),
+                         "diff": judgement.q(eq_close[1] - bs_equity)},
         })
+    # NOTE-TIE CARDS ARE NOT RAISED. A note that does not sum to the face figure it supports is
+    # still reconciled and still lowers note_link confidence (stages/reconcile), and the
+    # ReconciliationReport still records every untied face line — what is gone is the review-queue
+    # CARD. On a real filing the queue filled with them: a cited note is very often an analysis,
+    # segment or commitments table rather than a decomposition, and each one that failed to tie
+    # arrived as a finding an analyst had to dismiss. Removed at the user's request rather than
+    # tuned, so nothing here half-raises them.
+    # What the cards above ALREADY TELL THE READER, not merely which targets they mention. The two
+    # are different questions and were answered by one bare-string set, which is how a 2,500 break
+    # came to be silenced by a card asserting 1,000 about the same line.
+    reported = _reported_assertions(checks)
+    checks += _structural_checks(structural or [], locale, covered=reported,
+                                 rows=rows, template_def=template_def)
+    if stats is not None:
+        # Derived from the SAME `covered` set AND the same predicate the emitter used, in the same
+        # call: `_structural_checks` drops a failed relation whose target already has its own check,
+        # so coverage.failed can legitimately exceed the number of structural cards. Counting it
+        # anywhere else — or with a second expression of "was this suppressed" — is how the panel
+        # starts lying, and it did: this sum counted a dropped GUARD as reported elsewhere while no
+        # card anywhere reported it.
+        stats["failed_reported_elsewhere"] = sum(
+            1 for res in (structural or []) if _relation_reported_elsewhere(res, reported))
+    # The calculated path asks BOTH questions, one per finding it raises, and both sets are taken here
+    # — after the relations, because a relation card is exactly what legitimately covers a calculated
+    # line's mismatch (they are the same arithmetic over the same components). A subtotal nobody could
+    # verify has no difference to compare, so it yields to any card about its line in its column; a
+    # subtotal that DISAGREES with its components has one, and yields only to a card reporting that
+    # same difference.
+    checks += _calculated_checks(rows, template_def, locale,
+                                 covered=_claimed_targets(checks),
+                                 asserted=_reported_assertions(checks))
     return checks
 
 
+def _calculated_checks(rows: list[dict], template_def: dict | None, locale: str,
+                       covered: set[_Claim], asserted: set[_Assertion]) -> list[dict]:
+    """Review items for the template's CALCULATED lines — the face now shows the computed figure,
+    so the printed one has to be accounted for somewhere.
+
+    Two findings, and the distinction is what an analyst does next:
+
+    * the document printed a subtotal that its own components do not come to. Either a component
+      is mis-mapped or missing, or the filing's own arithmetic is being read wrongly. Either way
+      the face is showing the computed figure, and this says what was printed instead.
+    * a calculated line had NO extracted components at all, so there was nothing to compute from
+      and the printed figure is on the face unverified.
+
+    THE TWO FINDINGS YIELD TO A CARD ABOVE ON DIFFERENT TERMS, because they say different things, and
+    conflating them cost a real break twice over. Nothing here is counted anywhere —
+    ``failed_reported_elsewhere`` sums relations only — so unlike a dropped relation, a calculated card
+    dropped in error leaves no trace on the screen at all:
+
+    * ``uncomputed`` reports no difference (its delta is the literal "—"), so there is nothing to
+      compare and the only honest rule is the weaker one: it yields when the line already has a card
+      IN THIS COLUMN (``covered``, keyed on target + basis + period). Keyed on the bare template key,
+      that test let ``chk-balance`` — hardcoded consolidated/current — delete the STANDALONE column's
+      card for the same line;
+    * ``calculated_mismatch`` reports a difference, so it yields only to a card that reports THE SAME
+      difference about the same line in the same column (``asserted``). Under the target-keyed rule a
+      balance card asserting 100 on total assets deleted a 250 break between that printed subtotal and
+      its own components — a different fact, on no card, in no counter. The relation card for the same
+      line does still cover it: a rollup relation and a calculated line's mismatch are the same
+      arithmetic over the same components, so their assertions coincide.
+
+    NEITHER finding offers a mechanical fix, and the mismatch case is the important one: writing
+    the PRINTED figure over the computed subtotal would close the card while hiding the
+    mis-mapped, missing or double-counted component that caused it. That is the anti-fix — it
+    makes the symptom disappear and leaves the defect — so no button is offered and nobody may
+    re-add one.
+    """
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    from app.services import judgement
+    from app.services.rollups import node_labels
+
+    if not template_def:
+        return []
+    names = node_labels(template_def, locale)
+    out: list[dict] = []
+    # A calculated line is evaluated for the CURRENT column only. Named once because the same string
+    # decides what is computed, what the card says it is about, and which claim silences it — three
+    # spellings of one column is how the suppression came to be tested against a column nobody had
+    # looked at.
+    period = "current"
+    for basis in ("consolidated", "standalone"):
+        calc = _calculated(rows, template_def, basis, period, locale)
+        if not any(c.components for c in calc.values()):
+            continue
+        groups: dict[str, list[dict]] = {}
+        for r in rows:
+            k = r.get("canonical_key")
+            if k:
+                groups.setdefault(k, []).append(r)
+        # Only report on a basis the document actually presented.
+        if not any(_basis_values(r, basis) for r in rows):
+            continue
+        for key, c in calc.items():
+            if c.cycle:
+                continue
+            reported = _concept_value(groups.get(key, []), basis, period)
+            label = names.get(key, key)
+            where = f"{label} · {basis}/{period}"
+            parts = [[comp.label, "—" if comp.value is None else f"{comp.value:,.0f}", False]
+                     for comp in c.components]
+            if not c.computable:
+                if reported is None or (key, basis, period) in covered:
+                    continue        # neither printed nor computable, or the line is spoken for here
+                out.append({
+                    "id": f"chk-uncomputed-{basis}-{key}", "type": "uncomputed", "icon": "∅",
+                    "title": L("Printed subtotal could not be verified"),
+                    "where": where, "severity": L("Not computable"), "tone": "med",
+                    "delta": "—", "target": key,
+                    # The subtotal itself; its components are by definition not extracted here
+                    # (that is what "uncomputed" means), so there is no extracted line to name.
+                    "names": [key],
+                    # COUNTED, not the literal "0" this row used to print. It is always zero here
+                    # (`computable` is False exactly when no component carried a value), but a
+                    # number on a card has to be derived from the data it sits above — otherwise a
+                    # later change to what "not computable" means leaves a false 0 behind.
+                    "calc": [[L("Printed in the document"), f"{reported:,.0f}", True],
+                             [L("Components extracted"),
+                              str(sum(1 for comp in c.components if comp.value is not None)),
+                              False], *parts],
+                    "fix": L("None of the lines this subtotal is made of were extracted, so it "
+                             "could not be recomputed. The printed figure is on the face "
+                             "unverified — map its components, or accept it as reported."),
+                    "subject": {"k": "uncomputed", "key": key, "basis": basis,
+                                "period": period},
+                    # This check's `delta` is the literal "—", so `reported` is the ONLY thing
+                    # standing between an acceptance and a silently changed printed figure.
+                    # Components are keyed by canonical_key, never comp.label, which
+                    # node_labels() localizes — a locale must not change an identity.
+                    "evidence": {"reported": judgement.q(reported),
+                                 "components": {comp.canonical_key: judgement.q(comp.value)
+                                                for comp in c.components}},
+                })
+                continue
+            if reported is None:
+                continue            # computed cleanly and the document never printed it: fine
+            diff = c.value - reported
+            if abs(diff) <= _CALC_TOLERANCE:
+                continue            # the printed figure and the components agree
+            mismatch = {
+                "id": f"chk-calc-{basis}-{key}", "type": "calculated_mismatch", "icon": "≠",
+                "title": L("Printed subtotal differs from its components"),
+                "where": where, "severity": L("Check failed"), "tone": "high",
+                "delta": f"{diff:,.0f}", "target": key,
+                # The printed subtotal and every component the card lists beside it: the fix text
+                # tells the analyst to check those components against the page.
+                "names": [key, *(comp.canonical_key for comp in c.components
+                                 if comp.canonical_key)],
+                "calc": [[L("Printed in the document"), f"{reported:,.0f}", False],
+                         [L("Computed from components"), f"{c.value:,.0f}", True],
+                         [L("Difference"), f"{diff:,.0f}", False], *parts],
+                "fix": L("The face shows the computed figure. The document printed a different "
+                         "one, so a component is mis-mapped, missing, or double-counted — check "
+                         "the components below against the page."),
+                "subject": {"k": "calculated_mismatch", "key": key, "basis": basis,
+                            "period": period},
+                "evidence": {"reported": judgement.q(reported),
+                             "computed": judgement.q(c.value),
+                             "diff": judgement.q(c.value - reported),
+                             "components": {comp.canonical_key: judgement.q(comp.value)
+                                            for comp in c.components}},
+            }
+            # Built first and then tested, so what is compared is WHAT THIS CARD SAYS, read by the
+            # same function that read it off every card above — not a second expression of the same
+            # tuple that could drift from the one on screen. `_assertion_of` returns None if the card
+            # ever stops declaring all three, and None is in no set, so the card is served.
+            if _assertion_of(mismatch) not in asserted:
+                out.append(mismatch)
+    return out
+
+
+# --- Coverage contract, presented ------------------------------------------------------------
+# NOTHING NEW IS PERSISTED. `run.result["structural"]` is already the substrate — every relation
+# row, pass, fail and skip alike, written once at routes/extractions.py:320 — and
+# services/coverage.py exists so the report can be recomputed from a stored run months later. A
+# stored snapshot would be a second copy of numbers whose source sits in the same JSON column of
+# the same row, and it would drift from the failures the same response lists (an unknown skip
+# reason deliberately routes to UNCLASSIFIED, so the taxonomy WILL gain entries).
+#
+# It is derived at the point it is SERVED, inside GET /documents/{id}/review rather than on an
+# endpoint of its own: one fetch, one run. A separate endpoint could show run A's coverage above
+# run B's findings, which is this module's own trap in miniature.
+#
+# ACCEPTING A FINDING NEVER CHANGES COVERAGE. A failed relation stays failed:1 while its finding
+# reads "accepted". Judgement is about findings; coverage is about what was evaluable. Collapsing
+# the two would rebuild the trap coverage.py exists to prevent.
+_COVERAGE_STATUS_LABELS = {
+    "UNVALIDATED": "Nothing verified", "PARTIAL": "Partly verified", "FAILED": "Failed",
+    "PASSED": "Fully verified", "ABSENT": "Not in this filing",
+}
+
+# Buckets in the order a reader should meet them: recoverable first, structurally unrecoverable
+# next, authoring defects after that, and the one bucket outside the denominator last. Only
+# buckets PRESENT in the report are served — a zero row invites the reader to average them.
+_COVERAGE_SKIP_ORDER = ("INPUT_ABSENT", "TAUTOLOGICAL", "NO_REPORTED_SUBTOTAL",
+                        "UNEVALUABLE_RULE", "UNCLASSIFIED", "STATEMENT_ABSENT")
+_COVERAGE_SKIPS = {
+    "INPUT_ABSENT": ("Inputs not extracted", "better extraction would recover these"),
+    "TAUTOLOGICAL": ("Fed by a derived value",
+                     "fed by a derived value — cannot fail, however good extraction gets"),
+    "NO_REPORTED_SUBTOTAL": ("No printed subtotal",
+                             "the filing prints no subtotal to reconcile against"),
+    "UNEVALUABLE_RULE": ("Rule cannot run as authored",
+                         "the rule cannot run as authored — an authoring defect, not an "
+                         "extraction gap"),
+    "UNCLASSIFIED": ("Unclassified skip reason", "a new skip reason nobody has classified"),
+    "STATEMENT_ABSENT": ("Statement not in this filing",
+                         "not counted — this filing has no such statement"),
+}
+_COVERAGE_ALARMS = {
+    "BLOCKING_RULE_UNENFORCEABLE": (
+        "Blocking rule cannot be enforced",
+        "declared blocking and cannot run as authored, so it fires on no filing — this filing "
+        "was never checked against it."),
+    "UNVALIDATED": (
+        "Statement proved nothing",
+        "every relation declared for this statement was skipped, so it has no failures and has "
+        "proved nothing."),
+    "TAUTOLOGICAL_EXCEEDS_EVALUATED": (
+        "Mostly checking its own arithmetic",
+        "more relations were fed by derived values than were actually evaluated, so the "
+        "validation layer is largely confirming its own arithmetic."),
+    "PIPELINE_DEFECT": (
+        "Pipeline defect",
+        "a rule that needs nothing of the filing still could not be run, so this is a defect in "
+        "the pipeline or the rulebook rather than a fact about the document."),
+}
+_COVERAGE_UNAVAILABLE = {
+    "not_extracted": "This document has not been extracted, so no relation has been evaluated.",
+    "no_template": "No template was attached to this run, so structural validation never ran.",
+    "no_relations": "A template was attached but it declares no relation for this filing, so "
+                    "nothing was checked. That is an authoring gap, not a clean result.",
+    "sample": "The seeded sample project carries no structural validation run.",
+}
+
+
+def _coverage_unavailable(reason: str, locale: str) -> dict:
+    """Coverage stated as unavailable, never rendered as zeros. "0 of 0 relations evaluated" is
+    the exact misread services/coverage.py exists to prevent, and 0% is worse."""
+    return {"available": False, "reason": reason,
+            "reason_label": _t(_COVERAGE_UNAVAILABLE[reason], locale)}
+
+
+def _coverage_block(run, template_def: dict | None, locale: str) -> dict:
+    """The coverage report for a run, as labels and ordering over ``CoverageReport.as_dict()``.
+
+    RECOMPUTES NO NUMBER: every integer and both rates come from the one existing spelling in
+    services/coverage.py. This adds only localized labels, a reading order for the buckets and
+    the alarms, and nothing else. ``failed_reported_elsewhere`` is filled in by ``_build_review``,
+    which is the frame that has the `covered` set it must be derived from.
+
+    The unavailable reasons are resolved from ``_run_template_id`` and ``run.result`` only, never
+    by parsing ``run.logs`` — the run log keeps the forensic headline (StructuralStage still calls
+    ``cov.headline()``, unchanged, over the same rows), and a payload built by scraping a log is a
+    second parser of a format nobody versioned.
+
+    ``_run_template_id`` is the SAME resolution the check builders use (``_template_for_run``).
+    Reading ``run.template_version_id`` here while they read ``run.options`` let one response say
+    "no template was attached to this run" directly above structural and uncomputed findings
+    derived from that very template.
+    """
+    from app.services.coverage import ALARM_UNENFORCEABLE, NOT_DECLARABLE, coverage
+
+    if run is None or not run.result:
+        return _coverage_unavailable("not_extracted", locale)
+    if _run_template_id(run) is None:
+        return _coverage_unavailable("no_template", locale)
+    rows = run.result.get("structural") or []
+    if not rows:
+        # Said loudly: a template WAS attached and it declares nothing for this filing. That is an
+        # authoring gap, and rendering it as a clean sheet is the whole failure mode here.
+        return _coverage_unavailable("no_relations", locale)
+
+    report = coverage(rows)
+    served = report.as_dict()
+
+    def status_label(status: str) -> str:
+        return _t(_COVERAGE_STATUS_LABELS.get(status, status), locale)
+
+    aggregate = {**served["aggregate"], "label": _t("All statements", locale),
+                 "status_label": status_label(served["aggregate"]["status"])}
+    statements = [{**cov, "label": _stmt_label(template_def, cov["statement"], locale),
+                   "status_label": status_label(cov["status"])}
+                  for cov in served["statements"]]
+    # Ordered buckets first, then ANY bucket the report carries that this order list does not know
+    # — a new taxonomy bucket must show up unlabelled rather than drop out of the skip list, or the
+    # chips would stop totalling the `skipped` count printed beside them. Same reasoning as
+    # coverage.py routing an unknown skip reason to UNCLASSIFIED instead of discarding it.
+    present = served["aggregate"]["skips"]
+    ordered = [b for b in _COVERAGE_SKIP_ORDER if b in present]
+    skips = [{"bucket": bucket, "count": present[bucket],
+              "label": _t(_COVERAGE_SKIPS[bucket][0], locale) if bucket in _COVERAGE_SKIPS
+              else bucket,
+              "meaning": _t(_COVERAGE_SKIPS[bucket][1], locale) if bucket in _COVERAGE_SKIPS
+              else "",
+              # STATEMENT_ABSENT is the only bucket outside the denominator: holding a cash flow
+              # statement a standalone-only filing never had against its coverage would make every
+              # such filing look incomplete.
+              "counts_in_denominator": bucket not in NOT_DECLARABLE}
+             for bucket in [*ordered, *sorted(set(present) - set(ordered))]]
+
+    def alarm(a: dict) -> dict:
+        code = str(a.get("code") or "")
+        # An alarm code with no entry here shows its raw code rather than being hidden: an
+        # unfamiliar token on screen is the signal to add a label, and a dropped alarm is a
+        # missing warning.
+        label, text = _COVERAGE_ALARMS.get(code, (code, code))
+        return {"code": code, "label": _t(label, locale), "rule_id": a.get("rule_id"),
+                "statement": a.get("statement"), "text": _t(text, locale),
+                # An unenforceable blocking rule is the one alarm that names an assurance the run
+                # claims and does not have; coverage.py's raw English `note` is not served.
+                "assurance_gap": code == ALARM_UNENFORCEABLE}
+
+    unenforceable = report.unenforceable()
+    return {
+        "available": True,
+        "run_id": run.id,
+        "engine_version": run.engine_version,
+        "aggregate": aggregate,
+        "statements": statements,
+        "skips": skips,
+        # Unenforceable first — it is the only one invisible in every count — then the rest in the
+        # report's own order. UNVALIDATED alarms are included and the statement rows also carry
+        # the status, so the client renders alarms from THIS list only and never synthesises one
+        # from a status, or the same alarm appears twice.
+        "alarms": [alarm(a) for a in unenforceable]
+                  + [alarm(a) for a in report.alarms if a.get("code") != ALARM_UNENFORCEABLE],
+        # `failed_reported_elsewhere` is deliberately absent here rather than seeded with a zero:
+        # this frame cannot derive it, and a placeholder integer that a later frame is supposed to
+        # overwrite is precisely the fabricated count this codebase keeps deleting. `_build_review`
+        # sets it from the `covered` set that suppressed those relations.
+    }
+
+
+# Evidence key → the label the accepted figure is shown under, per subject kind. The keys are the
+# ones each builder in this module emits; the labels are the ones its `calc` already uses, so an
+# accepted card reads like the card that was accepted.
+_EVIDENCE_LABELS: dict[str, dict[str, str]] = {
+    "balance": {"assets": "Total assets", "eqliab": "Total equity and liabilities",
+                "diff": "Difference", "derived": "Totals derived from the section subtotals"},
+    "equity_tie": {"closing_label": "Closing balance row", "closing": "Closing balance",
+                   "bs_equity": "Total equity per the balance sheet", "diff": "Difference"},
+    # One card per (note, basis, period) covering every untied face line on that note, so the
+    # figures are per-face and `entries` is a nested map printing each face line under its own key.
+    "structural": {"actual": "Reported", "expected": "Sum of template components",
+                   "diff": "Difference", "sign_suspect": "Sign suspect",
+                   "components": "Components"},
+    # A guard asserts a condition, not an equality: its figures ARE its violation set (`violations`
+    # is a nested map, so its members print under their own canonical keys).
+    "guard": {"violation_count": "Violations", "violations_keys": "Lines in violation",
+              "violations": "Violations"},
+    "calculated_mismatch": {"reported": "Printed", "computed": "Computed",
+                            "diff": "Difference", "components": "Components"},
+    "uncomputed": {"reported": "Printed", "components": "Components"},
+    "unmapped": {"value": "Value"},
+    # The off-template card carries the figure, and the mapping's band and method too when it also
+    # printed them (it pre-empts the low-confidence card, so it inherits that card's subject matter —
+    # see where it is built). The template's own version is deliberately not fingerprinted; its
+    # identity lives in the SUBJECT, not here.
+    "off_template": {"value": "Value", "confidence_band": "Confidence band", "method": "Method"},
+    # `confidence_band` is the printed confidence quantized (`_confidence_evidence`), so it is shown
+    # under a label that says BAND — a reader of an accepted card must not read "40-49%" as the score.
+    "low_confidence": {"value": "Value", "confidence_band": "Confidence band",
+                       "method": "Method"},
+}
+
+
+def _evidence_label(subject: dict, key: str, locale: str) -> str:
+    """The localized label for one evidence key, falling back to the key itself.
+
+    A component's key IS its label here: ``components`` is keyed on canonical_key precisely so a
+    locale cannot change an identity, and printing the raw key beats printing nothing.
+    """
+    return _t(_EVIDENCE_LABELS.get(str(subject.get("k") or ""), {}).get(key, key), locale)
+
+
+def _evidence_value(v, locale: str) -> str:
+    """One accepted figure, formatted HERE. The client formats no number — same reason the card's
+    `calc` and the flip action's displays are server-formatted."""
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return _t("Yes" if v else "No", locale)
+    if isinstance(v, (int, float)):
+        return f"{v:,.0f}"
+    return str(v)
+
+
+def _evidence_rows(subject: dict, evidence: dict, locale: str) -> list[list[str]]:
+    """The judged figures as ``[label, value]`` pairs — the same two-column shape as a check's
+    ``calc``, so the client reuses one renderer for both."""
+    out: list[list[str]] = []
+    for key, val in (evidence or {}).items():
+        if isinstance(val, dict):
+            # A nested map is the component list; each component is its own row.
+            out += [[_evidence_label(subject, k, locale), _evidence_value(v, locale)]
+                    for k, v in val.items()]
+            continue
+        out.append([_evidence_label(subject, key, locale), _evidence_value(val, locale)])
+    return out
+
+
+def _subject_label(subject: dict, locale: str) -> str:
+    """A judged finding named in prose, for a judgement whose finding is no longer raised.
+
+    An orphaned row is never auto-deleted, so the screen has to be able to say what it was about
+    without the check that produced it.
+    """
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    kind = str(subject.get("k") or "")
+    if kind == "balance":
+        return L("Balance sheet identity")
+    if kind == "equity_tie":
+        return L("Equity statement closing balance")
+    if kind == "note_tie":
+        # No longer produced — note-tie cards are not raised (see the review-queue builder). Kept
+        # because a JUDGEMENT recorded against one before that change is still in the store, and a
+        # stored judgement whose subject cannot be labelled renders as a blank row.
+        return f"{L('Note')} {subject.get('note') or ''}".strip()
+    if kind == "structural":
+        return f"{L('Template relation')} {subject.get('rule_id') or ''} · " \
+               f"{subject.get('scope') or ''}"
+    if kind == "guard":
+        # Named by the SENTENCE, not only the id: the id is what could not tell two guards apart,
+        # and an orphaned row has no card left to read the sentence off.
+        return f"{L('Rulebook guard')} {subject.get('rule_id') or ''} · " \
+               f"{subject.get('scope') or ''} · {subject.get('rule') or ''}".strip()
+    if kind == "calculated_mismatch":
+        return f"{L('Printed subtotal')} · {subject.get('key') or ''}"
+    if kind == "uncomputed":
+        return f"{L('Unverified subtotal')} · {subject.get('key') or ''}"
+    if kind == "unmapped":
+        return f"{L('Unmapped line')} · {subject.get('label') or ''}"
+    if kind == "off_template":
+        # Both halves, because either alone leaves the orphaned row unreadable: the caption says
+        # which printed line, and the key says which concept the template would not carry.
+        return f"{L('Line mapped off the template')} · {subject.get('label') or ''} → " \
+               f"{subject.get('key') or ''}"
+    if kind == "low_confidence":
+        return f"{L('Low-confidence mapping')} · {subject.get('label') or ''}"
+    return L("A finding that is no longer raised")
+
+
+def _changed_label(subject: dict, keys: list[str], locale: str) -> str:
+    """The quantities that moved since the acceptance, named. "Something changed" over a card of
+    figures leaves the reader to diff by eye."""
+    return ", ".join(_evidence_label(subject, k, locale) for k in keys)
+
+
+def _conflict_note(subject: dict, count: int, withheld: bool, locale: str) -> str:
+    """What the screen must say when the queue cannot tell two findings apart.
+
+    Said outright, in the reviewer's own words, because the alternative shipped once: the queue
+    attributed one reviewer's verdict to a finding they never saw and captioned both cards
+    "accepting one accepts them all", which was false of figures that differed. There is no
+    honest acceptance available here, so the card says why and offers none.
+    """
+    def L(s: str) -> str:
+        return _t(s, locale)
+
+    cannot_tell = L("findings here share one identity but printed different figures, so the queue "
+                    "cannot tell them apart. None of them can be accepted until the extraction "
+                    "distinguishes them.")
+    note = f"{count} {cannot_tell}"
+    if withheld:
+        note = note + " " + L("A recorded acceptance for this identity is being withheld: it "
+                              "cannot be matched to one of these findings, and attributing it to "
+                              "the wrong one would put a name against figures nobody examined.")
+    return note
+
+
 def _build_review(rows: list[dict], filename: str, locale: str = "en",
-                  reconciliation: list[dict] | None = None) -> dict:
+                  reconciliation: list[dict] | None = None,
+                  structural: list[dict] | None = None,
+                  template_def: dict | None = None,
+                  judgements: list[dict] | None = None,
+                  run_id: str = "",
+                  coverage_block: dict | None = None) -> dict:
     """Derive the human-in-the-loop review queue from a real extraction: failed accounting
-    checks (balance identity, note ties) plus unmapped and low-confidence line items become
-    review items (the QA the analyst works before export). No demo data involved."""
+    checks (balance identity, note ties, template structure) plus the three ROW-shaped findings —
+    unmapped, off-template and low-confidence line items — become review items (the QA the analyst
+    works before export). No demo data involved.
+
+    The row-shaped three are the queue's account of every printed figure the spread does not simply
+    show. Two of them mean the figure is absent from the grid entirely: an unmapped row was placed
+    nowhere, and an off-template row was placed on a concept the run's own template puts on no
+    statement. The grid does not add either one — it renders the template's lines and nothing else —
+    so this queue is where those figures are reported, and all three end at the same ``remap``
+    control, which is what makes the report an action rather than a complaint.
+
+    ``judgements`` are the in-force ACCEPTED judgement rows for this document; each check comes
+    back carrying its ``status`` (open / accepted / stale) so the queue distinguishes "nobody has
+    looked at this" from "a named person examined these figures and recorded that they stand".
+
+    What travels in the fingerprint, and what deliberately does NOT:
+
+    * ``mapping_confidence`` and ``mapping_method`` are IN the low-confidence card's evidence,
+      quantized — see ``_confidence_evidence``. They used to be excluded as "why the finding was
+      raised rather than what was confirmed", and that was half right and ended in the wrong place: a
+      low-confidence finding is a statement about the mapping, so the mapping's strength and method
+      are what the acceptance is about, and the card prints both. Excluded, a collapse from 0.41
+      'fuzzy' to 0.02 'llm' was served 'accepted' with nothing changed. The churn worry is answered
+      by bucketing the score, not by omitting it; the RAW score still travels on the judgement row's
+      ``context``, where it records what the reviewer was shown without controlling identity.
+    * every localized string — title, where, severity, fix, calc labels — because one judgement
+      has to hold in all four locales.
+    * the formatted ``delta``, the row index and the check id.
+    * the human-facing source LABEL ("p.1"). The subject carries ``_prov_anchor`` instead — the
+      precise, content-derived locator — because the page label is shared by every line on the
+      page, and two findings sharing an identity is how an acceptance on one came to be reported
+      as a named judgement on another. That anchor is the row LABEL's geometry, never the value's:
+      a subject that moved with the figure reported a still-open finding as corrected. Label-box
+      jitter across the anchor's grid re-opens a finding, which is the failure direction worth
+      accepting; see ``_ANCHOR_GRID``.
+    * ``details.assumed_zero`` and ``details.tolerance``, because they are not displayed on the
+      card today. Fingerprinting an invisible field would withdraw an acceptance for a reason the
+      human was never shown; the honest order is to display them first, then fingerprint them.
+    """
+    from app.services import judgement
+
     def L(s: str) -> str:
         return _t(s, locale)
 
@@ -462,10 +2093,35 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
                      "line item, or add an alias so future runs map it automatically.")
     _LOWCONF_FIX = ("The mapping is uncertain. Confirm the concept is correct or reassign it; "
                     "the value and its source location are shown so you can verify against the document.")
-    accounting = _accounting_checks(rows, reconciliation or [], locale)
+    _OFFTPL_FIX = ("This figure was mapped to a concept the run's template does not put on any "
+                   "statement, so it appears on no spread. Re-map it to a template line item, or "
+                   "un-map it to record that it belongs on none — or re-extract against the "
+                   "current template, which may already declare it.")
+    stats: dict = {}
+    accounting = _accounting_checks(rows, reconciliation or [], locale, structural or [],
+                                    template_def, stats=stats)
     checks: list[dict] = list(accounting)
-    unmapped = low_conf = 0
+    # The extracted lines the accounting findings NAME, each contributed by the builder that knows
+    # which lines its card indicts. The header's third tile counts the rows in none of them.
+    named = {k for c in accounting for k in (c.get("names") or []) if k}
+    unmapped = low_conf = off_template = 0
+    # WHETHER THIS RUN HAS A TEMPLATE AT ALL is `template_def is None` and nothing else — the same
+    # spelling `_build_statement` gates its no-template fallback on, so the grid and the queue cannot
+    # disagree about it. It is deliberately not "are there any declared keys": a pinned definition
+    # with an empty `statements` list is valid (the schema defaults it, and the publish gate does not
+    # demand one), and reading emptiness as "no template" made the grid refuse every statement while
+    # the queue raised nothing — every extracted figure then appearing nowhere and named by nothing,
+    # under a refusal promising they were in the review queue.
+    templated = template_def is not None
+    declared_keys = _declared_line_keys(template_def)
+    on_a_matrix = _rows_on_a_matrix_face(rows, template_def)
+    # Row POSITIONS with a finding against them, not keys: an unmapped row has no canonical key,
+    # and two rows can legitimately print the same caption, so matching those by label would credit
+    # one row's finding to another.
+    indicted: set[int] = set()
     for i, r in enumerate(rows):
+        if (r.get("canonical_key") or "") in named or (r.get("source_label") or "") in named:
+            indicted.add(i)
         key = r.get("canonical_key")
         conf = r.get("mapping_confidence")
         flags = r.get("flags") or []
@@ -473,49 +2129,284 @@ def _build_review(rows: list[dict], filename: str, locale: str = "en",
         val = first.get("value")
         where = f"{filename} · {_prov_label(first.get('provenance'))}"
         pct = f"{round(conf * 100)}%" if isinstance(conf, (int, float)) else "—"
+        # Whether the MAPPING is weak, spelled once. The off-template card pre-empts the
+        # low-confidence one and has to carry the same subject matter when both hold — see there.
+        weak = ("low_mapping_confidence" in flags
+                or (isinstance(conf, (int, float)) and conf < _low_conf_threshold()))
 
         if not key:
             unmapped += 1
+            indicted.add(i)
             checks.append({
                 "id": f"chk-unmapped-{i}", "type": "unmapped", "icon": "?",
                 "title": r.get("source_label", "Line item"), "where": where,
                 "severity": L("Unmapped"), "tone": "low", "delta": "—",
                 "target": r.get("source_label", ""),
+                # Localized like every other card's labels: "Value" already had a translation that
+                # this expression never asked for, which is a translation that does not reach the
+                # screen it was written for.
                 "calc": [
-                    ["Source label", r.get("source_label", ""), False],
-                    ["Mapped to", "— (no confident match)", True],
-                    ["Value", str(val) if val is not None else "—", False],
+                    [L("Source label"), r.get("source_label", ""), False],
+                    [L("Mapped to"), L("— (no confident match)"), True],
+                    [L("Value"), str(val) if val is not None else "—", False],
                 ],
                 "fix": L(_UNMAPPED_FIX),
+                # The row INDEX in this id is a render key only — the React list key and the
+                # store's openCheck expand key. Judgement identity is `subject_key`, never `id`,
+                # because a row index moves whenever extraction composition changes and an
+                # acceptance that followed it would land on a different line item and hide a real
+                # problem. Do not rename the id: the client keys its expanded state on it.
+                #
+                # `anchor` is `_prov_anchor`, NOT the "p.1" the card prints: a page label makes
+                # every unmapped line on a page one identity, and accepting one of two "Others"
+                # lines then fabricated a judgement on the other.
+                "subject": {"k": "unmapped", "label": judgement.norm(r.get("source_label")),
+                            "anchor": _prov_anchor(first.get("provenance"))},
+                # The card prints str(val), so string equality invents no rounding the screen
+                # never applied.
+                "evidence": {"value": str(val) if val is not None else None},
+                # …and the fix the sentence above promises. `_UNMAPPED_FIX` has always said "Pick the
+                # correct template line item"; until this there was nothing on the card that could.
+                "remap": _remap_offer(r, locale),
             })
-        elif "low_mapping_confidence" in flags or (isinstance(conf, (int, float)) and conf < _low_conf_threshold()):
+        elif key and templated and key not in declared_keys and i not in on_a_matrix:
+            # A MAPPING ONTO A CONCEPT THIS RUN'S TEMPLATE DOES NOT CARRY. The grid used to
+            # render these under an "Other extracted items" heading appended after every template
+            # section — lines the template does not define, on a spread whose whole value is that its
+            # shape is the template's, and (against a superseded pinned template) the very lines
+            # whose position a revision had just corrected, back at the end again.
+            #
+            # Removing that heading would have made a real extracted figure invisible, which this
+            # codebase does not do. So the figure is reported HERE instead, as the finding it always
+            # was: the mapper placed it somewhere the spread cannot show it, and the analyst either
+            # re-maps it onto a line the template does declare, un-maps it, or re-extracts against a
+            # template that declares it. All three are stated on the card and the first two are one
+            # `remap` call away.
+            #
+            # RAISED BEFORE the low-confidence card, and instead of it, when a row qualifies for
+            # both. "Confirm the concept is correct or reassign it" is advice that cannot be taken
+            # about a concept the template does not have, and it says nothing about the figure being
+            # absent from every spread — which is the fact the reader needs first. Both cards resolve
+            # through the same re-map control, so raising both would put one row in the queue twice
+            # under one action. An acceptance recorded against the low-confidence subject is not lost
+            # by the swap: it orphans, and `judgements.orphaned` says so by name.
+            #
+            # PRE-EMPTING IT MEANS INHERITING WHAT IT WAS ABOUT. When the mapping is also weak the
+            # card prints the method and the score and fingerprints the quantized band, exactly as the
+            # low-confidence card does — otherwise swallowing that card would have swallowed the one
+            # property `_confidence_evidence` exists for: an acceptance made at 0.41 'fuzzy' surviving
+            # a re-run at 0.02 'llm' with `changed == []`, the reviewer never shown the collapse.
+            off_template += 1
+            indicted.add(i)
+            checks.append({
+                "id": f"chk-offtpl-{i}", "type": "off_template", "icon": "⌖",
+                "title": r.get("source_label", "Line item"), "where": where,
+                # Tone `med`, not `low`: an unmapped row is a figure nobody could place, while this is
+                # a figure the mapper DID place and the spread still cannot show — a disagreement
+                # between the rulebook and the template, which is a configuration defect.
+                # `delta` collapses to the score when there is a weak one to warn about, as the
+                # low-confidence card's does, and to "—" when the mapping was confident.
+                "severity": L("Off template"), "tone": "med", "delta": pct if weak else "—",
+                "target": r.get("source_label", ""),
+                "calc": [
+                    [L("Source label"), r.get("source_label", ""), False],
+                    [L("Mapped to"), key, True],
+                    [L("Not on this template"),
+                     L("Mapped, but not on any statement in this template"), True],
+                    *([[L("Method"), r.get("mapping_method") or "—", False],
+                       [L("Confidence"), pct, False]] if weak else []),
+                    [L("Value"), str(val) if val is not None else "—", False],
+                ],
+                "fix": L(_OFFTPL_FIX),
+                # `i` is a render key only, as on the two cards above. The MAPPED CONCEPT is in the
+                # subject for the same reason it is in the low-confidence one: the claim being judged
+                # is about this caption landing on this concept, and a re-run that files the row under
+                # a different off-template concept is a different claim, not the same one re-confirmed.
+                "subject": {"k": "off_template", "label": judgement.norm(r.get("source_label")),
+                            "anchor": _prov_anchor(first.get("provenance")), "key": key},
+                # The figure, plus the mapping's strength and method WHEN THE CARD PRINTS THEM — the
+                # rule everywhere here is that identity turns on what was displayed, and quantized so
+                # jitter does not withdraw a sound acceptance (`_confidence_evidence`).
+                #
+                # The template's own version is deliberately NOT in here: publishing a new template
+                # version would then withdraw every acceptance on this card, including for rows the
+                # new version still does not declare — churn carrying no new information. When a
+                # revision DOES declare the key the finding stops being raised at all, which the
+                # judgement layer already reports as orphaned rather than as accepted.
+                "evidence": {"value": str(val) if val is not None else None,
+                             **(_confidence_evidence(conf, r.get("mapping_method")) if weak
+                                else {})},
+                # The RAW score beside the banded digest, only when there is one the reviewer was
+                # shown — the same division of labour as on the low-confidence card.
+                **({"context": {"confidence": r.get("mapping_confidence"),
+                                "method": r.get("mapping_method") or ""}} if weak else {}),
+                # The control the fix text names. Un-mapping ("") is offered by the same endpoint and
+                # is the honest answer for a row that belongs on no line at all.
+                "remap": _remap_offer(r, locale),
+            })
+        elif weak:
             low_conf += 1
+            indicted.add(i)
             checks.append({
                 "id": f"chk-lowconf-{i}", "type": "low_confidence", "icon": "!",
                 "title": r.get("source_label", "Line item"), "where": where,
                 "severity": L("Low confidence"), "tone": "med", "delta": pct,
                 "target": r.get("source_label", ""),
+                # `Method` and `Confidence` are the finding's own subject matter, and both are in the
+                # evidence digest (quantized — see `_confidence_evidence`), so the reader sees exactly
+                # what the acceptance is a statement about.
                 "calc": [
-                    ["Source label", r.get("source_label", ""), False],
-                    ["Mapped to", key, True],
-                    ["Method", r.get("mapping_method") or "—", False],
-                    ["Confidence", pct, False],
-                    ["Value", str(val) if val is not None else "—", False],
+                    [L("Source label"), r.get("source_label", ""), False],
+                    [L("Mapped to"), key, True],
+                    [L("Method"), r.get("mapping_method") or "—", False],
+                    [L("Confidence"), pct, False],
+                    [L("Value"), str(val) if val is not None else "—", False],
                 ],
                 "fix": L(_LOWCONF_FIX),
+                # Same render-key-only note as chk-unmapped-{i} above: `i` is a list key, not an
+                # identity. The MAPPED CONCEPT is in the subject because the judgement being made
+                # is "this label really is this concept" — a re-run mapping it somewhere else is a
+                # different finding, not the same one re-confirmed.
+                "subject": {"k": "low_confidence", "label": judgement.norm(r.get("source_label")),
+                            "anchor": _prov_anchor(first.get("provenance")), "key": key},
+                # THE MAPPING'S STRENGTH AND METHOD ARE PART OF WHAT WAS JUDGED, because a
+                # low-confidence finding IS a statement about the mapping — and the card prints both,
+                # as its collapsed `delta` and as its Method and Confidence rows. With only `value` in
+                # here, run 1 at 0.41 / 'fuzzy' accepted by "41% fuzzy — checked p.42, the concept is
+                # right" served run 2 at 0.02 / 'llm' as 'accepted', digest byte-identical, changed
+                # == [] — the card printing "Method llm · Confidence 2%" under that reviewer's name.
+                # The churn worry that kept them out is real and is answered by QUANTIZING, the way
+                # `_prov_anchor` answered it for geometry, not by omitting.
+                "evidence": {"value": str(val) if val is not None else None,
+                             **_confidence_evidence(conf, r.get("mapping_method"))},
+                # Kept, and now beside the digest rather than instead of it: this is the RAW score,
+                # recorded on the judgement row so a reader can see the exact number the reviewer was
+                # shown. The evidence carries the band, which is what identity turns on.
+                "context": {"confidence": r.get("mapping_confidence"),
+                            "method": r.get("mapping_method") or ""},
+                # `_LOWCONF_FIX` says "Confirm the concept is correct or reassign it". Reassigning is
+                # this, and it is the half the card could not previously do.
+                "remap": _remap_offer(r, locale),
             })
+    for c in checks:
+        c["subject_key"] = judgement.subject_key(c["subject"])
+        c["evidence_digest"] = judgement.evidence_digest(c["evidence"])
+        # Only the structural builder can offer a mechanical fix, and only it can have edited
+        # inputs behind an un-recomputed relation. Every other card is explicit about having
+        # neither rather than leaving the key absent for the client to guess at.
+        c.setdefault("fix_action", None)
+        # `names` — the extracted lines a card indicts — is EMPTY on the row-shaped findings rather
+        # than absent: an unmapped card is about the row it was built from and nothing else, and
+        # naming that row by its caption would match a second row printed under the same caption.
+        # The header's tile counts those by row POSITION instead (see `indicted`).
+        c.setdefault("names", [])
+        c.setdefault("inputs_edited", False)
+        c.setdefault("inputs_edited_keys", [])
+        c.setdefault("inputs_edited_note", "")
+        # Only the three ROW-shaped findings are about a single printed line, so only they can be
+        # re-mapped. An accounting finding is about a relation between several concepts; offering to
+        # re-map it would have to guess which of them the analyst meant.
+        c.setdefault("remap", None)
+    applied = judgement.apply_judgements(
+        checks, judgements or [],
+        label_fn=lambda subj: _subject_label(subj, locale),
+        rows_fn=lambda subj, ev: _evidence_rows(subj, ev, locale),
+        changed_fn=lambda subj, keys: _changed_label(subj, keys, locale),
+        conflict_fn=lambda subj, n, withheld: _conflict_note(subj, n, withheld, locale))
+    # Conflict first, then stale, then open, then accepted, stably so builder order survives
+    # inside a rank. The client does no sorting: two orderings of one list is two answers to one
+    # question.
+    checks.sort(key=lambda c: judgement.rank(c["status"]))
+
+    counts = applied["counts"]
+    cov_block = coverage_block if coverage_block is not None \
+        else _coverage_unavailable("not_extracted", locale)
+    if cov_block.get("available"):
+        # Derived by `_accounting_checks` from the very `covered` set that suppressed those
+        # relations, and injected here because this is the only frame that has both. Computing it
+        # a second time inside the coverage presenter is how the band starts contradicting the
+        # cards above it.
+        cov_block["failed_reported_elsewhere"] = stats.get("failed_reported_elsewhere", 0)
     total = len(checks)
-    passed = max(0, len(rows) - (unmapped + low_conf))
+    # ROWS NAMED BY NO FINDING — which is what the header tile beside it says, in all four locales.
+    # It used to be `len(rows) - (unmapped + low_conf)`, so every line indicted by a balance, note
+    # tie, structural, guard, calculated_mismatch or uncomputed finding was counted as having no
+    # finding: a 9-row run with 4 checks against 4 of those rows rendered "4 open · 9 lines with no
+    # finding". The old label ("passed") did not assert WHICH lines it counted; the new one does, so
+    # the quantity is now the one the label names. `names` is contributed by each builder — see
+    # `_accounting_checks`.
+    #
+    # THE POPULATION IS DEFINED ONCE, FOR BOTH PATHS, in services/review_lines.py — this route and
+    # the sample route (api/routes/projects.py::_demo_review_summary) call the same predicate. Spelled
+    # here as `len(rows) - len(indicted)`, it counted every serialized row including subtotals and
+    # totals, while the sample counted only its `kind == "item"` rows: two populations under one
+    # label, and the sample understated its own by the 8 subtotal/total rows no finding named.
+    passed = review_lines.lines_with_no_finding(rows, lambda i, _r: i in indicted)
+    # Each tab carries the check TYPES it selects, so the client filters by what the tab means
+    # rather than by its position in this list. `types: None` is the everything tab. Positional
+    # agreement between a server list and a client array is the bug that made the page-scope
+    # chips filter by the wrong kind, and it is not repeated here.
+    #
+    # The tabs count by TYPE over the FULL list regardless of status, and no `statuses` dimension
+    # is added: a second predicate would have to be spelled once here for the counts and once in
+    # the TSX for the rows, and that drift is the counts-disagree-with-content bug the last three
+    # commits closed. An accepted finding therefore stays in its tab and stays on screen.
+    accounting_types = sorted({c["type"] for c in accounting})
     return {
+        "run_id": run_id,
         "checks": checks,
         "tabs": [
-            {"label": L("All"), "count": total},
-            {"label": L("Checks"), "count": len(accounting)},
-            {"label": L("Unmapped"), "count": unmapped},
-            {"label": L("Low confidence"), "count": low_conf},
+            {"label": L("All"), "count": total, "types": None},
+            {"label": L("Checks"), "count": len(accounting), "types": accounting_types},
+            {"label": L("Unmapped"), "count": unmapped, "types": ["unmapped"]},
+            {"label": L("Low confidence"), "count": low_conf, "types": ["low_confidence"]},
+            # Its own bucket rather than folded into one of the others: the tabs PARTITION the list,
+            # so a type with no tab of its own is a finding invisible under every filter, and this
+            # one is a different question from the two beside it — not "which concept is this line?"
+            # but "why does a mapped line reach no spread?", answered by fixing the rulebook or the
+            # template rather than by reading the page again.
+            {"label": L("Off template"), "count": off_template, "types": ["off_template"]},
         ],
-        "summary": {"open": total, "passed": passed},
+        # `open` is outstanding work, so it includes the stale cards — someone vouched for figures
+        # that have since moved, which is more urgent than an untouched finding, not less — and the
+        # conflict cards, which nobody can accept at all. `stale` and `conflict` are those subsets,
+        # reported separately so the screen can say each one out loud.
+        "summary": {"open": counts["open"] + counts["stale"] + counts["conflict"],
+                    "accepted": counts["accepted"], "stale": counts["stale"],
+                    "conflict": counts["conflict"], "passed": passed},
+        "judgements": {"orphaned": applied["orphaned"]},
+        "coverage": cov_block,
+        # The template lines a row-shaped finding may be re-mapped onto. ONCE per payload, not per
+        # card: 180-odd concepts repeated on every unmapped row is the same list served forty times.
+        # Empty when the run named no template, which is also when the offer is refused — there is
+        # nothing to map onto and a select with no options is worse than no control.
+        "remap_targets": _remap_targets(template_def, locale),
     }
+
+
+@router.get("/{document_id}/audit",
+            dependencies=[Depends(require(Permission.COMMENTARY_VIEW)),
+                          Depends(authorized_document)])
+def get_document_audit(document_id: str) -> dict:
+    """This document's audit trail — every run against it, with token usage and how long it took.
+
+    THE GAP THIS CLOSES. Runs against an uploaded document have always been recorded, under the
+    DOCUMENT's id: extraction (both outcomes) in ``extractions._run_extraction_task``, and the credit
+    narrative in ``generate_credit_narrative`` below. Nothing served that key. The only audit route
+    was ``/projects/{id}/audit`` and the client asked it for the demo project, so every real run
+    wrote an entry into a bucket no screen could reach — an audit trail that existed and could not be
+    read, which is indistinguishable from not keeping one.
+
+    Same permission as the project trail (COMMENTARY_VIEW — the Analysis screen is where both are
+    shown) and the same ownership predicate as every other read of a document, so one analyst cannot
+    read another's runs and a document they may not see answers 404 rather than 403.
+
+    No seeded rows are folded in, unlike the project route: those describe the sample, and mixing
+    them into a real filing's trail would put runs that never happened under this document's name.
+    """
+    from app.services import audit as audit_svc
+
+    return audit_svc.served_trail(document_id)
 
 
 @router.get("/{document_id}/run", dependencies=[Depends(authorized_document)])
@@ -529,7 +2420,12 @@ def get_document_run(document_id: str, session: Session = Depends(db)) -> dict:
     run = _latest_run(session, document_id)
     if run is None or not run.result:
         raise HTTPException(status_code=404, detail="No extraction run yet for this document")
-    return {"run_id": run.id, "status": run.status, "result": run.result}
+    # Which rulebook this run read the filing against, as the run recorded it (see
+    # ``routes.extractions.rulebook_record``). Reported, never re-derived: a reader deciding after
+    # the fact which rulebook "must" have been in force is how a superseded one got labelled as
+    # the current one.
+    return {"run_id": run.id, "status": run.status,
+            "rulebook": (run.options or {}).get("rulebook"), "result": run.result}
 
 
 @router.get("/{document_id}/analysis", dependencies=[Depends(authorized_document)])
@@ -546,17 +2442,22 @@ def get_document_analysis(document_id: str, locale: str = Query("en"),
         return {"ratios": [], "disclosures": [], "notes": [],
                 "credit": build_credit_analysis([], [], locale=locale)}
     rows = run.result.get("rows", [])
+    # The run's own template, so this screen's ratios, credit factors and notes are computed from
+    # the figures the spread shows — including calculated lines the filing does not print. Passing
+    # None here is what left the Analysis screen reading a different set of numbers from the KPI
+    # view beside it (see rollups.figures_as_shown).
+    template_def = _template_for_run(session, run)
     disclosures = localize_disclosures(run.result.get("disclosures", []), locale)
-    credit = build_credit_analysis(rows, disclosures, locale=locale)
+    credit = build_credit_analysis(rows, disclosures, locale=locale, template_def=template_def)
     # Fold in the cached LLM narrative (auto-generated at extraction when a provider is
     # configured, or produced on demand) so the Analysis screen shows it without a click.
     narrative = run.result.get("credit_narrative")
     if narrative and narrative.get("text"):
         credit = {**credit, "narrative": narrative}
     return {
-        "ratios": compute_ratios(rows, locale=locale),
+        "ratios": compute_ratios(rows, locale=locale, template_def=template_def),
         "disclosures": disclosures,
-        "notes": build_free_notes(rows, locale=locale),
+        "notes": build_free_notes(rows, locale=locale, template_def=template_def),
         # Credit view combines the extracted ratios with the report's narrative disclosures.
         "credit": credit,
     }
@@ -572,6 +2473,8 @@ def run_credit_narrative_endpoint(document_id: str, locale: str = Query("en"),
     factors and report signals and only writes grounded prose (see analysis_llm.CREDIT_SYSTEM).
     Requires a real LLM provider (config ``llm.provider``); returns 409 when none is configured
     so the caller can keep using the deterministic summary. The run is written to the audit log."""
+    from datetime import datetime, timezone
+
     from app.config import get_settings
     from app.ports.registry import registry as reg
     from app.services import audit as audit_svc
@@ -584,7 +2487,8 @@ def run_credit_narrative_endpoint(document_id: str, locale: str = Query("en"),
 
     rows = run.result.get("rows", [])
     disclosures = localize_disclosures(run.result.get("disclosures", []), locale)
-    credit = build_credit_analysis(rows, disclosures, locale=locale)
+    credit = build_credit_analysis(rows, disclosures, locale=locale,
+                                   template_def=_template_for_run(session, run))
     if not credit.get("factors") and not credit.get("flags"):
         raise HTTPException(status_code=422,
                             detail="Insufficient extracted data for a credit narrative")
@@ -604,20 +2508,26 @@ def run_credit_narrative_endpoint(document_id: str, locale: str = Query("en"),
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # Timed around the provider call itself — the only part that takes any time, and the part a
+    # reader comparing a slow narrative to a fast one is asking about. Started before the try so the
+    # failure path measures the same interval as the success path.
+    began = datetime.now(timezone.utc)
     try:
         result, meta = run_credit_narrative(provider, credit, entity=entity, locale=locale,
                                             max_tokens=settings.llm.max_tokens)
     except Exception as exc:  # provider unreachable / no key / bad response
         audit_svc.record(document_id, audit_svc.AuditEntry(
             run_id=run_id, entity=entity, action="credit_narrative", provider=provider_id,
-            model=settings.llm.model, input_tokens=None, output_tokens=None, status="failed"))
+            model=settings.llm.model, input_tokens=None, output_tokens=None, status="failed",
+            duration_ms=audit_svc.elapsed_ms(began)))
         raise HTTPException(status_code=502, detail=f"Credit narrative failed: {exc}") from exc
 
     model = meta.get("model", settings.llm.model)
     audit_svc.record(document_id, audit_svc.AuditEntry(
         run_id=run_id, entity=entity, action="credit_narrative", provider=provider_id,
         model=model, input_tokens=meta.get("input_tokens"),
-        output_tokens=meta.get("output_tokens"), status="succeeded"))
+        output_tokens=meta.get("output_tokens"), status="succeeded",
+        duration_ms=audit_svc.elapsed_ms(began)))
 
     # Persist the narrative on the run so the Excel/JSON export can fold it in. Reassigning
     # the JSON column marks it dirty for the commit.
@@ -656,6 +2566,7 @@ def get_document_commentary(document_id: str, locale: str = Query("en"),
     extraction (ratios, year-on-year trends, strengths/weaknesses) — not the demo project.
     Open review items are counted from the same extraction so the assessment stays honest
     about provisional figures. Empty (valid) shape until the document is extracted."""
+    from app.db.models import Document
     from app.services.commentary import build_commentary_from_rows
 
     run = _latest_run(session, document_id)
@@ -663,7 +2574,16 @@ def get_document_commentary(document_id: str, locale: str = Query("en"),
         return {"headline": "", "assessment": "", "metrics": [], "trends": [],
                 "strengths": [], "weaknesses": [], "data_quality": "", "basis": ""}
     rows = run.result.get("rows", [])
-    review = _build_review(rows, "", locale, run.result.get("reconciliation", []))
+    # The in-force judgements are passed here too, so the data-quality prose stops counting
+    # findings a human has already accepted. An accepted finding is no longer OPEN because a named
+    # person examined those figures and recorded that they stand; the reason and the actor on the
+    # judgement row are the record of that, and they are the only guard — this route will report
+    # better data quality after a reviewer accepts breaks, which is correct and is why the
+    # acceptance carries a name.
+    doc = session.get(Document, document_id)
+    review = _build_review(rows, "", locale, run.result.get("reconciliation", []),
+                           run.result.get("structural", []), _template_for_run(session, run),
+                           judgements=_inforce_judgements(session, doc), run_id=run.id)
     units = run.result.get("units") or {}
     c = build_commentary_from_rows(
         rows, open_review_items=review["summary"]["open"], basis=basis,
@@ -671,10 +2591,67 @@ def get_document_commentary(document_id: str, locale: str = Query("en"),
     return _localize_commentary(c, locale)
 
 
+def _judgement_history_entry(row) -> dict:
+    """The state a judgement row is LEAVING, for its history list.
+
+    Appended before every change and never removed, so an accept → withdraw → accept sequence is
+    one row with two history entries rather than three rival rows a reader has to date-sort. The
+    evidence goes in too: what the figures were when that verdict was recorded is the part a later
+    reader cannot reconstruct.
+
+    ``at`` is when THAT VERDICT WAS MADE, which is ``row.updated_at`` — read before this write
+    touches it, so it still holds the moment the state being left was recorded. Stamping
+    ``_now_iso()`` here dated every entry with the time of the CHANGE, i.e. its successor's
+    timestamp: accept at 10:00 and withdraw at 15:00 and the record said the acceptance was made
+    at 15:00, while 10:00 survived in no column at all (``updated_at`` is bumped by ``onupdate``
+    in the same flush). Nothing serves history yet, so no screen was wrong — but the audit trail
+    being accumulated was, from its first row.
+
+    No column was added to carry this. ``db/base.py::_reconcile_schema`` back-fills the
+    ``documents`` table ONLY and there is no Alembic, so a column added to ``review_judgements``
+    would simply be missing from any developer database that already has the table, and every
+    query selecting it would 500. ``updated_at`` is already the moment this row's current verdict
+    was written, so reading it is also the answer that keeps one quantity in one place.
+    """
+    at = row.updated_at or row.created_at
+    return {"verdict": row.verdict, "reason": row.reason or "", "actor": row.actor or "",
+            "actor_role": row.actor_role or "",
+            "at": at.isoformat(timespec="seconds") if at else _now_iso(),
+            "evidence": row.evidence or {}, "run_id": row.run_id or ""}
+
+
+def _inforce_judgements(session: Session, doc) -> list[dict]:
+    """The document's IN-FORCE accepted judgements, as plain dicts.
+
+    Only ``verdict == "accepted"`` matches. A withdrawn row is kept forever — erasing who accepted
+    a break is not something an audit trail should permit — but it governs nothing.
+    """
+    from app.db.models import ReviewJudgement
+
+    if doc is None:
+        return []
+    rows = session.execute(
+        select(ReviewJudgement).where(
+            ReviewJudgement.document_id == doc.id,
+            ReviewJudgement.tenant_id == doc.tenant_id,
+            ReviewJudgement.verdict == "accepted")
+    ).scalars().all()
+    return [{"subject_key": r.subject_key, "subject": r.subject or {},
+             "evidence": r.evidence or {}, "reason": r.reason or "", "actor": r.actor or "",
+             "actor_role": r.actor_role or "", "run_id": r.run_id or "",
+             "at": (r.updated_at or r.created_at).isoformat(timespec="seconds")}
+            for r in rows]
+
+
 @router.get("/{document_id}/review", dependencies=[Depends(authorized_document)])
 def get_document_review(document_id: str, locale: str = Query("en"),
                         session: Session = Depends(db)) -> dict:
-    """Real review queue for a document, derived from its latest extraction."""
+    """Real review queue for a document, derived from its latest extraction — each finding with
+    its human judgement, and the coverage contract for the relations that were never evaluable.
+
+    Both come from ONE read of ONE run: a coverage endpoint of its own could show run A's coverage
+    above run B's findings.
+    """
     from app.db.models import Document
 
     doc = session.get(Document, document_id)
@@ -682,25 +2659,362 @@ def get_document_review(document_id: str, locale: str = Query("en"),
         raise HTTPException(status_code=404, detail="Document not found")
     run = _latest_run(session, document_id)
     if run is None or not run.result:
-        return {"checks": [], "tabs": [{"label": _t("All", locale), "count": 0}],
-                "summary": {"open": 0, "passed": 0}}
+        # The empty shape is built by the SAME function as the real one rather than hand-written
+        # here: a second literal is a second answer to "what does an empty queue look like", and
+        # the previous one-tab literal disagreed with the four tabs the real branch serves.
+        return _build_review([], doc.filename or "document", locale, [], [], None, [], "",
+                             coverage_block=_coverage_unavailable("not_extracted", locale))
+    template_def = _template_for_run(session, run)
     return _build_review(run.result.get("rows", []), doc.filename or "document", locale,
-                         run.result.get("reconciliation", []))
+                         run.result.get("reconciliation", []),
+                         run.result.get("structural", []), template_def,
+                         judgements=_inforce_judgements(session, doc), run_id=run.id,
+                         coverage_block=_coverage_block(run, template_def, locale))
+
+
+class JudgementBody(BaseModel):
+    """An acceptance, posted with the digest the card was showing.
+
+    The subject key travels in the BODY and never in a path: a structural finding's scope_key
+    contains a "/" (services/structural_checks.py:526), so no check identifier is URL-safe.
+    """
+
+    subject_key: str
+    evidence_digest: str
+    reason: str = ""
+
+
+@router.post("/{document_id}/review/judgements",
+             dependencies=[Depends(require(Permission.REVIEW_RESOLVE)),
+                           Depends(authorized_document)])
+def accept_review_finding(document_id: str, body: JudgementBody, locale: str = Query("en"),
+                          session: Session = Depends(db),
+                          principal: Principal = Depends(current_principal)) -> dict:
+    """Record that a named person examined a finding's figures and judged that they stand.
+
+    "Accepted" does NOT mean the check passed. It means a human looked, and it is the distinction
+    the review found missing: before this there was no way to tell "nobody has looked at this"
+    from "reviewed and deemed acceptable", so a finding examined and dismissed stayed red forever.
+
+    The posted ``evidence_digest`` must match the server's current one. An acceptance must never
+    attach to figures that changed while the card was open — that is the whole reason identity is
+    split into subject and evidence.
+
+    The posted subject is resolved against EVERY check sharing it, not the first in rank order.
+    Matching by subject_key alone compared the posted digest against whichever card sorted first,
+    so of two findings on one subject the second was told "the figures changed while this card was
+    open" — quoting the other line's figures — on every retry, forever. And a subject whose
+    findings disagree about their evidence is refused outright: see
+    ``judgement.apply_judgements`` for why no judgement may be attributed there at all.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db.models import Document, ReviewJudgement
+
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        raise HTTPException(status_code=404, detail={"error": "no_run"})
+    if not body.reason.strip():
+        # An acceptance with no stated reason is an unsigned claim: the actor is recorded either
+        # way, but what they concluded is the part a later reader needs.
+        raise HTTPException(status_code=422, detail={"error": "reason_required"})
+
+    doc = session.get(Document, document_id)
+    # One build, in the request locale. No separate English rebuild is needed because identity is
+    # locale-free by construction — see services/judgement.py.
+    review = _build_review(run.result.get("rows", []), doc.filename or "document", locale,
+                           run.result.get("reconciliation", []),
+                           run.result.get("structural", []), _template_for_run(session, run),
+                           judgements=_inforce_judgements(session, doc), run_id=run.id)
+    group = [c for c in review["checks"] if c["subject_key"] == body.subject_key]
+    if not group:
+        raise HTTPException(status_code=404, detail={"error": "finding_not_found",
+                                                    "subject_key": body.subject_key})
+    if any(c["conflict"] for c in group):
+        # The identity scheme failed for this subject. Refusing is the honest answer: accepting
+        # would write one reviewer's verdict against figures they demonstrably did not see, and
+        # there is no way to tell from the request which of the group they were looking at.
+        raise HTTPException(status_code=409, detail={
+            "error": "subject_conflict", "subject_key": body.subject_key, "count": len(group),
+            "evidence_digests": sorted({c["evidence_digest"] for c in group}),
+            "note": group[0]["conflict_note"]})
+    check = next((c for c in group if c["evidence_digest"] == body.evidence_digest), None)
+    if check is None:
+        # Every card on this subject carries one digest (the group is not a conflict), so quoting
+        # the first is quoting the figures now on screen — not another line's.
+        current = group[0]
+        raise HTTPException(status_code=409, detail={
+            "error": "evidence_changed",
+            "current": {"evidence_digest": current["evidence_digest"],
+                        "status": current["status"],
+                        "accepted_rows": _evidence_rows(current["subject"], current["evidence"],
+                                                        locale)}})
+
+    reason = body.reason.strip()[:2000]
+
+    def _current_row():
+        return session.execute(
+            select(ReviewJudgement).where(
+                ReviewJudgement.document_id == doc.id,
+                ReviewJudgement.tenant_id == doc.tenant_id,
+                ReviewJudgement.subject_key == body.subject_key)).scalars().first()
+
+    def _record(row) -> None:
+        row.subject = check["subject"]
+        row.evidence = check["evidence"]
+        row.context = check.get("context") or {}
+        row.verdict = "accepted"
+        row.reason = reason
+        row.actor = principal.username
+        row.actor_role = principal.role.value
+        row.run_id = run.id
+        flag_modified(row, "history")
+
+    row = _current_row()
+    if row is not None:
+        row.history = [*(row.history or []), _judgement_history_entry(row)]
+        _record(row)
+        session.commit()
+    else:
+        new = ReviewJudgement(tenant_id=doc.tenant_id, document_id=doc.id,
+                              subject_key=body.subject_key, history=[])
+        session.add(new)
+        _record(new)
+        try:
+            session.commit()
+        except IntegrityError:
+            # REVIEWER and ADMIN both hold REVIEW_RESOLVE, so two people can POST for the same
+            # subject at the same instant: both SELECTs return None and the loser's INSERT
+            # violates uq_judgement_subject. Letting that surface was a 500 with the reviewer's
+            # typed reason thrown away. The loser's acceptance is instead recorded onto the row
+            # that won, exactly as a second sequential POST would be — the winner's verdict is
+            # appended to `history`, so neither judgement is lost.
+            session.rollback()
+            row = _current_row()
+            if row is None:
+                # The unique constraint fired and yet nothing is there to record onto: the write
+                # failed for a reason this handler does not understand, so say so rather than
+                # reporting an acceptance that was never stored.
+                raise HTTPException(status_code=409, detail={
+                    "error": "judgement_write_conflict",
+                    "subject_key": body.subject_key}) from None
+            row.history = [*(row.history or []), _judgement_history_entry(row)]
+            _record(row)
+            session.commit()
+    # No summary and no check comes back: the client invalidates and refetches, so every count on
+    # the screen keeps exactly one origin.
+    return {"ok": True, "subject_key": body.subject_key, "status": "accepted"}
+
+
+@router.delete("/{document_id}/review/judgements/{subject_key}",
+               dependencies=[Depends(require(Permission.REVIEW_RESOLVE)),
+                             Depends(authorized_document)])
+def withdraw_review_judgement(document_id: str, subject_key: str,
+                              session: Session = Depends(db),
+                              principal: Principal = Depends(current_principal)) -> dict:
+    """Withdraw an acceptance. ``subject_key`` is 64 hex characters, so it IS URL-safe.
+
+    The row is never deleted — the verdict flips and the prior state is appended to ``history``.
+
+    Deliberately NOT refused on a conflicted subject, unlike acceptance: a judgement that can no
+    longer be attributed to one finding is precisely the one a reviewer needs to be able to take
+    back, and withdrawing it puts a name against nothing.
+    """
+    from app.db.models import Document, ReviewJudgement
+
+    doc = session.get(Document, document_id)
+    row = session.execute(
+        select(ReviewJudgement).where(
+            ReviewJudgement.document_id == doc.id,
+            ReviewJudgement.tenant_id == doc.tenant_id,
+            ReviewJudgement.subject_key == subject_key,
+            ReviewJudgement.verdict == "accepted")).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "no_judgement"})
+    row.history = [*(row.history or []), _judgement_history_entry(row)]
+    row.verdict = "withdrawn"
+    row.actor = principal.username
+    row.actor_role = principal.role.value
+    flag_modified(row, "history")
+    session.commit()
+    return {"ok": True, "subject_key": subject_key, "withdrawn": True}
+
+
+class RemapBody(BaseModel):
+    """A row re-mapped by hand onto a different template line.
+
+    ``row_ref`` travels in the BODY for the same reason a subject key does: it is a hash, and the
+    thing it identifies is a row rather than a resource with a URL of its own.
+    """
+
+    row_ref: str
+    # "" un-maps the row: the analyst's judgement that this printed line belongs to no template
+    # concept at all, which is the exact inverse of the action and the only way back from a re-map
+    # that started from unmapped.
+    canonical_key: str = ""
+    reason: str = ""
+
+
+@router.post("/{document_id}/review/remap",
+             dependencies=[Depends(require(Permission.EXTRACTION_EDIT)),
+                           Depends(authorized_document)])
+def remap_review_row(document_id: str, body: RemapBody, locale: str = Query("en"),
+                     session: Session = Depends(db),
+                     principal: Principal = Depends(current_principal)) -> dict:
+    """Re-file one printed row onto a different template line — resolving a review finding.
+
+    The queue's two row-shaped findings both END here. An unmapped row's fix text has always read
+    "Pick the correct template line item" and a low-confidence row's "Confirm the concept is correct
+    or reassign it", and until this there was nothing on either card that could do it: the only write
+    the screen offered was the sign flip, and the only value endpoint is keyed on the canonical key an
+    unmapped row does not have.
+
+    THE ROW IS FOUND BY ``_row_ref``, and an ambiguous ref is REFUSED rather than resolved to the
+    first match. Two rows can share an anchor — the fallback for a page with no label geometry is the
+    printed line's vertical band, and two sub-tables on one baseline collide — and writing a concept
+    onto the wrong one of those would move a real figure onto a concept nobody chose, invisibly,
+    because the card the analyst was reading would disappear either way. ``apply_judgements`` refuses
+    to attribute an acceptance in exactly this case; so does this.
+
+    The target must be a line the RUN'S OWN template defines and must not be a calculated subtotal —
+    the same two conditions ``_remap_targets`` applies to what the card offers, checked again here
+    because a client is not a gate.
+
+    Recorded, not silent: the row keeps ``remap`` naming where it came from, who moved it and why, its
+    method becomes ``manual_remap``, and its confidence goes to 1.0 — a human decision is the
+    strongest evidence in the system, and leaving the old score would leave the low-confidence finding
+    on screen after the analyst answered it. The previous key is kept, so re-mapping back (or to "")
+    is the way out and no state is lost.
+    """
+    from app.db.models import Document
+
+    doc = session.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    run = _latest_run(session, document_id)
+    if run is None or not run.result:
+        raise HTTPException(status_code=404, detail="No extraction run yet for this document")
+    ref = (body.row_ref or "").strip()
+    if not ref:
+        raise HTTPException(status_code=422, detail="row_ref is required")
+
+    result = dict(run.result)
+    rows = result.get("rows", [])
+    matches = [r for r in rows if _row_ref(r) == ref]
+    if not matches:
+        raise HTTPException(status_code=404,
+                            detail="No extracted row matches that reference. Reload the queue: the "
+                                   "document may have been re-extracted since it was rendered.")
+    if len(matches) > 1:
+        # Honest refusal over a coin flip — see the docstring.
+        raise HTTPException(
+            status_code=409,
+            detail=f"{len(matches)} extracted rows share that reference, so which one to re-map "
+                   "cannot be decided. Re-map from the Workspace, where the rows are listed "
+                   "separately.")
+
+    key = (body.canonical_key or "").strip()
+    template_def = _template_for_run(session, run)
+    if key:
+        allowed = {t["canonical_key"] for t in _remap_targets(template_def, locale)}
+        if key not in allowed:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{key}' is not a line this run's template offers as a re-map target. "
+                       "Calculated subtotals and section headers are excluded.")
+
+    target = matches[0]
+    prior = target.get("canonical_key") or ""
+    if prior == key:
+        raise HTTPException(status_code=409,
+                            detail=f"That row is already mapped to '{key}'." if key
+                                   else "That row is already unmapped.")
+    target["canonical_key"] = key or None
+    target["mapping_method"] = "manual_remap" if key else "manual_unmap"
+    target["mapping_confidence"] = 1.0 if key else None
+    target["remap"] = {"from": prior, "to": key, "reason": body.reason.strip()[:2000],
+                       "by": getattr(principal, "username", "") or "", "at": _now_iso()}
+    # On the ROW's flags, not only in the payload: the export and the statement inspector both read
+    # row flags, so a figure moved by hand says so wherever it is read.
+    flags = [f for f in (target.get("flags") or []) if not f.startswith("remapped_by_reviewer:")]
+    flags.append(f"remapped_by_reviewer:{prior or 'unmapped'}->{key or 'unmapped'}")
+    # The findings the old mapping raised are answered by the analyst's decision, so the flags that
+    # raise them go with it. Left behind, the row would arrive at the queue re-mapped AND still
+    # low-confidence, which reads as the action having failed.
+    if key:
+        flags = [f for f in flags if f != "low_mapping_confidence"]
+    target["flags"] = flags
+    for v in target.get("values") or []:
+        conf = v.get("confidence")
+        if isinstance(conf, dict):
+            v["confidence"] = {**conf, "mapping": 1.0 if key else conf.get("mapping"),
+                               "flags": [f for f in (conf.get("flags") or [])
+                                         if not (key and f == "low_mapping_confidence")]}
+
+    result["rows"] = rows
+    run.result = result
+    flag_modified(run, "result")
+    session.commit()
+    return {"ok": True, "row_ref": ref, "label": target.get("source_label") or "",
+            "from": prior, "to": key, "remap": target["remap"]}
 
 
 class LineItemEdit(BaseModel):
     value: float | None = None
     formula: str = ""
     period: str = "current"
+    # Which set of figures is being edited. Without it every edit landed on the consolidated
+    # column, so an analyst working the standalone statement saw nothing change.
+    basis: str = "consolidated"
+    # WHY the figure was changed. A manual value overrides what the document says and what the
+    # template computes, so the reason it was overridden is part of the record — it travels with
+    # the row, into the export, and to whoever reviews the spread after the analyst.
+    comment: str = ""
+
+
+def _template_concept(template_def: dict | None, canonical_key: str,
+                      locale: str = "en") -> tuple[str, str] | None:
+    """``(label, role)`` for a canonical key the template defines, else None."""
+    for stmt in (template_def or {}).get("statements", []):
+        for sec in stmt.get("sections") or []:
+            for c in sec.get("children") or []:
+                if c.get("canonical_key") == canonical_key:
+                    label = (c.get("label_i18n") or {}).get(locale) or c.get("label") \
+                        or canonical_key
+                    return label, (c.get("role") or "line")
+    return None
+
+
+def _slot_id(basis: str, period: str) -> str:
+    return f"{basis}/{period}"
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 @router.patch("/{document_id}/line-items/{canonical_key:path}",
               dependencies=[Depends(require(Permission.EXTRACTION_EDIT)), Depends(authorized_document)])
 def edit_document_line_item(document_id: str, canonical_key: str, body: LineItemEdit,
-                            session: Session = Depends(db)) -> dict:
-    """Edit a value (and optional formula) on a real extraction. The override is persisted
-    onto the latest run so the statement, export and review all reflect it; the row is
-    flagged 'edited' while its original provenance is retained."""
+                            session: Session = Depends(db),
+                            principal: Principal = Depends(current_principal)) -> dict:
+    """Edit one figure of a real extraction: a concept, in one basis, for one period.
+
+    Three cases, all of which an analyst hits in the grid, and all of which used to fail
+    silently:
+
+    * the concept was extracted once — the ordinary case, the value is overlaid on that row;
+    * SEVERAL printed lines map to the concept (a section's "Others", three depreciation
+      lines) and the grid shows their sum — a typed figure then REPLACES that sum rather than
+      joining it, so what was entered is what appears;
+    * the template defines the line but the document never yielded it (a blank row in the
+      grid) — the figure is recorded as a manual entry against that concept instead of 404ing.
+
+    The overlay is persisted onto the latest run, so the statement, export, checks and review
+    all read it; the machine-extracted numbers are snapshotted first so a revert is exact.
+    """
     from app.db.models import Document
 
     if session.get(Document, document_id) is None:
@@ -708,42 +3022,65 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
     run = _latest_run(session, document_id)
     if run is None or not run.result:
         raise HTTPException(status_code=404, detail="No extraction run yet for this document")
+    if body.basis not in ("consolidated", "standalone"):
+        raise HTTPException(status_code=422, detail=f"Unknown basis '{body.basis}'")
     result = dict(run.result)
     rows = result.get("rows", [])
-    target = next((r for r in rows if r.get("canonical_key") == canonical_key), None)
-    if target is None:
-        raise HTTPException(status_code=404, detail="Line item not found in this run")
+    group = [r for r in rows if r.get("canonical_key") == canonical_key]
+    if group:
+        # The whole concept's manual figure lives on ONE row — its first, in run order — which
+        # is the row the statement view and the export look to for an override. Every other
+        # contributing line keeps its printed figure, so the composition stays auditable.
+        target = group[0]
+    else:
+        concept = _template_concept(_template_for_run(session, run), canonical_key)
+        if concept is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"'{canonical_key}' is neither in this extraction nor in its template")
+        label, role = concept
+        target = {"canonical_key": canonical_key, "source_label": label, "role": role,
+                  "values": [], "mapping_method": "manual", "mapping_confidence": None,
+                  # Entered by hand rather than read off the page: a revert removes the row
+                  # entirely instead of restoring a figure that never existed.
+                  "manual": True}
+        rows.append(target)
 
-    values = target.get("values") or []
-    # Snapshot the machine-extracted values ONCE, before the first edit, so a revert can
-    # restore the original numbers exactly (edits are overlays, never a lossy overwrite).
+    values = target.setdefault("values", [])
+    # Snapshot the machine-extracted values ONCE, before this concept's first edit, so a revert
+    # restores the original numbers exactly (edits are overlays, never a lossy overwrite). The
+    # WHOLE list is copied rather than a (basis, period) → value map: a row can legitimately hold
+    # two values that share a basis and period label, and a map would collapse them and hand both
+    # the same figure back on revert.
     if not target.get("edited"):
-        target["_original"] = {v.get("period_label"): v.get("value") for v in values}
+        target["_original"] = copy.deepcopy(values)
 
-    slot = next((v for v in values if v.get("period_label") == body.period), None)
+    # The slot the grid shows for this (basis, period) — matched by the period it names, so an
+    # edit to the prior column cannot land on the current one (or vice versa).
+    slot = slot_for(target, body.basis, body.period)
     if slot is None:
-        slot = {"period_label": body.period, "value": None, "provenance": None}
+        slot = {"period_label": body.period, "basis": body.basis, "value": None,
+                "provenance": None}
         values.append(slot)
-        target["values"] = values
 
-    # A formula drives the value: evaluate it against the other line items (same period), so a
-    # real formula shows its computed result. If a formula is given alongside an explicit value
-    # and can't be evaluated (e.g. free-form references), the explicit value stands and the
-    # formula is kept as an annotation. A formula-ONLY edit that can't evaluate is a 422.
+    # A formula drives the value: evaluate it against the other line items (same basis and
+    # period), so a real formula shows its computed result. If a formula is given alongside an
+    # explicit value and can't be evaluated (e.g. free-form references), the explicit value
+    # stands and the formula is kept as an annotation. A formula-ONLY edit that can't evaluate
+    # is a 422.
     computed: float | None = None
     formula_error: str | None = None
     if body.formula and body.formula.strip().lstrip("=").strip():
         from app.services.formula import FormulaError, evaluate
 
         def _resolve(name: str) -> float:
-            row = next((r for r in rows if r.get("canonical_key") == name), None)
-            if row is None:
+            # Resolve a reference the way the grid renders it: the concept's figure, summed
+            # across every printed line that maps to it (or its own manual override).
+            n = _concept_value([r for r in rows if r.get("canonical_key") == name],
+                               body.basis, body.period)
+            if n is None:
                 raise KeyError(name)
-            v = next((x for x in (row.get("values") or [])
-                      if x.get("period_label") == body.period), None)
-            if v is None or v.get("value") is None:
-                raise KeyError(name)
-            return float(str(v["value"]).replace(",", ""))
+            return n
 
         try:
             computed = evaluate(body.formula, _resolve)
@@ -764,15 +3101,38 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
     else:
         fv = float(new_val)
         slot["value"] = str(int(fv)) if fv == int(fv) else str(fv)
+    slot.setdefault("basis", body.basis)
     target["formula"] = body.formula or None
     target["edited"] = True
+    slot_id = _slot_id(body.basis, body.period)
+    # Which figures were typed, so an edit to one basis doesn't claim the other.
+    target["edited_slots"] = sorted(set(target.get("edited_slots") or []) | {slot_id})
+    comments = dict(target.get("edit_comments") or {})
+    if body.comment.strip():
+        comments[slot_id] = {"text": body.comment.strip()[:2000],
+                             "by": getattr(principal, "username", "") or "",
+                             "at": _now_iso()}
+    else:
+        # Clearing the box removes the note rather than leaving a stale reason on a new figure.
+        comments.pop(slot_id, None)
+    if comments:
+        target["edit_comments"] = comments
+    else:
+        target.pop("edit_comments", None)
 
     result["rows"] = rows
     run.result = result
     flag_modified(run, "result")
     session.commit()
-    return {"ok": True, "canonical_key": canonical_key, "period": body.period,
-            "value": slot["value"], "formula": target.get("formula"), "status": "edited"}
+    return {"ok": True, "canonical_key": canonical_key, "basis": body.basis,
+            "period": body.period, "value": slot["value"], "formula": target.get("formula"),
+            "status": "edited", "label": target.get("source_label") or "",
+            "comment": (target.get("edit_comments") or {}).get(slot_id, {}).get("text", ""),
+            # What the grid will now show for this concept, so the caller can confirm the
+            # figure it typed is the figure that took effect.
+            "current": _concept_value(group or [target], body.basis, "current"),
+            "prior": _concept_value(group or [target], body.basis, "prior"),
+            "combined_from": len(group) if len(group) > 1 else 0}
 
 
 @router.delete("/{document_id}/line-items/{canonical_key:path}",
@@ -780,7 +3140,7 @@ def edit_document_line_item(document_id: str, canonical_key: str, body: LineItem
 def revert_document_line_item(document_id: str, canonical_key: str,
                               session: Session = Depends(db)) -> dict:
     """Revert an edited line item to its original machine-extracted values, dropping the
-    manual value(s) and formula."""
+    manual value(s) and formula. A line that only ever existed as a manual entry is removed."""
     from app.db.models import Document
 
     if session.get(Document, document_id) is None:
@@ -790,19 +3150,34 @@ def revert_document_line_item(document_id: str, canonical_key: str,
         raise HTTPException(status_code=404, detail="No extraction run yet for this document")
     result = dict(run.result)
     rows = result.get("rows", [])
-    target = next((r for r in rows if r.get("canonical_key") == canonical_key), None)
+    target = next((r for r in rows
+                   if r.get("canonical_key") == canonical_key and r.get("edited")), None)
+    if target is None:
+        target = next((r for r in rows if r.get("canonical_key") == canonical_key), None)
     if target is None:
         raise HTTPException(status_code=404, detail="Line item not found in this run")
     if not target.get("edited"):
         return {"ok": True, "canonical_key": canonical_key, "reverted": False, "status": None}
 
-    original = target.get("_original") or {}
-    for v in target.get("values") or []:
-        if v.get("period_label") in original:
-            v["value"] = original[v["period_label"]]
-    target.pop("_original", None)
-    target.pop("formula", None)
-    target["edited"] = False
+    if target.get("manual"):
+        # Nothing to restore: the line came from the analyst, not the document.
+        rows = [r for r in rows if r is not target]
+    else:
+        original = target.get("_original")
+        if isinstance(original, dict):
+            # Runs edited before the snapshot was a full list: restore by period label alone.
+            for v in target.get("values") or []:
+                if v.get("period_label") in original:
+                    v["value"] = original[v["period_label"]]
+        elif original is not None:
+            # Restore the machine-extracted values wholesale. Slots that exist only because an
+            # edit created them are not in the snapshot and go away with the edit.
+            target["values"] = copy.deepcopy(original)
+        target.pop("_original", None)
+        target.pop("formula", None)
+        target["edited"] = False
+        target.pop("edited_slots", None)
+        target.pop("edit_comments", None)
 
     result["rows"] = rows
     run.result = result
@@ -851,17 +3226,23 @@ def export_document(
     ccy = (src_units or {}).get("currency")
     caption = (f"Amounts in {ccy + ' ' if ccy else ''}{unit_label}" if unit_label else None)
     narrative = run.result.get("credit_narrative")  # stored LLM narrative, if generated
+    # Resolved BEFORE the format branch so both the workbook and the JSON carry it, and read through
+    # the same `_coverage_block` the review screen is served — a second computation here is how the
+    # sheet and the queue would come to disagree about whether anything was checked.
+    export_template = _template_for_run(session, run)
+    coverage = _coverage_block(run, export_template, locale)
     if fmt == "json":
         data = build_rows_json(rows, filename=doc.filename or "document",
                                disclosures=run.result.get("disclosures", []),
                                note_details=run.result.get("note_details", []),
                                reconciliation=run.result.get("reconciliation", []), locale=locale,
                                credit_narrative=narrative,
-                               netting_rules=run.result.get("netting") or [])
+                               netting_rules=run.result.get("netting") or [],
+                               coverage=coverage, template_def=export_template)
         return Response(content=data, media_type="application/json",
                         headers={"Content-Disposition": f'attachment; filename="{name}.json"'})
 
-    template_def = _template_for_run(session, run)
+    template_def = export_template
     if layout == "statement" and template_def:
         data = build_statement_workbook(rows, template_def, locale=locale,
                                         filename=doc.filename or "document",
@@ -869,7 +3250,7 @@ def export_document(
                                         note_details=run.result.get("note_details", []),
                                         reconciliation=run.result.get("reconciliation", []),
                                         include=include_set, scale=scale, units_caption=caption,
-                                        credit_narrative=narrative)
+                                        credit_narrative=narrative, coverage=coverage)
     else:
         data = build_rows_xlsx(rows, filename=doc.filename or "document", scale=scale)
     return Response(
@@ -883,9 +3264,17 @@ _PAGE_CLS = {"face": "Statement face", "notes": "Notes", "other": "Other",
              "cover": "Cover", "toc": "Contents", "unknown": "Unclassified"}
 
 
-def _conf_cat(c) -> tuple[str, int]:
+def _conf_cat(c) -> tuple[str, int | None]:
+    """A measured confidence as (badge category, MEASURED percentage).
+
+    The percentage is ``None`` when there is no confidence to report, and callers serve that absence
+    rather than a number. It used to be 60 — a figure derived from nothing, standing where the
+    measured one belongs: a page with no classification confidence was served as 'med', and the
+    client's per-CATEGORY literal then printed "78%" over it. A category is a bucket of a
+    measurement, so it can never be printed as one.
+    """
     if not isinstance(c, (int, float)):
-        return "med", 60
+        return "med", None
     pct = round(c * 100)
     return ("high" if c >= 0.85 else "med" if c >= 0.7 else "low"), pct
 
@@ -901,34 +3290,29 @@ def _build_pages(pages: list[dict], scope: list[int] | None = None) -> dict:
     skipped)."""
     chosen = set(scope) if scope is not None else _default_scope(pages)
     cards = []
-    counts = {"face": 0, "notes": 0, "other": 0}
     for p in pages:
         kind = p.get("kind", "unknown")
         idx = p.get("index", 0) or 0
         included = idx in chosen
-        cat, _ = _conf_cat(p.get("classification_confidence"))
+        cat, pct = _conf_cat(p.get("classification_confidence"))
         cards.append({
             "no": idx + 1,
-            "kind": kind if kind in ("face", "notes") else "other",
+            "kind": normalise_kind(kind),
             "cls": _PAGE_CLS.get(kind, kind.title()),
             "sub": "in scope" if included else "skipped",
             "conf": cat,
+            # THE MEASURED PERCENTAGE, SERVED BESIDE THE CATEGORY. The classifier's score was
+            # computed here and thrown away (`cat, _ = …`), so the screen printed a literal per
+            # CATEGORY instead — a page scored 0.40 rendered "54%" and a page with no score at all
+            # rendered "78%". `null` where the classifier reported nothing: the screen has to say so
+            # rather than print a number, and it cannot say so if the payload does not distinguish.
+            "conf_pct": pct,
             "included": included,
             "scan": "scanned" if p.get("source_kind") == "scanned" else "native",
         })
-        counts[kind if kind in counts else "other"] = counts.get(kind if kind in counts else "other", 0) + 1
-    total = len(cards)
-    focused = sum(1 for c in cards if c["included"])
-    return {
-        "pages": cards,
-        "filters": [
-            {"label": "All pages", "count": total},
-            {"label": "Face", "count": counts["face"]},
-            {"label": "Notes", "count": counts["notes"]},
-            {"label": "Other", "count": counts["other"]},
-        ],
-        "focused": focused, "total": total, "skipped": total - focused,
-    }
+    # Counted from the cards, by the same helper the sample route uses — see app/services/
+    # page_scope.py for why the two routes are no longer allowed their own arithmetic.
+    return {"pages": cards, **scope_counts(cards)}
 
 
 def _document_pages(row, store: LocalObjectStore) -> list[dict]:
@@ -1002,13 +3386,123 @@ def _stmt_node(template_def: dict | None, statement_type: str) -> dict | None:
                  if s.get("type") == statement_type), None)
 
 
+# Why a statement is serving no rows, keyed by the code the payload publishes so the code and the
+# sentence cannot drift apart.
+_STATEMENT_REFUSALS = {
+    "statement_not_in_template":
+        "This run's template declares no statement of this type, so none is shown. Extracted "
+        "figures that reach no statement are reported in the review queue; re-extract against a "
+        "template that declares it to see it here.",
+    "template_declares_no_lines":
+        "This run's template declares this statement but no line items under it, so there is "
+        "nothing to render. Fix the template and re-extract; the figures themselves are unaffected.",
+    "basis_not_extracted":
+        "No figures were extracted for this statement on this basis. Check the page scope, or the "
+        "other basis.",
+}
+
+
+def _statement_refusal(reason: str, locale: str) -> dict:
+    """Why a statement is serving no rows, as a machine-readable code and the reader's sentence.
+
+    THE EMPTY GRID IS NOT SELF-EXPLANATORY, and it has two causes that need telling apart: the run's
+    template declares no statement of this type at all, or it declares one and nothing was extracted
+    for the requested basis. "Nothing here" reads as "the extraction found nothing", which sends an
+    analyst back to the document after figures that were never going to be shown.
+
+    ``viewer.callout`` carries the same sentence and is NOT a second spelling of it: the callout is
+    defined as the one line of prose a spread prints about itself, and when the spread is refused the
+    refusal is that line. This block exists because only one of the Workspace's three viewer branches
+    renders the callout — the paper preview, which a real uploaded PDF or workbook never takes — so a
+    client showing the grid area has to be able to read the reason where the rows would have been.
+
+    An unrecognised reason is a ``KeyError`` rather than a blank message: a refusal that cannot say
+    why is the very state this exists to remove.
+    """
+    return {"reason": reason, "message": _t(_STATEMENT_REFUSALS[reason], locale)}
+
+
+def _template_skeleton(stmt: dict | None) -> list[tuple[str, dict]]:
+    """One statement's skeleton as the grid lays it out: ``("section", node)`` headings and
+    ``("line", node)`` figure rows, in template order.
+
+    A section with keyed children is a HEADING followed by those children. A section with none is
+    itself a single figure row — that is how the template declares a statement-level total (gross
+    profit, profit before tax, total assets, net assets, closing cash), and skipping those left a
+    P&L with no "Profit for the year" on it.
+
+    ONE walk, because the grid and the review queue ask the same question from opposite ends: the
+    grid emits these keys and nothing else, and the queue raises a finding for every mapped row
+    whose key is not among them. Two walks would let a key count as declared for one and undeclared
+    for the other — the grid dropping a figure the queue never reported, which is precisely the
+    silent disappearance this layer exists to prevent.
+    """
+    out: list[tuple[str, dict]] = []
+    for sec in (stmt or {}).get("sections") or []:
+        children = [c for c in sec.get("children") or [] if c.get("canonical_key")]
+        if not children:
+            if sec.get("canonical_key"):
+                out.append(("line", sec))
+            continue
+        out.append(("section", sec))
+        out.extend(("line", c) for c in children)
+    return out
+
+
+# Statement types served as a MATRIX — component columns, movement rows — rather than as the
+# template's skeleton. ONE list, because three places turn on the same fact and any disagreement
+# between them loses a figure: `_build_statement` dispatches these to `_build_matrix_statement`,
+# `_declared_line_keys` must not count their template lines as grid keys (the matrix renders none of
+# them), and `_rows_on_a_matrix_face` exempts the rows the matrix does show.
+_MATRIX_STATEMENTS = ("changes_in_equity",)
+
+
+def _rows_on_a_matrix_face(rows: list[dict], template_def: dict | None) -> set[int]:
+    """Positions of rows that a MATRIX statement shows, when the template declares one.
+
+    The off-template finding says a mapped row "appears on no spread", and for these rows that would
+    be false: a matrix renders its movements as printed, so a movement whose concept the template
+    puts on no LINE still reaches a face. Left out, one payload would render a row on the equity
+    matrix and simultaneously report it as reaching nothing — the self-contradiction the shared
+    ``_template_skeleton`` walk exists to prevent, arriving by the one door that walk cannot cover,
+    because a matrix has no skeleton to walk.
+
+    Identity rather than equality: two movements can print the same caption and the same figures, and
+    ``_matrix_rows`` hands back the very dicts it filtered out of ``rows``.
+    """
+    if not any(_stmt_node(template_def, t) for t in _MATRIX_STATEMENTS):
+        return set()
+    shown = {id(r) for basis in ("consolidated", "standalone")
+             for r, _cells in _matrix_rows(rows, basis)}
+    return {i for i, r in enumerate(rows) if id(r) in shown}
+
+
+def _declared_line_keys(template_def: dict | None) -> set[str]:
+    """Every canonical key this template puts on a statement GRID, across all of its statements.
+
+    Deliberately NOT ``_remap_targets``: that list excludes calculated subtotals and headers because
+    a printed figure must not be written ONTO them, which is a different question from whether the
+    template declares the line at all. A row mapped to ``bs_total_assets`` does reach the grid, so it
+    is not off-template — treating it as one would raise a finding against a row the reader can see.
+
+    And deliberately NOT every declared node either: a matrix statement's lines are skipped, because
+    ``_build_matrix_statement`` renders movement rows and never consults the skeleton. Counting them
+    made a row mapped to a declared equity line reach no face and raise no finding at once — declared
+    enough to be silent, rendered nowhere.
+    """
+    return {node["canonical_key"]
+            for stmt in (template_def or {}).get("statements", [])
+            if stmt.get("type") not in _MATRIX_STATEMENTS
+            for kind, node in _template_skeleton(stmt) if kind == "line"}
+
+
 def _stmt_prefix(template_def: dict | None, statement_type: str) -> str:
     """The canonical-key prefix for a statement (e.g. 'bs'), read from the template's own
     keys so it isn't limited to the three reference statements."""
     node = _stmt_node(template_def, statement_type)
     if node:
         for sec in node.get("sections", []):
-            for c in sec.get("children", []):
+            for c in sec.get("children") or []:
                 k = c.get("canonical_key") or ""
                 if "_" in k:
                     return k.split("_", 1)[0]
@@ -1041,22 +3535,30 @@ def _to_num(v):
 
 def _basis_values(r: dict, basis: str) -> list[dict]:
     """Values for the requested basis; values with no basis are treated as consolidated."""
-    return [v for v in (r.get("values") or []) if (v.get("basis") or "consolidated") == basis]
+    return _basis_values_of(r, basis)
 
 
 def _cur_prior(r: dict, basis: str = "consolidated") -> tuple[dict | None, dict | None]:
-    vals = _basis_values(r, basis)
-    by = {v.get("period_label"): v for v in vals}
-    cur = by.get("current") or (vals[0] if vals else None)
-    prior = by.get("prior") or (vals[1] if len(vals) > 1 else None)
-    return cur, prior
+    """This row's current- and prior-period values. A period the row has no figure for stays
+    None — see services.periods for why the positional fallback must not fire here."""
+    return split_current_prior(_basis_values(r, basis))
 
 
 def _inspector(r: dict, cur: dict | None) -> dict:
     prov = (cur or {}).get("provenance")
-    return {"tag": "machine", "src": _prov_label(prov) if prov else "",
+    # A figure the pipeline INFERRED must not read as one it matched. The row carrying a subtotal's
+    # sole component (stages.map_ontology) has method "rule", so "Mapped by rule" would tell the
+    # analyst a caption on the page said "Current tax" when no such caption exists — the figure is
+    # the total, filed here because nothing evidenced a sibling. Say that instead.
+    flags = ((cur or {}).get("confidence") or {}).get("flags") or []
+    inferred = next((f.split(":", 1)[1] for f in flags
+                     if f.startswith("inferred_sole_component:")), "")
+    return {"tag": "inferred" if inferred else "machine",
+            "src": _prov_label(prov) if prov else "",
             "formula": "", "result": str((cur or {}).get("value") or ""),
-            "note": f"Mapped by {r.get('mapping_method') or 'ensemble'}"}
+            "note": (f"Inferred: the face printed {inferred} alone and no sibling component was "
+                     "evidenced on the face or in its note"
+                     if inferred else f"Mapped by {r.get('mapping_method') or 'ensemble'}")}
 
 
 def _netting_rules_for_run(session: Session, run) -> list:
@@ -1069,24 +3571,76 @@ def _netting_rules_for_run(session: Session, run) -> list:
     if row is None:
         return []
     try:
-        return load_ontology(row.definition).netting_rules
+        return load_ontology(row.definition, resolve=True).netting_rules
     except Exception:  # noqa: BLE001 — a malformed ontology must not break the statement
         return []
 
 
 def _template_for_run(session: Session, run) -> dict | None:
-    """The template the run used, else the seeded HK reference template."""
+    """The template THIS RUN was launched against, or None. There is no fallback.
+
+    The id comes from ``_run_template_id`` so this and the coverage band cannot disagree about
+    whether a template was attached at all.
+
+    It used to fall back to the newest seeded ``TemplateVersion`` when the run named none, and the
+    template is genuinely optional (``ExtractionOptions.template_version_id`` defaults to None and
+    the upload screen allows it). So a run extracted with only an ontology served a coverage band
+    reading {"available": false, "reason": "no_template"} directly above four
+    TEMPLATE-DERIVED findings — two calculated_mismatch and two uncomputed, built from some other
+    template's rollup children and node labels. That is the same self-contradiction inside one
+    payload that ``_run_template_id`` was introduced to close, reached by the other half of the
+    question: agreeing on how to READ the id is worth nothing while one reader answers "none" and
+    the other substitutes a template the analyst never chose.
+
+    Findings, labels and computed subtotals attributed to an unchosen template are worse than
+    absent ones: nothing on the screen says which template they came from. Without an id the answer
+    is None, and every caller already handles it — ``_calculated_checks`` returns [],
+    ``_flip_sign_action`` refuses the button, the statement falls back to the extracted labels.
+    """
     from app.db.models import TemplateVersion
 
-    tid = (run.options or {}).get("template_version_id")
-    if tid:
-        tv = session.get(TemplateVersion, tid)
-        if tv:
-            return tv.definition
-    tv = session.execute(
-        select(TemplateVersion).order_by(TemplateVersion.version.desc())
-    ).scalars().first()
+    tid = _run_template_id(run)
+    if not tid:
+        return None
+    tv = session.get(TemplateVersion, tid)
     return tv.definition if tv else None
+
+
+def _superseded_template(session: Session, run) -> dict | None:
+    """This run's PINNED template version against the newest one stored under the same key.
+
+    Stated because a run cannot be un-pinned. ``_template_for_run`` resolves the template the run was
+    launched against and there is no fallback, so a document extracted before a template revision
+    goes on rendering the old shape for as long as that run is the latest one — which is exactly how
+    a corrected line order still looks wrong on screen, and how a reader comparing two documents can
+    be reading two different spreads without anything saying so. The two are indistinguishable
+    otherwise: nothing else in the payload names the template's version.
+
+    STATED, NOT ACTED ON. Re-extracting is a new run against the current template, and it discards
+    every manual value, comment and re-map recorded on this one — a decision for the analyst, not a
+    side effect of opening a statement. ``POST /documents/{id}/extractions`` already starts that run.
+
+    ``latest_version`` is the highest version STORED for the key, not the highest ``is_published``
+    one: ``routes/templates.py::_publish`` writes each new version with ``is_published`` defaulting
+    to False and nothing ever flips it, so filtering on that flag would report a genuinely superseded
+    run as current — the seeded reference template is the only published row in the table.
+
+    None when the run named no template (nothing to be superseded) or when the pinned row is gone.
+    """
+    from sqlalchemy import func
+
+    from app.db.models import TemplateVersion
+
+    tid = _run_template_id(run)
+    tv = session.get(TemplateVersion, tid) if tid else None
+    if tv is None:
+        return None
+    latest = session.execute(
+        select(func.max(TemplateVersion.version))
+        .where(TemplateVersion.template_key == tv.template_key)
+    ).scalar() or tv.version
+    return {"superseded": int(latest) > int(tv.version), "run_version": int(tv.version),
+            "latest_version": int(latest), "template_key": tv.template_key}
 
 
 _BASIS_LABEL_I18N = {
@@ -1111,18 +3665,451 @@ def _disp_period(lbl: str | None, idx: int, locale: str) -> str:
 
 
 def _period_labels(rows: list[dict], basis: str, locale: str) -> list[str]:
-    """The two period-column headers for the statement. Uses the real headers the extractor
-    captured (Excel carries the year/date text); falls back to Current/Prior (e.g. native PDF,
-    where the column header date isn't yet detected)."""
-    for r in rows:
-        vals = _basis_values(r, basis)
-        if len(vals) >= 1:
-            # Prefer the real period-end date the extractor captured (Excel header text or a
-            # PDF-detected column date); fall back to the positional key for Current/Prior.
-            labels = [(v.get("period_display") or v.get("period_label")) for v in vals]
-            return [_disp_period(labels[0] if labels else None, 0, locale),
-                    _disp_period(labels[1] if len(labels) > 1 else None, 1, locale)]
+    """The two period-column headers for one basis of a statement's rows."""
+    # A generator, so the early `break` inside still stops before touching every row.
+    return _period_labels_from((_basis_values(r, basis) for r in rows), locale)
+
+
+def _period_labels_from(value_lists: Iterable[list[dict]], locale: str) -> list[str]:
+    """The two period-column headers, from the value lists whose figures sit under them. Uses the
+    real headers the extractor captured (Excel carries the year/date text); falls back to
+    Current/Prior (e.g. native PDF, where the column header date isn't yet detected).
+
+    Taking the VALUE LISTS rather than rows-plus-basis is what lets the note-detail route reuse
+    this: a note row's values are the same shape, and the header a note table prints above its
+    figures has to be derived from those very figures. Two labellers would let the Notes screen
+    and the Workspace label the same figures differently, which is exactly what "FY25"/"FY24"
+    hardcoded above a 2023/2022 filing did.
+
+    Each header is looked up by the period it NAMES, across every list, rather than taken
+    positionally from the first one that carries any value at all — a row printed for one year
+    only would otherwise label both columns with that year's period.
+    """
+    found: dict[str, str | None] = {}
+    positional: list[str | None] | None = None
+    for vals in value_lists:
+        if not vals:
+            continue
+        for period, disp in period_displays(vals).items():
+            found.setdefault(period, disp)
+        if positional is None and not period_displays(vals):
+            # A row whose columns are unnamed (col0/col1) still tells us the header order.
+            positional = [(v.get("period_display") or v.get("period_label")) for v in vals]
+        if "current" in found and "prior" in found:
+            break
+    if found:
+        return [_disp_period(found.get("current"), 0, locale),
+                _disp_period(found.get("prior"), 1, locale)]
+    if positional:
+        return [_disp_period(positional[0] if positional else None, 0, locale),
+                _disp_period(positional[1] if len(positional) > 1 else None, 1, locale)]
     return [_t("Current", locale), _t("Prior", locale)]
+
+
+# A two-column comparative labels its values positionally — "current", "prior", "col2" for a
+# third numeric column. A matrix labels them with the column header text it read off the page
+# ("Issued capital", "Retained profits"). That is the discriminator between the two shapes, and
+# it needs no extra plumbing: the label already travels with every value.
+_POSITIONAL_PERIOD = re.compile(r"^(current|prior|col\d+)$", re.IGNORECASE)
+# A column header that reads as a period rather than a component. Excel carries the sheet's real
+# header TEXT in period_label ("2023", "31 December 2023", "FY2024"), so without this every
+# spreadsheet row looks like an equity movement with two component columns.
+_PERIOD_LIKE = re.compile(r"(19|20)\d{2}|\bfy\b|\bq[1-4]\b|年", re.IGNORECASE)
+
+
+def _is_named_column(label) -> bool:
+    """Whether a value's column is NAMED — an equity component ("Retained profits") — as opposed
+    to a period, whether that period was labelled positionally or by its own printed date.
+
+    Delegates to services.periods so the Excel reader (which decides how to LABEL a column) and
+    the statement builder (which decides how to READ one) cannot disagree.
+    """
+    return names_a_component(label)
+
+
+def _matrix_cells(row: dict, basis: str) -> dict[str, object]:
+    """This row's named component cells for one basis — empty for a comparative row."""
+    out: dict[str, object] = {}
+    for v in row.get("values") or []:
+        if (v.get("basis") or "consolidated") != basis:
+            continue
+        if _is_named_column(v.get("period_label")):
+            out[str(v["period_label"])] = v
+    return out
+
+
+def _matrix_rows(rows: list[dict], basis: str) -> list[tuple[dict, dict]]:
+    """(row, named cells) for every row that is part of the matrix.
+
+    A movement in equity always touches at least its own component and a total column, so two
+    named cells is the floor — that keeps a stray one-column row out of the statement.
+    """
+    out = []
+    for r in rows:
+        cells = _matrix_cells(r, basis)
+        if len(cells) >= 2:
+            out.append((r, cells))
+    return out
+
+
+def _matrix_columns(rows: list[dict], basis: str) -> list[str]:
+    """The component columns of a matrix statement, in the order they are PRINTED.
+
+    Column identity is the header text extraction already attached to each value; the order is
+    recovered from where the figures sit on the page (the median x of a column's cells), because
+    a dict of values has no left-to-right order of its own and equity statements are read
+    left-to-right — issued capital through to total equity.
+    """
+    xs: dict[str, list[float]] = {}
+    for _r, cells in _matrix_rows(rows, basis):
+        for name, v in cells.items():
+            box = ((v.get("provenance") or {}).get("bbox")) or {}
+            x = box.get("x0")
+            xs.setdefault(name, []).append(0.0 if x is None else float(x))
+    def centre(name: str) -> float:
+        vals = sorted(xs[name])
+        return vals[len(vals) // 2] if vals else 0.0
+    return sorted(xs, key=centre)
+
+
+def _build_matrix_statement(rows: list[dict], statement_type: str, filename: str, *,
+                            basis: str, locale: str, units_ctx: dict | None,
+                            company: str | None, doc_format: str, page_count: int,
+                            template_def: dict | None) -> dict:
+    """A matrix statement: named component columns, one row per movement, in document order.
+
+    Rows keep the caption as printed. A movement's identity in a statement of changes in equity
+    IS its caption ("Profit for the year", "Dividends paid", "Acquisition of a subsidiary"), and
+    there is no section skeleton to slot it into — so the printed order is the statement's order,
+    and every parsed row appears. ``cells`` is keyed by column name; ``v1``/``v2`` stay null so
+    nothing downstream mistakes a component for a period.
+
+    THE STATEMENT IS THE UNIT OF THE TEMPLATE'S PERMISSION HERE, not the row. Everywhere else "no
+    line the template does not define may reach a statement" is decided per line, because a
+    comparative's rows ARE template line items. A matrix's rows are movements through the year, and
+    the template declares no movements — so filtering row by row would have to invent a
+    correspondence between "Acquisition of a subsidiary" and some template line that the template
+    never states, and would delete the statement's real content on the strength of that invention.
+    The one thing the template can honestly declare about a matrix is whether it carries the
+    statement at all. So: declared, and every parsed movement shows as printed; not declared, and
+    the statement is refused outright rather than rendering a face nothing asked for.
+
+    Refused loudly and with nothing lost. The tab is out of the nav but the route, this builder and
+    the ``StatementKey`` are all live, so a deep link still arrives here — it now arrives at an empty
+    grid carrying ``refused``, which says why in a code and a sentence, instead of at rows no template
+    declares. A movement row that mapped to no concept is already an ``unmapped`` finding in the
+    review queue, with the re-map offer that resolves it, so refusing the face hides no figure.
+    """
+    declared = template_def is None or _stmt_node(template_def, statement_type) is not None
+    columns = _matrix_columns(rows, basis) if declared else []
+    out: list[dict] = []
+    for r, raw_cells in (_matrix_rows(rows, basis) if declared else []):
+        cells = {name: _to_num(v.get("value")) for name, v in raw_cells.items()}
+        prov = next((v.get("provenance") for v in raw_cells.values() if v.get("provenance")), None)
+        cat, pct = _conf_cat(r.get("mapping_confidence"))
+        label = r.get("source_label") or ""
+        out.append({
+            "id": r.get("canonical_key") or f"eq:{len(out)}:{label[:40]}",
+            "label": label, "source_label": label,
+            # A row whose every figure lands in a "total" column is the statement's own subtotal.
+            "kind": "subtotal" if _looks_like_equity_total(label) else "item",
+            "note": r.get("note"), "note2": None, "status": None,
+            "confidence": {"cat": cat, "pct": pct} if r.get("mapping_confidence") else None,
+            "editable": False, "formula": None,
+            "inspector": _inspector(r, {"value": next(iter(cells.values()), None),
+                                        "provenance": prov}),
+            "contributions": None, "cells": cells,
+            # A matrix has no prior COLUMN — its columns are components — so there is no second
+            # period provenance to carry.
+            "v1": None, "v2": None, "source": prov, "source2": None,
+        })
+
+    # Why the matrix is empty, when it is — the same two-cause answer the comparative grid gives, for
+    # the same reason: a blank grid reads as "the extraction found nothing" and sends the analyst
+    # after movements that were never going to be shown. A declared statement with nothing
+    # matrix-shaped on this basis is a filing/scope question, not a template one.
+    refused = None if declared and out else _statement_refusal(
+        "statement_not_in_template" if not declared else "basis_not_extracted", locale)
+    basis_label = _t("Consolidated" if basis == "consolidated" else "Standalone", locale)
+    return {
+        "statement": statement_type,
+        "label": _stmt_label(template_def, statement_type, locale),
+        "basis": basis,
+        # The shape the client must render. Absent/"comparative" is the two-column default.
+        "layout": "matrix",
+        "columns": [{"key": c, "label": c} for c in columns],
+        "periods": [],
+        "currency": (units_ctx or {}).get("currency") or "",
+        "currency_symbol": "", "units": (units_ctx or {}).get("units_label") or "",
+        "units_scale_factor": _to_num((units_ctx or {}).get("scale_factor")) or 1.0,
+        "format": doc_format, "page_count": page_count,
+        "rows": out,
+        # Null when the statement is being served. See `_statement_refusal`.
+        "refused": refused,
+        "viewer": {
+            "company": company or filename, "subtitle": _t("Extracted statement", locale),
+            "chips": [{"label": basis_label, "active": True}],
+            "callout": _t("Columns are equity components as printed, not periods. Click a row "
+                          "to see it in the document.", locale) if refused is None
+                       else refused["message"],
+        },
+    }
+
+
+# A movement row whose caption is an opening/closing balance is the matrix's own subtotal line.
+_EQUITY_TOTAL = re.compile(
+    r"^\s*(at|as at|balance(s)? (at|as at))\b|^\s*(於|于|截至)", re.IGNORECASE)
+
+
+def _looks_like_equity_total(label: str) -> bool:
+    return bool(_EQUITY_TOTAL.search(label or ""))
+
+
+def _equity_closing(rows: list[dict], basis: str) -> tuple[str, float, str] | None:
+    """The equity statement's CLOSING total equity, as (caption, amount, name of the line).
+
+    The last balance line in document order is the closing one — an equity statement runs
+    opening balance, movements, closing balance, and a two-year statement simply does that
+    twice. Returns None when the document carries no equity matrix at all.
+
+    The third element is how the review queue NAMES the line this row is: its canonical_key when the
+    matrix row mapped to one, else the caption as printed. It is returned rather than re-derived by
+    the caller because this function is the only place that knows WHICH row was taken as the closing
+    one — and the equity_tie card indicts it, so the header tile counting "lines with no finding" has
+    to be able to exclude it. `_matrix_rows` FILTERS `rows`, so this row is one of them; the card
+    used to assert otherwise and named only the balance sheet's total.
+    """
+    total_col = None
+    last = None
+    for r, cells in _matrix_rows(rows, basis):
+        if total_col is None:
+            total_col = next((c for c in cells if "total equity" in c.lower()), None)
+        if total_col and _looks_like_equity_total(r.get("source_label") or ""):
+            v = _to_num((cells.get(total_col) or {}).get("value"))
+            if v is not None:
+                last = (r.get("source_label") or "", v,
+                        str(r.get("canonical_key") or r.get("source_label") or ""))
+    return last
+
+
+# A computed subtotal and the printed one are read from the same page in the same units, so any
+# real difference is a whole currency unit or more. Below that it is float noise from the sum.
+_CALC_TOLERANCE = 0.5
+
+
+def _component_value(calc: dict, owner_key: str, index: int):
+    """One component's figure for the period `calc` was evaluated for.
+
+    Read from that period's own evaluation rather than from another period's component list: a
+    Calculated is evaluated for ONE period, so reusing its figures would print this year's
+    components under last year's total.
+    """
+    own = calc.get(owner_key)
+    if own is not None and index < len(own.components):
+        return own.components[index].value
+    return None
+
+
+_CALC_NOTES = {
+    "calculated": "Computed from the {n} template lines below, each of which clicks through to "
+                  "the page it was printed on. The document's own printed figure is held for "
+                  "review, not shown here — a subtotal that contradicts its components is a "
+                  "finding rather than a number.",
+    "manual": "A value entered by hand, which stands over the computed one. The components below "
+              "are what the template says this line is made of.",
+    "reported_uncomputed": "None of the components this line is made of were extracted, so there "
+                           "was nothing to compute from and the document's printed figure is "
+                           "shown unverified. It is in the review queue.",
+}
+
+
+def _calculated_note(origin: str, diff: float | None, n_components: int, locale: str) -> str:
+    note = _t(_CALC_NOTES[origin], locale).replace("{n}", str(n_components))
+    if diff is not None and abs(diff) > _CALC_TOLERANCE:
+        note = f"{note} {_t('The printed figure differs by', locale)} {diff:,.0f}."
+    return note
+
+
+def _calculated(rows: list[dict], template_def: dict | None, basis: str, period: str,
+                locale: str, netted: dict[str, float] | None = None) -> dict:
+    """Evaluate the template's calculated lines for one (basis, period).
+
+    Inputs are read through ``concept_value``, so a calculated line is built from exactly the
+    figures the grid shows for its components — including an analyst's manual correction to one of
+    them, and any netting restatement, which is the point: whatever a component shows is what its
+    subtotal is built from.
+
+    A pass-through to ``rollups.evaluate_rows``, which the export and the KPI layer also call. The
+    plumbing used to be written out again here; two spellings of "what a subtotal is" is how the
+    screen and everything reading beside it come to differ.
+    """
+    from app.services.rollups import evaluate_rows
+
+    return evaluate_rows(template_def, rows, basis, period, locale, netted=netted)
+
+
+_KPI_CATEGORY_I18N = {
+    "Liquidity": {"zh": "流动性", "ar": "السيولة", "fr": "Liquidité"},
+    "Leverage": {"zh": "杠杆", "ar": "الرافعة المالية", "fr": "Endettement"},
+    "Coverage": {"zh": "偿付能力", "ar": "التغطية", "fr": "Couverture"},
+    "Efficiency": {"zh": "运营效率", "ar": "الكفاءة", "fr": "Efficacité"},
+    "Profitability": {"zh": "盈利能力", "ar": "الربحية", "fr": "Rentabilité"},
+}
+
+
+def _key_provenance(rows: list[dict], basis: str) -> dict[str, tuple[dict | None, dict | None]]:
+    """canonical key → (current, prior) provenance of the first line that carried it, so a
+    derived figure can still be traced to the page its inputs were printed on."""
+    out: dict[str, tuple[dict | None, dict | None]] = {}
+    for r in rows:
+        k = r.get("canonical_key")
+        # Skip a row carrying nothing for THIS basis: taking the first row with the key regardless
+        # left a consolidated-only line with no location on the standalone view, so the KPI inputs
+        # advertised a click-through they could not deliver.
+        if not k or k in out or not _basis_values(r, basis):
+            continue
+        cur, prior = _cur_prior(r, basis)
+        out[k] = ((cur or {}).get("provenance"), (prior or {}).get("provenance"))
+    return out
+
+
+def _kpi_inputs_as_contributions(inputs: dict, prior_inputs: dict, provs: dict,
+                                 locale: str) -> list[dict]:
+    """A ratio's inputs in the same shape as a combined line's contributions, so the inspector
+    shows the arithmetic with each figure clickable through to where it was printed."""
+    out: list[dict] = []
+    for side, sign_label in (("numerator", _t("numerator", locale)),
+                             ("denominator", _t("denominator", locale))):
+        # Matched by POSITION in the term list, not by resolved key: a term may name several
+        # candidate keys and resolve to a different one in each period (cost of goods sold this
+        # year, total operating cost last year), and keying on the current period's answer then
+        # reported the prior input as absent even though the prior ratio used it.
+        prior_side = list(prior_inputs.get(side) or [])
+        for pos, i in enumerate(inputs.get(side) or []):
+            key = str(i.get("canonical_key") or "")
+            cur_prov, prior_prov = provs.get(key, (None, None))
+            sign = i.get("sign") or 1
+            pv = prior_side[pos].get("value") if pos < len(prior_side) else None
+            out.append({
+                "label": f"{sign_label}: {i.get('label') or ''}",
+                "canonical_key": key or None,
+                "v1": None if i.get("value") is None else sign * float(i["value"]),
+                "v2": None if pv is None else sign * float(pv),
+                "method": None,
+                # An input the filing never reported: shown, and shown as absent.
+                "residual": i.get("value") is None,
+                "src": _prov_label(cur_prov), "source": cur_prov,
+                "src2": _prov_label(prior_prov), "source2": prior_prov,
+            })
+    return out
+
+
+def _build_kpi_statement(rows: list[dict], filename: str, *, basis: str, locale: str,
+                         company: str | None, doc_format: str, page_count: int,
+                         template_def: dict | None) -> dict:
+    """The KPI view — the ratio catalog computed from THIS extraction, current beside prior.
+
+    A ratio is not a currency amount: it carries its own unit (×, %, days) and is untouched by
+    the presentation currency or magnitude an analyst picks for the statements. So every figure
+    ships a formatted ``display`` string beside the raw number and the grid renders that
+    verbatim, instead of scaling a current ratio of 1.35 into "thousands".
+
+    Ratios whose inputs the filing never reported are listed as unavailable rather than dropped:
+    which KPIs a document cannot support is itself a finding.
+    """
+    from app.services.derived import compute_ratios
+
+    # The template's own KPI block is the catalog when it declares one — passing it is what makes a
+    # declared KPI reach this view at all, and without it the block would be an inert declaration.
+    cur = compute_ratios(rows, basis=basis, period="current", locale=locale,
+                         template_def=template_def)
+    prior = {r["key"]: r for r in compute_ratios(rows, basis=basis, period="prior", locale=locale,
+                                                 template_def=template_def)}
+    provs = _key_provenance(rows, basis)
+
+    out: list[dict] = []
+    seen_cat: set[str] = set()
+    for ratio in cur:
+        cat = ratio.get("category") or "Profitability"
+        if cat not in seen_cat:
+            seen_cat.add(cat)
+            out.append({"id": f"kpi_sec_{cat.lower()}",
+                        "label": _KPI_CATEGORY_I18N.get(cat, {}).get(locale, cat),
+                        "kind": "section", "v1": None, "v2": None})
+        p = prior.get(ratio["key"], {})
+        contributions = _kpi_inputs_as_contributions(
+            ratio.get("inputs") or {}, p.get("inputs") or {}, provs, locale)
+        out.append({
+            "id": f"kpi_{ratio['key']}", "label": ratio["label"], "source_label": None,
+            "kind": "item", "note": None, "note2": None,
+            "status": None if ratio.get("available") else "missing",
+            "confidence": None,
+            # Derived, not extracted: there is no single figure on a page to correct, so the fix
+            # for a wrong ratio is to fix the line items it is computed from.
+            "editable": False,
+            "formula": ratio.get("formula"),
+            "inspector": {
+                "tag": _t("computed", locale) if ratio.get("available")
+                       else _t("inputs not extracted", locale),
+                "src": "", "formula": ratio.get("formula") or "",
+                "result": ratio.get("display") or "",
+                "note": _t("Computed from the extracted line items below — each one clicks "
+                           "through to the page it was printed on. Correct a KPI by correcting "
+                           "its inputs.", locale),
+            },
+            "contributions": contributions or None,
+            "v1": ratio.get("value"), "v2": p.get("value"),
+            # Pre-formatted with the ratio's own unit; the grid shows these instead of applying
+            # the statements' currency/magnitude presentation.
+            "display1": ratio.get("display") or "—", "display2": p.get("display") or "—",
+            "source": None, "source2": None,
+        })
+
+    return {
+        "statement": "kpi", "label": _t("KPIs", locale), "basis": basis,
+        "layout": "comparative", "periods": _period_labels(rows, basis, locale),
+        # Ratios are unitless: no currency, no magnitude, nothing for the presentation
+        # selectors to scale. `display1`/`display2` are already in each ratio's own unit.
+        "currency": "", "currency_symbol": "", "units": "", "units_scale_factor": 1.0,
+        "presentation": "raw",
+        "format": doc_format, "page_count": page_count,
+        "rows": out,
+        # Explicit rather than absent, as on the two face shapes: the KPI view serves the catalog it
+        # declares whatever the filing yielded — a ratio whose inputs are missing is a row saying so
+        # — so there is no state in which it refuses, and the client needs no special case for it.
+        "refused": None,
+        "viewer": {
+            "company": company or filename, "subtitle": _t("Computed KPIs", locale),
+            "chips": [{"label": _t("Consolidated" if basis == "consolidated" else "Standalone",
+                                   locale), "active": True}],
+            "callout": _t("Every KPI is computed from this document's own extracted figures. "
+                          "Select one to see its inputs and jump to where each was printed.",
+                          locale),
+        },
+    }
+
+
+def _face_prefixes(template_def: dict | None) -> set[str]:
+    """The canonical-key prefixes that DO reach a face statement, so anything else can be
+    recognised as not being on one.
+
+    A PREFIX TEST, AND NOW AN OVER-APPROXIMATION. Its one caller (services/gap_closing.py::leftovers)
+    treats a row whose key carries a face prefix as already placed, which held while the grid rendered
+    off-template keys under an "Other extracted items" heading. It no longer does: ``_build_statement``
+    emits the template's declared lines only, so a row keyed ``bs_something_the_template_omits`` is on
+    no face while this still calls its prefix a face. The consequence is bounded — gap closing offers
+    one candidate fewer, and the row is raised as an ``off_template`` review finding whose re-map
+    offer is the same remedy by hand — but the honest predicate is ``_declared_line_keys``, and
+    ``leftovers`` should move to it.
+    """
+    out = {p for p in _STMT_PREFIX.values()}
+    for stmt in (template_def or {}).get("statements", []):
+        t = stmt.get("type")
+        if t:
+            p = _stmt_prefix(template_def, t)
+            if p:
+                out.add(p)
+    return out
 
 
 def _build_statement(rows: list[dict], template_def: dict | None, statement_type: str,
@@ -1135,48 +4122,263 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     carry a value for the requested `basis` (consolidated / standalone) are shown. Labels are
     resolved in the output `locale` from the template's label_i18n (input=output parity)."""
     prefix = _stmt_prefix(template_def, statement_type)
-    by_key: dict[str, dict] = {}
+    # A statement of changes in equity is not a two-column comparative — its columns are equity
+    # COMPONENTS (issued capital, each reserve, retained profits, non-controlling interests,
+    # total equity) and its rows are movements through the year. Forcing it into current/prior
+    # columns files a component under a period that does not exist, so it gets its own shape.
+    if statement_type in _MATRIX_STATEMENTS:
+        return _build_matrix_statement(
+            rows, statement_type, filename, basis=basis, locale=locale, units_ctx=units_ctx,
+            company=company, doc_format=doc_format, page_count=page_count,
+            template_def=template_def)
+    # Two views that are not statements the document prints, but which the document's figures
+    # determine: the KPIs computed off them, and everything extracted that reaches no face.
+    if statement_type == "kpi":
+        return _build_kpi_statement(
+            rows, filename, basis=basis, locale=locale, company=company,
+            doc_format=doc_format, page_count=page_count, template_def=template_def)
+    # Several printed lines legitimately share one concept: three depreciation lines roll into
+    # "Depreciation and amortisation", two tax payments into "Income tax paid", and an "Others"
+    # bucket exists precisely to absorb a handful. Keeping only the first row would drop the
+    # rest from the statement silently, so rows are grouped and their values added.
+    by_key: dict[str, list[dict]] = {}
     for r in rows:
         k = r.get("canonical_key")
         if k:
-            by_key.setdefault(k, r)
+            by_key.setdefault(k, []).append(r)
 
     def has_basis(r: dict) -> bool:
         return bool(_basis_values(r, basis))
+
+    # The template's calculated lines — subtotals, totals, net figures — evaluated from the
+    # components the template says they are made of. A subtotal printed on the page is a fourth
+    # opinion alongside the lines it is meant to be the sum of; when they disagree, showing the
+    # printed one puts a figure on the face that its own components contradict. So the computed
+    # figure is what the grid shows, the printed one is kept for the review queue, and their
+    # difference becomes a finding rather than a silent inconsistency.
+    # Netting is resolved FIRST. It restates a component's displayed figure, and a subtotal
+    # computed before that restatement no longer equals the components printed beneath it — the
+    # spread would contradict itself on its own face.
+    net_cur: dict = {}
+    net_prior: dict = {}
+    if netting_rules:
+        from app.services.netting import compute_netting
+
+        net_cur = compute_netting(rows, netting_rules, basis=basis, period="current")
+        net_prior = compute_netting(rows, netting_rules, basis=basis, period="prior")
+    netted_cur = {k: _to_num(v["net"]) for k, v in net_cur.items() if v.get("net") is not None}
+    netted_prior = {k: _to_num(v["net"]) for k, v in net_prior.items() if v.get("net") is not None}
+
+    calc_cur = _calculated(rows, template_def, basis, "current", locale, netted_cur)
+    calc_prior = _calculated(rows, template_def, basis, "prior", locale, netted_prior)
 
     # A template child's presentation kind (subtotal / total rows are styled differently in
     # the grid); anything else is a plain line item.
     def _kind_for(role: str | None) -> str:
         return {"subtotal": "subtotal", "total": "total"}.get(role or "", "item")
 
-    def item_row(key: str, label: str, r: dict, kind: str = "item") -> dict:
+    provs = _key_provenance(rows, basis)
+
+    def as_calculated(row: dict) -> dict:
+        """Put the COMPUTED figure on a calculated line, and keep the printed one out of sight.
+
+        The template says this line is made of other lines, so that is the figure the face
+        carries. What the document printed is retained as ``reported1``/``reported2`` — not shown
+        as the line's value, because a subtotal that contradicts its own components is a finding,
+        not a number — and the review queue is built from exactly that difference.
+
+        Precedence is manual > computed > printed. An analyst's typed value is their answer for
+        the line and outranks the arithmetic; a line whose components were never extracted has
+        nothing to compute from, so it falls back to the printed figure and says so.
+        """
+        key = row["id"]
+        c1, c2 = calc_cur.get(key), calc_prior.get(key)
+        if c1 is None and c2 is None:
+            return row                                   # not a calculated line
+        row["reported1"], row["reported2"] = row["v1"], row["v2"]
+        group = by_key.get(key, [])
+
+        def resolve(period: str, calc, reported):
+            """This period's figure and where it came from — decided for THIS period alone.
+
+            Every part of this is per-period on purpose. An analyst who corrects the current
+            column has said nothing about last year, and a period whose components were not
+            extracted is not made computable by the other period's being so. Deciding either
+            question at row level silently rewrites the column nobody touched.
+            """
+            if any(_edited_for(x, basis, period) for x in group):
+                return reported, "manual"
+            if calc is not None and calc.computable:
+                return calc.value, "calculated"
+            return reported, "reported_uncomputed"
+
+        row["v1"], o1 = resolve("current", c1, row["reported1"])
+        row["v2"], o2 = resolve("prior", c2, row["reported2"])
+        row["calculated1"] = c1.value if (c1 and c1.computable) else None
+        row["calculated2"] = c2.value if (c2 and c2.computable) else None
+        row["origin1"], row["origin2"] = o1, o2
+        # The row-level chip summarises the two: a manual value is the most important thing to
+        # say about the line, then that anything on it was computed.
+        row["origin"] = ("manual" if "manual" in (o1, o2)
+                         else "calculated" if "calculated" in (o1, o2)
+                         else "reported_uncomputed")
+        if row.get("status") == "missing" and (row["v1"] is not None or row["v2"] is not None):
+            # The document not printing this line is no longer a gap: the template says what it
+            # is made of, and the components were there.
+            row["status"] = None
+
+        source = c1 if (c1 and c1.components) else c2
+        if source is not None:
+            # Display only — see item_row. A rollup's rendering ("12,800 + 2,150 + 3,410") is not
+            # an expression the server may evaluate on the next edit.
+            row["arithmetic"] = source.formula or row.get("arithmetic")
+            # The components ARE the traceability: each with its own figure and the page it was
+            # printed on, so a computed subtotal can be taken apart line by line.
+            row["contributions"] = [{
+                "label": comp.label,
+                "canonical_key": comp.canonical_key,
+                "v1": _component_value(calc_cur, key, i),
+                "v2": _component_value(calc_prior, key, i),
+                "method": "calculated" if comp.canonical_key in calc_cur else None,
+                "residual": comp.value is None,
+                "src": _prov_label(provs.get(comp.canonical_key, (None, None))[0]),
+                "source": provs.get(comp.canonical_key, (None, None))[0],
+                "src2": _prov_label(provs.get(comp.canonical_key, (None, None))[1]),
+                "source2": provs.get(comp.canonical_key, (None, None))[1],
+            } for i, comp in enumerate(source.components)]
+        diff = None
+        if row.get("origin1") == "calculated" and row["v1"] is not None \
+                and row["reported1"] is not None:
+            diff = row["v1"] - row["reported1"]
+        row["inspector"] = {
+            "tag": {"calculated": _t("calculated", locale),
+                    "manual": _t("manual override", locale),
+                    "reported_uncomputed": _t("printed, not computable", locale)}[row["origin"]],
+            "src": "", "formula": row.get("arithmetic") or row.get("formula") or "",
+            "result": "" if row["v1"] is None else f"{row['v1']:,.0f}",
+            "note": _calculated_note(row["origin"], diff, len(source.components) if source else 0,
+                                    locale),
+        }
+        if diff is not None and abs(diff) > _CALC_TOLERANCE:
+            # A divergence is the finding; the review queue carries it with the arithmetic.
+            row["status"] = "recon"
+        row["confidence"] = row.get("confidence")
+        return row
+
+    def item_row(key: str, label: str, group: list[dict], kind: str = "item") -> dict:
+        """One statement row from every extracted row that mapped to this concept.
+
+        With a single source row this is that row. With several, the values are summed and the
+        inspector says how many printed lines went into the figure, so a total that does not
+        match any one line on the page is explainable rather than mysterious. Provenance stays
+        on the first contributing line, which is where click-to-source lands — carried for BOTH
+        periods, because last year's figure is printed somewhere too and is just as much a
+        number a reviewer needs to check against the page.
+        """
+        r = group[0]
         cur, prior = _cur_prior(r, basis)
-        cat, pct = _conf_cat(r.get("mapping_confidence"))
-        edited = bool(r.get("edited"))
-        return {
+        cat, pct = _conf_cat(min((x.get("mapping_confidence") or 0) for x in group)
+                             if len(group) > 1 else r.get("mapping_confidence"))
+        # An edit to the consolidated figures does not make the standalone ones edited.
+        edited_row = next((x for x in group if _edited_for(x, basis)), None)
+        edited = edited_row is not None
+        # One reader for the figure — the sum of the printed lines, or the analyst's manual
+        # value replacing it. See services.periods.concept_value.
+        v1 = _concept_value(group, basis, "current")
+        v2 = _concept_value(group, basis, "prior")
+        inspector = _inspector(r, cur)
+        formula = (edited_row or r).get("formula")
+        arithmetic: str | None = None      # display-only rendering of how the figure was reached
+        contributions: list[dict] = []
+        if len(group) > 1:
+            # A combined figure has to be auditable line by line: each contributing caption with
+            # its OWN values and its OWN source location, so every part can be traced back to the
+            # page it was printed on. A prose summary cannot be clicked.
+            for x in group:
+                c, p = _cur_prior(x, basis)
+                contributions.append({
+                    "label": x.get("source_label") or "",
+                    "canonical_key": x.get("canonical_key"),
+                    "v1": _to_num((c or {}).get("value")),
+                    "v2": _to_num((p or {}).get("value")),
+                    "method": x.get("mapping_method"),
+                    # Whether this line was ROUTED here (no specific concept matched) rather than
+                    # identified — the difference an analyst needs before accepting the figure.
+                    "residual": any("residual_combined" in ((v.get("confidence") or {})
+                                                            .get("flags") or [])
+                                    for v in (x.get("values") or [])),
+                    "src": _prov_label((c or {}).get("provenance")),
+                    "source": (c or {}).get("provenance"),
+                    # …and the same for the prior period, which sits in its own column on its
+                    # own page in a filing that reprints last year's statement.
+                    "src2": _prov_label((p or {}).get("provenance")),
+                    "source2": (p or {}).get("provenance"),
+                })
+            terms = [f"{c['v1']:,.0f}" if c["v1"] is not None else "—" for c in contributions]
+            printed = " + ".join(terms)
+            # DISPLAY only. This is a rendering of the figures, not an expression: publishing it
+            # in `formula` meant the client prefilled its formula box with "100 + 50", sent it
+            # back with the next edit, and the server EVALUATED it — so a typed 200 was silently
+            # replaced by the recomputed 150. `formula` is reserved for an expression an analyst
+            # actually stored.
+            arithmetic = printed
+            inspector = {**inspector, "tag": "combined",
+                         "formula": printed,
+                         "result": "" if v1 is None else f"{v1:,.0f}",
+                         "src": " · ".join(dict.fromkeys(
+                             c["src"] for c in contributions if c["src"])),
+                         "note": (f"Combined from {len(group)} printed lines that map to this "
+                                  f"concept. Each line below keeps its own figure and page — "
+                                  f"click one to jump to it in the document.")
+                                 + (f" A manual value replaces the combined figure; the printed "
+                                    f"lines still add to {printed}." if edited else "")}
+        notes = {}
+        for x in group:
+            for slot, meta in (x.get("edit_comments") or {}).items():
+                b, _, per = str(slot).partition("/")
+                if b == basis and (meta or {}).get("text"):
+                    notes[per] = meta
+        return as_calculated({
             "id": key, "label": label or r.get("source_label"),
             "source_label": r.get("source_label"), "kind": kind,
-            "note": r.get("note"), "note2": None, "status": "edited" if edited else None,
-            "confidence": {"cat": cat, "pct": pct}, "editable": True,
-            "formula": r.get("formula"), "inspector": _inspector(r, cur),
-            "v1": _to_num((cur or {}).get("value")), "v2": _to_num((prior or {}).get("value")),
-            # Structured source location of the current-period value, so the Workspace's live
-            # viewer can hyperlink this row to its page+bbox (PDF) or sheet+cell (Excel).
+            "note": next((x.get("note") for x in group if x.get("note")), None),
+            "note2": None, "status": "edited" if edited else None,
+            # No confidence object at all when nothing measured one, rather than a category beside a
+            # made-up percentage: `_conf_cat` used to answer ('med', 60) for a row that carries no
+            # mapping confidence, and the inspector printed "60% confidence" over a figure nothing
+            # had scored. The screen already renders the badge only when this key is present.
+            "confidence": ({"cat": cat, "pct": pct} if pct is not None else None),
+            "editable": True,
+            "origin": "manual" if edited else "extracted",
+            # Why a figure was overridden, per period — kept beside the number it explains.
+            "comments": notes or None,
+            "formula": formula, "arithmetic": arithmetic, "inspector": inspector,
+            # Present only when more than one printed line was combined into this figure.
+            "contributions": contributions or None,
+            "v1": v1, "v2": v2,
+            # Structured source location of each period's value, so the Workspace's live viewer
+            # can hyperlink BOTH figures in the row to the page+bbox (PDF) or sheet+cell (Excel)
+            # they were printed at — the prior year is a number a reviewer checks too.
             "source": (cur or {}).get("provenance"),
-        }
+            "source2": (prior or {}).get("provenance"),
+        })
 
     # A template line that wasn't extracted (or has no value for this basis) still appears, so
     # the analyst sees the FULL template skeleton and can spot/fill gaps — just with blank values.
+    # A CALCULATED line is a different case entirely: the document never had to print it for the
+    # spread to carry it, so as_calculated fills it in from its components.
     def blank_row(key: str, label: str, kind: str = "item") -> dict:
-        return {
+        return as_calculated({
             "id": key, "label": label, "source_label": None, "kind": kind,
             "note": None, "note2": None, "status": "missing",
-            "confidence": None, "editable": True, "formula": None,
+            "confidence": None, "editable": True, "formula": None, "origin": "extracted",
+            "comments": None,
             "inspector": {"tag": _t("not extracted", locale), "src": "", "formula": "",
                           "result": "", "note": _t("This template line was not found in the "
-                                                    "document's extraction for this basis.", locale)},
-            "v1": None, "v2": None, "source": None,
-        }
+                                                    "document's extraction for this basis. Enter "
+                                                    "a value to record it manually.", locale)},
+            "v1": None, "v2": None, "source": None, "source2": None, "arithmetic": None,
+        })
 
     # Show the full template skeleton only when this statement+basis is actually present in the
     # document. If the basis wasn't extracted at all (e.g. no standalone figures), the grid stays
@@ -1187,48 +4389,83 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
 
     out: list[dict] = []
     seen: set[str] = set()
-    stmt = next((s for s in (template_def or {}).get("statements", [])
-                 if s.get("type") == statement_type), None)
-    if stmt and basis_present:
-        for sec in stmt.get("sections", []):
-            children = [c for c in sec.get("children", []) if c.get("canonical_key")]
-            if not children:
-                continue
-            # Show every section and every template line (extracted or not) so the whole
-            # template is represented, not only the lines that happened to be extracted.
-            out.append({"id": f"sec_{sec.get('node_id', '')}", "label": _loc(sec, locale),
-                        "kind": "section", "v1": None, "v2": None})
-            for c in children:
-                k = c["canonical_key"]
-                seen.add(k)
-                kind = _kind_for(c.get("role"))
-                r = by_key.get(k)
-                if r is not None and has_basis(r):
-                    out.append(item_row(k, _loc(c, locale), r, kind))
-                else:
-                    out.append(blank_row(k, _loc(c, locale), kind))
+    stmt = _stmt_node(template_def, statement_type)
+    def emit(key: str, label: str, kind: str) -> None:
+        seen.add(key)
+        group = [r for r in by_key.get(key, []) if has_basis(r)]
+        out.append(item_row(key, label, group, kind) if group
+                   else blank_row(key, label, kind))
 
-    extra = [r for r in rows
-             if (r.get("canonical_key") or "").startswith(f"{prefix}_")
-             and r["canonical_key"] not in seen and has_basis(r)]
-    if extra:
-        out.append({"id": "sec_other", "label": _t("Other extracted items", locale),
-                    "kind": "section", "v1": None, "v2": None})
-        for r in extra:
-            out.append(item_row(r["canonical_key"], r.get("source_label", ""), r))
+    if stmt and basis_present:
+        # THE TEMPLATE IS THE WHOLE STATEMENT. Every declared section and line appears (extracted or
+        # not, so a gap is visible and fillable), in the order the template declares them, and
+        # nothing else appears at all.
+        #
+        # What used to follow this loop was an "Other extracted items" section: any row whose
+        # canonical_key carried this statement's prefix but was not one of the template's declared
+        # children, rendered as real statement rows and appended AFTER every template section. It was
+        # the in-statement successor of `_build_additional_items_statement`, removed for exactly this
+        # reason, and it did two kinds of damage. It ADDED lines the template does not define, which
+        # the spread is not allowed to do — a spread is only comparable across filings if its shape
+        # is the template's. And against a run pinned to a superseded template it appended the very
+        # lines whose position a template revision had corrected, so a fixed line order still
+        # rendered with the totals at the end.
+        #
+        # A mapped figure still never vanishes in silence: an off-template row is raised as an
+        # `off_template` review finding carrying a re-map offer (see `_build_review`), which both
+        # says the figure reaches no spread and offers the control that fixes it.
+        for kind, node in _template_skeleton(stmt):
+            if kind == "section":
+                out.append({"id": f"sec_{node.get('node_id', '')}", "label": _loc(node, locale),
+                            "kind": "section", "v1": None, "v2": None})
+            else:
+                emit(node["canonical_key"], _loc(node, locale), _kind_for(node.get("role")))
+    elif template_def is None:
+        # NO TEMPLATE WAS PINNED to this run — `ExtractionOptions.template_version_id` defaults to
+        # None and the upload screen allows it — so there is no declared shape to render and no
+        # declaration for a row to be outside of. `_template_for_run` documents this fallback: the
+        # statement is the extracted concepts themselves, under their own printed captions, in the
+        # order they were read. No "Other" heading, because with no skeleton nothing is other.
+        for r in rows:
+            k = r.get("canonical_key") or ""
+            if k.startswith(f"{prefix}_") and k not in seen and has_basis(r):
+                emit(k, r.get("source_label") or "", "item")
+
+    # WHY THE GRID IS EMPTY, when it is. Both causes used to be one indistinguishable blank, under a
+    # callout ("Values are read deterministically from the source") that asserts figures are being
+    # shown — so an analyst went back to the filing hunting for lines that were never going to
+    # appear. Stated in the order they are decided: a template declaring no statement of this type
+    # answers the question completely, and only then does the basis matter.
+    # WHY THE GRID IS EMPTY, when it is. The causes used to be one indistinguishable blank, under a
+    # callout ("Values are read deterministically from the source") that asserts figures are being
+    # shown — so an analyst went back to the filing hunting for lines that were never going to
+    # appear. Ordered most-specific first, because each earlier cause makes the later ones moot and
+    # naming the wrong one sends the reader to the wrong place: a template defect is not fixed by
+    # widening the page scope.
+    refused = None
+    if not out:
+        refused = _statement_refusal(
+            "statement_not_in_template" if stmt is None and template_def is not None
+            else "template_declares_no_lines" if stmt is not None and not _template_skeleton(stmt)
+            else "basis_not_extracted", locale)
 
     # Face-line containment netting: reduce a target line by the lines already included in it
     # (e.g. cost of sales inclusive of admin / S&M), showing the net value + formula. Signed and
     # non-destructive — the raw figure is preserved in the inspector for audit.
-    if netting_rules:
-        from app.services.netting import compute_netting
-
-        net_cur = compute_netting(rows, netting_rules, basis=basis, period="current")
-        net_prior = compute_netting(rows, netting_rules, basis=basis, period="prior")
+    if net_cur or net_prior:
         for r in out:
             if r.get("kind") != "item":
                 continue
             nc, np = net_cur.get(r["id"]), net_prior.get(r["id"])
+            # A figure the analyst typed is the answer for that line; an automatic restatement
+            # must not quietly overwrite it. Decided per period: an edit to the current column
+            # says nothing about last year, and suppressing netting there would silently show the
+            # gross figure instead.
+            group = by_key.get(r["id"], [])
+            if nc and any(_edited_for(x, basis, "current") for x in group):
+                nc = None
+            if np and any(_edited_for(x, basis, "prior") for x in group):
+                np = None
             if not nc and not np:
                 continue
             info = nc or np
@@ -1257,12 +4494,14 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
         # Document shape so the Workspace picks the right live viewer (PDF pages vs Excel cells).
         "format": doc_format, "page_count": page_count,
         "rows": out,
+        # Null when the statement is being served. See `_statement_refusal`.
+        "refused": refused,
         "viewer": {
             "company": company or filename, "subtitle": _t("Extracted statement", locale),
             "chips": [{"label": basis_label, "active": True}],
             "callout": _t("Values are read deterministically from the source; mapping is by the "
                           "ensemble. Open the extraction view for click-to-source provenance.",
-                          locale),
+                          locale) if refused is None else refused["message"],
         },
     }
 
@@ -1288,14 +4527,20 @@ def get_document_statement(
     template_def = _template_for_run(session, run)
     # Consolidated and standalone are extracted in one pass; the grid shows the requested
     # basis (empty if the source didn't present that basis).
-    return _build_statement(run.result.get("rows", []), template_def, statement,
-                            doc.filename or "document", basis, locale,
-                            run.result.get("units"), company=run.result.get("entity"),
-                            doc_format=run.result.get("format") or doc.fmt or "",
-                            page_count=run.result.get("page_count") or doc.page_count or 0,
-                            # Apply only the netting the LLM confirmed for this document (cached at
-                            # extraction); the raw ontology policies are candidates, not results.
-                            netting_rules=run.result.get("netting") or [])
+    spread = _build_statement(run.result.get("rows", []), template_def, statement,
+                              doc.filename or "document", basis, locale,
+                              run.result.get("units"), company=run.result.get("entity"),
+                              doc_format=run.result.get("format") or doc.fmt or "",
+                              page_count=run.result.get("page_count") or doc.page_count or 0,
+                              # Apply only the netting the LLM confirmed for this document (cached at
+                              # extraction); the raw ontology policies are candidates, not results.
+                              netting_rules=run.result.get("netting") or [])
+    # Which template version this spread's SHAPE came from, and whether a newer one exists. Added
+    # here rather than inside `_build_statement`, which is a pure function of a definition and has no
+    # session to ask the question with — and the question is about the row in the table, not about
+    # the definition. See `_superseded_template`: stated, never acted on.
+    spread["superseded_template"] = _superseded_template(session, run)
+    return spread
 
 
 def _note_no(raw) -> int | None:
@@ -1340,29 +4585,82 @@ def _fmt_amt(v) -> str:
         return str(v)
 
 
+def _entry_column(entry: dict) -> str:
+    """Which COLUMN a reconciliation entry compared, as ``basis/period`` — the same spelling the
+    review card's ``where`` uses for the same pair.
+
+    Reconciliation records one entry per (face line, note, basis, period) and ``_TIE_PERIODS`` is
+    ("current", "prior") (stages/reconcile.py), so an ordinary comparative filing holds TWO entries
+    for one face line. A residual printed without its column is a figure the reader cannot place:
+    the Notes screen listed one face line twice, under two different residuals, with no column named.
+    """
+    return f"{entry.get('basis') or '—'}/{entry.get('period_label') or '—'}"
+
+
 def _reconciliation_text(entries: list[dict], note_no: int) -> str | None:
     """A human-readable note→face reconciliation summary for one note, from the reconcile
-    stage's entries. Prefers the consolidated / current-period entry."""
+    stage's entries. Prefers the consolidated / current-period entry.
+
+    One note can break down SEVERAL face lines (reconcile.py records an entry per face line, and
+    ``link_notes`` has a first-class relationship for it), so when more than one of them does not
+    tie this says how many and names each residual. Printing the best-graded entry's residual alone
+    read as "the note is out by 20" over a second face line out by 2,000,000 — a number that was
+    not about the sentence it sat in.
+
+    COUNT AND NAME WHAT THE SENTENCE CLAIMS. ``mine`` spans every basis AND period for the note, so
+    ``len(untied)`` counted reconciliation ENTRIES while the sentence called them "face lines": a
+    comparative filing whose ONE face line missed on both columns read "does not tie to 2 of the face
+    lines it supports" and then listed that line twice under two different residuals with no column
+    named. Face lines and columns are now counted separately, each residual says which column it
+    belongs to, and the "Face figure … → reconciled …" clause above says which column IT is about —
+    it is taken from ``mine[0]``, the best-graded entry, while the residual list spans all of them.
+    """
     mine = [e for e in entries if _note_no(e.get("note_number")) == note_no]
     if not mine:
         return None
-    mine.sort(key=lambda e: (e.get("basis") != "consolidated", e.get("period_label") != "current"))
+    # An entry we could actually grade says more than an unconfirmed one, so prefer it; then
+    # prefer the consolidated / current-period view.
+    mine.sort(key=lambda e: (tie_status(e) == "unconfirmed",
+                             e.get("basis") != "consolidated",
+                             e.get("period_label") != "current"))
     e = mine[0]
     raw, sub, rec = e.get("raw_face"), e.get("subtracted"), e.get("reconciled")
-    resid, tie = e.get("residual"), e.get("within_tolerance")
+    resid = e.get("residual")
+    status = tie_status(e)
     parts: list[str] = []
     try:
         if abs(float(sub)) > 0:
             parts.append(
                 f"Face figure {_fmt_amt(raw)} less {_fmt_amt(sub)} of note detail already "
-                f"carried as separate line items → reconciled {_fmt_amt(rec)}.")
+                f"carried as separate line items → reconciled {_fmt_amt(rec)} "
+                f"({_entry_column(e)}).")
     except (TypeError, ValueError):
         pass
-    if tie:
-        parts.append(f"The note total ties to the face figure (residual {_fmt_amt(resid)}).")
+    if status == "tied":
+        parts.append(f"The note total ties to the face figure ({_entry_column(e)}, residual "
+                     f"{_fmt_amt(resid)}).")
+    elif status == "untied":
+        # EVERY face line this note fails to tie to, in the same sentence. `e` is the best-graded
+        # entry; with a second face line out by a different amount, naming only this residual states
+        # a figure that is not about the note as a whole.
+        untied = sorted([u for u in mine if tie_status(u) == "untied"],
+                        key=lambda u: (str(u.get("face_key") or ""), _entry_column(u)))
+        # The noun in the sentence is "face lines", so the count is of face LINES; the number of
+        # comparisons that missed is its own quantity and is stated as its own.
+        lines = {str(u.get("face_key") or "—") for u in untied}
+        if len(untied) > 1:
+            each = "; ".join(f"{u.get('face_key') or '—'} ({_entry_column(u)}) "
+                             f"{_fmt_amt(u.get('residual'))}" for u in untied)
+            noun = "face line" if len(lines) == 1 else "face lines"
+            parts.append(f"The note total does not tie to {len(lines)} of the {noun} it supports, "
+                         f"on {len(untied)} of the columns compared — residual by face line and "
+                         f"column: {each} (flagged for review).")
+        else:
+            parts.append(f"The note total does not tie to the face figure — residual "
+                         f"{_fmt_amt(resid)} ({_entry_column(e)}) (flagged for review).")
     else:
-        parts.append(f"The note total does not tie to the face figure — residual {_fmt_amt(resid)} "
-                     f"(flagged for review).")
+        parts.append("This note is not a breakdown of the face figure it is cited from, so no "
+                     "tie is asserted.")
     return " ".join(parts)
 
 
@@ -1376,22 +4674,37 @@ def get_document_notes(document_id: str, session: Session = Depends(db)) -> dict
         return {"notes": [], "count": 0, "linked": 0}
 
     details = _note_index(run.result.get("note_details", []))
+    # `conf_pct` is NULL on both branches, deliberately and explicitly. A note carries no measured
+    # confidence of its own — the categories below say which SOURCE the index was built from (a
+    # parsed detail table, or the face lines citing the note), not how confident anything is — so
+    # there is no percentage to serve, and the screen must say so instead of printing the literal
+    # its category happens to map to. Absent-versus-null is the distinction the client needs to
+    # tell "no measurement" from "not sent".
     if details:
-        notes = [{"no": n, "title": details[n].get("title") or f"Note {n}", "conf": "high"}
+        notes = [{"no": n, "title": details[n].get("title") or f"Note {n}",
+                  "conf": "high", "conf_pct": None}
                  for n in sorted(details)]
         linked = sum(len(details[n].get("rows", [])) for n in details)
         return {"notes": notes, "count": len(notes), "linked": linked}
 
     grouped = _rows_by_note(run.result.get("rows", []))
-    notes = [{"no": n, "title": f"Note {n}", "conf": "med"} for n in sorted(grouped)]
+    notes = [{"no": n, "title": f"Note {n}", "conf": "med", "conf_pct": None}
+             for n in sorted(grouped)]
     return {"notes": notes, "count": len(notes), "linked": sum(len(v) for v in grouped.values())}
 
 
 @router.get("/{document_id}/notes/{note_no}", dependencies=[Depends(authorized_document)])
-def get_document_note(document_id: str, note_no: int, session: Session = Depends(db)) -> dict:
+def get_document_note(document_id: str, note_no: int, locale: str = Query("en"),
+                      session: Session = Depends(db)) -> dict:
     """One note's detail for a real document: its EXTRACTED breakdown rows (label + period
     values) with the page they came from, plus the face line that cites it. Falls back to
-    the face line items referencing the note when no detail table was parsed."""
+    the face line items referencing the note when no detail table was parsed.
+
+    ``periods`` is the same key, in the same order, that the statement routes serve, so ONE client
+    field labels both screens. The Notes screen used to print "FY25"/"FY24" as literals above these
+    very columns, which said something different from the Workspace on any filing whose periods are
+    not those two.
+    """
     run = _latest_run(session, document_id)
     result = run.result if run and run.result else {}
     details = _note_index(result.get("note_details", []))
@@ -1404,24 +4717,29 @@ def get_document_note(document_id: str, note_no: int, session: Session = Depends
         d = details[note_no]
         detail_rows = []
         for row in d.get("rows", []):
-            vals = row.get("values") or []
-            by = {v.get("period_label"): v for v in vals}
-            cur = by.get("current") or (vals[0] if vals else {})
-            prior = by.get("prior") or (vals[1] if len(vals) > 1 else {})
+            cur_v, prior_v = split_current_prior(row.get("values") or [])
+            cur, prior = cur_v or {}, prior_v or {}
             detail_rows.append({
                 "label": row.get("label", ""),
                 "v1": _to_num(cur.get("value")) or 0,
                 "v2": _to_num(prior.get("value")) or 0,
                 # Role → emphasis (subtotal/total) and mapping confidence → a per-row badge,
-                # so a real note detail shows the same role/confidence cues as the demo.
+                # so a real note detail shows the same role/confidence cues as the demo. The badge
+                # carries the MEASURED percentage beside its category: the category alone left the
+                # screen printing a per-category literal ("96%" on every 'high' row, whatever the row
+                # scored), and the number it needs was being computed here and dropped.
                 **({"kind": _note_row_kind(row)} if _note_row_kind(row) else {}),
-                **({"conf": _conf_cat(row.get("confidence"))[0]}
+                **(dict(zip(("conf", "conf_pct"), _conf_cat(row.get("confidence"))))
                    if isinstance(row.get("confidence"), (int, float)) else {}),
             })
         return {
             "no": note_no, "title": d.get("title") or f"Note {note_no}", "page": d.get("page", 0),
             "linked_line": linked_key, "linked_label": linked_label,
             "rows": detail_rows,
+            # Derived from exactly the value lists whose split_current_prior above produced v1/v2,
+            # so a header cannot disagree with the column under it.
+            "periods": _period_labels_from((r.get("values") or [] for r in d.get("rows", [])),
+                                           locale),
             "reconciliation": _reconciliation_text(result.get("reconciliation", []), note_no),
         }
 
@@ -1438,7 +4756,12 @@ def get_document_note(document_id: str, note_no: int, session: Session = Depends
         "no": note_no, "title": f"Note {note_no}",
         "page": (prov.get("page_index", 0) + 1) if prov else 0,
         "linked_line": linked_key, "linked_label": linked_label,
-        "rows": detail_rows, "reconciliation": None,
+        "rows": detail_rows,
+        # Same consolidated default `_cur_prior` uses for these fallback rows, so the header names
+        # the columns the figures were read from.
+        "periods": _period_labels_from((_basis_values(r, "consolidated") for r in linked_face),
+                                       locale),
+        "reconciliation": None,
     }
 
 

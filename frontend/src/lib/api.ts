@@ -27,12 +27,59 @@ export function setStoredActiveDoc(id: string | null): void {
   else localStorage.removeItem(ACTIVE_DOC_KEY);
 }
 
-/** Error carrying the HTTP status so callers (e.g. auth gating) can special-case 401. */
+/** Error carrying the HTTP status so callers (e.g. auth gating) can special-case 401.
+ *  `detail` is the server's own explanation when it sent one — editors show it verbatim
+ *  rather than a generic failure, so a rejected value says WHY it was rejected.
+ *
+ *  `code` is the machine-readable `detail.error` the judgement endpoints send instead of a
+ *  sentence. Three different refusals share status 409 there — the figures moved, the subject is a
+ *  conflict the queue cannot resolve, the write itself lost a race — and one status cannot tell
+ *  them apart, so a screen that explains a 409 must read the code rather than assume the first
+ *  meaning. */
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  detail?: string;
+  code?: string;
+  constructor(status: number, message: string, detail?: string, code?: string) {
     super(message);
     this.status = status;
+    this.detail = detail;
+    this.code = code;
+  }
+}
+
+/** WHAT THE SERVER SAID IT REFUSED, for a screen that has to print it. `detail` is preferred over
+ *  the status line because it names the thing — the concept, the status, the missing run — and a
+ *  reader told only "500" has nothing to act on. Empty for anything that is not an error at all.
+ *
+ *  Lives here rather than in a screen because two of them print refusals the same way, and a second
+ *  copy of this is a second place for "the server's own words" to quietly become "Error: 500". */
+export function refusalText(err: unknown): string {
+  if (err instanceof ApiError) return err.detail ?? err.message;
+  return err instanceof Error ? err.message : "";
+}
+
+/** Pull FastAPI's `detail` out of an error body; undefined when it isn't a plain message. */
+function errorDetail(text: string): string | undefined {
+  try {
+    const body = JSON.parse(text) as { detail?: unknown };
+    return typeof body.detail === "string" ? body.detail : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Pull `detail.error` out of a structured error body — the endpoint's own name for what it
+ *  refused. Undefined when the body carries no such code, which is what keeps a caller from
+ *  reporting a specific cause it was never told. */
+function errorCode(text: string): string | undefined {
+  try {
+    const body = JSON.parse(text) as { detail?: { error?: unknown } };
+    const code = body.detail && typeof body.detail === "object"
+      ? (body.detail as { error?: unknown }).error : undefined;
+    return typeof code === "string" ? code : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -48,7 +95,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`);
+    throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`,
+                       errorDetail(text), errorCode(text));
   }
   if (res.status === 204) return undefined as T; // no content (e.g. DELETE)
   return res.json() as Promise<T>;
@@ -63,18 +111,27 @@ import type {
   CellContext,
   Commentary,
   DemoUser,
+  DocumentRunStatus,
   ExtractionRunResponse,
   ExportFmt,
+  FxRate,
+  FxRateInput,
+  FxRateResolution,
   IntegrityResponse,
   Locale,
   LoginResponse,
+  MappingEdit,
   Me,
+  NettingRuleEdit,
   NoteDetail,
   NotesResponse,
+  OntologyEditResult,
   OntologyRef,
+  OntologySchema,
   PagesResponse,
   ProjectResponse,
   ReviewResponse,
+  RulebookRecord,
   TemplateRef,
   SettingsPatch,
   SourceDoc,
@@ -98,25 +155,59 @@ export const api = {
   settings: () => req<AppSettings>(`/settings`),
   patchSettings: (body: SettingsPatch) =>
     req<AppSettings>(`/settings`, { method: "PATCH", body: JSON.stringify(body) }),
-  submitForReview: () =>
-    req<{ ok: boolean; entry: AuditEntry }>(`/projects/${PROJECT}/submit-review`, { method: "POST" }),
+  // --- FX rate master (admin-maintained; drives presentation currency conversion) ---
+  /** The whole master — readable by any authenticated user (the Workspace needs it). */
+  fxRates: () => req<{ rates: FxRate[] }>(`/fx-rates`),
+  /** Ask the master for one pair. Resolution happens server-side so the reciprocal of a
+   *  stored rate is computed in exact decimal, and comes back labelled as derived. */
+  resolveFxRate: (base: string, quote: string) =>
+    req<FxRateResolution>(
+      `/fx-rates/resolve?base=${encodeURIComponent(base)}&quote=${encodeURIComponent(quote)}`,
+    ),
+  /** Create or restate a rate for a pair + as-of date (admin). */
+  upsertFxRate: (body: FxRateInput) =>
+    req<FxRate>(`/fx-rates`, { method: "POST", body: JSON.stringify(body) }),
+  updateFxRate: (id: string, body: FxRateInput) =>
+    req<FxRate>(`/fx-rates/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteFxRate: (id: string) => req<void>(`/fx-rates/${id}`, { method: "DELETE" }),
+  /** Hand the output to the reviewer. `documentId` says WHOSE filing is being submitted: the
+   *  Export screen serves an uploaded document and the seeded sample from the same controls, and
+   *  without it the server had no choice but to name the demo company in the audit entry. Omitted
+   *  for the sample project, which is the only case that name is right for. The server refuses a
+   *  document whose run has not named an entity rather than guessing one. */
+  submitForReview: (documentId?: string) =>
+    req<{ ok: boolean; entry: AuditEntry }>(
+      `/projects/${PROJECT}/submit-review${documentId ? `?document_id=${encodeURIComponent(documentId)}` : ""}`,
+      { method: "POST" }),
   commentary: (locale: Locale = "en") =>
     req<Commentary>(`/projects/${PROJECT}/commentary?locale=${locale}`),
   audit: () => req<AuditResponse>(`/projects/${PROJECT}/audit`),
+  /** One uploaded document's audit trail — the runs against THAT filing.
+   *
+   *  A separate route because the trail is keyed by what was run against, and runs against a
+   *  document have always been recorded under its id. Asking the demo project's route for them (the
+   *  only thing the Analysis screen used to do) returned the sample's rows and never a real run's,
+   *  so extraction and credit-narrative entries were written and never readable. */
+  documentAudit: (documentId: string) =>
+    req<AuditResponse>(`/documents/${encodeURIComponent(documentId)}/audit`),
   runAnalysis: () =>
     req<{ entry: AuditEntry; result: unknown }>(`/projects/${PROJECT}/analysis`, { method: "POST" }),
   project: () => req<ProjectResponse>(`/projects/${PROJECT}`),
   documents: () => req<{ documents: SourceDoc[] }>(`/documents`),
   ontologies: () => req<OntologyRef[]>(`/ontologies`),
   templates: () => req<TemplateRef[]>(`/templates`),
+  /** Start a run. The 202 carries the rulebook the run was CREATED with, so the screen can name
+   *  what governs the figures from the moment the run exists rather than waiting for a result — or
+   *  deciding for itself which rulebook that must have been. */
   runExtraction: (
     documentId: string,
     body: { ontology_version_id?: string; template_version_id?: string } = {},
   ) =>
-    req<{ run_id: string; status: string }>(`/documents/${documentId}/extractions`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+    req<{ run_id: string; status: string; rulebook?: RulebookRecord | null }>(
+      `/documents/${documentId}/extractions`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
   /** Poll a background extraction run's status/result. */
   getRun: (runId: string) => req<ExtractionRunResponse>(`/extractions/${runId}`),
   /** Real per-document pre-flight integrity (drives the Integrity screen for an upload). */
@@ -126,19 +217,65 @@ export const api = {
    * confidence). */
   documentReview: (documentId: string, locale: Locale = "en") =>
     req<ReviewResponse>(`/documents/${documentId}/review?locale=${locale}`),
+  /** Record that a named person examined a finding's figures and judged that they stand. The key
+   *  travels in the BODY, not the path: a structural finding's scope key contains "/" and no
+   *  check identifier is URL-safe. `evidenceDigest` is the figures the human was looking at —
+   *  the server refuses the acceptance with 409 when they have since moved. */
+  acceptFinding: (
+    documentId: string, subjectKey: string, evidenceDigest: string, reason: string,
+    locale: Locale = "en",
+  ) =>
+    req<{ ok: boolean; subject_key: string; status: string }>(
+      `/documents/${documentId}/review/judgements?locale=${locale}`,
+      { method: "POST", body: JSON.stringify({
+          subject_key: subjectKey, evidence_digest: evidenceDigest, reason }) },
+    ),
+  /** Withdraw an acceptance. The row is not deleted — the verdict changes and the history keeps
+   *  who accepted what — because erasing the record of who vouched for a break is not something
+   *  an audit trail should permit. The 64-hex subject key is URL-safe. */
+  withdrawAcceptance: (documentId: string, subjectKey: string) =>
+    req<{ ok: boolean; subject_key: string; withdrawn: boolean }>(
+      `/documents/${documentId}/review/judgements/${subjectKey}`, { method: "DELETE" },
+    ),
+  /** Re-map one printed row onto a different template line — the way a row-shaped review finding
+   *  is RESOLVED. `canonicalKey: ""` un-maps the row, which is the only route back from a re-map
+   *  that started from unmapped. Errors are meaningful and must reach the card: 409 means the row
+   *  reference is ambiguous or the row already carries that concept, 422 that the target is not a
+   *  line this run's template offers. */
+  remapReviewRow: (documentId: string, rowRef: string, canonicalKey: string, reason: string,
+                   locale: Locale = "en") =>
+    req<{ ok: boolean; row_ref: string; label: string; from: string; to: string;
+          remap: { from: string; to: string; reason: string; by: string; at: string } }>(
+      `/documents/${documentId}/review/remap?locale=${locale}`,
+      { method: "POST", body: JSON.stringify({ row_ref: rowRef, canonical_key: canonicalKey,
+                                               reason }) },
+    ),
   /** Derived analysis for a document: computed ratios, disclosure scan, free-form notes. */
   documentAnalysis: (documentId: string, locale: Locale = "en") =>
     req<AnalysisResponse>(`/documents/${documentId}/analysis?locale=${locale}`),
   /** Real per-document notes index + detail, from line-item note references. */
   documentNotes: (documentId: string) =>
     req<NotesResponse>(`/documents/${documentId}/notes`),
-  documentNote: (documentId: string, no: number) =>
-    req<NoteDetail>(`/documents/${documentId}/notes/${no}`),
-  /** Edit a value/formula on a real extraction (persists onto the latest run). */
-  editDocumentLineItem: (documentId: string, key: string, value: number | null, formula: string) =>
-    req<{ status: string; value: string | null }>(
+  /** One note's detail. `locale` is passed because the response now carries the note's own
+   *  column labels, and their Current/Prior fallback is localized server-side. */
+  documentNote: (documentId: string, no: number, locale: Locale = "en") =>
+    req<NoteDetail>(`/documents/${documentId}/notes/${no}?locale=${locale}`),
+  /** Edit ONE figure of a real extraction: a concept, in one basis, for one period.
+   *  Basis and period are required, not defaulted — without them every edit landed on the
+   *  consolidated current column, so editing the standalone grid or the prior year did nothing
+   *  visible. The response echoes the figures the grid will now show.
+   *  `period` is a slot name ("current"/"prior") OR a literal period label, which the server
+   *  resolves the same way: a review finding's fix names the period as the filing printed it. */
+  editDocumentLineItem: (
+    documentId: string, key: string, value: number | null, formula: string,
+    basis: Basis, period: string, comment = "",
+  ) =>
+    req<{
+      status: string; value: string | null; label: string; comment: string;
+      current: number | null; prior: number | null; combined_from: number;
+    }>(
       `/documents/${documentId}/line-items/${encodeURIComponent(key)}`,
-      { method: "PATCH", body: JSON.stringify({ value, formula }) },
+      { method: "PATCH", body: JSON.stringify({ value, formula, basis, period, comment }) },
     ),
   /** Revert an edited line item to its original machine-extracted values. */
   revertDocumentLineItem: (documentId: string, key: string) =>
@@ -149,6 +286,16 @@ export const api = {
   /** The latest extraction run for a document (drives the Export preview/counts). */
   documentRun: (documentId: string) =>
     req<ExtractionRunResponse>(`/documents/${documentId}/run`),
+  /** Whether a document has an extraction IN FLIGHT, and how far it has got — the per-document
+   *  question, asked with no run id.
+   *
+   *  `documentRun` above cannot answer it: that route 404s until a run has a RESULT, which is
+   *  exactly the state a working run is not in, and `getRun` needs an id a freshly loaded page does
+   *  not have. `status: "none"` is a normal 200 answer meaning this document has never been
+   *  extracted — never an error, so a caller does not have to read a status code to tell "extracting"
+   *  from "nothing here". */
+  documentRunStatus: (documentId: string) =>
+    req<DocumentRunStatus>(`/documents/${documentId}/run-status`),
   /** Real per-page classification for the Page Scope screen (available pre-extraction). */
   documentPages: (documentId: string) =>
     req<PagesResponse>(`/documents/${documentId}/pages`),
@@ -231,25 +378,62 @@ export const api = {
   createTemplate: (definition: unknown) =>
     req<{ id: string; template_key: string; version: number }>(
       `/templates`, { method: "POST", body: JSON.stringify({ definition }) }),
-  createOntology: (definition: unknown) =>
-    req<{ id: string; ontology_key: string; version: number }>(
-      `/ontologies`, { method: "POST", body: JSON.stringify({ definition }) }),
-  /** Edit ONE concept's rules inline. The server validates the result and publishes a NEW
-   *  ontology version (so a past extraction still explains itself against the version it
-   *  actually used); the response carries that new version's id/number. */
-  editOntologyMapping: (
-    ontologyId: string,
-    edit: {
-      canonical_key: string;
-      locale?: string;
-      aliases?: string[];
-      sign_convention?: string;
-      label?: string;
-      description?: string;
-    },
-  ) =>
-    req<{ id: string; ontology_key: string; version: number; canonical_key: string }>(
+  /** Upload an ontology (the extraction rulebook) FOR a template. `targetTemplateKey` re-points
+   *  a rulebook written against another template; it still has to validate against the one named,
+   *  so a key the template doesn't define comes back as a 422 listing it. */
+  createOntology: (definition: unknown, targetTemplateKey?: string) =>
+    req<{ id: string; ontology_key: string; target_template_key: string; version: number;
+          mappings: number }>(
+      `/ontologies`, {
+        method: "POST",
+        body: JSON.stringify({ definition, target_template_key: targetTemplateKey ?? null }),
+      }),
+  /** The shape an authored ontology must have, generated from the model the upload gate
+   *  validates with: the JSON Schema plus a flat, per-field index to read it by. Admin-only,
+   *  like every other ontology configuration call — gate the control on `config:ontology`. */
+  ontologySchema: () => req<OntologySchema>(`/ontologies/schema`),
+  /** A stored ontology's full definition — for "download, edit, upload back". */
+  ontologyDetail: (id: string) =>
+    req<{ id: string; ontology_key: string; target_template_key: string; version: number;
+          definition: unknown }>(`/ontologies/${id}`),
+  /** What the template workbook's columns mean, straight from the reader that enforces them. */
+  templateXlsxColumns: () =>
+    req<{ columns: { key: string; header: string }[];
+          kinds: { value: string; help: string }[]; required: string[] }>(
+      `/templates/xlsx/columns`),
+  /** Publish an edited template workbook as a NEW version of `templateKey` (blank = a new
+   *  template named after the file). Nothing is overwritten: a past run still explains itself
+   *  against the version it actually used. */
+  uploadTemplateXlsx: async (
+    file: File, templateKey: string, name: string,
+  ): Promise<{ id: string; template_key: string; name: string; version: number;
+               line_items: number }> => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("template_key", templateKey);
+    fd.append("name", name);
+    const res = await fetch(`${BASE}/templates/xlsx`,
+                            { method: "POST", headers: { ...authHeader() }, body: fd });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new ApiError(res.status, `${res.status} ${res.statusText} — ${text}`,
+                         errorDetail(text));
+    }
+    return res.json();
+  },
+  /** Edit ONE concept's rules inline — aliases, sign, and the mapping criteria the model
+   *  reasons over. The server validates the result and publishes a NEW ontology version (so a
+   *  past extraction still explains itself against the version it actually used); the
+   *  response carries that new version's id/number. */
+  editOntologyMapping: (ontologyId: string, edit: MappingEdit) =>
+    req<OntologyEditResult & { canonical_key: string }>(
       `/ontologies/${ontologyId}/mappings`,
+      { method: "PATCH", body: JSON.stringify(edit) }),
+  /** Upsert or delete ONE netting rule. Netting restates a reported figure, so it goes
+   *  through the same versioned publish + validation as a concept edit. */
+  editNettingRule: (ontologyId: string, edit: NettingRuleEdit) =>
+    req<OntologyEditResult>(
+      `/ontologies/${ontologyId}/netting-rules`,
       { method: "PATCH", body: JSON.stringify(edit) }),
   listTemplates: () =>
     req<{ id: string; template_key: string; name: string; version: number }[]>(`/templates`),
@@ -278,6 +462,49 @@ export async function downloadExport(body: {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/** Save an authenticated download to disk, preferring the name the SERVER chose.
+ *  Shared by the authoring downloads: both put the source version in the filename, so the file
+ *  the user edits says which version it was generated from — a detail a client-side name loses. */
+async function saveAsFile(res: Response, fallbackName: string): Promise<void> {
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, `${res.status} ${res.statusText}`, errorDetail(text));
+  }
+  const disp = res.headers.get("content-disposition") || "";
+  const named = /filename="?([^";]+)"?/.exec(disp)?.[1];
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = named || fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** Download a template as the editable workbook (auth'd fetch → blob, like the exports). */
+export async function downloadTemplateXlsx(templateId: string, fallbackName: string): Promise<void> {
+  await saveAsFile(
+    await fetch(`${BASE}/templates/${templateId}/xlsx`, { headers: { ...authHeader() } }),
+    `${fallbackName}.xlsx`,
+  );
+}
+
+/** Download a ready-to-edit ontology for one template: every canonical_key already a stub inside
+ *  the section it is printed under. It is a COMPLETE, valid rulebook — it can be uploaded back
+ *  unmodified — so authoring means filling in aliases and criteria instead of discovering the
+ *  expected shape from a sequence of 422s. Admin-only (`config:ontology`). */
+export async function downloadOntologySkeleton(
+  templateId: string, fallbackName: string,
+): Promise<void> {
+  await saveAsFile(
+    await fetch(`${BASE}/ontologies/skeleton?template_id=${encodeURIComponent(templateId)}`,
+                { headers: { ...authHeader() } }),
+    `${fallbackName}_ontology_skeleton.json`,
+  );
 }
 
 /** GET a REAL document's export (built from its latest extraction) and download it. Excel

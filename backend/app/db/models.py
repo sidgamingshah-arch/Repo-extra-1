@@ -3,15 +3,24 @@
 Kept intentionally compact for this foundation: the entities the API needs now
 (Document, versioned Template/Ontology, ExtractionRun). The full relational model
 (Statement, LineItem, NotesTable, FaceNoteLink, ReviewItem, EditEvent, RuleResult,
-Export) is documented in docs/architecture/02-data-model.md and lands with the
-extraction persistence phase.
+Export) is documented in docs/architecture/02-data-model-and-schemas.md and lands
+with the extraction persistence phase.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -23,6 +32,10 @@ def _uuid() -> str:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _today() -> date:
+    return datetime.now(timezone.utc).date()
 
 
 class Document(Base):
@@ -78,6 +91,39 @@ class OntologyVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class FxRate(Base):
+    """One admin-maintained exchange rate: 1 ``base_ccy`` = ``rate`` ``quote_ccy`` on ``as_of``.
+
+    The FX master is deliberately *only* what an administrator entered — there is no rate
+    feed. Nothing is seeded: an empty table means "we hold no authoritative rate", which
+    the resolver reports honestly instead of falling back to 1.
+    """
+
+    __tablename__ = "fx_rates"
+    # One row per pair per as-of date. Without this a second entry for the same day would
+    # silently coexist with the first and the resolver would have to guess which is current.
+    __table_args__ = (
+        UniqueConstraint("base_ccy", "quote_ccy", "as_of", name="uq_fx_pair_as_of"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    base_ccy: Mapped[str] = mapped_column(String(3), index=True)
+    quote_ccy: Mapped[str] = mapped_column(String(3), index=True)
+    # Held as text and parsed back with ``Decimal(...)``: these multiply financial figures,
+    # and a binary FLOAT column cannot round-trip a rate like 0.0121 exactly — the drift
+    # would land in the presented numbers. Same reasoning as the extracted values, which
+    # are also persisted as strings.
+    rate: Mapped[str] = mapped_column(String(48))
+    # The date the rate is *for* (not when it was typed) — a converted figure is only
+    # honest next to the date of the rate that produced it.
+    as_of: Mapped[date] = mapped_column(Date, default=_today, index=True)
+    # Free-text provenance ("ECB reference, 2026-08-01 fixing", "treasury desk") so a
+    # reviewer can trace where an authoritative-looking number actually came from.
+    source: Mapped[str] = mapped_column(String(256), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
 class ExtractionRun(Base):
     __tablename__ = "extraction_runs"
 
@@ -97,3 +143,84 @@ class ExtractionRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     document: Mapped["Document"] = relationship(back_populates="runs")
+
+
+class ReviewJudgement(Base):
+    """One human judgement on one review finding, keyed on WHAT was judged rather than on the
+    finding's id — two of the eight check builders key on row index (api/routes/documents.py:715
+    and :729), so an id-keyed acceptance would silently move onto a different line item after a
+    re-run and mark a real problem as vouched for by someone who never saw it.
+
+    ONE in-force row per (tenant_id, document_id, subject_key), never rival rows a reader has to
+    date-sort to find the current answer. ``history`` is appended to on every state change,
+    newest LAST, and nothing is ever deleted: a withdrawal flips ``verdict`` and keeps the row,
+    because erasing who accepted a break is not something an audit trail should permit.
+
+    No column holds a digest, a status or a count. All three are derived at serve time (see
+    ``services.judgement.apply_judgements``) — a derived value stored beside its source is the
+    two-places-computing-one-quantity bug, and here it would be the one that decides whether an
+    acceptance still stands.
+
+    Scope cut, stated rather than implied: nothing reads ``history`` yet, so this table is not
+    described as an audit trail anywhere until something serves it.
+    """
+
+    __tablename__ = "review_judgements"
+    __table_args__ = (UniqueConstraint("tenant_id", "document_id", "subject_key",
+                                       name="uq_judgement_subject"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), default="default")
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
+    # sha256 of the canonicalized subject — 64 hex characters, so it is URL-safe (unlike a check
+    # id, whose structural scope_key contains a "/").
+    subject_key: Mapped[str] = mapped_column(String(64), index=True)
+    subject: Mapped[dict] = mapped_column(JSON, default=dict)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Why the finding was RAISED (mapping confidence and method), as opposed to the claim that was
+    # confirmed. Recorded so a reader can see how uncertain a mapping was when it was accepted,
+    # and deliberately NOT part of any match: re-running the mapper at a different confidence
+    # must not withdraw a judgement about which concept the line is.
+    context: Mapped[dict] = mapped_column(JSON, default=dict)
+    verdict: Mapped[str] = mapped_column(String(16), default="accepted")   # accepted|withdrawn
+    reason: Mapped[str] = mapped_column(Text, default="")
+    actor: Mapped[str] = mapped_column(String(128), default="")
+    actor_role: Mapped[str] = mapped_column(String(16), default="")
+    run_id: Mapped[str] = mapped_column(String(96), default="")
+    history: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class SettingOverride(Base):
+    """One administrator-changed setting, so a change survives a restart.
+
+    Everything else in ``config.toml`` is deployment configuration and changes on redeploy;
+    these are the values an admin sets from the Settings screen and expects to stay set.
+
+    One row per setting rather than a single blob: adding a knob then needs no schema change
+    and no migration of an existing row, and two admins changing different knobs cannot
+    clobber each other's edit the way a whole-document write would.
+
+    ``scope`` groups a setting to the object it is applied onto — "features", "llm",
+    "extraction" — because the same short name could exist in more than one of them.
+
+    NO SECRETS. The LLM API key is never written here; only the NAME of the environment
+    variable it is read from (``api_key_env``), which is what the rest of the app stores too.
+    The value column is JSON so a bool, a number and a string all round-trip as themselves
+    instead of being stringified and guessed at on the way back.
+    """
+
+    __tablename__ = "setting_overrides"
+    __table_args__ = (
+        UniqueConstraint("scope", "key", name="uq_setting_override_scope_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    scope: Mapped[str] = mapped_column(String(32), index=True)
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    # {"v": <json value>} rather than a bare scalar: SQLite's JSON support stores a bare
+    # ``null`` indistinguishably from SQL NULL, and "explicitly set to null" has to remain
+    # different from "no row".
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

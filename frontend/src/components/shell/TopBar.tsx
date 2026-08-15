@@ -6,27 +6,38 @@ import { useDocuments, useMe, useProject } from "../../lib/queries";
 import { useUI } from "../../store";
 import { color } from "../../theme";
 import { useT } from "../../i18n";
-import { STEPPER, screenIdForPath } from "../../screens/config";
+import { STEPPER, stepIdForPath } from "../../screens/config";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { UserMenu } from "./UserMenu";
 
 export function TopBar() {
   const nav = useNavigate();
   const loc = useLocation();
-  const { data } = useProject();
   const { data: me } = useMe();
   const t = useT();
   const extractMode = useUI((s) => s.extractMode);
   // When a real uploaded document is being worked, the title bar reflects THAT file — not
   // the demo project — so demo chrome never bleeds into a real run.
   const activeDocumentId = useUI((s) => s.activeDocumentId);
+  const usingReal = !!activeDocumentId;
+  // Not requested while a real document is active: the sample project is not what this bar is
+  // naming then, so there is nothing in its answer to print. (Same wrong-source rule as the nav
+  // rail's progress card.)
+  const { data } = useProject(!usingReal);
   const { data: docsData } = useDocuments();
   const activeDoc = docsData?.documents?.find((d) => d.id === activeDocumentId);
-  const title = activeDoc ? activeDoc.name : data?.project.title ?? "Loading…";
-  const subtitle = activeDoc
-    ? activeDoc.meta
+  // Which document is active is settled by `activeDocumentId`, NOT by whether its row has arrived
+  // from /documents yet. Branching on `activeDoc` meant that for as long as that request was in
+  // flight — every cold load and every invalidation — the bar printed the SAMPLE project's title
+  // and its "…· 33 pages · IFRS" subtitle as the identity of the real file being worked. A pending
+  // request is not "no document": it is this document, not yet named.
+  const title = usingReal
+    ? activeDoc?.name ?? t("empty.loading")
+    : data?.project.title ?? t("empty.loading");
+  const subtitle = usingReal
+    ? activeDoc?.meta ?? ""
     : data
-    ? `${data.project.filename} · ${data.project.pages} pages · ${data.project.standard}`
+    ? `${data.project.filename} · ${data.project.pages} ${t("tb.pages")} · ${data.project.standard}`
     : "";
   // In auto mode the pipeline skips the manual Page Scope confirmation, so the
   // stepper collapses to Upload → Integrity → Extract → Review → Export. Also limit the
@@ -34,8 +45,10 @@ export function TopBar() {
   const steps = STEPPER
     .filter((s) => !(extractMode === "auto" && s.id === "scope"))
     .filter((s) => !me || me.screens.includes(s.id));
-  const activeId = screenIdForPath(loc.pathname);
-  const curIdx = steps.findIndex((s) => s.id === activeId);
+  // The STEP reached, which is not the same as the screen shown: the Workspace and All Notes
+  // are read after the extraction and sit at its step, so the bar marks progress instead of
+  // going blank on the screen an analyst spends most of their time on.
+  const curIdx = steps.findIndex((s) => s.id === stepIdForPath(loc.pathname));
 
   return (
     <div
@@ -84,7 +97,7 @@ export function TopBar() {
 
       <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto" }}>
         {steps.map((s, i) => {
-          const active = s.id === activeId;
+          const active = i === curIdx;
           const done = curIdx !== -1 && i < curIdx;
           return (
             <div

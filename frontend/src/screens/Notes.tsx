@@ -3,14 +3,14 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { Card } from "../components/ui";
+import { Card, ConfidencePill } from "../components/ui";
 import { PageStack, type PdfPick } from "../components/SourceViewer";
 import { SCREENS } from "./config";
 import { useT } from "../i18n";
 import { useDocumentNote, useDocumentNotes, useDocumentRun, useNote, useNotes, useProjectLoaded } from "../lib/queries";
 import { EmptyState } from "../components/EmptyState";
 import { useUI } from "../store";
-import { color, confStyle, fmtIN, font, radius } from "../theme";
+import { color, confStyle, fmtIN, font } from "../theme";
 import type { NoteDetail, NoteDetailRow } from "../types";
 
 const GRID = "1fr 120px 120px 64px";
@@ -29,7 +29,6 @@ function DetailRow({ row }: { row: NoteDetailRow }) {
   const wt = isSub || isTot ? 600 : 400;
   const fg = isTot ? color.indigo : color.ink;
   const bg = isTot ? color.indigoTint2 : isSub ? color.rowAltBg : color.surface;
-  const cc = row.conf ? confStyle(row.conf) : null;
   return (
     <div
       style={{
@@ -48,21 +47,14 @@ function DetailRow({ row }: { row: NoteDetailRow }) {
       <span style={{ textAlign: "right", fontFamily: font.mono, fontSize: 12, color: color.muted }}>
         {fmtIN(row.v2)}
       </span>
+      {/* Under the CONF. header, the row's OWN measured mapping confidence. It used to print
+          `confStyle(cat).pct` — 96/78/54 per bucket — so every 'high' row read "96%" whatever its
+          real score, and a row the extractor never scored read "78%": a band's stand-in figure
+          presented as a measurement of the line it sits beside. The pill now prints the served
+          percentage, and names the band instead when the payload carries no number — which is the
+          case for the seeded sample, whose rows record a band and were never scored. */}
       <span style={{ textAlign: "right" }}>
-        {cc && (
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 600,
-              padding: "2px 7px",
-              borderRadius: radius.pill,
-              background: cc.bg,
-              color: cc.fg,
-            }}
-          >
-            {cc.pct}
-          </span>
-        )}
+        {row.conf && <ConfidencePill cat={row.conf} pct={row.conf_pct} testid="note-conf" />}
       </span>
     </div>
   );
@@ -71,6 +63,13 @@ function DetailRow({ row }: { row: NoteDetailRow }) {
 function Detail({ detail }: { detail: NoteDetail }) {
   const navigate = useNavigate();
   const t = useT();
+  // The two column headers were the literals "FY25"/"FY24" while the Workspace showed the
+  // filing's real period labels, so on a 2023/2022 filing the two screens labelled the same
+  // figure differently. They now come from the note's own value lists — the same lists v1/v2 were
+  // resolved from — and fall back to a localized Current/Prior only when the source named no
+  // columns, because an empty header cell says less than "Current" does.
+  const per = (i: number) =>
+    detail.periods?.[i]?.trim() || t(i === 0 ? "n.periodCurrent" : "n.periodPrior");
   return (
     <div style={{ maxWidth: 760 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
@@ -107,8 +106,8 @@ function Detail({ detail }: { detail: NoteDetail }) {
           }}
         >
           <span>{t("n.particulars")}</span>
-          <span style={{ textAlign: "right" }}>FY25</span>
-          <span style={{ textAlign: "right" }}>FY24</span>
+          <span data-testid="note-period" style={{ textAlign: "right" }}>{per(0)}</span>
+          <span data-testid="note-period" style={{ textAlign: "right" }}>{per(1)}</span>
           <span style={{ textAlign: "right" }}>{t("n.conf")}</span>
         </div>
         {detail.rows.map((r, i) => (
@@ -144,7 +143,7 @@ export default function NotesScreen() {
   const { note, setNote } = useUI();
   // Real document → notes from its extraction (line-item note references); else the demo.
   const realNotes = useDocumentNotes(activeDocumentId ?? undefined);
-  const realDetail = useDocumentNote(activeDocumentId ?? undefined, note);
+  const realDetail = useDocumentNote(activeDocumentId ?? undefined, note, locale);
   const demoNotes = useNotes(locale, !usingReal);
   const demoDetail = useNote(note, locale, !usingReal);
   const notes = usingReal ? realNotes.data : demoNotes.data;
@@ -206,6 +205,9 @@ export default function NotesScreen() {
         <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 8px 12px" }}>
           {notes.notes.map((n) => {
             const sel = n.no === note;
+            // The index prints no confidence figure — only a coloured dot — so the CATEGORY is all
+            // it needs, and colour is all confStyle offers. Anything numeric here must come from
+            // the note's own served percentage, not from the bucket.
             const cc = confStyle(n.conf);
             return (
               <div

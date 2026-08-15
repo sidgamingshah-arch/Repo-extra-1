@@ -35,6 +35,7 @@ from .reports import (
     ReconciliationReport,
     ReviewItemModel,
     RuleResult,
+    StructuralReport,
 )
 from .table import Cell, Table
 
@@ -49,5 +50,6 @@ __all__ = [
     "ExtractedValue", "FaceNoteLink", "LineItem", "NoteItem", "NoteRef",
     "NotesTable", "UnitContext", "ValueKey",
     "ReconciliationEntry", "ReconciliationReport", "ReviewItemModel", "RuleResult",
+    "StructuralReport",
     "Cell", "Table",
 ]
