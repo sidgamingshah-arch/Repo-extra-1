@@ -89,6 +89,8 @@ def extract_workbook(data: bytes, *, document_id: str | None = None, log=None,
     does on the PDF path (``row_reconstruct.build_line_items``)."""
     import openpyxl
 
+    from app.services.mapping import section_of_banner_only
+
     from app.services.row_reconstruct import (
         _entity_signals,
         _pipeline_steps,
@@ -141,16 +143,37 @@ def extract_workbook(data: bytes, *, document_id: str | None = None, log=None,
                                                           unit_ctx.scale_factor):
                         log(f"extract:sheet={name}:{_col_letter(c + 1)}:units="
                             f"{cu.currency or 'unknown_ccy'}/{cu.units_label}")
+            # A heading row scopes the rows beneath it, exactly as a printed banner does on the
+            # PDF path (``row_reconstruct.build_line_items``). Without this every spreadsheet row
+            # reached mapping and the residual sweep with no section at all: the section gate
+            # (``mapping._in_section``) admits every concept when it has no section to compare, and
+            # the sweep's first signal was simply unavailable. Reset per SHEET, because a workbook's
+            # sheets are separate statements and a section cannot span them.
+            section: str | None = None
             for r_idx, row in enumerate(rows):
                 if label_col >= len(row):
                     continue
                 label = row[label_col]
                 if not isinstance(label, str) or not label.strip():
                     continue
-                li = _row_item(name, sheet_index, r_idx, label.strip(), row, label_col,
+                label = label.strip()
+                # ``section_of_banner_only`` and not ``section_of_banner``: a spreadsheet row with an
+                # empty value column is a heading sometimes and a line item with no figures for
+                # either period the rest of the time, and substring matching cannot tell those apart
+                # — "Equity investments designated at FVOCI" would declare the equity section while
+                # being a non-current asset. Requiring no figures as well, so a heading a filing
+                # happens to print a total against is still read as the row it is.
+                if (section_of_banner_only(label) is not None
+                        and not any(_to_decimal(row[c]) is not None
+                                    for c in value_cols if c < len(row))):
+                    section = label
+                    if log:
+                        log(f"extract:sheet={name}:row={r_idx + 1}:section={label}")
+                    continue
+                li = _row_item(name, sheet_index, r_idx, label, row, label_col,
                                value_cols, headers, document_id, ordinal, note_col, basis_map,
                                unit_ctx=unit_ctx, col_units=col_units, dims=dims, log=log,
-                               store=store_fact)
+                               store=store_fact, section_hint=section)
                 if li is not None:
                     items.append(li)
                     ordinal += 1
@@ -416,11 +439,11 @@ def _row_item(sheet, sheet_index, r_idx, label, row, label_col, value_cols, head
               document_id, ordinal, note_col=None, basis_map=None, *,
               unit_ctx: UnitContext | None = None,
               col_units: dict[int, UnitContext] | None = None, dims: tuple[str, ...] = (),
-              log=None, store=None) -> LineItem | None:
+              log=None, store=None, section_hint: str | None = None) -> LineItem | None:
     from app.core.models.line_item import NoteRef
 
     li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
-                  source=ValueSource.MACHINE)
+                  section_hint=section_hint, source=ValueSource.MACHINE)
     if note_col is not None and note_col < len(row):
         note = _note_from_cell(row[note_col])
         if note:

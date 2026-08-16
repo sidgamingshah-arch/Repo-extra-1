@@ -1959,6 +1959,10 @@ def _matrix_items(m: _Matrix, names: list[str], *, page_index: int, document_id:
         if _is_matrix_noise(label, " ".join(w.text for w in row), vals):
             continue
 
+        # No section_hint, deliberately. A statement of changes in equity has no section banners on
+        # its ROW axis — its rows are movements and its sections are the component COLUMNS — and the
+        # rulebook declares no equity-statement concepts or section scopes for one to be compared
+        # against. A sticky banner here would be a mechanism with nothing to gate.
         li = LineItem(source_label=label, ordinal=ordinal, role=LineRole.LINE,
                       source=ValueSource.MACHINE)
         label_bbox = _union([w.source_bbox for w in label_words])

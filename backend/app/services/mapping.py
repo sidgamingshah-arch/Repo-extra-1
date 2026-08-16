@@ -284,6 +284,60 @@ def section_of_banner(text: str | None) -> str | None:
     return None
 
 
+# The sections a statement prints as a HEADING ROW, and the only ones a data-less row may declare.
+#
+# Every other family in ``SECTION_WORDS`` is matched on words that are themselves complete line-item
+# captions, so a row carrying one of them is far more likely to be an item with no figures than a
+# heading: ``income`` matches "Revenue" and "Turnover", ``tax_expense`` matches "Taxation",
+# ``other_comprehensive_income`` matches the OCI subtotal itself, ``profit_attributable_to`` matches
+# "attributable to" inside "Profit attributable to owners of the parent", and ``exceptional_items`` /
+# ``non_operating_expenses`` / ``total_comprehensive_income_attributable_to`` match bare fragments
+# ("exceptional", "non operating", "comprehensive").
+#
+# The eight below are unambiguous: no concept in a statement is CAPTIONED "Current assets" or
+# "Operating activities", so a row that says only that is a heading. The cost of the exclusion is
+# that a profit-and-loss section heading in a spreadsheet sets no section — those rows keep falling
+# back to the accounting structure, which is what they did before, so nothing regresses.
+HEADING_ROW_SECTIONS: frozenset[str] = frozenset({
+    "non_current_assets", "current_assets", "non_current_liabilities", "current_liabilities",
+    "equity", "cash_flow_from_operating_activities", "cash_flow_from_investing_activities",
+    "cash_flow_from_financing_activities",
+})
+
+
+def section_of_banner_only(text: str | None) -> str | None:
+    """The section a label names when the label is NOTHING BUT that banner, else None.
+
+    :func:`section_of_banner` matches a section phrase ANYWHERE in the text, which is right where
+    geometry has already established that the text is a standalone heading — a printed line with no
+    figures beside it, on a statement face. It is wrong where there is no geometry to lean on.
+
+    A spreadsheet row is the case in point. "Label column has text, value columns are empty" is a
+    banner sometimes and a line item with no data for either period the rest of the time, and
+    substring matching cannot tell them apart: "Equity investments designated at FVOCI" contains
+    "equity" and would scope every row beneath it — a non-current asset declaring the equity section.
+    "Total current assets" contains "current assets" and is the LAST row of its section, so reading
+    it as a banner scopes the NEXT one.
+
+    So this requires the label to be EXHAUSTED by section phrases. One phrase ("Current assets"), or
+    several where a filing puts both languages in one cell ("Current assets 流動資產"), and nothing
+    else. Anything left over means the label says something the section vocabulary does not cover,
+    which makes it a caption.
+
+    The umbrella rule is inherited rather than restated: ``section_of_banner`` returns None for a
+    banner spanning more than one section ("EQUITY AND LIABILITIES"), and this returns None whenever
+    it does.
+    """
+    token = section_of_banner(text)
+    if token is None or token not in HEADING_ROW_SECTIONS:
+        return None
+    remaining = normalize_label(text)
+    for _tok, words in SECTION_WORDS:
+        for word in words:
+            remaining = remaining.replace(word, " ")
+    return token if not remaining.strip() else None
+
+
 def section_of_key(canonical_key: str) -> str | None:
     """The section namespace a canonical key sits in, or None for a key that has none
     (``bs_total_assets``, ``pl_profit_before_tax``). Matched longest-first, since
