@@ -511,6 +511,42 @@ def _join_words(words: list[Word]) -> str:
     return " ".join(parts).strip()
 
 
+def _wrap_reaches_a_value(rows: list[list[Word]], idx: int, fmt=None,
+                          steps: tuple[tuple[str, object], ...] = (), max_lines: int = 3) -> bool:
+    """Whether the label-only line at ``idx`` begins a caption that reaches a valued row.
+
+    THE DEFECT THIS CLOSES, reported off the notes to a real filing: a caption that wraps over MORE
+    THAN TWO lines lost everything but its tail. "Deposits paid for acquisition of" / "land use
+    rights in the" / "PRC  2,500" was published as "land use rights in the PRC" — a note detail a
+    reader cannot identify and the mapper cannot place.
+
+    The wrap test required the IMMEDIATE next row to carry values, which is true of the last
+    continuation line and false of every earlier one. So on a three-line caption the first line
+    failed the test, was emitted as a label-only row, and was skipped.
+
+    Bounded at ``max_lines`` continuation lines, and each STEP is still checked for tight spacing and
+    label-column alignment by the caller as it walks — a note page is mostly prose, and an unbounded
+    look-ahead would glue a paragraph onto the first figure beneath it.
+    """
+    for step in range(1, max_lines + 1):
+        j = idx + step
+        if j >= len(rows):
+            return False
+        label_words, _note, value_words = _scan_row(rows[j], fmt)
+        if value_words:
+            return True
+        if not label_words:
+            return False
+        # A banner or a colon sub-heading introduces what follows; it never continues a caption, so
+        # the chain stops here rather than reaching past it for a figure.
+        text = _join_words(label_words)
+        if _looks_like_header(label_words, steps) or _is_banner_line(text, steps):
+            return False
+        if not _wrap_adjacent(_row_box(rows[j - 1]), _row_box(rows[j]), label_words):
+            return False
+    return False
+
+
 def _merge_wrapped_labels(rows: list[list[Word]], fmt=None,
                           steps: tuple[tuple[str, object], ...] = ()) -> list[list[Word]]:
     """Fold a label-only line into the following valued row when the two are clearly one
@@ -543,7 +579,10 @@ def _merge_wrapped_labels(rows: list[list[Word]], fmt=None,
             and (not (_looks_like_header(label_words, steps)
                       or _is_banner_line(_join_words(label_words), steps))
                  or _is_wrapped_head(label_words, _scan_row(nxt, fmt)[0], steps))
-            and _scan_row(nxt, fmt)[2]                  # next row actually carries values
+            # …and the caption reaches a figure. Not necessarily on the NEXT row: a caption may
+            # wrap over three or more lines, and requiring the value immediately dropped every line
+            # but the last two (see `_wrap_reaches_a_value`).
+            and _wrap_reaches_a_value(rows, idx, fmt, steps)
             and _wrap_adjacent(_row_box(row), _row_box(nxt), _scan_row(nxt, fmt)[0])
         )
         if is_wrap:
