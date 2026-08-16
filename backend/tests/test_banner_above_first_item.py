@@ -241,3 +241,69 @@ def test_a_single_line_caption_never_sets_a_section(caption: str):
         assert li.section_hint is None, (
             f"{caption!r} set section_hint={li.section_hint!r} from its own text; a caption is not "
             f"a banner and every row beneath it would inherit this")
+
+def test_a_banner_beside_its_first_item_on_one_baseline():
+    """The second geometry, and the one the original report describes literally: the heading and its
+    first item printed on ONE baseline, separated by clear air rather than by a line break.
+
+    The sub-line split cannot see this — one baseline is one printed line — so the remaining line is
+    split by horizontal whitespace, the way `_basis_bands` already tells two column captions apart
+    from one sentence naming both. Measured on this shape the gap between the banner and the item is
+    0.085 of the page width against 0.004 inside either phrase, so `_CAPTION_GAP` separates them with
+    two orders of magnitude to spare.
+    """
+    def baseline(y, banner_tokens, item_tokens, value):
+        out, x = [], 0.06
+        for t in banner_tokens:
+            out.append(_w(t, x, y)); x += 0.018 * len(t) + 0.004
+        # Clear air. The item's own column starts here, giving a gap of ~0.09 against the ~0.004
+        # spacing inside either phrase — the proportions measured on a real page. Anything under
+        # `_CAPTION_GAP` (0.03) is deliberately NOT a split, so this margin is the point.
+        x = 0.46
+        for t in item_tokens:
+            out.append(_w(t, x, y)); x += 0.018 * len(t) + 0.004
+        out.append(_w(value, 0.72, y))
+        return out
+
+    items = _items(
+        _line(0.300, "NON-CURRENT", "ASSETS"),
+        _line(0.320, "Goodwill", value="8,000"),
+        baseline(0.350, ["Current", "assets", "流動資產"], ["Inventories"], "1,234"),
+        _line(0.370, "Trade", "receivables", value="3,410"),
+    )
+    got = dict(_sections(items))
+    assert "Inventories" in got, f"the banner stayed glued to the caption: {list(got)}"
+    assert got["Goodwill"] == "non_current_assets"
+    assert got["Inventories"] == "current_assets"
+    assert got["Trade receivables"] == "current_assets", (
+        "the banner printed beside the first item never advanced the sticky section")
+
+
+def test_a_multi_word_caption_head_that_starts_with_a_section_phrase_is_kept_whole():
+    """The regression the first version of this fix shipped, found by an adversarial sweep.
+
+    The one-word rule caught "Equity" but not "Equity investments designated": three words, and it
+    contains "equity", so a substring test called it a banner. The caption was truncated to
+    "at FVOCI" — which then maps to whatever that tail resembles — and every row below was scoped to
+    equity while the row itself is a non-current asset. Exhaustion is what refuses it: "equity" does
+    not account for "investments designated".
+    """
+    items = _items(
+        _line(0.300, "Equity", "investments", "designated"),
+        _line(0.315, "at", "FVOCI", value="1,234"),
+    )
+    assert len(items) == 1
+    assert items[0].source_label == "Equity investments designated at FVOCI"
+    assert items[0].section_hint is None
+
+
+def test_a_wrapped_subtotal_caption_is_kept_whole():
+    """The same flaw, third instance: "Total current assets" contains "current assets" and read as a
+    banner would both truncate the subtotal and scope the rows after it."""
+    items = _items(
+        _line(0.300, "Total", "current"),
+        _line(0.315, "assets", value="4,644"),
+    )
+    assert len(items) == 1
+    assert items[0].source_label == "Total current assets"
+    assert items[0].section_hint is None

@@ -319,6 +319,16 @@ def section_of_banner_only(text: str | None) -> str | None:
     "Total current assets" contains "current assets" and is the LAST row of its section, so reading
     it as a banner scopes the NEXT one.
 
+    The same distinction bites on a PAGE, which is why ``row_reconstruct._is_banner_line`` reads
+    through here too. A caption wrapping over two printed lines puts "Equity investments designated"
+    on a line of its own, and substring matching took that for the equity banner — truncating the
+    item to "at FVOCI" and scoping every row below to equity while it is a non-current asset.
+    Exhaustion refuses it, because "equity" does not account for "investments designated".
+
+    Callers whose evidence is weaker than a printed label-only line add ``HEADING_ROW_SECTIONS`` on
+    top of this; the function itself does not, so the page path still recognises a profit-and-loss
+    banner ("Other comprehensive income") that a data-less spreadsheet row is not trusted to declare.
+
     So this requires the label to be EXHAUSTED by section phrases. One phrase ("Current assets"), or
     several where a filing puts both languages in one cell ("Current assets 流動資產"), and nothing
     else. Anything left over means the label says something the section vocabulary does not cover,
@@ -329,7 +339,7 @@ def section_of_banner_only(text: str | None) -> str | None:
     it does.
     """
     token = section_of_banner(text)
-    if token is None or token not in HEADING_ROW_SECTIONS:
+    if token is None:
         return None
     remaining = normalize_label(text)
     for _tok, words in SECTION_WORDS:

@@ -89,7 +89,7 @@ def extract_workbook(data: bytes, *, document_id: str | None = None, log=None,
     does on the PDF path (``row_reconstruct.build_line_items``)."""
     import openpyxl
 
-    from app.services.mapping import section_of_banner_only
+    from app.services.mapping import HEADING_ROW_SECTIONS, section_of_banner_only
 
     from app.services.row_reconstruct import (
         _entity_signals,
@@ -163,7 +163,7 @@ def extract_workbook(data: bytes, *, document_id: str | None = None, log=None,
                 # — "Equity investments designated at FVOCI" would declare the equity section while
                 # being a non-current asset. Requiring no figures as well, so a heading a filing
                 # happens to print a total against is still read as the row it is.
-                if (section_of_banner_only(label) is not None
+                if (section_of_banner_only(label) in HEADING_ROW_SECTIONS
                         and not any(_to_decimal(row[c]) is not None
                                     for c in value_cols if c < len(row))):
                     section = label

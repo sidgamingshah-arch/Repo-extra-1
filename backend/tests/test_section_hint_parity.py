@@ -46,6 +46,19 @@ ONTOLOGY_PATH = (pathlib.Path(__file__).resolve().parent.parent
                  / "app/sample/templates/hkfrs_hk_china_ontology.json")
 
 
+def _excel_banner(label: str) -> str | None:
+    """The spreadsheet predicate: what ``excel_extract`` asks of a data-less row.
+
+    ``section_of_banner_only`` is exhaustion ONLY, because the page path needs it that way — a
+    printed label-only line is strong enough evidence to accept a profit-and-loss banner like
+    "Other comprehensive income". A data-less spreadsheet row is weaker evidence, so the caller adds
+    ``HEADING_ROW_SECTIONS`` on top. Tests of the spreadsheet behaviour must ask the same question
+    the spreadsheet asks.
+    """
+    token = section_of_banner_only(label)
+    return token if token in HEADING_ROW_SECTIONS else None
+
+
 # ── the banner test itself ─────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("label, token", [
     ("CURRENT ASSETS", "current_assets"),
@@ -60,7 +73,7 @@ ONTOLOGY_PATH = (pathlib.Path(__file__).resolve().parent.parent
     ("投資活動", "cash_flow_from_investing_activities"),
 ])
 def test_a_heading_is_recognised(label, token):
-    assert section_of_banner_only(label) == token
+    assert _excel_banner(label) == token
 
 
 @pytest.mark.parametrize("label", [
@@ -79,25 +92,23 @@ def test_a_heading_is_recognised(label, token):
     "Profit attributable to owners of the parent",
 ])
 def test_a_caption_is_not_a_heading(label):
-    """The whole point of requiring the label to be exhausted by section phrases. Several of these
-    ARE recognised by `section_of_banner`, which is correct where geometry has already established
-    the text is a standalone heading and wrong where it has not."""
-    assert section_of_banner_only(label) is None
+    """The whole point of the two conditions. Several of these ARE recognised by
+    `section_of_banner`, which is correct where geometry has already established the text is a
+    standalone heading and wrong where it has not. Some are refused by exhaustion ("Equity
+    investments designated at FVOCI" is not accounted for by "equity") and the rest by the
+    heading-row restriction ("Revenue" IS exhausted, and is still not a heading)."""
+    assert _excel_banner(label) is None
 
 
 def test_the_restriction_to_heading_row_sections_is_load_bearing():
-    """`Revenue` and `Taxation` are exhausted by a section phrase — "revenue" IS the whole label —
-    so exhaustiveness alone does not refuse them. The token allow-list is the second condition, and
-    without it a data-less "Revenue" row would declare the income section for everything below."""
+    """`Revenue` and `Taxation` pass the exhaustion test — "revenue" IS the whole label — so
+    exhaustion alone does not refuse them. The token allow-list is the second condition, and without
+    it a data-less "Revenue" row would declare the income section for everything below it."""
     for label in ("Revenue", "Turnover", "Taxation"):
-        token = section_of_banner(label)
-        assert token is not None, f"{label} is expected to match loosely"
-        assert token not in HEADING_ROW_SECTIONS
-        remaining = normalize_label(label)
-        for _tok, words in SECTION_WORDS:
-            for word in words:
-                remaining = remaining.replace(word, " ")
-        assert not remaining.strip(), f"{label} IS exhausted, so only the allow-list refuses it"
+        assert section_of_banner_only(label) is not None, (
+            f"{label} is exhausted by a section phrase, so exhaustion cannot be what refuses it")
+        assert section_of_banner_only(label) not in HEADING_ROW_SECTIONS
+        assert _excel_banner(label) is None
 
 
 def test_no_rulebook_caption_is_mistaken_for_a_heading():
@@ -110,7 +121,7 @@ def test_no_rulebook_caption_is_mistaken_for_a_heading():
         captions.append(concept.get("label") or "")
         captions += concept.get("aliases") or []
         captions += (concept.get("aliases_i18n") or {}).get("zh") or []
-    offenders = sorted({c for c in captions if c.strip() and section_of_banner_only(c)})
+    offenders = sorted({c for c in captions if c.strip() and _excel_banner(c)})
     assert not offenders, f"these concept captions would be read as section headings: {offenders}"
 
 

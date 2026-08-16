@@ -33,7 +33,7 @@ from app.schemas.ontology import Normalisation, ScopeSelection
 from app.services.han import to_simplified
 # The section vocabulary is a property of how statements are PRINTED, not of any ontology, so
 # reading a banner here uses the same function mapping does rather than a second copy of it.
-from app.services.mapping import section_of_banner
+from app.services.mapping import section_of_banner, section_of_banner_only
 
 _NUM = re.compile(r"^\(?-?[\d,]*\.?\d+\)?%?$")
 _NOTE = re.compile(r"^note[s]?\.?$", re.IGNORECASE)
@@ -229,7 +229,7 @@ def _is_banner_line(text: str, steps: tuple[tuple[str, object], ...]) -> bool:
     caption whole — a truncated caption maps to whatever its tail resembles, which is worse than a
     missing section.
     """
-    if section_of_banner(apply_pipeline(text, steps)) is None:
+    if section_of_banner_only(apply_pipeline(text, steps)) is None:
         return False
     return len(text.split()) >= 2 or bool(_HAN.search(text))
 
@@ -260,6 +260,24 @@ def _label_sub_lines(label_words: list[Word]) -> list[list[Word]]:
     return lines
 
 
+def _any_banner_line(label_words: list[Word], steps: tuple[tuple[str, object], ...]) -> bool:
+    """Whether any PRINTED LINE of these label words is a section banner.
+
+    Per line and not over the joined text, because row clustering sorts a row by x: a bilingual
+    banner whose English and Chinese halves share the left margin comes back interleaved —
+    "Current 流動資產 assets" — and no exhaustive test can see a banner in that. Splitting back into
+    printed lines recovers "Current assets" and "流動資產", each of which is one.
+
+    This subsumes a narrower rule that used to live in ``_is_wrapped_head`` (a bilingual pair naming
+    the same section is one banner, not a caption wrapping into its translation). That rule was
+    needed while ``_is_banner_line`` matched a section phrase as a SUBSTRING, since the interleaved
+    join still contained one; under the exhaustive test it does not, and reading the printed lines
+    answers the question where it is actually decidable. ``_is_wrapped_head`` is about whether a
+    caption wraps, and it is better off not also deciding what a banner is.
+    """
+    return any(_is_banner_line(_join_words(line), steps) for line in _label_sub_lines(label_words))
+
+
 def _split_banner_prefix(label_words: list[Word], steps: tuple[tuple[str, object], ...]
                          ) -> tuple[str | None, list[Word]]:
     """``(banner, caption words)`` when a valued row's label begins with section banners printed on
@@ -272,15 +290,20 @@ def _split_banner_prefix(label_words: list[Word], steps: tuple[tuple[str, object
     stayed on the PREVIOUS banner — "Non-current assets" — and every current asset and current
     liability inherited it, which sent them all to ``bs_non_current_assets__others``.
 
-    Geometry decides it, not the words. Requiring the banner to sit on its own PRINTED line is what
-    keeps this from firing on the many real captions that merely begin with a section phrase —
+    Geometry decides it, not the words, and there are two geometries. The banner may sit on its own
+    PRINTED LINE above the caption (row clustering then merges the two), or BESIDE it on one baseline
+    separated by clear air. Both are handled below; the second is why the whole-label text is never
+    tested on its own.
+
+    Requiring the banner to occupy a whole line, or a whole horizontally-separated run of one, is
+    what keeps this from firing on the many real captions that merely begin with a section phrase —
     "Equity investments designated at FVOCI" (a non-current asset), "Total current assets",
     "长期负债的流动部分" (current portion of long-term debt), "Revenue", "Taxation". Seventy-three
     captions in the shipped rulebook start with a section phrase; every one of them is printed on a
     single line, so none of them reaches the banner test at all.
     """
     lines = _label_sub_lines(label_words)
-    if len(lines) < 2:
+    if not lines:
         return None, label_words
     banner: str | None = None
     i = 0
@@ -295,9 +318,29 @@ def _split_banner_prefix(label_words: list[Word], steps: tuple[tuple[str, object
             break
         banner = text                      # the NEAREST banner wins, as elsewhere
         i += 1
+    # The banner may also sit BESIDE the caption on one printed line, which is the shape a filing
+    # produces when it prints the heading and its first item on a single baseline rather than on
+    # consecutive lines. The sub-line walk above cannot see that — one baseline is one sub-line — so
+    # the remaining line is split by horizontal WHITESPACE instead, the same way `_basis_bands` tells
+    # two column captions apart from one sentence naming both. Measured on this shape: the gap
+    # between "流動資產" and "Inventories" is 0.085 of the page width while spacing inside either
+    # phrase is 0.004, so `_CAPTION_GAP` separates them with two orders of magnitude to spare, and
+    # "Equity investments designated at FVOCI" stays a single run.
+    #
+    # Per printed LINE, never over the whole label: `_x_runs` welds across a line break, because the
+    # x of a following line's first word is far to the LEFT of the previous line's last word and a
+    # negative gap trivially satisfies its threshold.
+    caption_lines = lines[i:]
+    if caption_lines:
+        runs = _x_runs(caption_lines[0], _CAPTION_GAP)
+        if len(runs) >= 2:
+            head = _join_words(_regroup_scripts(runs[0]))
+            if _is_banner_line(head, steps):
+                banner = head
+                caption_lines = [[w for run in runs[1:] for w in run], *caption_lines[1:]]
     if banner is None:
         return None, label_words
-    caption = [w for line in lines[i:] for w in line]
+    caption = [w for line in caption_lines for w in line]
     return (banner, caption) if caption else (None, label_words)
 
 
@@ -577,7 +620,7 @@ def _merge_wrapped_labels(rows: list[list[Word]], fmt=None,
             # taken for a wrapped-label continuation and folded into the first item beneath it,
             # losing the section for the whole block. A recognised banner is not a continuation.
             and (not (_looks_like_header(label_words, steps)
-                      or _is_banner_line(_join_words(label_words), steps))
+                      or _any_banner_line(label_words, steps))
                  or _is_wrapped_head(label_words, _scan_row(nxt, fmt)[0], steps))
             # …and the caption reaches a figure. Not necessarily on the NEXT row: a caption may
             # wrap over three or more lines, and requiring the value immediately dropped every line
