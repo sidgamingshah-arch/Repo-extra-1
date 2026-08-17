@@ -571,12 +571,12 @@ def _nil_when_absent(template: TemplateDefinition) -> dict[str, str]:
 
     That reasoning is a property of the residual's REACH, not of one rollup's child list — which is
     all the original test (``any(c.endswith("__others"))``) could see. It is generalised here because
-    the revised statements split several subtotals into tiers: ``pl_expenses__total_cost_of_sales``
-    is struck from two leaves the expenses residual covers but is not itself the section subtotal,
-    and the cash flow's two intermediate operating subtotals are the same shape. Without this, the
-    most-used check on the income statement — gross profit against revenue and cost of sales — would
-    be permanently skipped on every filing that does not print a purchases of stock-in-trade line,
-    which is most of them.
+    the revised statements strike several relations over leaves the residual covers without naming
+    the residual: ``pl_gross_profit`` is struck from revenue and the two cost-of-sales leaves the
+    expenses residual covers, and the cash flow's two intermediate operating subtotals are the same
+    shape. Without this, the most-used check on the income statement — gross profit against revenue
+    and cost of sales — would be permanently skipped on every filing that does not print a purchases
+    of stock-in-trade line, which is most of them.
 
     THE REACH IS THE KEY NAMESPACE, not the template's section node. ``stages/residual`` reads a
     residual's section off the ``__others`` key itself (``_sections_from_template``:
@@ -590,8 +590,10 @@ def _nil_when_absent(template: TemplateDefinition) -> dict[str, str]:
 
     * A CALCULATED node never qualifies. Its absence means the filing printed no subtotal there,
       and its figure is computable, so taking it as nil would compare a reported total against a
-      knowingly incomplete sum. ``pl_gross_profit = revenue + total_cost_of_sales`` would then fail
-      by the whole cost of sales on any filing that prints no cost-of-sales subtotal.
+      knowingly incomplete sum. ``pl_operating_profit_ebit = total_income + total_operating_cost``
+      would then fail by the whole operating cost on any filing that prints no operating-cost
+      subtotal — and ``total_operating_cost`` sits in the very namespace the expenses residual
+      sweeps, so nothing but this exclusion keeps it out.
     * The caller applies this only to components on the relation's own statement. A cross-statement
       tie compares two independently extracted statements, and an operand missing there says the
       other statement is incomplete — ``cf_to_bs_cash`` would otherwise assert closing cash equals

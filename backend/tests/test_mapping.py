@@ -77,3 +77,49 @@ def test_exclude_hints_veto_a_concept_across_every_tier():
     assert m.match("Gain on disposal of subsidiaries").canonical_key is None
     # ...nor via fuzzy, which is where it used to slip through.
     assert m.match("Gain on disposal of subsidiaries, net").canonical_key is None
+
+
+def test_a_hint_typed_in_the_case_a_human_uses_still_fires():
+    """THE DEFECT THIS CLOSES, found on a reviewer's own edits and silent by construction.
+
+    A hint is a REGEX, and it is searched against a caption the matcher has already lowercased while
+    the pattern is taken verbatim from the rulebook. So a hint typed the way anyone writes a caption
+    — "Finance Cost", "Non-current Assets", "Short term" — matched nothing, ever. Every one of the
+    415 hints shipped in the rulebook happens to be lowercase, so no shipped behaviour was wrong and
+    no test failed; the trap was waiting for the next person to add one. A reviewer added thirteen
+    through the ontology workbook and hit it thirteen times out of thirteen: each exclusion looked
+    accepted, appeared in the workbook, and did nothing.
+
+    Both hint families are asserted, because they are read at two different sites.
+    """
+    onto = OntologyDefinition(
+        ontology_key="t", target_template_key="t", locale="en",
+        mappings=[
+            OntologyMapping(
+                canonical_key="pl_expenses__others",
+                label="Other expenses",
+                # The second alias is the one the exclusion has to beat. Without it the excluded
+                # caption reaches no tier of this concept and the assertion below would hold for the
+                # wrong reason — the exclusion never being consulted at all.
+                aliases=["Other expenses", "Finance costs and other items"],
+                # Capitalised exactly as a reviewer typed it into the workbook.
+                exclude_hints=["Finance Cost"],
+            ),
+            OntologyMapping(
+                canonical_key="bs_current_liabilities__bills_payable",
+                label="Bills payable",
+                # No alias to match on: the regex hint is the only route to this concept.
+                regex_hints=[r"Bills? Payable"],
+            ),
+        ],
+    )
+    m = OntologyMatcher(onto, locale="en")
+
+    # The concept still claims the caption it is for.
+    assert m.match("Other expenses").canonical_key == "pl_expenses__others"
+    # …and the capitalised exclusion is honoured against a caption printed in ordinary sentence case,
+    # which is the pairing that failed: pattern "Finance Cost" against text "finance costs …". This
+    # caption is an exact alias of the concept, so only the exclusion can keep it out.
+    assert m.match("Finance costs and other items").canonical_key != "pl_expenses__others"
+    # The other site. A capitalised regex hint reaches its concept.
+    assert m.match("Bills payable").canonical_key == "bs_current_liabilities__bills_payable"

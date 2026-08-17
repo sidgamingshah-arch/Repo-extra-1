@@ -736,7 +736,28 @@ class ResidualStage:
         residuals = _residuals(ontology, terms)
         # ``population: sweep_only`` is what makes this stage the only way in. A residual declaring
         # anything else is not swept — it is populated by whatever that declaration names.
-        usable = [r for r in residuals if r.population == "sweep_only" and r.sweepable]
+        sweep_only = [r for r in residuals if r.population == "sweep_only" and r.sweepable]
+        # ONE SECTION, ONE BUCKET — the clause ``candidate_set`` states as "the residual's SINGLE
+        # section_scope value", read from the other end. Two buckets claiming one section is the same
+        # contradiction prohibition 5 forbids, arrived at from two concepts instead of one, and
+        # ``{r.section: r for r in usable}`` used to settle it by POSITION IN THE RULEBOOK FILE: the
+        # later concept won, the earlier one vanished with nothing logged, and re-ordering the
+        # ``mappings`` array — which is presentation, not meaning — silently moved a section's rows
+        # into a different bucket. Neither bucket sweeps the contested section now, and both say why.
+        contested: dict[str, list[_Residual]] = {}
+        for r in sweep_only:
+            contested.setdefault(r.section, []).append(r)
+        for section, claimants in contested.items():
+            if len(claimants) < 2:
+                continue
+            keys = [c.key for c in claimants]
+            for c in claimants:
+                others = ",".join(k for k in keys if k != c.key)
+                c.sweepable = False
+                c.conflicts.append(f"section_contested_by:{others}")
+        # Recomputed, not filtered in place: a contested bucket must be out of the note sourcing, the
+        # cross-section rescue and the reconciliation too, not merely out of the section map.
+        usable = [r for r in sweep_only if r.sweepable]
         by_section = {r.section: r for r in usable}
         for r in residuals:
             if r.conflicts:

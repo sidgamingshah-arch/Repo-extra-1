@@ -149,13 +149,22 @@ def test_the_pl_tree_is_in_the_templates_own_order(client):
 
 def test_gross_profit_sits_between_cost_of_sales_and_operating_expenses(client):
     """The concrete placement, named, because "in file order" is only reassuring if you know what
-    the file says: Gross profit follows the cost-of-sales block and precedes operating expenses."""
+    the file says: Gross profit follows the cost-of-sales block and precedes operating expenses.
+
+    This is the reviewer's positioning requirement stated as an assertion — "gross profit should
+    come [after] cost of sales on P&L". It reads the cost lines directly now that the intermediate
+    total-cost-of-sales subtotal is retired, so there is nothing between the last cost line and the
+    margin it produces.
+    """
     ids = [n["id"] for n in _statement_rows(_detail(client)["tree"], "profit_and_loss")]
     assert (ids.index("sec:pl_s2a_cost_of_sales")
-            < ids.index("pl_expenses__total_cost_of_sales")
+            < ids.index("pl_expenses__cost_of_goods_sold")
+            < ids.index("pl_expenses__purchases_of_stock_in_trade")
             < ids.index("pl_gross_profit")
             < ids.index("sec:pl_s2_expenses")
-            < ids.index("pl_expenses__taxes_and_surcharges"))
+            < ids.index("pl_expenses__taxes_and_surcharges")
+            < ids.index("pl_expenses__total_operating_cost")
+            < ids.index("pl_operating_profit_ebit"))
 
 
 # --- genuine headings keep behaving exactly as they did --------------------------------------

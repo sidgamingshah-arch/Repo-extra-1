@@ -271,7 +271,7 @@ def test_the_shipped_rulebook_is_seeded_whole_and_selectable(client):
 
     definition = client.get(f"{API}/ontologies/{shipped['id']}").json()["definition"]
     assert definition["schema_version"] == 2 and len(definition["section_defaults"]) == 19
-    assert len(definition["mappings"]) == 185
+    assert len(definition["mappings"]) == 183
     assert len(definition["validation"]["identities"]) == 19
 
 

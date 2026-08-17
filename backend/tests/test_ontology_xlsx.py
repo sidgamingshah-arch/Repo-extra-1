@@ -26,7 +26,7 @@ def _shipped() -> dict:
 
 
 def test_the_shipped_rulebook_round_trips_byte_for_byte():
-    """THE GUARANTEE. Not a fixture — the real 185-concept rulebook: export it, read it back, and the
+    """THE GUARANTEE. Not a fixture — the real 183-concept rulebook: export it, read it back, and the
     definition must be the SAME definition. An exporter that quietly drops a block would otherwise
     hand an admin a file whose upload silently publishes a smaller rulebook than the one they edited,
     which is the failure this codebase spends most of its guards on.
@@ -38,10 +38,10 @@ def test_the_shipped_rulebook_round_trips_byte_for_byte():
 
 def test_every_concept_and_field_survives():
     """Stated separately from equality so a failure says WHAT went missing rather than dumping two
-    185-entry structures side by side."""
+    183-entry structures side by side."""
     original = _shipped()
     rebuilt = parse_ontology_xlsx(build_ontology_xlsx(original))
-    assert len(rebuilt["mappings"]) == len(original["mappings"]) == 185
+    assert len(rebuilt["mappings"]) == len(original["mappings"]) == 183
     assert [m["canonical_key"] for m in rebuilt["mappings"]] \
         == [m["canonical_key"] for m in original["mappings"]]
     for a, b in zip(original["mappings"], rebuilt["mappings"]):
@@ -78,7 +78,7 @@ def test_the_workbook_the_admin_gets_has_the_sheets_the_readme_names():
     assert wb.sheetnames == [SHEET_CONCEPTS, "Section defaults", "Netting rules",
                              SHEET_CONFIG, "README"]
     ws = wb[SHEET_CONCEPTS]
-    assert ws.max_row == 186                      # 185 concepts + the header
+    assert ws.max_row == 184                      # 183 concepts + the header
     assert ws["A1"].value == "Canonical key"
     assert ws.freeze_panes == "B2"                # the key column stays visible while scrolling
     # Per-locale alias columns, derived from what the rulebook supports.
@@ -153,7 +153,7 @@ def test_the_rebuilt_definition_passes_the_same_gate_as_a_json_upload():
 
     rebuilt = parse_ontology_xlsx(build_ontology_xlsx(_shipped()))
     ont = load_ontology(rebuilt)
-    assert len(ont.mappings) == 185
+    assert len(ont.mappings) == 183
     assert unknown_keys(rebuilt, ont, limit=500) == []
     resolve_inherits(rebuilt)          # every `inherits` still names a real section
 
@@ -215,7 +215,7 @@ def test_the_workbook_downloads_and_uploads_through_the_api(client):
                                          "spreadsheetml.sheet")})
     assert posted.status_code == 201, posted.text
     body = posted.json()
-    assert body["mappings"] == 185
+    assert body["mappings"] == 183
     assert body["version"] == before_version + 1        # a new version, nothing overwritten
     try:
         # And it validated against the template, exactly as a JSON upload would.

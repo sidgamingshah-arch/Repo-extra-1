@@ -29,8 +29,8 @@ carries the distinction:
     provenance and a ``PARENT_GROSS_EVIDENCE_ONLY`` flag) so the figure cannot be counted twice.
 
 ``structural`` — the parent is a REPORTED SUBTOTAL that appears alongside its components as a
-    matter of course: income tax expense over current/deferred tax, total cost of sales over its
-    components, total comprehensive income over profit and OCI. Unfiling one of those DELETES a
+    matter of course: income tax expense over current/deferred tax, total comprehensive income over
+    profit and OCI. Unfiling one of those DELETES a
     printed figure from the statement and breaks the subtotal checks that compare it to the sum of
     its parts — ``test_sole_component`` catches exactly that. These rules need no switch: each
     parent is already ``unit_of_account: subtotal`` with a ``derivation``, and a subtotal is never
@@ -65,6 +65,14 @@ ONTOLOGY = pathlib.Path(__file__).resolve().parent.parent / "app/sample/template
 # alias list is why a filing printing "Trade and other receivables" dumps the whole combined amount
 # into trade receivables. Removing it there and adding it to the parent is the fix; the containment
 # pair then keeps parent and children from both counting.
+#
+# `retired: True` marks a rule whose PARENT no longer exists — the reviewer's later pass struck the
+# total-cost-of-sales and total-operating-expenses subtotals from the rulebook, so the P&L reads
+# cost of sales, GROSS PROFIT, operating expenses, total operating cost. Both were `structural`,
+# meaning the rule threw no switch of its own: it recorded prose against a subtotal whose exclusivity
+# came from being derived. With the concept gone there is nothing to double-count through and nothing
+# to record it on. The rules are kept here rather than deleted because this file is the record of
+# what was applied, and skipped at both the key check and the apply loop so it still runs.
 RULES = [
     {
         "id": "netting_trade_and_other_receivables", "mechanism": "containment",
@@ -307,7 +315,7 @@ RULES = [
         "strip_from": {},
     },
     {
-        "id": "netting_cost_of_sales", "mechanism": "structural",
+        "id": "netting_cost_of_sales", "mechanism": "structural", "retired": True,
         "parent": "pl_expenses__total_cost_of_sales",
         "children": ["pl_expenses__cost_of_goods_sold", "pl_expenses__purchases_of_stock_in_trade"],
         "captions_en": ["Cost of sales", "Cost of revenue", "Cost of goods sold"],
@@ -326,7 +334,7 @@ RULES = [
         "strip_from": {},
     },
     {
-        "id": "netting_operating_expenses", "mechanism": "structural",
+        "id": "netting_operating_expenses", "mechanism": "structural", "retired": True,
         "parent": "pl_expenses__total_operating_expenses",
         "children": [
             "pl_expenses__selling_and_marketing_expenses",
@@ -500,6 +508,8 @@ def main() -> int:
     # one not translated at all.
     missing = []
     for r in RULES:
+        if r.get("retired"):
+            continue
         for k in [r["parent"], *r["children"], *r.get("strip_from", {})]:
             if k not in by:
                 missing.append((r["id"], k))
@@ -510,6 +520,10 @@ def main() -> int:
 
     report = []
     for r in RULES:
+        if r.get("retired"):
+            report.append({"id": r["id"], "parent": r["parent"], "children": len(r["children"]),
+                           "stripped": [], "retired": True})
+            continue
         parent = by[r["parent"]]
         line = {"id": r["id"], "parent": r["parent"], "children": len(r["children"])}
 
@@ -567,11 +581,16 @@ def main() -> int:
             line["thin"] = r["thin"]
         report.append(line)
 
+    def _tail(line: dict) -> str:
+        if line.get("retired"):
+            return "RETIRED — parent struck from the rulebook"
+        return ", ".join(line["stripped"]) or "—"
+
     print(f"{'rule':46} {'children':>8}  {'alias+':>6} {'zh+':>4} {'rx+':>4} {'ex+':>4}  stripped")
     for line in report:
         print(f"{line['id']:46} {line['children']:>8}  {line.get('aliases+', 0):>6} "
               f"{line.get('zh+', 0):>4} {line.get('regex+', 0):>4} {line.get('excl+', 0):>4}  "
-              f"{', '.join(line['stripped']) or '—'}")
+              f"{_tail(line)}")
     print()
     for line in report:
         for cap, held in line.get("refused") or []:

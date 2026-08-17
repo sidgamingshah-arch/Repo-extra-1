@@ -56,15 +56,18 @@ PRECEDENCE_PARENTS = {
 # The two the rulebook already carried, which must not be disturbed.
 PRE_EXISTING = {"bs_equity__reserves", "pl_exceptional_items__share_of_profit_of_associates_and_jvs"}
 
-# The four rules whose parent is a REPORTED SUBTOTAL, not a composite caption. These must NOT carry
+# The rules whose parent is a REPORTED SUBTOTAL, not a composite caption. These must NOT carry
 # the containment pair: the guard strips an aggregate's canonical_key once any component is printed,
 # and on a filing that prints "Income tax expense" over "Current tax" and "Deferred tax" — which is
 # every filing — that deletes the printed total and breaks the subtotal checks. Their double-count
 # control is already structural: a subtotal is derived, never summed into its own section.
+#
+# Two of the original four — total cost of sales and total operating expenses — were retired from
+# the rulebook; the reviewer's P&L reads cost of sales, GROSS PROFIT, operating expenses, total
+# operating cost, with no redundant subtotal between a cost block and the margin it produces. The
+# rules that named them are moot: a rule cannot double-count through a concept that does not exist.
 SUBTOTAL_PARENTS = {
     "pl_tax_expense__total_tax_expense",
-    "pl_expenses__total_cost_of_sales",
-    "pl_expenses__total_operating_expenses",
     "pl_total_comprehensive_income_for_the_year",
 }
 
@@ -195,8 +198,8 @@ def test_a_reported_subtotal_never_carries_the_containment_pair(by_key, ontology
     Setting ``is_gross_parent`` on ``pl_tax_expense__total_tax_expense`` made
     ``_enforce_containment`` strip the total's canonical_key as soon as "Deferred tax" appeared on
     the face — so a statement printing a tax charge of 1,200 with a 300 deferred component published
-    the 300 and lost the 1,200. ``test_sole_component`` caught it. These four parents are subtotals,
-    and a subtotal's exclusivity is already structural.
+    the 300 and lost the 1,200. ``test_sole_component`` caught it. These parents are subtotals, and a
+    subtotal's exclusivity is already structural.
     """
     aggregates = {a for a, _c, _w in _pairs_to_keep_apart(ontology)}
     for key in SUBTOTAL_PARENTS:
@@ -228,7 +231,7 @@ def test_oci_composition_still_decomposes_only_the_oci_subtotal(ontology):
 
 def test_no_parent_claims_a_caption_another_concept_exclusively_owns(ontology):
     """The rules' ``caption_keywords`` name the captions that TRIGGER a rule, which is not the same
-    as naming its parent. Folding them in blindly gave ``pl_expenses__total_cost_of_sales`` the
+    as naming its parent. Folding them in blindly gave the then-live total-cost-of-sales subtotal the
     alias "Cost of sales" — already the component's — making the commonest caption on a P&L
     ambiguous between a component and its own total. Thirteen such additions were refused; this
     asserts none crept back.

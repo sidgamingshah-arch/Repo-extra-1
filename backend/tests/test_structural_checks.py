@@ -428,14 +428,13 @@ def _shipped_template():
 def test_a_leaf_the_filing_does_not_print_is_nil_where_the_section_sweeps_it():
     """A subtotal split into tiers must not lose its arithmetic check to a line nobody prints.
 
-    THE DEFECT THIS CLOSES, measured on the shipped template: the revision gives cost of sales its
-    own subtotal over TWO leaves — cost of goods sold and purchases of stock-in-trade. Almost no
-    filing prints the second one. A missing component used to make the whole relation `skipped`
-    unless the rollup's own child list contained the section residual, so
-    ``rollup:pl_expenses__total_cost_of_sales`` would have been not-evaluable on essentially every
-    filing, and so would the gross-profit tie behind it. That is the failure mode this module's own
-    docstring calls out: a relation occupying the slot where a reviewer expects assurance while
-    proving nothing.
+    THE DEFECT THIS CLOSES, measured on the shipped template: gross profit is struck over THREE
+    leaves — revenue, cost of goods sold and purchases of stock-in-trade. Almost no filing prints
+    the last one. A missing component used to make the whole relation `skipped` unless the rollup's
+    own child list contained the section residual, so ``rollup:pl_gross_profit`` — the most-read
+    check on an income statement — would have been not-evaluable on essentially every filing. That
+    is the failure mode this module's own docstring calls out: a relation occupying the slot where a
+    reviewer expects assurance while proving nothing.
 
     ``_nil_when_absent`` closes it: the expenses namespace owns an ``__others`` bucket that sweeps
     every printed row it places there, so a leaf of that namespace which is STILL absent is one the
@@ -444,10 +443,11 @@ def test_a_leaf_the_filing_does_not_print_is_nil_where_the_section_sweeps_it():
     """
     tpl = _shipped_template()
     report = evaluate_structure(tpl, _items(**{
-        "pl_expenses__cost_of_goods_sold": -600,
-        "pl_expenses__total_cost_of_sales": -600,      # the printed subtotal, no purchases line
+        "pl_income__revenue_from_operations": 1000,
+        "pl_expenses__cost_of_goods_sold": -600,        # the printed cost line, no purchases line
+        "pl_gross_profit": 400,
     }))
-    res = _one(report, "rollup:pl_expenses__total_cost_of_sales")
+    res = _one(report, "rollup:pl_gross_profit")
     assert res.status == "pass", res.details
     assert res.details["assumed_zero"] == ["pl_expenses__purchases_of_stock_in_trade"]
 
@@ -455,20 +455,22 @@ def test_a_leaf_the_filing_does_not_print_is_nil_where_the_section_sweeps_it():
 def test_a_calculated_component_the_filing_does_not_print_is_never_taken_as_nil():
     """The other half, and the one that would FAIL a correct filing rather than skip it.
 
-    ``pl_gross_profit`` now routes through ``pl_expenses__total_cost_of_sales``, a calculated
-    subtotal most filings do not print. Taking an absent calculated node as nil would compare the
-    printed gross profit against revenue ALONE — a break equal to the entire cost of sales, raised
-    as a blocking finding, on a filing where nothing is wrong. So it stays a skip, and the tie is
-    covered instead by the rulebook identity over the leaves.
+    ``pl_operating_profit_ebit`` is struck over ``pl_expenses__total_operating_cost``, a calculated
+    subtotal most filings do not print — and one that lives in the ``pl_expenses__`` namespace the
+    residual sweeps, so the rule above would reach it if being calculated did not exclude it first.
+    Taking it as nil would compare the printed operating profit against total income ALONE — a break
+    equal to the entire operating cost, raised as a blocking finding, on a filing where nothing is
+    wrong. So it stays a skip, and the tie is covered instead by the rulebook identity over the
+    leaves.
     """
     tpl = _shipped_template()
     report = evaluate_structure(tpl, _items(**{
-        "pl_income__revenue_from_operations": 1000,
-        "pl_gross_profit": 400,
+        "pl_income__total_income": 1000,
+        "pl_operating_profit_ebit": 400,
     }))
-    res = _one(report, "rollup:pl_gross_profit")
+    res = _one(report, "rollup:pl_operating_profit_ebit")
     assert res.status == "skipped"
-    assert res.details["missing"] == ["pl_expenses__total_cost_of_sales"]
+    assert res.details["missing"] == ["pl_expenses__total_operating_cost"]
 
 
 def test_the_cash_flow_starting_line_the_filing_did_not_choose_is_nil():

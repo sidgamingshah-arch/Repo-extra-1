@@ -982,6 +982,78 @@
    ]
   },
   {
+   "canonical_key": "bs_non_current_assets__investment_properties",
+   "label": "Investment properties",
+   "inherits": "bs_s1_non_current_assets",
+   "match_priority": 62,
+   "definition": "Property held to earn rentals or for capital appreciation rather than for use or sale in the ordinary course of business (HKAS 40).",
+   "aliases": [
+    "Investment properties",
+    "Investment property"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Investment properties",
+     "Investment property"
+    ],
+    "zh": [
+     "投资物业",
+     "投资性房地产"
+    ]
+   },
+   "exclude": [
+    "Owner-occupied property, which is PP&E.",
+    "Completed properties held for sale and properties under development, which are developer inventory.",
+    "The fair-value movement on investment properties, which is a profit-or-loss item."
+   ],
+   "confusable_with": [
+    "bs_non_current_assets__property_plant_and_equipment",
+    "bs_current_assets__completed_properties_held_for_sale",
+    "pl_exceptional_items__fair_value_change_gains"
+   ],
+   "exclude_hints": [
+    "fair value",
+    "公允值",
+    "公允价值",
+    "held for sale",
+    "待售",
+    "发展中"
+   ]
+  },
+  {
+   "canonical_key": "bs_non_current_assets__right_of_use_assets",
+   "label": "Right-of-use assets",
+   "inherits": "bs_s1_non_current_assets",
+   "match_priority": 62,
+   "definition": "Lessee's right to use an underlying leased asset over the lease term (HKFRS 16.47).",
+   "aliases": [
+    "Right-of-use assets",
+    "Right of use assets"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Right-of-use assets",
+     "Right of use assets"
+    ],
+    "zh": [
+     "使用权资产"
+    ]
+   },
+   "confusable_with": [
+    "bs_non_current_assets__land_of_use_rights",
+    "bs_non_current_liabilities__non_current_lease_liabilities"
+   ],
+   "exclude": [
+    "The lease LIABILITY, which is the corresponding obligation and sits in the liabilities sections.",
+    "Land use rights where separately captioned."
+   ],
+   "exclude_hints": [
+    "liabilit",
+    "负债",
+    "土地使用权"
+   ]
+  },
+  {
    "canonical_key": "bs_non_current_assets__land_of_use_rights",
    "label": "Land use rights",
    "inherits": "bs_s1_non_current_assets",
@@ -1017,39 +1089,6 @@
    "exclude_hints": [
     "使用权资产",
     "right-of-use"
-   ]
-  },
-  {
-   "canonical_key": "bs_non_current_assets__right_of_use_assets",
-   "label": "Right-of-use assets",
-   "inherits": "bs_s1_non_current_assets",
-   "match_priority": 62,
-   "definition": "Lessee's right to use an underlying leased asset over the lease term (HKFRS 16.47).",
-   "aliases": [
-    "Right-of-use assets",
-    "Right of use assets"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Right-of-use assets",
-     "Right of use assets"
-    ],
-    "zh": [
-     "使用权资产"
-    ]
-   },
-   "confusable_with": [
-    "bs_non_current_assets__land_of_use_rights",
-    "bs_non_current_liabilities__non_current_lease_liabilities"
-   ],
-   "exclude": [
-    "The lease LIABILITY, which is the corresponding obligation and sits in the liabilities sections.",
-    "Land use rights where separately captioned."
-   ],
-   "exclude_hints": [
-    "liabilit",
-    "负债",
-    "土地使用权"
    ]
   },
   {
@@ -1098,95 +1137,41 @@
    ]
   },
   {
-   "canonical_key": "bs_non_current_assets__contract_in_progress",
-   "label": "Contract work in progress",
+   "canonical_key": "bs_non_current_assets__properties_under_development",
+   "label": "Properties under development (non-current)",
    "inherits": "bs_s1_non_current_assets",
-   "match_priority": 64,
-   "definition": "Costs incurred and margin recognised on incomplete customer construction contracts, presented as a non-current contract asset. Distinct from construction in progress, which is own-use PP&E.",
+   "match_priority": 66,
+   "definition": "Development property inventory a filing classifies as non-current because completion is not expected within the operating cycle. Same economic asset as the current-asset concept; classification follows the printed section.",
    "aliases": [
-    "Contract in progress",
-    "Contracts in progress",
-    "Contract work in progress",
-    "Amounts due from contract customers"
+    "Properties under development",
+    "Property under development",
+    "Development properties"
    ],
    "aliases_i18n": {
     "en": [
-     "Contract in progress",
-     "Contracts in progress",
-     "Contract work in progress",
-     "Amounts due from contract customers"
+     "Properties under development",
+     "Property under development",
+     "Development properties"
     ],
     "zh": [
-     "在建工程合同",
-     "在建合同",
-     "合同工程",
-     "应收合同客户款项"
+     "发展中物业",
+     "开发中物业",
+     "在建开发产品"
     ]
    },
-   "exclude": [
-    "'Construction in progress' / 在建工程 without a contract qualifier, which is own-use PP&E under construction.",
-    "Contract liabilities, which are the mirror obligation."
-   ],
    "confusable_with": [
+    "bs_current_assets__properties_under_development",
     "bs_non_current_assets__construction_in_progress",
-    "bs_current_liabilities__contract_liabilities"
+    "bs_non_current_assets__investment_properties"
    ],
-   "regex_hints": [
-    "contract.{0,10}in progress",
-    "在建工程合同",
-    "合同工程"
-   ],
-   "exclude_hints": [
-    "^在建工程$",
-    "liabilit",
-    "负债"
-   ]
-  },
-  {
-   "canonical_key": "bs_non_current_assets__investment_properties",
-   "label": "Investment properties",
-   "inherits": "bs_s1_non_current_assets",
-   "match_priority": 62,
-   "definition": "Property held to earn rentals or for capital appreciation rather than for use or sale in the ordinary course of business (HKAS 40).",
-   "aliases": [
-    "Investment properties",
-    "Investment property"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Investment properties",
-     "Investment property"
-    ],
-    "zh": [
-     "投资物业",
-     "投资性房地产"
-    ]
-   },
-   "exclude": [
-    "Owner-occupied property, which is PP&E.",
-    "Completed properties held for sale and properties under development, which are developer inventory.",
-    "The fair-value movement on investment properties, which is a profit-or-loss item."
-   ],
-   "confusable_with": [
-    "bs_non_current_assets__property_plant_and_equipment",
-    "bs_current_assets__completed_properties_held_for_sale",
-    "pl_exceptional_items__fair_value_change_gains"
-   ],
-   "exclude_hints": [
-    "fair value",
-    "公允值",
-    "公允价值",
-    "held for sale",
-    "待售",
-    "发展中"
-   ]
+   "section_disambiguation": "Identical wording to bs_current_assets__properties_under_development. Resolution is by printed section only — never by materiality, maturity language or developer type."
   },
   {
    "canonical_key": "bs_non_current_assets__goodwill",
    "label": "Goodwill",
    "inherits": "bs_s1_non_current_assets",
    "match_priority": 60,
-   "definition": "Excess of consideration transferred over the net identifiable assets acquired in a business combination (HKFRS 3).",
+   "definition": "Goodwill is an intangible asset recorded when one company buys another for a price higher than the net fair market value of its identifiable assets and liabilities. It captures extra value like a strong brand, loyal customers, good employee relations, and secret technology.",
    "aliases": [
     "Goodwill"
    ],
@@ -1212,7 +1197,7 @@
    "label": "Other intangible assets",
    "inherits": "bs_s1_non_current_assets",
    "match_priority": 58,
-   "definition": "Identifiable non-monetary assets without physical substance other than goodwill (HKAS 38).",
+   "definition": "All other intangible assets beyond goodwill and Intangible assets under development. Ensure if there is intangible asset on the face of the reported balance sheet which is not tagged, tag it here",
    "aliases": [
     "Other intangible assets",
     "Intangible assets",
@@ -1255,7 +1240,7 @@
    "definition": "Capitalised development expenditure on intangible assets not yet available for use.",
    "aliases": [
     "Intangible assets under development",
-    "Development costs",
+    "Capitalised Software Development costs",
     "Capitalised development expenditure"
    ],
    "aliases_i18n": {
@@ -1544,6 +1529,116 @@
    "decomposition_rule": "Do not sweep a clearly identified financial instrument into general Other assets merely because its dedicated concept was not initially matched."
   },
   {
+   "canonical_key": "bs_non_current_assets__term_deposits",
+   "label": "Term deposits (non-current)",
+   "inherits": "bs_s1_non_current_assets",
+   "match_priority": 60,
+   "definition": "Bank deposits with a remaining maturity beyond twelve months, classified as non-current.",
+   "aliases": [
+    "Term deposits",
+    "Long-term time deposits",
+    "Non-current time deposits"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Term deposits",
+     "Long-term time deposits",
+     "Non-current time deposits"
+    ],
+    "zh": [
+     "定期存款",
+     "长期定期存款"
+    ]
+   },
+   "exclude": [
+    "Deposits classified as current, restricted cash and pledged deposits, all of which are current-asset concepts."
+   ],
+   "confusable_with": [
+    "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
+    "bs_current_assets__restricted_cash",
+    "bs_current_assets__pledged_deposits"
+   ]
+  },
+  {
+   "canonical_key": "bs_non_current_assets__prepayments_and_other_assets",
+   "label": "Prepayments and other assets (non-current)",
+   "inherits": "bs_s1_non_current_assets",
+   "match_priority": 56,
+   "definition": "Non-current prepayments, deposits and sundry assets presented as a single printed caption.",
+   "aliases": [
+    "Prepayments and other assets",
+    "Prepayments, deposits and other assets",
+    "Prepayments and other receivables"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Prepayments and other assets",
+     "Prepayments, deposits and other assets",
+     "Prepayments and other receivables"
+    ],
+    "zh": [
+     "预付款项及其他资产",
+     "预付款项、按金及其他资产",
+     "预付款项及其他应收款项"
+    ]
+   },
+   "exclude": [
+    "Prepayments printed in the CURRENT assets section.",
+    "Prepaid income tax.",
+    "This is a printed caption, not the section residual."
+   ],
+   "confusable_with": [
+    "bs_current_assets__prepayments_other_receivables_and_other_assets",
+    "bs_current_assets__prepaid_income_tax",
+    "bs_non_current_assets__others"
+   ]
+  },
+  {
+   "canonical_key": "bs_non_current_assets__contract_in_progress",
+   "label": "Contract work in progress",
+   "inherits": "bs_s1_non_current_assets",
+   "match_priority": 64,
+   "definition": "Costs incurred and margin recognised on incomplete customer construction contracts, presented as a non-current contract asset. Distinct from construction in progress, which is own-use PP&E.",
+   "aliases": [
+    "Contract in progress",
+    "Contracts in progress",
+    "Contract work in progress",
+    "Amounts due from contract customers"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Contract in progress",
+     "Contracts in progress",
+     "Contract work in progress",
+     "Amounts due from contract customers"
+    ],
+    "zh": [
+     "在建工程合同",
+     "在建合同",
+     "合同工程",
+     "应收合同客户款项"
+    ]
+   },
+   "exclude": [
+    "'Construction in progress' / 在建工程 without a contract qualifier, which is own-use PP&E under construction.",
+    "Contract liabilities, which are the mirror obligation."
+   ],
+   "confusable_with": [
+    "bs_non_current_assets__construction_in_progress",
+    "bs_current_liabilities__contract_liabilities"
+   ],
+   "regex_hints": [
+    "contract.{0,10}in progress",
+    "在建工程合同",
+    "合同工程"
+   ],
+   "exclude_hints": [
+    "^在建工程$",
+    "liabilit",
+    "负债"
+   ]
+  },
+  {
    "canonical_key": "bs_non_current_assets__deferred_income_tax_assets",
    "label": "Deferred tax assets",
    "inherits": "bs_s1_non_current_assets",
@@ -1580,101 +1675,6 @@
     "预付",
     "recoverable",
     "可收回"
-   ]
-  },
-  {
-   "canonical_key": "bs_non_current_assets__term_deposits",
-   "label": "Term deposits (non-current)",
-   "inherits": "bs_s1_non_current_assets",
-   "match_priority": 60,
-   "definition": "Bank deposits with a remaining maturity beyond twelve months, classified as non-current.",
-   "aliases": [
-    "Term deposits",
-    "Long-term time deposits",
-    "Non-current time deposits"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Term deposits",
-     "Long-term time deposits",
-     "Non-current time deposits"
-    ],
-    "zh": [
-     "定期存款",
-     "长期定期存款"
-    ]
-   },
-   "exclude": [
-    "Deposits classified as current, restricted cash and pledged deposits, all of which are current-asset concepts."
-   ],
-   "confusable_with": [
-    "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
-    "bs_current_assets__restricted_cash",
-    "bs_current_assets__pledged_deposits"
-   ]
-  },
-  {
-   "canonical_key": "bs_non_current_assets__properties_under_development",
-   "label": "Properties under development (non-current)",
-   "inherits": "bs_s1_non_current_assets",
-   "match_priority": 66,
-   "definition": "Development property inventory a filing classifies as non-current because completion is not expected within the operating cycle. Same economic asset as the current-asset concept; classification follows the printed section.",
-   "aliases": [
-    "Properties under development",
-    "Property under development",
-    "Development properties"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Properties under development",
-     "Property under development",
-     "Development properties"
-    ],
-    "zh": [
-     "发展中物业",
-     "开发中物业",
-     "在建开发产品"
-    ]
-   },
-   "confusable_with": [
-    "bs_current_assets__properties_under_development",
-    "bs_non_current_assets__construction_in_progress",
-    "bs_non_current_assets__investment_properties"
-   ],
-   "section_disambiguation": "Identical wording to bs_current_assets__properties_under_development. Resolution is by printed section only — never by materiality, maturity language or developer type."
-  },
-  {
-   "canonical_key": "bs_non_current_assets__prepayments_and_other_assets",
-   "label": "Prepayments and other assets (non-current)",
-   "inherits": "bs_s1_non_current_assets",
-   "match_priority": 56,
-   "definition": "Non-current prepayments, deposits and sundry assets presented as a single printed caption.",
-   "aliases": [
-    "Prepayments and other assets",
-    "Prepayments, deposits and other assets",
-    "Prepayments and other receivables"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Prepayments and other assets",
-     "Prepayments, deposits and other assets",
-     "Prepayments and other receivables"
-    ],
-    "zh": [
-     "预付款项及其他资产",
-     "预付款项、按金及其他资产",
-     "预付款项及其他应收款项"
-    ]
-   },
-   "exclude": [
-    "Prepayments printed in the CURRENT assets section.",
-    "Prepaid income tax.",
-    "This is a printed caption, not the section residual."
-   ],
-   "confusable_with": [
-    "bs_current_assets__prepayments_other_receivables_and_other_assets",
-    "bs_current_assets__prepaid_income_tax",
-    "bs_non_current_assets__others"
    ]
   },
   {
@@ -1749,112 +1749,11 @@
     "less current",
     "减流动",
     "^total assets$",
-    "^资产总额$"
-   ]
-  },
-  {
-   "canonical_key": "bs_current_assets__cash_and_cash_equivalents",
-   "label": "Cash and cash equivalents",
-   "inherits": "bs_s2_current_assets",
-   "match_priority": 68,
-   "definition": "Cash on hand, demand deposits and short-term highly liquid investments readily convertible to known amounts of cash and subject to insignificant risk of change in value (HKAS 7.6) — balances the group can use freely.",
-   "include": [
-    "Cash on hand, bank balances repayable on demand, and deposits with an original maturity of three months or less that are not restricted as to use."
-   ],
-   "exclude": [
-    "RESTRICTED cash — escrowed pre-sale proceeds, frozen or pledged balances — which is not available on demand and has its own concept (HKAS 7.48).",
-    "Pledged deposits and time deposits with an original maturity over three months.",
-    "Bank overdrafts, unless the filing itself presents them within cash and cash equivalents.",
-    "The cash-flow statement's closing cash line, which is a separate concept."
-   ],
-   "aliases": [
+    "^资产总额$",
     "Cash and cash equivalents",
-    "Cash and bank balances",
-    "Cash at bank and on hand",
-    "Bank balances and cash"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Cash and cash equivalents",
-     "Cash and bank balances",
-     "Cash at bank and on hand"
-    ],
-    "zh": [
-     "现金及现金等价物",
-     "现金及银行结余",
-     "银行存款及现金",
-     "银行结余及现金"
-    ]
-   },
-   "confusable_with": [
-    "bs_current_assets__restricted_cash",
-    "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
-    "bs_current_assets__pledged_deposits",
-    "cf_closing_cash_and_cash_equivalents"
-   ],
-   "exclude_hints": [
-    "restricted",
-    "受限制",
-    "pledged",
-    "已抵押",
-    "other than",
-    "cash flow statement",
-    "statement of cash flows",
-    "现金流量表",
-    "cash generated from operations",
-    "经营所得现金"
-   ],
-   "is_gross_parent": true,
-   "children_if_decomposed": [
-    "bs_current_assets__restricted_cash",
-    "bs_current_assets__pledged_deposits",
-    "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents"
-   ],
-   "regex_hints": [
-    "^cash\\s+(?:and|&)\\s+bank\\s+balances?$",
-    "^cash\\s+at\\s+bank\\s+(?:and|&)\\s+on\\s+hand$",
-    "^bank\\s+balances?\\s+(?:and|&)\\s+cash$"
-   ],
-   "aggregation_note": "A combined cash and bank balance caption must not automatically populate cash and cash equivalents. Remove explicitly disclosed restricted cash, pledged deposits and deposits that do not meet the cash-equivalent definition. Populate cash and cash equivalents only from the disclosed eligible component or a supported reconciliation. Combined cash and bank balances are validation evidence when dedicated cash categories are populated.",
-   "decomposition_rule": "Unclassified bank balances are not Other current assets. Keep them in the closest supported bank-balance concept or route to review."
-  },
-  {
-   "canonical_key": "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
-   "label": "Bank balances other than cash and cash equivalents",
-   "inherits": "bs_s2_current_assets",
-   "match_priority": 72,
-   "definition": "Unrestricted bank deposits excluded from cash and cash equivalents solely because their original maturity exceeds three months.",
-   "aliases": [
+    "Inventories",
     "Bank balances other than cash and cash equivalents",
-    "Time deposits with original maturity over three months",
-    "Short-term time deposits"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Bank balances other than cash and cash equivalents",
-     "Time deposits with original maturity over three months",
-     "Short-term time deposits"
-    ],
-    "zh": [
-     "除现金及现金等价物以外的银行结余",
-     "原到期日超过三个月的定期存款",
-     "短期定期存款"
-    ]
-   },
-   "exclude": [
-    "Restricted or pledged balances, which are excluded for restriction rather than maturity."
-   ],
-   "confusable_with": [
-    "bs_current_assets__cash_and_cash_equivalents",
-    "bs_current_assets__restricted_cash",
-    "bs_current_assets__pledged_deposits",
-    "bs_non_current_assets__term_deposits"
-   ],
-   "exclude_hints": [
-    "restricted",
-    "受限制",
-    "pledged",
-    "已抵押"
+    "Short term investments"
    ]
   },
   {
@@ -1891,6 +1790,95 @@
     "物业",
     "held for sale",
     "待售"
+   ]
+  },
+  {
+   "canonical_key": "bs_current_assets__properties_under_development",
+   "label": "Properties under development (current)",
+   "inherits": "bs_s2_current_assets",
+   "match_priority": 66,
+   "definition": "Work-in-progress property inventory of a developer, at the lower of cost and net realisable value (HKAS 2). Cost comprises land use rights, construction and development expenditure and capitalised borrowing costs on properties being developed for sale in the ordinary course of business.",
+   "include": [
+    "Land use rights, construction and development costs and capitalised finance costs of properties being developed for sale.",
+    "Any write-down to net realisable value, netted against the carrying amount."
+   ],
+   "exclude": [
+    "Completed properties held for sale, which are finished inventory with their own concept.",
+    "Property under construction held to earn rentals or for capital appreciation, which is investment property.",
+    "Construction in progress of owner-occupied PP&E.",
+    "The cash-flow movement 'Increase in properties under development'."
+   ],
+   "aliases": [
+    "Properties under development",
+    "Properties under development for sale",
+    "Property under development",
+    "Development properties",
+    "Properties in the course of development"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Properties under development",
+     "Properties under development for sale",
+     "Property under development",
+     "Development properties",
+     "Properties in the course of development"
+    ],
+    "zh": [
+     "发展中物业",
+     "开发中物业",
+     "在建开发产品",
+     "发展中待售物业"
+    ]
+   },
+   "confusable_with": [
+    "bs_non_current_assets__properties_under_development",
+    "bs_current_assets__completed_properties_held_for_sale",
+    "bs_current_assets__inventories",
+    "bs_non_current_assets__construction_in_progress",
+    "cf_cash_flow_from_operating_activities__increase_decrease_in_inventories"
+   ],
+   "section_disambiguation": "Identical wording to the non-current concept. Bind by printed section only."
+  },
+  {
+   "canonical_key": "bs_current_assets__completed_properties_held_for_sale",
+   "label": "Completed properties held for sale",
+   "inherits": "bs_s2_current_assets",
+   "match_priority": 68,
+   "definition": "Finished property inventory of a developer — completed units and car parking spaces held for sale in the ordinary course of business, at the lower of cost and net realisable value (HKAS 2).",
+   "include": [
+    "Completed residential, commercial and car-parking units held for sale, net of any write-down to net realisable value.",
+    "Completed properties transferred out of properties under development on completion."
+   ],
+   "exclude": [
+    "Properties still under development.",
+    "Completed properties held to earn rentals or for capital appreciation, which are investment properties.",
+    "Completed properties transferred to owner-occupation, which are PP&E.",
+    "The cash-flow movement 'Decrease in completed properties held for sale'."
+   ],
+   "aliases": [
+    "Completed properties held for sale",
+    "Completed properties for sale",
+    "Properties held for sale",
+    "Completed properties"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Completed properties held for sale",
+     "Completed properties for sale",
+     "Properties held for sale",
+     "Completed properties"
+    ],
+    "zh": [
+     "持作出售已落成物业",
+     "已落成待售物业",
+     "持作销售的已完工物业",
+     "已完工待售物业"
+    ]
+   },
+   "confusable_with": [
+    "bs_current_assets__properties_under_development",
+    "bs_current_assets__inventories",
+    "bs_non_current_assets__investment_properties"
    ]
   },
   {
@@ -2062,239 +2050,6 @@
    "decomposition_rule": "Only itemised source rows that remain unclaimed after dedicated-child matching may enter the section residual. A difference created by an incomplete or unavailable note is an unallocated_gap, not Others."
   },
   {
-   "canonical_key": "bs_current_assets__financial_assets_at_fair_value_through_other_comprehensive_income",
-   "label": "Financial assets at FVOCI (current)",
-   "inherits": "bs_s2_current_assets",
-   "match_priority": 70,
-   "definition": "Debt instruments measured at fair value through other comprehensive income under HKFRS 9.4.1.2A, classified as current.",
-   "aliases": [
-    "Financial assets at fair value through other comprehensive income",
-    "Debt investments at FVOCI"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Financial assets at fair value through other comprehensive income",
-     "Debt investments at FVOCI"
-    ],
-    "zh": [
-     "以公允价值计量且其变动计入其他综合收益的金融资产",
-     "以公允价值计量且其变动计入其他综合收益的债务投资"
-    ]
-   },
-   "exclude": [
-    "EQUITY investments designated at FVOCI, which are the non-current concept."
-   ],
-   "confusable_with": [
-    "bs_non_current_assets__equity_investments_designated_at_fair_value_through_other_comprehensive_income"
-   ],
-   "exclude_hints": [
-    "equity",
-    "权益"
-   ]
-  },
-  {
-   "canonical_key": "bs_current_assets__other_financial_assets",
-   "label": "Other current financial assets",
-   "inherits": "bs_s2_current_assets",
-   "match_priority": 54,
-   "definition": "Printed caption for current financial assets that no more specific current financial-asset concept covers.",
-   "aliases": [
-    "Other financial assets",
-    "Financial assets at fair value through profit or loss",
-    "Derivative financial instruments"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Other financial assets",
-     "Financial assets at fair value through profit or loss",
-     "Derivative financial instruments"
-    ],
-    "zh": [
-     "其他金融资产",
-     "以公允价值计量且其变动计入损益的金融资产",
-     "衍生金融工具"
-    ]
-   },
-   "exclude": [
-    "This is a printed caption, not the section residual. Unmapped current-asset rows sweep to bs_current_assets__others."
-   ],
-   "confusable_with": [
-    "bs_current_assets__financial_assets_at_fair_value_through_other_comprehensive_income",
-    "bs_current_assets__others"
-   ]
-  },
-  {
-   "canonical_key": "bs_current_assets__properties_under_development",
-   "label": "Properties under development (current)",
-   "inherits": "bs_s2_current_assets",
-   "match_priority": 66,
-   "definition": "Work-in-progress property inventory of a developer, at the lower of cost and net realisable value (HKAS 2). Cost comprises land use rights, construction and development expenditure and capitalised borrowing costs on properties being developed for sale in the ordinary course of business.",
-   "include": [
-    "Land use rights, construction and development costs and capitalised finance costs of properties being developed for sale.",
-    "Any write-down to net realisable value, netted against the carrying amount."
-   ],
-   "exclude": [
-    "Completed properties held for sale, which are finished inventory with their own concept.",
-    "Property under construction held to earn rentals or for capital appreciation, which is investment property.",
-    "Construction in progress of owner-occupied PP&E.",
-    "The cash-flow movement 'Increase in properties under development'."
-   ],
-   "aliases": [
-    "Properties under development",
-    "Properties under development for sale",
-    "Property under development",
-    "Development properties",
-    "Properties in the course of development"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Properties under development",
-     "Properties under development for sale",
-     "Property under development",
-     "Development properties",
-     "Properties in the course of development"
-    ],
-    "zh": [
-     "发展中物业",
-     "开发中物业",
-     "在建开发产品",
-     "发展中待售物业"
-    ]
-   },
-   "confusable_with": [
-    "bs_non_current_assets__properties_under_development",
-    "bs_current_assets__completed_properties_held_for_sale",
-    "bs_current_assets__inventories",
-    "bs_non_current_assets__construction_in_progress",
-    "cf_cash_flow_from_operating_activities__increase_decrease_in_inventories"
-   ],
-   "section_disambiguation": "Identical wording to the non-current concept. Bind by printed section only."
-  },
-  {
-   "canonical_key": "bs_current_assets__completed_properties_held_for_sale",
-   "label": "Completed properties held for sale",
-   "inherits": "bs_s2_current_assets",
-   "match_priority": 68,
-   "definition": "Finished property inventory of a developer — completed units and car parking spaces held for sale in the ordinary course of business, at the lower of cost and net realisable value (HKAS 2).",
-   "include": [
-    "Completed residential, commercial and car-parking units held for sale, net of any write-down to net realisable value.",
-    "Completed properties transferred out of properties under development on completion."
-   ],
-   "exclude": [
-    "Properties still under development.",
-    "Completed properties held to earn rentals or for capital appreciation, which are investment properties.",
-    "Completed properties transferred to owner-occupation, which are PP&E.",
-    "The cash-flow movement 'Decrease in completed properties held for sale'."
-   ],
-   "aliases": [
-    "Completed properties held for sale",
-    "Completed properties for sale",
-    "Properties held for sale",
-    "Completed properties"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Completed properties held for sale",
-     "Completed properties for sale",
-     "Properties held for sale",
-     "Completed properties"
-    ],
-    "zh": [
-     "持作出售已落成物业",
-     "已落成待售物业",
-     "持作销售的已完工物业",
-     "已完工待售物业"
-    ]
-   },
-   "confusable_with": [
-    "bs_current_assets__properties_under_development",
-    "bs_current_assets__inventories",
-    "bs_non_current_assets__investment_properties"
-   ]
-  },
-  {
-   "canonical_key": "bs_current_assets__restricted_cash",
-   "label": "Restricted cash",
-   "inherits": "bs_s2_current_assets",
-   "match_priority": 70,
-   "definition": "Bank balances the group holds but cannot use freely — pre-sale proceeds in PRC housing-fund supervision (escrow) accounts, balances pledged as security, and balances frozen by legal or regulatory restriction. Excluded from cash and cash equivalents because not available on demand (HKAS 7.48).",
-   "include": [
-    "Pre-sale proceeds held in designated supervision or escrow accounts released only against certified construction progress.",
-    "Bank balances frozen, blocked or otherwise legally restricted as to use.",
-    "Restricted bank deposits presented within current assets."
-   ],
-   "exclude": [
-    "Cash and bank balances freely available on demand.",
-    "Pledged deposits where the filing prints them as a separate caption.",
-    "Unrestricted time deposits with original maturity over three months.",
-    "The cash-flow movement in restricted cash."
-   ],
-   "aliases": [
-    "Restricted cash",
-    "Restricted bank balances",
-    "Restricted cash and bank balances",
-    "Restricted bank deposits",
-    "Restricted deposits"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Restricted cash",
-     "Restricted bank balances",
-     "Restricted cash and bank balances",
-     "Restricted bank deposits",
-     "Restricted deposits"
-    ],
-    "zh": [
-     "受限制现金",
-     "受限制银行存款",
-     "受限制银行结余",
-     "受限制现金及银行结余"
-    ]
-   },
-   "confusable_with": [
-    "bs_current_assets__cash_and_cash_equivalents",
-    "bs_current_assets__pledged_deposits",
-    "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
-    "bs_non_current_assets__term_deposits"
-   ],
-   "section_disambiguation": "Where a filing prints both 'Restricted cash' and 'Pledged deposits', keep them separate. Where only one caption appears, map to the caption printed; do not split."
-  },
-  {
-   "canonical_key": "bs_current_assets__pledged_deposits",
-   "label": "Pledged deposits",
-   "inherits": "bs_s2_current_assets",
-   "match_priority": 70,
-   "definition": "Bank deposits pledged as security for borrowings, bills or guarantees, presented separately from both cash and restricted cash.",
-   "aliases": [
-    "Pledged deposits",
-    "Pledged bank deposits",
-    "Pledged bank balances",
-    "Deposits pledged as security"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Pledged deposits",
-     "Pledged bank deposits",
-     "Pledged bank balances",
-     "Deposits pledged as security"
-    ],
-    "zh": [
-     "已抵押存款",
-     "已抵押银行存款",
-     "已抵押银行结余",
-     "作为担保的抵押存款"
-    ]
-   },
-   "exclude": [
-    "Restricted cash where separately captioned.",
-    "Cash and cash equivalents."
-   ],
-   "confusable_with": [
-    "bs_current_assets__restricted_cash",
-    "bs_current_assets__cash_and_cash_equivalents"
-   ]
-  },
-  {
    "canonical_key": "bs_current_assets__due_from_related_parties",
    "label": "Due from related parties",
    "inherits": "bs_s2_current_assets",
@@ -2404,6 +2159,255 @@
    ]
   },
   {
+   "canonical_key": "bs_current_assets__financial_assets_at_fair_value_through_other_comprehensive_income",
+   "label": "Financial assets at FVOCI (current)",
+   "inherits": "bs_s2_current_assets",
+   "match_priority": 70,
+   "definition": "Debt instruments measured at fair value through other comprehensive income under HKFRS 9.4.1.2A, classified as current.",
+   "aliases": [
+    "Financial assets at fair value through other comprehensive income",
+    "Debt investments at FVOCI"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Financial assets at fair value through other comprehensive income",
+     "Debt investments at FVOCI"
+    ],
+    "zh": [
+     "以公允价值计量且其变动计入其他综合收益的金融资产",
+     "以公允价值计量且其变动计入其他综合收益的债务投资"
+    ]
+   },
+   "exclude": [
+    "EQUITY investments designated at FVOCI, which are the non-current concept."
+   ],
+   "confusable_with": [
+    "bs_non_current_assets__equity_investments_designated_at_fair_value_through_other_comprehensive_income"
+   ],
+   "exclude_hints": [
+    "equity",
+    "权益"
+   ]
+  },
+  {
+   "canonical_key": "bs_current_assets__other_financial_assets",
+   "label": "Other current financial assets",
+   "inherits": "bs_s2_current_assets",
+   "match_priority": 54,
+   "definition": "Printed caption for current financial assets that no more specific current financial-asset concept covers.",
+   "aliases": [
+    "Other financial assets",
+    "Financial assets at fair value through profit or loss",
+    "Derivative financial instruments"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Other financial assets",
+     "Financial assets at fair value through profit or loss",
+     "Derivative financial instruments"
+    ],
+    "zh": [
+     "其他金融资产",
+     "以公允价值计量且其变动计入损益的金融资产",
+     "衍生金融工具"
+    ]
+   },
+   "exclude": [
+    "This is a printed caption, not the section residual. Unmapped current-asset rows sweep to bs_current_assets__others."
+   ],
+   "confusable_with": [
+    "bs_current_assets__financial_assets_at_fair_value_through_other_comprehensive_income",
+    "bs_current_assets__others"
+   ]
+  },
+  {
+   "canonical_key": "bs_current_assets__pledged_deposits",
+   "label": "Pledged deposits",
+   "inherits": "bs_s2_current_assets",
+   "match_priority": 70,
+   "definition": "Bank deposits pledged as security for borrowings, bills or guarantees, presented separately from both cash and restricted cash.",
+   "aliases": [
+    "Pledged deposits",
+    "Pledged bank deposits",
+    "Pledged bank balances",
+    "Deposits pledged as security"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Pledged deposits",
+     "Pledged bank deposits",
+     "Pledged bank balances",
+     "Deposits pledged as security"
+    ],
+    "zh": [
+     "已抵押存款",
+     "已抵押银行存款",
+     "已抵押银行结余",
+     "作为担保的抵押存款"
+    ]
+   },
+   "exclude": [
+    "Restricted cash where separately captioned.",
+    "Cash and cash equivalents."
+   ],
+   "confusable_with": [
+    "bs_current_assets__restricted_cash",
+    "bs_current_assets__cash_and_cash_equivalents"
+   ]
+  },
+  {
+   "canonical_key": "bs_current_assets__restricted_cash",
+   "label": "Restricted cash",
+   "inherits": "bs_s2_current_assets",
+   "match_priority": 70,
+   "definition": "Bank balances the group holds but cannot use freely — pre-sale proceeds in PRC housing-fund supervision (escrow) accounts, balances pledged as security, and balances frozen by legal or regulatory restriction. Excluded from cash and cash equivalents because not available on demand (HKAS 7.48).",
+   "include": [
+    "Pre-sale proceeds held in designated supervision or escrow accounts released only against certified construction progress.",
+    "Bank balances frozen, blocked or otherwise legally restricted as to use.",
+    "Restricted bank deposits presented within current assets."
+   ],
+   "exclude": [
+    "Cash and bank balances freely available on demand.",
+    "Pledged deposits where the filing prints them as a separate caption.",
+    "Unrestricted time deposits with original maturity over three months.",
+    "The cash-flow movement in restricted cash."
+   ],
+   "aliases": [
+    "Restricted cash",
+    "Restricted bank balances",
+    "Restricted cash and bank balances",
+    "Restricted bank deposits",
+    "Restricted deposits"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Restricted cash",
+     "Restricted bank balances",
+     "Restricted cash and bank balances",
+     "Restricted bank deposits",
+     "Restricted deposits"
+    ],
+    "zh": [
+     "受限制现金",
+     "受限制银行存款",
+     "受限制银行结余",
+     "受限制现金及银行结余"
+    ]
+   },
+   "confusable_with": [
+    "bs_current_assets__cash_and_cash_equivalents",
+    "bs_current_assets__pledged_deposits",
+    "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
+    "bs_non_current_assets__term_deposits"
+   ],
+   "section_disambiguation": "Where a filing prints both 'Restricted cash' and 'Pledged deposits', keep them separate. Where only one caption appears, map to the caption printed; do not split."
+  },
+  {
+   "canonical_key": "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
+   "label": "Bank balances other than cash and cash equivalents",
+   "inherits": "bs_s2_current_assets",
+   "match_priority": 72,
+   "definition": "Unrestricted bank deposits excluded from cash and cash equivalents solely because their original maturity exceeds three months.",
+   "aliases": [
+    "Bank balances other than cash and cash equivalents",
+    "Time deposits with original maturity over three months",
+    "Short-term time deposits"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Bank balances other than cash and cash equivalents",
+     "Time deposits with original maturity over three months",
+     "Short-term time deposits"
+    ],
+    "zh": [
+     "除现金及现金等价物以外的银行结余",
+     "原到期日超过三个月的定期存款",
+     "短期定期存款"
+    ]
+   },
+   "exclude": [
+    "Restricted or pledged balances, which are excluded for restriction rather than maturity."
+   ],
+   "confusable_with": [
+    "bs_current_assets__cash_and_cash_equivalents",
+    "bs_current_assets__restricted_cash",
+    "bs_current_assets__pledged_deposits",
+    "bs_non_current_assets__term_deposits"
+   ],
+   "exclude_hints": [
+    "restricted",
+    "受限制",
+    "pledged",
+    "已抵押"
+   ]
+  },
+  {
+   "canonical_key": "bs_current_assets__cash_and_cash_equivalents",
+   "label": "Cash and cash equivalents",
+   "inherits": "bs_s2_current_assets",
+   "match_priority": 68,
+   "definition": "Cash on hand, demand deposits and short-term highly liquid investments readily convertible to known amounts of cash and subject to insignificant risk of change in value (HKAS 7.6) — balances the group can use freely.",
+   "include": [
+    "Cash on hand, bank balances repayable on demand, and deposits with an original maturity of three months or less that are not restricted as to use."
+   ],
+   "exclude": [
+    "RESTRICTED cash — escrowed pre-sale proceeds, frozen or pledged balances — which is not available on demand and has its own concept (HKAS 7.48).",
+    "Pledged deposits and time deposits with an original maturity over three months.",
+    "Bank overdrafts, unless the filing itself presents them within cash and cash equivalents.",
+    "The cash-flow statement's closing cash line, which is a separate concept."
+   ],
+   "aliases": [
+    "Cash and cash equivalents",
+    "Cash and bank balances",
+    "Cash at bank and on hand",
+    "Bank balances and cash"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Cash and cash equivalents",
+     "Cash and bank balances",
+     "Cash at bank and on hand"
+    ],
+    "zh": [
+     "现金及现金等价物",
+     "现金及银行结余",
+     "银行存款及现金",
+     "银行结余及现金"
+    ]
+   },
+   "confusable_with": [
+    "bs_current_assets__restricted_cash",
+    "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents",
+    "bs_current_assets__pledged_deposits",
+    "cf_closing_cash_and_cash_equivalents"
+   ],
+   "exclude_hints": [
+    "restricted",
+    "受限制",
+    "pledged",
+    "已抵押",
+    "other than",
+    "cash flow statement",
+    "statement of cash flows",
+    "现金流量表",
+    "cash generated from operations",
+    "经营所得现金"
+   ],
+   "is_gross_parent": true,
+   "children_if_decomposed": [
+    "bs_current_assets__restricted_cash",
+    "bs_current_assets__pledged_deposits",
+    "bs_current_assets__bank_balances_other_than_cash_and_cash_equivalents"
+   ],
+   "regex_hints": [
+    "^cash\\s+(?:and|&)\\s+bank\\s+balances?$",
+    "^cash\\s+at\\s+bank\\s+(?:and|&)\\s+on\\s+hand$",
+    "^bank\\s+balances?\\s+(?:and|&)\\s+cash$"
+   ],
+   "aggregation_note": "A combined cash and bank balance caption must not automatically populate cash and cash equivalents. Remove explicitly disclosed restricted cash, pledged deposits and deposits that do not meet the cash-equivalent definition. Populate cash and cash equivalents only from the disclosed eligible component or a supported reconciliation. Combined cash and bank balances are validation evidence when dedicated cash categories are populated.",
+   "decomposition_rule": "Unclassified bank balances are not Other current assets. Keep them in the closest supported bank-balance concept or route to review."
+  },
+  {
    "canonical_key": "bs_current_assets__others",
    "label": "Other current asset lines (face, unmapped)",
    "inherits": "bs_s2_current_assets",
@@ -2438,7 +2442,11 @@
    "aliases_i18n": {
     "en": [],
     "zh": []
-   }
+   },
+   "exclude_hints": [
+    "Non-current Assets",
+    "Long term"
+   ]
   },
   {
    "canonical_key": "bs_current_assets__total_current_assets",
@@ -2477,817 +2485,309 @@
    ]
   },
   {
-   "canonical_key": "bs_equity__share_capital",
-   "label": "Share capital",
-   "inherits": "bs_s5_equity",
+   "canonical_key": "bs_current_liabilities__current_trade_payables",
+   "label": "Trade payables (current)",
+   "inherits": "bs_s3_current_liabilities",
    "match_priority": 62,
-   "sign_convention": "positive_expected",
-   "definition": "Nominal or stated capital of shares issued and fully paid.",
+   "definition": "Amounts payable to third-party suppliers, subcontractors and contractors for goods and services received.",
    "aliases": [
-    "Share capital",
-    "Issued capital",
-    "Issued and paid-up capital"
+    "Current trade payables",
+    "Trade payables",
+    "Trade and bills payables",
+    "Accounts and bills payable"
    ],
    "aliases_i18n": {
     "en": [
-     "Share capital",
-     "Issued capital",
-     "Issued and paid-up capital"
+     "Current trade payables",
+     "Trade payables",
+     "Trade and bills payables",
+     "Trade and other payables",
+     "Accounts and bills payable"
     ],
     "zh": [
-     "股本",
-     "已发行股本",
-     "已发行及缴足股本"
+     "流动应付账款",
+     "应付账款",
+     "贸易应付款项及票据",
+     "应付账款及票据",
+     "应付贸易款项"
     ]
    },
    "exclude": [
-    "Share premium, which is a separate component.",
-    "Authorised but unissued capital, which is a disclosure not a balance."
+    "Amounts due to related parties.",
+    "Other payables and accruals where separately captioned.",
+    "Notes payable that are debt instruments rather than trade bills."
    ],
    "confusable_with": [
-    "bs_equity__share_premium",
-    "bs_equity__other_equity_instruments"
+    "bs_current_liabilities__due_to_related_parties",
+    "bs_current_liabilities__other_payables_and_accruals",
+    "bs_current_liabilities__current_notes_payable"
    ],
    "exclude_hints": [
-    "premium",
-    "溢价",
-    "authorised",
-    "法定"
+    "related",
+    "关联",
+    "关连",
+    "senior note",
+    "优先票据"
    ]
   },
   {
-   "canonical_key": "bs_equity__other_equity_instruments",
-   "label": "Other equity instruments",
-   "inherits": "bs_s5_equity",
-   "match_priority": 64,
-   "sign_convention": "positive_expected",
-   "definition": "Instruments classified as equity rather than liabilities under HKAS 32 — perpetual capital securities, convertible preference shares and similar.",
-   "aliases": [
-    "Other equity instruments",
-    "Perpetual capital securities",
-    "Perpetual securities",
-    "Convertible preference shares"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Other equity instruments",
-     "Perpetual capital securities",
-     "Perpetual securities",
-     "Convertible preference shares"
-    ],
-    "zh": [
-     "其他权益工具",
-     "永续资本证券",
-     "永续债",
-     "可转换优先股"
-    ]
-   },
-   "exclude": [
-    "Instruments classified as financial liabilities.",
-    "Share capital and share premium."
-   ],
-   "confusable_with": [
-    "bs_equity__share_capital",
-    "bs_non_current_liabilities__non_current_bonds_payable"
-   ]
-  },
-  {
-   "canonical_key": "bs_equity__capital_reserve",
-   "label": "Capital reserve",
-   "inherits": "bs_s5_equity",
-   "match_priority": 60,
-   "sign_convention": "either",
-   "definition": "Reserve arising from capital transactions — reorganisations, common-control combinations, deemed contributions and equity-settled transactions with owners.",
-   "aliases": [
-    "Capital reserve",
-    "Capital reserves",
-    "Merger reserve",
-    "Contributed surplus"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Capital reserve",
-     "Capital reserves",
-     "Merger reserve",
-     "Contributed surplus"
-    ],
-    "zh": [
-     "资本公积",
-     "资本储备",
-     "合并储备",
-     "实收盈余"
-    ]
-   },
-   "exclude": [
-    "Share premium.",
-    "The undifferentiated 'Reserves' aggregate — see mutually_exclusive_groups.equity_reserves."
-   ],
-   "confusable_with": [
-    "bs_equity__reserves",
-    "bs_equity__share_premium",
-    "bs_equity__general_reserve"
-   ]
-  },
-  {
-   "canonical_key": "bs_equity__share_premium",
-   "label": "Share premium",
-   "inherits": "bs_s5_equity",
+   "canonical_key": "bs_current_liabilities__current_notes_payable",
+   "label": "Notes payable (current)",
+   "inherits": "bs_s3_current_liabilities",
    "match_priority": 62,
-   "sign_convention": "positive_expected",
-   "definition": "Consideration received for shares issued in excess of their nominal value.",
+   "definition": "Senior notes, domestic bonds and similar debt instruments repayable within twelve months.",
    "aliases": [
-    "Share premium",
-    "Share premium account"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Share premium",
-     "Share premium account"
-    ],
-    "zh": [
-     "股份溢价",
-     "股份溢价账"
-    ]
-   },
-   "confusable_with": [
-    "bs_equity__share_capital",
-    "bs_equity__capital_reserve",
-    "bs_equity__reserves"
-   ]
-  },
-  {
-   "canonical_key": "bs_equity__treasury_shares",
-   "label": "Treasury shares",
-   "inherits": "bs_s5_equity",
-   "match_priority": 64,
-   "sign_convention": "negative_expected",
-   "definition": "The group's own equity instruments reacquired and held, deducted from equity (HKAS 32.33). Carried as a negative amount.",
-   "aliases": [
-    "Treasury shares",
-    "Own shares held",
-    "Shares held in treasury"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Treasury shares",
-     "Own shares held",
-     "Shares held in treasury"
-    ],
-    "zh": [
-     "库存股",
-     "持有的自身股份"
-    ]
-   },
-   "exclude": [
-    "Shares held for share award schemes where separately captioned."
-   ],
-   "confusable_with": [
-    "bs_equity__shares_held_for_share_award_schemes"
-   ]
-  },
-  {
-   "canonical_key": "bs_equity__shares_held_for_share_award_schemes",
-   "label": "Shares held for share award schemes",
-   "inherits": "bs_s5_equity",
-   "match_priority": 68,
-   "sign_convention": "negative_expected",
-   "definition": "Own shares acquired and held by a trust to satisfy awards under a share award or option scheme, deducted from equity.",
-   "aliases": [
-    "Shares held for share award schemes",
-    "Shares held under share award scheme",
-    "Shares held for employee share scheme"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Shares held for share award schemes",
-     "Shares held under share award scheme",
-     "Shares held for employee share scheme"
-    ],
-    "zh": [
-     "为股份奖励计划持有的股份",
-     "股份奖励计划下持有的股份",
-     "为雇员股份计划持有的股份"
-    ]
-   },
-   "confusable_with": [
-    "bs_equity__treasury_shares"
-   ]
-  },
-  {
-   "canonical_key": "bs_equity__retained_earnings",
-   "label": "Retained earnings",
-   "inherits": "bs_s5_equity",
-   "match_priority": 62,
-   "sign_convention": "either",
-   "definition": "Cumulative undistributed profits or accumulated losses attributable to owners of the parent.",
-   "aliases": [
-    "Retained earnings",
-    "Retained profits",
-    "Accumulated losses",
-    "Accumulated profits"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Retained earnings",
-     "Retained profits",
-     "Accumulated losses",
-     "Accumulated profits"
-    ],
-    "zh": [
-     "留存收益",
-     "保留溢利",
-     "累计亏损",
-     "未分配利润"
-    ]
-   },
-   "exclude": [
-    "Statutory or general reserves appropriated out of retained earnings where separately captioned.",
-    "The profit for the year, which is a period flow."
-   ],
-   "confusable_with": [
-    "bs_equity__general_reserve",
-    "bs_equity__reserves",
-    "pl_profit_for_the_year"
-   ]
-  },
-  {
-   "canonical_key": "bs_equity__general_reserve",
-   "label": "General reserve",
-   "inherits": "bs_s5_equity",
-   "match_priority": 62,
-   "sign_convention": "positive_expected",
-   "definition": "Statutory surplus reserve or general reserve appropriated out of the profits of PRC subsidiaries as required by PRC company law, not distributable as dividends.",
-   "aliases": [
-    "General reserve",
-    "Statutory reserve",
-    "Statutory surplus reserve",
-    "Statutory reserve funds"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "General reserve",
-     "Statutory reserve",
-     "Statutory surplus reserve",
-     "Statutory reserve funds"
-    ],
-    "zh": [
-     "一般储备",
-     "法定储备",
-     "法定盈余公积",
-     "法定公积金"
-    ]
-   },
-   "confusable_with": [
-    "bs_equity__retained_earnings",
-    "bs_equity__reserves",
-    "bs_equity__capital_reserve"
-   ]
-  },
-  {
-   "canonical_key": "bs_equity__other_comprehensive_income_reserve",
-   "label": "Other comprehensive income reserve",
-   "inherits": "bs_s5_equity",
-   "match_priority": 66,
-   "sign_convention": "either",
-   "definition": "Cumulative balance of items recognised in other comprehensive income — exchange translation, FVOCI fair-value and hedging reserves.",
-   "aliases": [
-    "Other comprehensive income reserve",
-    "Exchange fluctuation reserve",
-    "Translation reserve",
-    "Fair value reserve",
-    "Foreign currency translation reserve"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Other comprehensive income reserve",
-     "Exchange fluctuation reserve",
-     "Translation reserve",
-     "Fair value reserve",
-     "Foreign currency translation reserve"
-    ],
-    "zh": [
-     "其他综合收益储备",
-     "汇兑波动储备",
-     "外币折算储备",
-     "公允价值储备"
-    ]
-   },
-   "exclude": [
-    "Other comprehensive income FOR THE YEAR, which is a period flow on the statement of comprehensive income, not this cumulative balance."
-   ],
-   "confusable_with": [
-    "pl_other_comprehensive_income_for_the_year",
-    "bs_equity__reserves"
-   ],
-   "exclude_hints": [
-    "for the year",
-    "for the period",
-    "年内",
-    "期内"
-   ]
-  },
-  {
-   "canonical_key": "bs_equity__non_controlling_interests",
-   "label": "Non-controlling interests (equity balance)",
-   "inherits": "bs_s5_equity",
-   "match_priority": 66,
-   "sign_convention": "either",
-   "definition": "The CLOSING BALANCE of equity in subsidiaries not attributable, directly or indirectly, to the parent (HKAS 1.54(q) / HKFRS 10.22), presented within total equity.",
-   "include": [
-    "The non-controlling-interests balance presented within equity on the statement of financial position."
-   ],
-   "exclude": [
-    "The non-controlling-interests share of PROFIT for the year, or of total comprehensive income — identical wording, but a period flow on the statement of profit or loss rather than an equity balance.",
-    "Dividends paid to, or capital contributed by, non-controlling shareholders, which are cash flows.",
-    "Equity attributable to owners of the parent."
-   ],
-   "aliases": [
-    "Non-controlling interests",
-    "Non-controlling interests in subsidiaries",
-    "Minority interests"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Non-controlling interests",
-     "Non-controlling interests in subsidiaries",
-     "Minority interests"
-    ],
-    "zh": [
-     "非控制性权益",
-     "非控股股东权益",
-     "少数股东权益"
-    ]
-   },
-   "confusable_with": [
-    "pl_profit_attributable_to__non_controlling_interests",
-    "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
-    "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests",
-    "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests"
-   ],
-   "section_disambiguation": "Three concepts share this exact caption. Section_scope (bs_s5_equity vs pl_s6 vs pl_s7) plus unit_of_account (balance vs flow) resolves all three with no wording test."
-  },
-  {
-   "canonical_key": "bs_equity__reserves",
-   "label": "Reserves (undifferentiated aggregate)",
-   "inherits": "bs_s5_equity",
-   "match_priority": 52,
-   "sign_convention": "either",
-   "is_gross_parent": true,
-   "children_if_decomposed": [
-    "bs_equity__capital_reserve",
-    "bs_equity__share_premium",
-    "bs_equity__general_reserve",
-    "bs_equity__other_comprehensive_income_reserve"
-   ],
-   "definition": "A single undifferentiated 'Reserves' caption, common in a company-only balance sheet. A gross parent of the individually captioned reserve concepts.",
-   "exclude": [
-    "Any individually captioned reserve. If a component is printed, populate the component and leave this concept null — see mutually_exclusive_groups.equity_reserves."
-   ],
-   "aliases": [
-    "Reserves",
-    "Other reserves"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Reserves",
-     "Other reserves"
-    ],
-    "zh": [
-     "储备",
-     "其他储备"
-    ]
-   },
-   "confusable_with": [
-    "bs_equity__capital_reserve",
-    "bs_equity__general_reserve",
-    "bs_equity__other_comprehensive_income_reserve",
-    "bs_equity__share_premium",
-    "bs_equity__others"
-   ]
-  },
-  {
-   "canonical_key": "bs_equity__others",
-   "label": "Other equity lines (face, unmapped)",
-   "inherits": "bs_s5_equity",
-   "value_scope": "exclusive_residual",
-   "alias_matching": "disabled",
-   "match_priority": 0,
-   "sign_convention": "either",
-   "definition": "Sweep bucket for value rows printed on the face of the balance sheet inside the equity section that no dedicated equity concept claimed. Governed entirely by residual_framework.",
-   "residual_policy": {
-    "framework": "residual_framework",
-    "section_scope": "bs_s5_equity",
-    "population": "sweep_only",
-    "cross_section": false,
-    "notes_as_source": false,
-    "plug": false,
-    "itemise": true
-   },
-   "never_sweep": [
-    "bs_equity__total_equity",
-    "bs_net_assets",
-    "'Equity attributable to owners of the parent' subtotal",
-    "any profit-or-loss attribution line",
-    "any row printed in the assets or liabilities sections"
-   ],
-   "expected_components": [
-    "Equity attributable to owners of the parent, where the filing prints it as a component rather than a subtotal",
-    "Share-based payment reserve",
-    "Hedging reserve",
-    "Revaluation reserve",
-    "Proposed final dividend presented within equity"
-   ],
-   "aliases": [],
-   "aliases_i18n": {
-    "en": [],
-    "zh": []
-   }
-  },
-  {
-   "canonical_key": "bs_equity__total_equity",
-   "label": "Total equity",
-   "inherits": "bs_s5_equity",
-   "value_scope": "not_applicable",
-   "unit_of_account": "subtotal",
-   "match_priority": 78,
-   "definition": "The residual interest in the assets of the group after deducting all liabilities — the subtotal of all equity components including non-controlling interests.",
-   "include": [
-    "The reported total-equity subtotal (权益总额), including non-controlling interests."
-   ],
-   "exclude": [
-    "'Net assets' / 资产净值, which is the same amount under a different caption and binds to bs_net_assets. The two are linked by an equivalence rule, not by a shared alias.",
-    "Equity attributable to owners of the parent, which excludes non-controlling interests.",
-    "'Net current assets/(liabilities)', which nets only the current sections.",
-    "'Total assets less current liabilities'."
-   ],
-   "aliases": [
-    "Total equity",
-    "Total shareholders' equity",
-    "Total equity and reserves"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Total equity",
-     "Total shareholders' equity",
-     "Total equity and reserves"
-    ],
-    "zh": [
-     "权益总额",
-     "股东权益总额",
-     "权益合计"
-    ]
-   },
-   "equivalence": {
-    "with": "bs_net_assets",
-    "relation": "identical_reported_amount",
-    "rule": "One economic fact under two captions. Populate whichever caption is printed; populate the other by equivalence with allocation_status: derived_from_equivalence. If both are printed and differ, route to review — do not average or pick."
-   },
-   "confusable_with": [
-    "bs_net_assets",
-    "bs_net_current_assets_liabilities",
-    "bs_total_assets_less_current_liabilities",
-    "bs_equity__non_controlling_interests"
-   ],
-   "exclude_hints": [
-    "net current",
-    "净额",
-    "attributable",
-    "应占",
-    "^资产净值$",
-    "^net assets$"
-   ]
-  },
-  {
-   "canonical_key": "bs_non_current_liabilities__non_current_borrowings",
-   "label": "Borrowings (non-current)",
-   "inherits": "bs_s4_non_current_liabilities",
-   "match_priority": 60,
-   "definition": "Interest-bearing bank and other loans repayable beyond twelve months.",
-   "aliases": [
-    "Non-current borrowings",
-    "Interest-bearing bank and other borrowings",
-    "Bank and other borrowings",
-    "Interest-bearing borrowings",
-    "Long-term borrowings",
-    "Bank loans"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Non-current borrowings",
-     "Interest-bearing bank and other borrowings",
-     "Bank and other borrowings",
-     "Interest-bearing borrowings",
-     "Long-term borrowings",
-     "Bank loans"
-    ],
-    "zh": [
-     "非流动借款",
-     "计息银行及其他贷款",
-     "银行及其他贷款",
-     "计息借款",
-     "长期借款",
-     "银行贷款"
-    ]
-   },
-   "confusable_with": [
-    "bs_current_liabilities__current_borrowings",
-    "bs_current_liabilities__current_portion_of_long_term_debt",
-    "bs_non_current_liabilities__non_current_bonds_payable"
-   ],
-   "section_disambiguation": "Shares the aliases 'Interest-bearing bank and other borrowings' and 'Bank and other borrowings' byte-for-byte with the current-liability concept. Resolution is by printed section only. Never split a single printed amount across the two."
-  },
-  {
-   "canonical_key": "bs_non_current_liabilities__non_current_bonds_payable",
-   "label": "Bonds payable (non-current)",
-   "inherits": "bs_s4_non_current_liabilities",
-   "match_priority": 62,
-   "definition": "Debt securities issued and repayable beyond twelve months, at amortised cost.",
-   "aliases": [
-    "Non-current bonds payable",
-    "Bonds payable",
-    "Corporate bonds",
+    "Current notes payable",
+    "Senior notes",
+    "Senior notes and domestic bonds",
+    "Notes payable",
     "Domestic bonds"
    ],
    "aliases_i18n": {
     "en": [
-     "Non-current bonds payable",
-     "Bonds payable",
-     "Corporate bonds",
+     "Current notes payable",
+     "Senior notes",
+     "Senior notes and domestic bonds",
+     "Notes payable",
      "Domestic bonds"
     ],
     "zh": [
-     "非流动应付债券",
-     "应付债券",
-     "公司债券",
+     "流动应付票据",
+     "优先票据",
+     "优先票据及境内债券",
+     "应付票据",
      "境内债券"
     ]
    },
+   "exclude": [
+    "Trade bills payable, which are trade payables.",
+    "The non-current portion."
+   ],
    "confusable_with": [
     "bs_non_current_liabilities__non_current_notes_payable",
-    "bs_current_liabilities__current_notes_payable",
-    "bs_equity__other_equity_instruments"
+    "bs_current_liabilities__current_trade_payables"
    ],
-   "section_disambiguation": "Where a filing prints a combined 'Senior notes and domestic bonds' caption, it maps to the notes-payable concept in the printed section; do not fabricate a bond/note split."
+   "section_disambiguation": "'應付票據' is ambiguous between a trade bill and a debt note. Where the filing prints it adjacent to trade payables and the note describes supplier bills, prefer trade payables; where it sits with borrowings and senior notes, prefer this concept. If unresolvable, emit both candidates and route to review."
   },
   {
-   "canonical_key": "bs_non_current_liabilities__non_current_notes_payable",
-   "label": "Notes payable (non-current)",
-   "inherits": "bs_s4_non_current_liabilities",
-   "match_priority": 62,
-   "definition": "Senior notes and similar debt instruments repayable beyond twelve months.",
+   "canonical_key": "bs_current_liabilities__contract_liabilities",
+   "label": "Contract liabilities",
+   "inherits": "bs_s3_current_liabilities",
+   "match_priority": 64,
+   "definition": "Obligation to transfer goods or services for which consideration has been received or is due (HKFRS 15.106). For a PRC developer this is chiefly pre-sale proceeds on undelivered units.",
    "aliases": [
-    "Non-current notes payable",
-    "Senior notes",
-    "Senior notes and domestic bonds",
-    "Notes payable"
+    "Contract liabilities",
+    "Contract liability",
+    "Advances from customers",
+    "Pre-sale proceeds received"
    ],
    "aliases_i18n": {
     "en": [
-     "Non-current notes payable",
-     "Senior notes",
-     "Senior notes and domestic bonds",
-     "Notes payable"
+     "Contract liabilities",
+     "Contract liability",
+     "Advances from customers",
+     "Pre-sale proceeds received"
     ],
     "zh": [
-     "非流动应付票据",
-     "优先票据",
-     "优先票据及境内债券",
-     "应付票据"
+     "合同负债",
+     "合约负债",
+     "预收客户款项",
+     "已收预售款项"
+    ]
+   },
+   "exclude": [
+    "Deferred revenue or deferred income where the filing uses that caption separately.",
+    "The contract ASSET side.",
+    "Trade payables."
+   ],
+   "confusable_with": [
+    "bs_current_liabilities__current_deferred_revenue",
+    "bs_non_current_assets__contract_in_progress",
+    "bs_non_current_liabilities__non_current_deferred_income"
+   ]
+  },
+  {
+   "canonical_key": "bs_current_liabilities__other_payables_and_accruals",
+   "label": "Other payables and accruals",
+   "inherits": "bs_s3_current_liabilities",
+   "match_priority": 56,
+   "definition": "Printed caption grouping non-trade current payables, accrued expenses, accrued staff costs and other sundry current obligations.",
+   "aliases": [
+    "Other payables and accruals",
+    "Other payables and accrued expenses",
+    "Accruals and other payables",
+    "Accruals",
+    "Other payables",
+    "Trade and other payables",
+    "Trade payables, other payables and accruals"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Other payables and accruals",
+     "Other payables and accrued expenses",
+     "Accruals and other payables",
+     "Accruals",
+     "Other payables"
+    ],
+    "zh": [
+     "其他应付款项及应计费用",
+     "其他应付款项",
+     "应计费用及其他应付款项",
+     "应计费用",
+     "贸易及其他应付款",
+     "贸易应付款、其他应付款及应计费用",
+     "其他应付款及应计费用"
+    ]
+   },
+   "exclude": [
+    "Trade payables.",
+    "Amounts due to related parties.",
+    "Contract liabilities.",
+    "This is a printed caption, not the section residual."
+   ],
+   "confusable_with": [
+    "bs_current_liabilities__current_trade_payables",
+    "bs_current_liabilities__due_to_related_parties",
+    "bs_current_liabilities__others"
+   ],
+   "is_gross_parent": true,
+   "children_if_decomposed": [
+    "bs_current_liabilities__current_trade_payables",
+    "bs_current_liabilities__due_to_related_parties",
+    "bs_current_liabilities__contract_liabilities",
+    "bs_current_liabilities__current_income_tax_liabilities"
+   ],
+   "regex_hints": [
+    "^(?:trade|accounts?)\\s+(?:and\\s+)?other\\s+payables?$",
+    "^trade\\s+payables?\\s*[,]?\\s*other\\s+payables?\\s+(?:and|&)\\s+accruals?$",
+    "^other\\s+payables?\\s+(?:and|&)\\s+accrued\\s+expenses?$",
+    "^贸易及其他应付款项?$",
+    "^贸易应付款项?[、,，]?其他应付款项?及应计(?:费用|款项)$"
+   ],
+   "exclude_hints": [
+    "non-current",
+    "长期",
+    "非流动",
+    "trade and other receivables",
+    "贸易及其他应收款",
+    "contract assets",
+    "合同资产"
+   ],
+   "aggregation_note": "Treat the printed amount as a combined parent. Populate trade payables and other dedicated children only from explicit face or note evidence. Do not allocate the complete caption to trade payables. Use either the combined reported amount or the decomposed children in calculation, never both.",
+   "decomposition_rule": "Only itemised unclaimed rows may sweep. An unexplained gap between the combined caption and extracted note components remains an unallocated_gap."
+  },
+  {
+   "canonical_key": "bs_current_liabilities__due_to_related_parties",
+   "label": "Due to related parties",
+   "inherits": "bs_s3_current_liabilities",
+   "match_priority": 68,
+   "definition": "Balances payable to related parties as defined by HKAS 24 — joint ventures, associates, non-controlling shareholders of subsidiaries and entities controlled by the controlling shareholder or directors. Typically unsecured, interest-free and repayable on demand.",
+   "include": [
+    "Non-trade advances and funding balances payable to joint ventures, associates and other related parties.",
+    "Amounts due to non-controlling shareholders of subsidiaries and to entities controlled by the controlling shareholder or directors."
+   ],
+   "exclude": [
+    "Amounts due FROM related parties, which are an asset and map to the mirror concept — never net the two.",
+    "Trade and bills payables owed to third-party suppliers and contractors.",
+    "Interest-bearing loans from related parties where the filing presents them within borrowings.",
+    "The cash-flow movement in amounts due to related parties."
+   ],
+   "aliases": [
+    "Due to related parties",
+    "Amounts due to related parties",
+    "Amounts due to related companies",
+    "Amounts due to fellow subsidiaries",
+    "Amount due to a director"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Due to related parties",
+     "Amounts due to related parties",
+     "Amounts due to related companies",
+     "Amounts due to fellow subsidiaries",
+     "Amount due to a director"
+    ],
+    "zh": [
+     "应付关联方款项",
+     "应付关连人士款项",
+     "应付关联公司款项",
+     "应付同系附属公司款项",
+     "应付董事款项"
     ]
    },
    "confusable_with": [
-    "bs_non_current_liabilities__non_current_bonds_payable",
-    "bs_current_liabilities__current_notes_payable"
+    "bs_current_assets__due_from_related_parties",
+    "bs_current_liabilities__current_trade_payables",
+    "bs_current_liabilities__current_borrowings"
    ],
-   "section_disambiguation": "Same aliases as the current-liability notes concept. Bind by printed section."
+   "regex_hints": [
+    "due to (a |the )?(related|director|fellow|shareholder|associate|joint venture)",
+    "应付(关联方|关连人士|董事|同系附属公司)"
+   ],
+   "exclude_hints": [
+    "due from related",
+    "应收关联方",
+    "应收关连"
+   ]
   },
   {
-   "canonical_key": "bs_non_current_liabilities__non_current_lease_liabilities",
-   "label": "Lease liabilities (non-current)",
-   "inherits": "bs_s4_non_current_liabilities",
-   "match_priority": 62,
-   "definition": "Present value of lease payments falling due beyond twelve months (HKFRS 16).",
+   "canonical_key": "bs_current_liabilities__current_deferred_revenue",
+   "label": "Deferred revenue (current)",
+   "inherits": "bs_s3_current_liabilities",
+   "match_priority": 60,
+   "definition": "Income received in advance recognisable within twelve months, where the filing uses a deferred-revenue rather than a contract-liability caption.",
    "aliases": [
-    "Non-current lease liabilities",
+    "Current deferred revenue",
+    "Deferred revenue",
+    "Deferred income",
+    "Receipts in advance"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Current deferred revenue",
+     "Deferred revenue",
+     "Deferred income",
+     "Receipts in advance"
+    ],
+    "zh": [
+     "流动递延收入",
+     "递延收入",
+     "递延收益",
+     "预收款项"
+    ]
+   },
+   "exclude": [
+    "Contract liabilities under HKFRS 15 where the filing uses that caption — a filing printing both must keep them apart."
+   ],
+   "confusable_with": [
+    "bs_current_liabilities__contract_liabilities",
+    "bs_non_current_liabilities__non_current_deferred_income"
+   ]
+  },
+  {
+   "canonical_key": "bs_current_liabilities__current_lease_liabilities",
+   "label": "Lease liabilities (current)",
+   "inherits": "bs_s3_current_liabilities",
+   "match_priority": 62,
+   "definition": "Present value of lease payments falling due within twelve months (HKFRS 16).",
+   "aliases": [
+    "Current lease liabilities",
     "Lease liabilities"
    ],
    "aliases_i18n": {
     "en": [
-     "Non-current lease liabilities",
+     "Current lease liabilities",
      "Lease liabilities"
     ],
     "zh": [
-     "非流动租赁负债",
+     "流动租赁负债",
      "租赁负债"
     ]
    },
-   "exclude": [
-    "The right-of-use ASSET.",
-    "The current portion of lease liabilities."
-   ],
    "confusable_with": [
-    "bs_current_liabilities__current_lease_liabilities",
-    "bs_non_current_assets__right_of_use_assets"
+    "bs_non_current_liabilities__non_current_lease_liabilities"
    ],
-   "section_disambiguation": "The bare alias 'Lease liabilities' / 租赁负债 sits on both the current and non-current concepts. Bind by printed section only."
-  },
-  {
-   "canonical_key": "bs_non_current_liabilities__long_term_provisions",
-   "label": "Provisions (non-current)",
-   "inherits": "bs_s4_non_current_liabilities",
-   "match_priority": 60,
-   "definition": "Liabilities of uncertain timing or amount expected to be settled beyond twelve months (HKAS 37).",
-   "aliases": [
-    "Long-term provisions",
-    "Provisions",
-    "Provision for major overhauls",
-    "Provision for restoration"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Long-term provisions",
-     "Provisions",
-     "Provision for major overhauls",
-     "Provision for restoration"
-    ],
-    "zh": [
-     "长期拨备",
-     "拨备",
-     "大修拨备",
-     "复原拨备"
-    ]
-   },
-   "confusable_with": [
-    "bs_non_current_liabilities__others"
-   ]
-  },
-  {
-   "canonical_key": "bs_non_current_liabilities__long_term_payables",
-   "label": "Long-term payables",
-   "inherits": "bs_s4_non_current_liabilities",
-   "match_priority": 58,
-   "definition": "Non-interest-bearing or deferred payables settled beyond twelve months, including deferred consideration and long-term construction payables.",
-   "aliases": [
-    "Long-term payables",
-    "Other long-term payables",
-    "Deferred consideration payable"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Long-term payables",
-     "Other long-term payables",
-     "Deferred consideration payable"
-    ],
-    "zh": [
-     "长期应付款",
-     "其他长期应付款",
-     "应付递延代价"
-    ]
-   },
-   "confusable_with": [
-    "bs_non_current_liabilities__others",
-    "bs_current_liabilities__other_payables_and_accruals"
-   ]
-  },
-  {
-   "canonical_key": "bs_non_current_liabilities__non_current_deferred_tax_liabilities_net",
-   "label": "Deferred tax liabilities",
-   "inherits": "bs_s4_non_current_liabilities",
-   "match_priority": 64,
-   "definition": "Income taxes payable in future periods on taxable temporary differences (HKAS 12.5).",
-   "aliases": [
-    "Deferred tax liabilities",
-    "Deferred income tax liabilities",
-    "Deferred tax liabilities (net)"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Deferred tax liabilities",
-     "Deferred income tax liabilities",
-     "Deferred tax liabilities (net)"
-    ],
-    "zh": [
-     "非流动递延税项负债（净额）",
-     "递延税项负债",
-     "递延所得税负债"
-    ]
-   },
-   "exclude": [
-    "Deferred tax ASSETS.",
-    "Current income tax liabilities.",
-    "The deferred tax charge in profit or loss."
-   ],
-   "confusable_with": [
-    "bs_non_current_assets__deferred_income_tax_assets",
-    "bs_current_liabilities__current_income_tax_liabilities",
-    "pl_tax_expense__deferred_tax"
-   ],
-   "exclude_hints": [
-    "asset",
-    "资产",
-    "^应付税项$",
-    "current tax"
-   ]
-  },
-  {
-   "canonical_key": "bs_non_current_liabilities__non_current_deferred_income",
-   "label": "Deferred income (non-current)",
-   "inherits": "bs_s4_non_current_liabilities",
-   "match_priority": 62,
-   "definition": "Government grants and other income received but not yet recognised, releasable beyond twelve months.",
-   "aliases": [
-    "Non-current deferred income",
-    "Deferred income",
-    "Deferred government grants"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Non-current deferred income",
-     "Deferred income",
-     "Deferred government grants"
-    ],
-    "zh": [
-     "非流动递延收益",
-     "递延收益",
-     "递延政府补助"
-    ]
-   },
-   "exclude": [
-    "Contract liabilities under HKFRS 15, which have their own concept.",
-    "Current deferred revenue."
-   ],
-   "confusable_with": [
-    "bs_current_liabilities__current_deferred_revenue",
-    "bs_current_liabilities__contract_liabilities"
-   ]
-  },
-  {
-   "canonical_key": "bs_non_current_liabilities__others",
-   "label": "Other non-current liability lines (face, unmapped)",
-   "inherits": "bs_s4_non_current_liabilities",
-   "value_scope": "exclusive_residual",
-   "alias_matching": "disabled",
-   "match_priority": 0,
-   "sign_convention": "either",
-   "definition": "Sweep bucket for value rows printed on the face of the balance sheet inside the non-current liabilities section that no dedicated non-current-liability concept claimed. Governed entirely by residual_framework.",
-   "residual_policy": {
-    "framework": "residual_framework",
-    "section_scope": "bs_s4_non_current_liabilities",
-    "population": "sweep_only",
-    "cross_section": false,
-    "notes_as_source": false,
-    "plug": false,
-    "itemise": true
-   },
-   "never_sweep": [
-    "bs_non_current_liabilities__total_non_current_liabilities",
-    "bs_total_equity_and_liabilities",
-    "any row printed in the current liabilities, equity or assets sections"
-   ],
-   "expected_components": [
-    "Retirement benefit obligations / defined benefit liability",
-    "Financial guarantee contracts",
-    "Put options over non-controlling interests",
-    "Amounts due to related parties classified as non-current",
-    "Derivative financial instruments classified as non-current"
-   ],
-   "aliases": [],
-   "aliases_i18n": {
-    "en": [],
-    "zh": []
-   }
-  },
-  {
-   "canonical_key": "bs_non_current_liabilities__total_non_current_liabilities",
-   "label": "Total non-current liabilities",
-   "inherits": "bs_s4_non_current_liabilities",
-   "value_scope": "not_applicable",
-   "unit_of_account": "subtotal",
-   "match_priority": 78,
-   "definition": "The reported subtotal at the foot of the non-current liabilities section.",
-   "aliases": [
-    "Total non-current liabilities",
-    "Non-current liabilities, total"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Total non-current liabilities",
-     "Non-current liabilities, total"
-    ],
-    "zh": [
-     "非流动负债总额",
-     "非流动负债总计"
-    ]
-   },
-   "exclude": [
-    "Total current liabilities.",
-    "Total liabilities.",
-    "'Total assets less current liabilities'."
-   ],
-   "confusable_with": [
-    "bs_current_liabilities__total_current_liabilities",
-    "bs_total_assets_less_current_liabilities"
-   ]
+   "section_disambiguation": "The bare alias 'Lease liabilities' / 租赁负债 sits on both concepts. Bind by printed section only."
   },
   {
    "canonical_key": "bs_current_liabilities__current_borrowings",
@@ -3411,91 +2911,6 @@
    "decomposition_rule": "A clearly identified borrowing, lease or derivative item must not sweep into Other liabilities."
   },
   {
-   "canonical_key": "bs_current_liabilities__current_trade_payables",
-   "label": "Trade payables (current)",
-   "inherits": "bs_s3_current_liabilities",
-   "match_priority": 62,
-   "definition": "Amounts payable to third-party suppliers, subcontractors and contractors for goods and services received.",
-   "aliases": [
-    "Current trade payables",
-    "Trade payables",
-    "Trade and bills payables",
-    "Accounts and bills payable"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Current trade payables",
-     "Trade payables",
-     "Trade and bills payables",
-     "Trade and other payables",
-     "Accounts and bills payable"
-    ],
-    "zh": [
-     "流动应付账款",
-     "应付账款",
-     "贸易应付款项及票据",
-     "应付账款及票据",
-     "应付贸易款项"
-    ]
-   },
-   "exclude": [
-    "Amounts due to related parties.",
-    "Other payables and accruals where separately captioned.",
-    "Notes payable that are debt instruments rather than trade bills."
-   ],
-   "confusable_with": [
-    "bs_current_liabilities__due_to_related_parties",
-    "bs_current_liabilities__other_payables_and_accruals",
-    "bs_current_liabilities__current_notes_payable"
-   ],
-   "exclude_hints": [
-    "related",
-    "关联",
-    "关连",
-    "senior note",
-    "优先票据"
-   ]
-  },
-  {
-   "canonical_key": "bs_current_liabilities__current_notes_payable",
-   "label": "Notes payable (current)",
-   "inherits": "bs_s3_current_liabilities",
-   "match_priority": 62,
-   "definition": "Senior notes, domestic bonds and similar debt instruments repayable within twelve months.",
-   "aliases": [
-    "Current notes payable",
-    "Senior notes",
-    "Senior notes and domestic bonds",
-    "Notes payable",
-    "Domestic bonds"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Current notes payable",
-     "Senior notes",
-     "Senior notes and domestic bonds",
-     "Notes payable",
-     "Domestic bonds"
-    ],
-    "zh": [
-     "流动应付票据",
-     "优先票据",
-     "优先票据及境内债券",
-     "应付票据",
-     "境内债券"
-    ]
-   },
-   "exclude": [
-    "Trade bills payable, which are trade payables.",
-    "The non-current portion."
-   ],
-   "confusable_with": [
-    "bs_non_current_liabilities__non_current_notes_payable",
-    "bs_current_liabilities__current_trade_payables"
-   ],
-   "section_disambiguation": "'應付票據' is ambiguous between a trade bill and a debt note. Where the filing prints it adjacent to trade payables and the note describes supplier bills, prefer trade payables; where it sits with borrowings and senior notes, prefer this concept. If unresolvable, emit both candidates and route to review."
-  },
-  {
    "canonical_key": "bs_current_liabilities__current_income_tax_liabilities",
    "label": "Current income tax liabilities",
    "inherits": "bs_s3_current_liabilities",
@@ -3548,226 +2963,6 @@
     "可收回",
     "paid",
     "已付"
-   ]
-  },
-  {
-   "canonical_key": "bs_current_liabilities__current_lease_liabilities",
-   "label": "Lease liabilities (current)",
-   "inherits": "bs_s3_current_liabilities",
-   "match_priority": 62,
-   "definition": "Present value of lease payments falling due within twelve months (HKFRS 16).",
-   "aliases": [
-    "Current lease liabilities",
-    "Lease liabilities"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Current lease liabilities",
-     "Lease liabilities"
-    ],
-    "zh": [
-     "流动租赁负债",
-     "租赁负债"
-    ]
-   },
-   "confusable_with": [
-    "bs_non_current_liabilities__non_current_lease_liabilities"
-   ],
-   "section_disambiguation": "The bare alias 'Lease liabilities' / 租赁负债 sits on both concepts. Bind by printed section only."
-  },
-  {
-   "canonical_key": "bs_current_liabilities__current_deferred_revenue",
-   "label": "Deferred revenue (current)",
-   "inherits": "bs_s3_current_liabilities",
-   "match_priority": 60,
-   "definition": "Income received in advance recognisable within twelve months, where the filing uses a deferred-revenue rather than a contract-liability caption.",
-   "aliases": [
-    "Current deferred revenue",
-    "Deferred revenue",
-    "Deferred income",
-    "Receipts in advance"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Current deferred revenue",
-     "Deferred revenue",
-     "Deferred income",
-     "Receipts in advance"
-    ],
-    "zh": [
-     "流动递延收入",
-     "递延收入",
-     "递延收益",
-     "预收款项"
-    ]
-   },
-   "exclude": [
-    "Contract liabilities under HKFRS 15 where the filing uses that caption — a filing printing both must keep them apart."
-   ],
-   "confusable_with": [
-    "bs_current_liabilities__contract_liabilities",
-    "bs_non_current_liabilities__non_current_deferred_income"
-   ]
-  },
-  {
-   "canonical_key": "bs_current_liabilities__due_to_related_parties",
-   "label": "Due to related parties",
-   "inherits": "bs_s3_current_liabilities",
-   "match_priority": 68,
-   "definition": "Balances payable to related parties as defined by HKAS 24 — joint ventures, associates, non-controlling shareholders of subsidiaries and entities controlled by the controlling shareholder or directors. Typically unsecured, interest-free and repayable on demand.",
-   "include": [
-    "Non-trade advances and funding balances payable to joint ventures, associates and other related parties.",
-    "Amounts due to non-controlling shareholders of subsidiaries and to entities controlled by the controlling shareholder or directors."
-   ],
-   "exclude": [
-    "Amounts due FROM related parties, which are an asset and map to the mirror concept — never net the two.",
-    "Trade and bills payables owed to third-party suppliers and contractors.",
-    "Interest-bearing loans from related parties where the filing presents them within borrowings.",
-    "The cash-flow movement in amounts due to related parties."
-   ],
-   "aliases": [
-    "Due to related parties",
-    "Amounts due to related parties",
-    "Amounts due to related companies",
-    "Amounts due to fellow subsidiaries",
-    "Amount due to a director"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Due to related parties",
-     "Amounts due to related parties",
-     "Amounts due to related companies",
-     "Amounts due to fellow subsidiaries",
-     "Amount due to a director"
-    ],
-    "zh": [
-     "应付关联方款项",
-     "应付关连人士款项",
-     "应付关联公司款项",
-     "应付同系附属公司款项",
-     "应付董事款项"
-    ]
-   },
-   "confusable_with": [
-    "bs_current_assets__due_from_related_parties",
-    "bs_current_liabilities__current_trade_payables",
-    "bs_current_liabilities__current_borrowings"
-   ],
-   "regex_hints": [
-    "due to (a |the )?(related|director|fellow|shareholder|associate|joint venture)",
-    "应付(关联方|关连人士|董事|同系附属公司)"
-   ],
-   "exclude_hints": [
-    "due from related",
-    "应收关联方",
-    "应收关连"
-   ]
-  },
-  {
-   "canonical_key": "bs_current_liabilities__other_payables_and_accruals",
-   "label": "Other payables and accruals",
-   "inherits": "bs_s3_current_liabilities",
-   "match_priority": 56,
-   "definition": "Printed caption grouping non-trade current payables, accrued expenses, accrued staff costs and other sundry current obligations.",
-   "aliases": [
-    "Other payables and accruals",
-    "Other payables and accrued expenses",
-    "Accruals and other payables",
-    "Accruals",
-    "Other payables",
-    "Trade and other payables",
-    "Trade payables, other payables and accruals"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Other payables and accruals",
-     "Other payables and accrued expenses",
-     "Accruals and other payables",
-     "Accruals",
-     "Other payables"
-    ],
-    "zh": [
-     "其他应付款项及应计费用",
-     "其他应付款项",
-     "应计费用及其他应付款项",
-     "应计费用",
-     "贸易及其他应付款",
-     "贸易应付款、其他应付款及应计费用",
-     "其他应付款及应计费用"
-    ]
-   },
-   "exclude": [
-    "Trade payables.",
-    "Amounts due to related parties.",
-    "Contract liabilities.",
-    "This is a printed caption, not the section residual."
-   ],
-   "confusable_with": [
-    "bs_current_liabilities__current_trade_payables",
-    "bs_current_liabilities__due_to_related_parties",
-    "bs_current_liabilities__others"
-   ],
-   "is_gross_parent": true,
-   "children_if_decomposed": [
-    "bs_current_liabilities__current_trade_payables",
-    "bs_current_liabilities__due_to_related_parties",
-    "bs_current_liabilities__contract_liabilities",
-    "bs_current_liabilities__current_income_tax_liabilities"
-   ],
-   "regex_hints": [
-    "^(?:trade|accounts?)\\s+(?:and\\s+)?other\\s+payables?$",
-    "^trade\\s+payables?\\s*[,]?\\s*other\\s+payables?\\s+(?:and|&)\\s+accruals?$",
-    "^other\\s+payables?\\s+(?:and|&)\\s+accrued\\s+expenses?$",
-    "^贸易及其他应付款项?$",
-    "^贸易应付款项?[、,，]?其他应付款项?及应计(?:费用|款项)$"
-   ],
-   "exclude_hints": [
-    "non-current",
-    "长期",
-    "非流动",
-    "trade and other receivables",
-    "贸易及其他应收款",
-    "contract assets",
-    "合同资产"
-   ],
-   "aggregation_note": "Treat the printed amount as a combined parent. Populate trade payables and other dedicated children only from explicit face or note evidence. Do not allocate the complete caption to trade payables. Use either the combined reported amount or the decomposed children in calculation, never both.",
-   "decomposition_rule": "Only itemised unclaimed rows may sweep. An unexplained gap between the combined caption and extracted note components remains an unallocated_gap."
-  },
-  {
-   "canonical_key": "bs_current_liabilities__contract_liabilities",
-   "label": "Contract liabilities",
-   "inherits": "bs_s3_current_liabilities",
-   "match_priority": 64,
-   "definition": "Obligation to transfer goods or services for which consideration has been received or is due (HKFRS 15.106). For a PRC developer this is chiefly pre-sale proceeds on undelivered units.",
-   "aliases": [
-    "Contract liabilities",
-    "Contract liability",
-    "Advances from customers",
-    "Pre-sale proceeds received"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Contract liabilities",
-     "Contract liability",
-     "Advances from customers",
-     "Pre-sale proceeds received"
-    ],
-    "zh": [
-     "合同负债",
-     "合约负债",
-     "预收客户款项",
-     "已收预售款项"
-    ]
-   },
-   "exclude": [
-    "Deferred revenue or deferred income where the filing uses that caption separately.",
-    "The contract ASSET side.",
-    "Trade payables."
-   ],
-   "confusable_with": [
-    "bs_current_liabilities__current_deferred_revenue",
-    "bs_non_current_assets__contract_in_progress",
-    "bs_non_current_liabilities__non_current_deferred_income"
    ]
   },
   {
@@ -3966,6 +3161,871 @@
    ]
   },
   {
+   "canonical_key": "bs_non_current_liabilities__non_current_borrowings",
+   "label": "Borrowings (non-current)",
+   "inherits": "bs_s4_non_current_liabilities",
+   "match_priority": 60,
+   "definition": "Interest-bearing bank and other loans repayable beyond twelve months.",
+   "aliases": [
+    "Non-current borrowings",
+    "Interest-bearing bank and other borrowings",
+    "Bank and other borrowings",
+    "Interest-bearing borrowings",
+    "Long-term borrowings",
+    "Bank loans"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Non-current borrowings",
+     "Interest-bearing bank and other borrowings",
+     "Bank and other borrowings",
+     "Interest-bearing borrowings",
+     "Long-term borrowings",
+     "Bank loans"
+    ],
+    "zh": [
+     "非流动借款",
+     "计息银行及其他贷款",
+     "银行及其他贷款",
+     "计息借款",
+     "长期借款",
+     "银行贷款"
+    ]
+   },
+   "confusable_with": [
+    "bs_current_liabilities__current_borrowings",
+    "bs_current_liabilities__current_portion_of_long_term_debt",
+    "bs_non_current_liabilities__non_current_bonds_payable"
+   ],
+   "section_disambiguation": "Shares the aliases 'Interest-bearing bank and other borrowings' and 'Bank and other borrowings' byte-for-byte with the current-liability concept. Resolution is by printed section only. Never split a single printed amount across the two."
+  },
+  {
+   "canonical_key": "bs_non_current_liabilities__non_current_bonds_payable",
+   "label": "Bonds payable (non-current)",
+   "inherits": "bs_s4_non_current_liabilities",
+   "match_priority": 62,
+   "definition": "Debt securities issued and repayable beyond twelve months, at amortised cost.",
+   "aliases": [
+    "Non-current bonds payable",
+    "Bonds payable",
+    "Corporate bonds",
+    "Domestic bonds"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Non-current bonds payable",
+     "Bonds payable",
+     "Corporate bonds",
+     "Domestic bonds"
+    ],
+    "zh": [
+     "非流动应付债券",
+     "应付债券",
+     "公司债券",
+     "境内债券"
+    ]
+   },
+   "confusable_with": [
+    "bs_non_current_liabilities__non_current_notes_payable",
+    "bs_current_liabilities__current_notes_payable",
+    "bs_equity__other_equity_instruments"
+   ],
+   "section_disambiguation": "Where a filing prints a combined 'Senior notes and domestic bonds' caption, it maps to the notes-payable concept in the printed section; do not fabricate a bond/note split."
+  },
+  {
+   "canonical_key": "bs_non_current_liabilities__non_current_notes_payable",
+   "label": "Notes payable (non-current)",
+   "inherits": "bs_s4_non_current_liabilities",
+   "match_priority": 62,
+   "definition": "Senior notes and similar debt instruments repayable beyond twelve months.",
+   "aliases": [
+    "Non-current notes payable",
+    "Senior notes",
+    "Senior notes and domestic bonds",
+    "Notes payable"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Non-current notes payable",
+     "Senior notes",
+     "Senior notes and domestic bonds",
+     "Notes payable"
+    ],
+    "zh": [
+     "非流动应付票据",
+     "优先票据",
+     "优先票据及境内债券",
+     "应付票据"
+    ]
+   },
+   "confusable_with": [
+    "bs_non_current_liabilities__non_current_bonds_payable",
+    "bs_current_liabilities__current_notes_payable"
+   ],
+   "section_disambiguation": "Same aliases as the current-liability notes concept. Bind by printed section."
+  },
+  {
+   "canonical_key": "bs_non_current_liabilities__long_term_payables",
+   "label": "Long-term payables",
+   "inherits": "bs_s4_non_current_liabilities",
+   "match_priority": 58,
+   "definition": "Non-interest-bearing or deferred payables settled beyond twelve months, including deferred consideration and long-term construction payables.",
+   "aliases": [
+    "Long-term payables",
+    "Other long-term payables",
+    "Deferred consideration payable"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Long-term payables",
+     "Other long-term payables",
+     "Deferred consideration payable"
+    ],
+    "zh": [
+     "长期应付款",
+     "其他长期应付款",
+     "应付递延代价"
+    ]
+   },
+   "confusable_with": [
+    "bs_non_current_liabilities__others",
+    "bs_current_liabilities__other_payables_and_accruals"
+   ]
+  },
+  {
+   "canonical_key": "bs_non_current_liabilities__non_current_lease_liabilities",
+   "label": "Lease liabilities (non-current)",
+   "inherits": "bs_s4_non_current_liabilities",
+   "match_priority": 62,
+   "definition": "Present value of lease payments falling due beyond twelve months (HKFRS 16).",
+   "aliases": [
+    "Non-current lease liabilities",
+    "Lease liabilities"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Non-current lease liabilities",
+     "Lease liabilities"
+    ],
+    "zh": [
+     "非流动租赁负债",
+     "租赁负债"
+    ]
+   },
+   "exclude": [
+    "The right-of-use ASSET.",
+    "The current portion of lease liabilities."
+   ],
+   "confusable_with": [
+    "bs_current_liabilities__current_lease_liabilities",
+    "bs_non_current_assets__right_of_use_assets"
+   ],
+   "section_disambiguation": "The bare alias 'Lease liabilities' / 租赁负债 sits on both the current and non-current concepts. Bind by printed section only."
+  },
+  {
+   "canonical_key": "bs_non_current_liabilities__long_term_provisions",
+   "label": "Provisions (non-current)",
+   "inherits": "bs_s4_non_current_liabilities",
+   "match_priority": 60,
+   "definition": "Liabilities of uncertain timing or amount expected to be settled beyond twelve months (HKAS 37).",
+   "aliases": [
+    "Long-term provisions",
+    "Provisions",
+    "Provision for major overhauls",
+    "Provision for restoration"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Long-term provisions",
+     "Provisions",
+     "Provision for major overhauls",
+     "Provision for restoration"
+    ],
+    "zh": [
+     "长期拨备",
+     "拨备",
+     "大修拨备",
+     "复原拨备"
+    ]
+   },
+   "confusable_with": [
+    "bs_non_current_liabilities__others"
+   ]
+  },
+  {
+   "canonical_key": "bs_non_current_liabilities__non_current_deferred_income",
+   "label": "Deferred income (non-current)",
+   "inherits": "bs_s4_non_current_liabilities",
+   "match_priority": 62,
+   "definition": "Government grants and other income received but not yet recognised, releasable beyond twelve months.",
+   "aliases": [
+    "Non-current deferred income",
+    "Deferred income",
+    "Deferred government grants"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Non-current deferred income",
+     "Deferred income",
+     "Deferred government grants"
+    ],
+    "zh": [
+     "非流动递延收益",
+     "递延收益",
+     "递延政府补助"
+    ]
+   },
+   "exclude": [
+    "Contract liabilities under HKFRS 15, which have their own concept.",
+    "Current deferred revenue."
+   ],
+   "confusable_with": [
+    "bs_current_liabilities__current_deferred_revenue",
+    "bs_current_liabilities__contract_liabilities"
+   ]
+  },
+  {
+   "canonical_key": "bs_non_current_liabilities__non_current_deferred_tax_liabilities_net",
+   "label": "Deferred tax liabilities",
+   "inherits": "bs_s4_non_current_liabilities",
+   "match_priority": 64,
+   "definition": "Income taxes payable in future periods on taxable temporary differences (HKAS 12.5).",
+   "aliases": [
+    "Deferred tax liabilities",
+    "Deferred income tax liabilities",
+    "Deferred tax liabilities (net)"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Deferred tax liabilities",
+     "Deferred income tax liabilities",
+     "Deferred tax liabilities (net)"
+    ],
+    "zh": [
+     "非流动递延税项负债（净额）",
+     "递延税项负债",
+     "递延所得税负债"
+    ]
+   },
+   "exclude": [
+    "Deferred tax ASSETS.",
+    "Current income tax liabilities.",
+    "The deferred tax charge in profit or loss."
+   ],
+   "confusable_with": [
+    "bs_non_current_assets__deferred_income_tax_assets",
+    "bs_current_liabilities__current_income_tax_liabilities",
+    "pl_tax_expense__deferred_tax"
+   ],
+   "exclude_hints": [
+    "asset",
+    "资产",
+    "^应付税项$",
+    "current tax"
+   ]
+  },
+  {
+   "canonical_key": "bs_non_current_liabilities__others",
+   "label": "Other non-current liability lines (face, unmapped)",
+   "inherits": "bs_s4_non_current_liabilities",
+   "value_scope": "exclusive_residual",
+   "alias_matching": "disabled",
+   "match_priority": 0,
+   "sign_convention": "either",
+   "definition": "Sweep bucket for value rows printed on the face of the balance sheet inside the non-current liabilities section that no dedicated non-current-liability concept claimed. Governed entirely by residual_framework.",
+   "residual_policy": {
+    "framework": "residual_framework",
+    "section_scope": "bs_s4_non_current_liabilities",
+    "population": "sweep_only",
+    "cross_section": false,
+    "notes_as_source": false,
+    "plug": false,
+    "itemise": true
+   },
+   "never_sweep": [
+    "bs_non_current_liabilities__total_non_current_liabilities",
+    "bs_total_equity_and_liabilities",
+    "any row printed in the current liabilities, equity or assets sections"
+   ],
+   "expected_components": [
+    "Retirement benefit obligations / defined benefit liability",
+    "Financial guarantee contracts",
+    "Put options over non-controlling interests",
+    "Amounts due to related parties classified as non-current",
+    "Derivative financial instruments classified as non-current"
+   ],
+   "aliases": [],
+   "aliases_i18n": {
+    "en": [],
+    "zh": []
+   },
+   "exclude_hints": [
+    "Current liability",
+    "Trade payables",
+    "Short term"
+   ]
+  },
+  {
+   "canonical_key": "bs_non_current_liabilities__total_non_current_liabilities",
+   "label": "Total non-current liabilities",
+   "inherits": "bs_s4_non_current_liabilities",
+   "value_scope": "not_applicable",
+   "unit_of_account": "subtotal",
+   "match_priority": 78,
+   "definition": "The reported subtotal at the foot of the non-current liabilities section.",
+   "aliases": [
+    "Total non-current liabilities",
+    "Non-current liabilities, total"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Total non-current liabilities",
+     "Non-current liabilities, total"
+    ],
+    "zh": [
+     "非流动负债总额",
+     "非流动负债总计"
+    ]
+   },
+   "exclude": [
+    "Total current liabilities.",
+    "Total liabilities.",
+    "'Total assets less current liabilities'."
+   ],
+   "confusable_with": [
+    "bs_current_liabilities__total_current_liabilities",
+    "bs_total_assets_less_current_liabilities"
+   ]
+  },
+  {
+   "canonical_key": "bs_net_assets",
+   "label": "Net assets",
+   "inherits": "bs_top_level",
+   "match_priority": 84,
+   "definition": "Total assets less total liabilities as printed on the balance sheet. Under HKFRS this is the same reported amount as total equity.",
+   "include": [
+    "The 'Net assets' / 'NET ASSETS' / 资产净值 total printed on the balance sheet."
+   ],
+   "exclude": [
+    "'Net current assets/(liabilities)' / 流动资产（负债）净额, which nets only the current sections.",
+    "Any individual asset or liability line.",
+    "'Total assets'."
+   ],
+   "aliases": [
+    "Net assets",
+    "Net asset value"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Net assets",
+     "Net asset value"
+    ],
+    "zh": [
+     "资产净值",
+     "净资产"
+    ]
+   },
+   "equivalence": {
+    "with": "bs_equity__total_equity",
+    "relation": "identical_reported_amount",
+    "rule": "One economic fact under two captions. Populate whichever is printed; populate the other by equivalence with allocation_status: derived_from_equivalence. If both are printed and differ, route to review."
+   },
+   "confusable_with": [
+    "bs_equity__total_equity",
+    "bs_net_current_assets_liabilities",
+    "bs_total_assets"
+   ],
+   "regex_hints": [
+    "^net assets",
+    "^(资产净值|净资产)$"
+   ],
+   "exclude_hints": [
+    "current",
+    "流动"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__share_capital",
+   "label": "Share capital",
+   "inherits": "bs_s5_equity",
+   "match_priority": 62,
+   "sign_convention": "positive_expected",
+   "definition": "Nominal or stated capital of shares issued and fully paid.",
+   "aliases": [
+    "Share capital",
+    "Issued capital",
+    "Issued and paid-up capital"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Share capital",
+     "Issued capital",
+     "Issued and paid-up capital"
+    ],
+    "zh": [
+     "股本",
+     "已发行股本",
+     "已发行及缴足股本"
+    ]
+   },
+   "exclude": [
+    "Share premium, which is a separate component.",
+    "Authorised but unissued capital, which is a disclosure not a balance."
+   ],
+   "confusable_with": [
+    "bs_equity__share_premium",
+    "bs_equity__other_equity_instruments"
+   ],
+   "exclude_hints": [
+    "premium",
+    "溢价",
+    "authorised",
+    "法定"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__other_equity_instruments",
+   "label": "Other equity instruments",
+   "inherits": "bs_s5_equity",
+   "match_priority": 64,
+   "sign_convention": "positive_expected",
+   "definition": "Instruments classified as equity rather than liabilities under HKAS 32 — perpetual capital securities, convertible preference shares and similar.",
+   "aliases": [
+    "Other equity instruments",
+    "Perpetual capital securities",
+    "Perpetual securities",
+    "Convertible preference shares"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Other equity instruments",
+     "Perpetual capital securities",
+     "Perpetual securities",
+     "Convertible preference shares"
+    ],
+    "zh": [
+     "其他权益工具",
+     "永续资本证券",
+     "永续债",
+     "可转换优先股"
+    ]
+   },
+   "exclude": [
+    "Instruments classified as financial liabilities.",
+    "Share capital and share premium."
+   ],
+   "confusable_with": [
+    "bs_equity__share_capital",
+    "bs_non_current_liabilities__non_current_bonds_payable"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__share_premium",
+   "label": "Share premium",
+   "inherits": "bs_s5_equity",
+   "match_priority": 62,
+   "sign_convention": "positive_expected",
+   "definition": "Consideration received for shares issued in excess of their nominal value.",
+   "aliases": [
+    "Share premium",
+    "Share premium account"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Share premium",
+     "Share premium account"
+    ],
+    "zh": [
+     "股份溢价",
+     "股份溢价账"
+    ]
+   },
+   "confusable_with": [
+    "bs_equity__share_capital",
+    "bs_equity__capital_reserve",
+    "bs_equity__reserves"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__capital_reserve",
+   "label": "Capital reserve",
+   "inherits": "bs_s5_equity",
+   "match_priority": 60,
+   "sign_convention": "either",
+   "definition": "Reserve arising from capital transactions — reorganisations, common-control combinations, deemed contributions and equity-settled transactions with owners.",
+   "aliases": [
+    "Capital reserve",
+    "Capital reserves",
+    "Merger reserve",
+    "Contributed surplus"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Capital reserve",
+     "Capital reserves",
+     "Merger reserve",
+     "Contributed surplus"
+    ],
+    "zh": [
+     "资本公积",
+     "资本储备",
+     "合并储备",
+     "实收盈余"
+    ]
+   },
+   "exclude": [
+    "Share premium.",
+    "The undifferentiated 'Reserves' aggregate — see mutually_exclusive_groups.equity_reserves."
+   ],
+   "confusable_with": [
+    "bs_equity__reserves",
+    "bs_equity__share_premium",
+    "bs_equity__general_reserve"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__general_reserve",
+   "label": "General reserve",
+   "inherits": "bs_s5_equity",
+   "match_priority": 62,
+   "sign_convention": "positive_expected",
+   "definition": "Statutory surplus reserve or general reserve appropriated out of the profits of PRC subsidiaries as required by PRC company law, not distributable as dividends.",
+   "aliases": [
+    "General reserve",
+    "Statutory reserve",
+    "Statutory surplus reserve",
+    "Statutory reserve funds"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "General reserve",
+     "Statutory reserve",
+     "Statutory surplus reserve",
+     "Statutory reserve funds"
+    ],
+    "zh": [
+     "一般储备",
+     "法定储备",
+     "法定盈余公积",
+     "法定公积金"
+    ]
+   },
+   "confusable_with": [
+    "bs_equity__retained_earnings",
+    "bs_equity__reserves",
+    "bs_equity__capital_reserve"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__other_comprehensive_income_reserve",
+   "label": "Other comprehensive income reserve",
+   "inherits": "bs_s5_equity",
+   "match_priority": 66,
+   "sign_convention": "either",
+   "definition": "Cumulative balance of items recognised in other comprehensive income — exchange translation, FVOCI fair-value and hedging reserves.",
+   "aliases": [
+    "Other comprehensive income reserve",
+    "Exchange fluctuation reserve",
+    "Translation reserve",
+    "Fair value reserve",
+    "Foreign currency translation reserve"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Other comprehensive income reserve",
+     "Exchange fluctuation reserve",
+     "Translation reserve",
+     "Fair value reserve",
+     "Foreign currency translation reserve"
+    ],
+    "zh": [
+     "其他综合收益储备",
+     "汇兑波动储备",
+     "外币折算储备",
+     "公允价值储备"
+    ]
+   },
+   "exclude": [
+    "Other comprehensive income FOR THE YEAR, which is a period flow on the statement of comprehensive income, not this cumulative balance."
+   ],
+   "confusable_with": [
+    "pl_other_comprehensive_income_for_the_year",
+    "bs_equity__reserves"
+   ],
+   "exclude_hints": [
+    "for the year",
+    "for the period",
+    "年内",
+    "期内"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__retained_earnings",
+   "label": "Retained earnings",
+   "inherits": "bs_s5_equity",
+   "match_priority": 62,
+   "sign_convention": "either",
+   "definition": "Cumulative undistributed profits or accumulated losses attributable to owners of the parent.",
+   "aliases": [
+    "Retained earnings",
+    "Retained profits",
+    "Accumulated losses",
+    "Accumulated profits"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Retained earnings",
+     "Retained profits",
+     "Accumulated losses",
+     "Accumulated profits"
+    ],
+    "zh": [
+     "留存收益",
+     "保留溢利",
+     "累计亏损",
+     "未分配利润"
+    ]
+   },
+   "exclude": [
+    "Statutory or general reserves appropriated out of retained earnings where separately captioned.",
+    "The profit for the year, which is a period flow."
+   ],
+   "confusable_with": [
+    "bs_equity__general_reserve",
+    "bs_equity__reserves",
+    "pl_profit_for_the_year"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__treasury_shares",
+   "label": "Treasury shares",
+   "inherits": "bs_s5_equity",
+   "match_priority": 64,
+   "sign_convention": "negative_expected",
+   "definition": "The group's own equity instruments reacquired and held, deducted from equity (HKAS 32.33). Carried as a negative amount.",
+   "aliases": [
+    "Treasury shares",
+    "Own shares held",
+    "Shares held in treasury"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Treasury shares",
+     "Own shares held",
+     "Shares held in treasury"
+    ],
+    "zh": [
+     "库存股",
+     "持有的自身股份"
+    ]
+   },
+   "exclude": [
+    "Shares held for share award schemes where separately captioned."
+   ],
+   "confusable_with": [
+    "bs_equity__shares_held_for_share_award_schemes"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__shares_held_for_share_award_schemes",
+   "label": "Shares held for share award schemes",
+   "inherits": "bs_s5_equity",
+   "match_priority": 68,
+   "sign_convention": "negative_expected",
+   "definition": "Own shares acquired and held by a trust to satisfy awards under a share award or option scheme, deducted from equity.",
+   "aliases": [
+    "Shares held for share award schemes",
+    "Shares held under share award scheme",
+    "Shares held for employee share scheme"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Shares held for share award schemes",
+     "Shares held under share award scheme",
+     "Shares held for employee share scheme"
+    ],
+    "zh": [
+     "为股份奖励计划持有的股份",
+     "股份奖励计划下持有的股份",
+     "为雇员股份计划持有的股份"
+    ]
+   },
+   "confusable_with": [
+    "bs_equity__treasury_shares"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__others",
+   "label": "Other equity lines (face, unmapped)",
+   "inherits": "bs_s5_equity",
+   "value_scope": "exclusive_residual",
+   "alias_matching": "disabled",
+   "match_priority": 0,
+   "sign_convention": "either",
+   "definition": "Sweep bucket for value rows printed on the face of the balance sheet inside the equity section that no dedicated equity concept claimed. Governed entirely by residual_framework.",
+   "residual_policy": {
+    "framework": "residual_framework",
+    "section_scope": "bs_s5_equity",
+    "population": "sweep_only",
+    "cross_section": false,
+    "notes_as_source": false,
+    "plug": false,
+    "itemise": true
+   },
+   "never_sweep": [
+    "bs_equity__total_equity",
+    "bs_net_assets",
+    "'Equity attributable to owners of the parent' subtotal",
+    "any profit-or-loss attribution line",
+    "any row printed in the assets or liabilities sections"
+   ],
+   "expected_components": [
+    "Equity attributable to owners of the parent, where the filing prints it as a component rather than a subtotal",
+    "Share-based payment reserve",
+    "Hedging reserve",
+    "Revaluation reserve",
+    "Proposed final dividend presented within equity"
+   ],
+   "aliases": [],
+   "aliases_i18n": {
+    "en": [],
+    "zh": []
+   }
+  },
+  {
+   "canonical_key": "bs_equity__reserves",
+   "label": "Reserves (undifferentiated aggregate)",
+   "inherits": "bs_s5_equity",
+   "match_priority": 52,
+   "sign_convention": "either",
+   "is_gross_parent": true,
+   "children_if_decomposed": [
+    "bs_equity__capital_reserve",
+    "bs_equity__share_premium",
+    "bs_equity__general_reserve",
+    "bs_equity__other_comprehensive_income_reserve"
+   ],
+   "definition": "A single undifferentiated 'Reserves' caption, common in a company-only balance sheet. A gross parent of the individually captioned reserve concepts.",
+   "exclude": [
+    "Any individually captioned reserve. If a component is printed, populate the component and leave this concept null — see mutually_exclusive_groups.equity_reserves."
+   ],
+   "aliases": [
+    "Reserves",
+    "Other reserves"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Reserves",
+     "Other reserves"
+    ],
+    "zh": [
+     "储备",
+     "其他储备"
+    ]
+   },
+   "confusable_with": [
+    "bs_equity__capital_reserve",
+    "bs_equity__general_reserve",
+    "bs_equity__other_comprehensive_income_reserve",
+    "bs_equity__share_premium",
+    "bs_equity__others"
+   ]
+  },
+  {
+   "canonical_key": "bs_equity__non_controlling_interests",
+   "label": "Non-controlling interests (equity balance)",
+   "inherits": "bs_s5_equity",
+   "match_priority": 66,
+   "sign_convention": "either",
+   "definition": "The CLOSING BALANCE of equity in subsidiaries not attributable, directly or indirectly, to the parent (HKAS 1.54(q) / HKFRS 10.22), presented within total equity.",
+   "include": [
+    "The non-controlling-interests balance presented within equity on the statement of financial position."
+   ],
+   "exclude": [
+    "The non-controlling-interests share of PROFIT for the year, or of total comprehensive income — identical wording, but a period flow on the statement of profit or loss rather than an equity balance.",
+    "Dividends paid to, or capital contributed by, non-controlling shareholders, which are cash flows.",
+    "Equity attributable to owners of the parent."
+   ],
+   "aliases": [
+    "Non-controlling interests",
+    "Non-controlling interests in subsidiaries",
+    "Minority interests"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Non-controlling interests",
+     "Non-controlling interests in subsidiaries",
+     "Minority interests"
+    ],
+    "zh": [
+     "非控制性权益",
+     "非控股股东权益",
+     "少数股东权益"
+    ]
+   },
+   "confusable_with": [
+    "pl_profit_attributable_to__non_controlling_interests",
+    "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
+    "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests",
+    "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests"
+   ],
+   "section_disambiguation": "Three concepts share this exact caption. Section_scope (bs_s5_equity vs pl_s6 vs pl_s7) plus unit_of_account (balance vs flow) resolves all three with no wording test."
+  },
+  {
+   "canonical_key": "bs_equity__total_equity",
+   "label": "Total equity",
+   "inherits": "bs_s5_equity",
+   "value_scope": "not_applicable",
+   "unit_of_account": "subtotal",
+   "match_priority": 78,
+   "definition": "The residual interest in the assets of the group after deducting all liabilities — the subtotal of all equity components including non-controlling interests.",
+   "include": [
+    "The reported total-equity subtotal (权益总额), including non-controlling interests."
+   ],
+   "exclude": [
+    "'Net assets' / 资产净值, which is the same amount under a different caption and binds to bs_net_assets. The two are linked by an equivalence rule, not by a shared alias.",
+    "Equity attributable to owners of the parent, which excludes non-controlling interests.",
+    "'Net current assets/(liabilities)', which nets only the current sections.",
+    "'Total assets less current liabilities'."
+   ],
+   "aliases": [
+    "Total equity",
+    "Total shareholders' equity",
+    "Total equity and reserves"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Total equity",
+     "Total shareholders' equity",
+     "Total equity and reserves"
+    ],
+    "zh": [
+     "权益总额",
+     "股东权益总额",
+     "权益合计"
+    ]
+   },
+   "equivalence": {
+    "with": "bs_net_assets",
+    "relation": "identical_reported_amount",
+    "rule": "One economic fact under two captions. Populate whichever caption is printed; populate the other by equivalence with allocation_status: derived_from_equivalence. If both are printed and differ, route to review — do not average or pick."
+   },
+   "confusable_with": [
+    "bs_net_assets",
+    "bs_net_current_assets_liabilities",
+    "bs_total_assets_less_current_liabilities",
+    "bs_equity__non_controlling_interests"
+   ],
+   "exclude_hints": [
+    "net current",
+    "净额",
+    "attributable",
+    "应占",
+    "^资产净值$",
+    "^net assets$"
+   ]
+  },
+  {
    "canonical_key": "bs_total_assets",
    "label": "Total assets",
    "inherits": "bs_top_level",
@@ -4034,53 +4094,6 @@
    "confusable_with": [
     "bs_equity__total_equity",
     "bs_total_assets"
-   ]
-  },
-  {
-   "canonical_key": "bs_net_assets",
-   "label": "Net assets",
-   "inherits": "bs_top_level",
-   "match_priority": 84,
-   "definition": "Total assets less total liabilities as printed on the balance sheet. Under HKFRS this is the same reported amount as total equity.",
-   "include": [
-    "The 'Net assets' / 'NET ASSETS' / 资产净值 total printed on the balance sheet."
-   ],
-   "exclude": [
-    "'Net current assets/(liabilities)' / 流动资产（负债）净额, which nets only the current sections.",
-    "Any individual asset or liability line.",
-    "'Total assets'."
-   ],
-   "aliases": [
-    "Net assets",
-    "Net asset value"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Net assets",
-     "Net asset value"
-    ],
-    "zh": [
-     "资产净值",
-     "净资产"
-    ]
-   },
-   "equivalence": {
-    "with": "bs_equity__total_equity",
-    "relation": "identical_reported_amount",
-    "rule": "One economic fact under two captions. Populate whichever is printed; populate the other by equivalence with allocation_status: derived_from_equivalence. If both are printed and differ, route to review."
-   },
-   "confusable_with": [
-    "bs_equity__total_equity",
-    "bs_net_current_assets_liabilities",
-    "bs_total_assets"
-   ],
-   "regex_hints": [
-    "^net assets",
-    "^(资产净值|净资产)$"
-   ],
-   "exclude_hints": [
-    "current",
-    "流动"
    ]
   },
   {
@@ -4315,6 +4328,79 @@
    ]
   },
   {
+   "canonical_key": "pl_expenses__purchases_of_stock_in_trade",
+   "label": "Purchases of stock-in-trade",
+   "inherits": "pl_s2_expenses",
+   "match_priority": 62,
+   "definition": "Cost of goods purchased for resale, where presented as a face line separate from cost of sales.",
+   "aliases": [
+    "Purchases of stock-in-trade",
+    "Cost of inventories sold",
+    "Changes in inventories of finished goods"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Purchases of stock-in-trade",
+     "Cost of inventories sold",
+     "Changes in inventories of finished goods"
+    ],
+    "zh": [
+     "存货采购",
+     "已售存货成本",
+     "产成品存货变动"
+    ]
+   },
+   "confusable_with": [
+    "pl_expenses__cost_of_goods_sold"
+   ]
+  },
+  {
+   "canonical_key": "pl_gross_profit",
+   "label": "Gross profit",
+   "inherits": "pl_top_level",
+   "match_priority": 74,
+   "definition": "The face subtotal struck immediately after revenue and cost of sales — revenue less the cost of sales for the same period. Measures the margin on core selling and servicing activity BEFORE selling and marketing expenses, administrative expenses, other income and gains, finance costs and tax. A negative amount is a gross loss and is carried with its reported sign. Being a subtotal, it is derived from the separately mapped revenue and cost-of-sales lines and must not be double-counted with them.",
+   "include": [
+    "The face subtotal captioned 'Gross profit', 'Gross profit/(loss)' or 毛利 / 毛利润 presented directly below revenue and cost of sales.",
+    "A reported gross loss ('Gross loss' / 毛损), retained with its negative sign.",
+    "The consolidated figure where both consolidated and company-only columns are shown."
+   ],
+   "exclude": [
+    "Revenue and cost of sales themselves, which would double-count this subtotal.",
+    "Operating profit / EBIT, profit before tax and profit for the year.",
+    "Gross margin percentages, ratios or per-segment gross profit quoted in the MD&A or segment note rather than on the face."
+   ],
+   "aliases": [
+    "Gross profit",
+    "Gross profit/(loss)",
+    "Gross loss"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Gross profit",
+     "Gross profit/(loss)",
+     "Gross loss"
+    ],
+    "zh": [
+     "毛利",
+     "毛利润",
+     "毛利/（毛损）",
+     "毛损"
+    ]
+   },
+   "confusable_with": [
+    "pl_operating_profit_ebit",
+    "pl_income__total_income"
+   ],
+   "exclude_hints": [
+    "margin",
+    "率",
+    "%",
+    "segment",
+    "分部"
+   ]
+  },
+  {
    "canonical_key": "pl_expenses__taxes_and_surcharges",
    "label": "Taxes and surcharges",
    "definition": "Turnover-based taxes and levies charged as an operating expense — city construction and maintenance tax, education surcharge, stamp duty, land use and property tax. NOT income tax, which is struck below profit before tax.",
@@ -4519,84 +4605,43 @@
    ]
   },
   {
-   "canonical_key": "pl_expenses__purchases_of_stock_in_trade",
-   "label": "Purchases of stock-in-trade",
+   "canonical_key": "pl_expenses__depreciation_and_amortisation_expense",
+   "label": "Depreciation and amortisation",
    "inherits": "pl_s2_expenses",
    "match_priority": 62,
-   "definition": "Cost of goods purchased for resale, where presented as a face line separate from cost of sales.",
+   "definition": "Systematic allocation of the depreciable amount of tangible and intangible assets, where presented as a face line of the statement of profit or loss.",
    "aliases": [
-    "Purchases of stock-in-trade",
-    "Cost of inventories sold",
-    "Changes in inventories of finished goods"
+    "Depreciation and amortisation expense",
+    "Depreciation and amortisation",
+    "Depreciation",
+    "Amortisation"
    ],
    "aliases_i18n": {
     "en": [
-     "Purchases of stock-in-trade",
-     "Cost of inventories sold",
-     "Changes in inventories of finished goods"
+     "Depreciation and amortisation expense",
+     "Depreciation and amortisation",
+     "Depreciation",
+     "Amortisation"
     ],
     "zh": [
-     "存货采购",
-     "已售存货成本",
-     "产成品存货变动"
-    ]
-   },
-   "confusable_with": [
-    "pl_expenses__cost_of_goods_sold"
-   ]
-  },
-  {
-   "canonical_key": "pl_expenses__total_cost_of_sales",
-   "label": "Total cost of sales",
-   "definition": "The reported subtotal of cost of sales, where a filing prints one — cost of goods sold together with purchases of stock-in-trade.",
-   "inherits": "pl_s2_expenses",
-   "match_priority": 76,
-   "unit_of_account": "subtotal",
-   "extraction_mode": "extract_or_derive",
-   "sign_convention": "negative_expected",
-   "derivation": "sum of pl_expenses__cost_of_goods_sold and pl_expenses__purchases_of_stock_in_trade where no subtotal is printed",
-   "value_scope": "not_applicable",
-   "aliases": [
-    "Total cost of sales",
-    "Total cost of goods sold",
-    "Total cost of revenue",
-    "Total cost of sales and services"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Total cost of sales",
-     "Total cost of goods sold",
-     "Total cost of revenue",
-     "Total cost of sales and services"
-    ],
-    "zh": [
-     "销售成本总额",
-     "销售成本合计",
-     "营业成本合计",
-     "已售货品成本"
+     "折旧及摊销费用",
+     "折旧及摊销",
+     "折旧",
+     "摊销"
     ]
    },
    "exclude": [
-    "Cost of sales alone, which is its own concept.",
-    "Total operating cost, which also contains the operating expenses."
+    "The cash-flow-statement add-back of depreciation and amortisation, which is a different statement.",
+    "Accumulated depreciation, which is a balance-sheet memorandum.",
+    "Depreciation disclosed by nature in the expenses note where the face is by-function."
    ],
    "confusable_with": [
-    "pl_expenses__cost_of_goods_sold",
-    "pl_expenses__total_operating_cost"
-   ],
-   "regex_hints": [
-    "^(?:销售成本|营业成本|已售货品成本)$"
+    "cf_cash_flow_from_operating_activities__depreciation_and_amortisation"
    ],
    "exclude_hints": [
-    "selling expenses",
-    "distribution expenses",
-    "finance costs",
-    "销售费用",
-    "分销费用",
-    "财务费用"
-   ],
-   "aggregation_note": "A reported cost-of-sales total must not be added to separately populated cost-of-goods-sold or purchase components. Component extraction is permitted only when the face presentation shows additive components or the note explicitly reconciles to the reported total. The aggregate and its components are mutually exclusive for computation.",
-   "decomposition_rule": "An unexplained difference to cost of sales is an unallocated_gap and must not be placed in Other operating costs."
+    "accumulated",
+    "累计"
+   ]
   },
   {
    "canonical_key": "pl_expenses__other_operating_costs",
@@ -4719,45 +4764,6 @@
    "decomposition_rule": "Only genuinely unclassified itemised expense rows remain in Other expenses. Do not use Other expenses to plug a difference to a reported operating-expense total."
   },
   {
-   "canonical_key": "pl_expenses__depreciation_and_amortisation_expense",
-   "label": "Depreciation and amortisation",
-   "inherits": "pl_s2_expenses",
-   "match_priority": 62,
-   "definition": "Systematic allocation of the depreciable amount of tangible and intangible assets, where presented as a face line of the statement of profit or loss.",
-   "aliases": [
-    "Depreciation and amortisation expense",
-    "Depreciation and amortisation",
-    "Depreciation",
-    "Amortisation"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Depreciation and amortisation expense",
-     "Depreciation and amortisation",
-     "Depreciation",
-     "Amortisation"
-    ],
-    "zh": [
-     "折旧及摊销费用",
-     "折旧及摊销",
-     "折旧",
-     "摊销"
-    ]
-   },
-   "exclude": [
-    "The cash-flow-statement add-back of depreciation and amortisation, which is a different statement.",
-    "Accumulated depreciation, which is a balance-sheet memorandum.",
-    "Depreciation disclosed by nature in the expenses note where the face is by-function."
-   ],
-   "confusable_with": [
-    "cf_cash_flow_from_operating_activities__depreciation_and_amortisation"
-   ],
-   "exclude_hints": [
-    "accumulated",
-    "累计"
-   ]
-  },
-  {
    "canonical_key": "pl_expenses__others",
    "label": "Other expense lines (face, unmapped)",
    "inherits": "pl_s2_expenses",
@@ -4792,60 +4798,13 @@
    "aliases_i18n": {
     "en": [],
     "zh": []
-   }
-  },
-  {
-   "canonical_key": "pl_expenses__total_operating_expenses",
-   "label": "Total operating expenses",
-   "definition": "The reported subtotal of the operating expenses that sit below cost of sales, where a filing prints one.",
-   "inherits": "pl_s2_expenses",
-   "match_priority": 76,
-   "unit_of_account": "subtotal",
-   "extraction_mode": "extract_or_derive",
-   "sign_convention": "negative_expected",
-   "derivation": "sum of the operating expense lines and pl_expenses__others where no subtotal is printed",
-   "value_scope": "not_applicable",
-   "aliases": [
-    "Total operating expenses",
-    "Total operating expenditure",
-    "Total other operating expenses",
-    "Operating expenses"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Total operating expenses",
-     "Total operating expenditure",
-     "Total other operating expenses"
-    ],
-    "zh": [
-     "营业费用总额",
-     "营业费用合计",
-     "经营费用合计",
-     "经营费用",
-     "经营成本总额"
-    ]
    },
-   "exclude": [
-    "Total operating cost, which also contains cost of sales.",
-    "Cost of sales and its own subtotal."
-   ],
-   "confusable_with": [
-    "pl_expenses__total_operating_cost",
-    "pl_expenses__total_cost_of_sales"
-   ],
-   "regex_hints": [
-    "^(?:经营费用总额|经营费用|经营成本总额)$"
-   ],
    "exclude_hints": [
-    "cost of sales",
-    "finance costs",
-    "income tax expense",
-    "销售成本",
-    "财务费用",
-    "所得税费用"
-   ],
-   "aggregation_note": "The operating-expense total is an aggregate. Use either the aggregate or its mutually exclusive components in calculation. By-nature note disclosures must not be added to by-function face expenses unless an explicit reconciliation supports decomposition. The aggregate and all listed components are mutually exclusive for computation.",
-   "decomposition_rule": "Operating-expense Others contains only itemised, unclaimed operating-expense rows. It must never be calculated as a balancing plug."
+    "Finance Cost",
+    "Interest Expense",
+    "disposal",
+    "fair value"
+   ]
   },
   {
    "canonical_key": "pl_expenses__total_operating_cost",
@@ -4881,6 +4840,54 @@
    ],
    "confusable_with": [
     "pl_expenses__cost_of_goods_sold"
+   ]
+  },
+  {
+   "canonical_key": "pl_operating_profit_ebit",
+   "label": "Operating profit / EBIT",
+   "inherits": "pl_top_level",
+   "match_priority": 72,
+   "extraction_mode": "extract_or_derive",
+   "derivation": "pl_income__total_income + pl_expenses__total_operating_cost, under the negative-expense sign convention",
+   "definition": "Result of operating activities before finance costs and tax. HKFRS does not mandate this subtotal, so most HKEX filings do not print it; derivation is the normal path.",
+   "aliases": [
+    "Operating profit",
+    "Profit from operations",
+    "Operating profit / EBIT",
+    "EBIT",
+    "Results from operating activities"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Operating profit",
+     "Profit from operations",
+     "Operating profit / EBIT",
+     "EBIT",
+     "Results from operating activities"
+    ],
+    "zh": [
+     "营业利润",
+     "经营利润",
+     "营业利润/息税前利润",
+     "息税前利润",
+     "经营活动业绩"
+    ]
+   },
+   "exclude": [
+    "Gross profit.",
+    "Profit before tax, which is struck after finance costs.",
+    "EBITDA and other MD&A measures."
+   ],
+   "confusable_with": [
+    "pl_gross_profit",
+    "pl_profit_before_tax",
+    "pl_profit_before_exceptional_items_and_tax"
+   ],
+   "exclude_hints": [
+    "ebitda",
+    "before tax",
+    "除税前",
+    "税前"
    ]
   },
   {
@@ -5085,6 +5092,38 @@
    },
    "confusable_with": [
     "pl_non_operating_expenses__interest_expense"
+   ]
+  },
+  {
+   "canonical_key": "pl_profit_before_exceptional_items_and_tax",
+   "label": "Profit before exceptional items and tax",
+   "inherits": "pl_top_level",
+   "match_priority": 72,
+   "extraction_mode": "derive",
+   "derivation": "pl_income__total_income + pl_expenses__total_operating_cost + pl_non_operating_expenses__total_non_operating",
+   "definition": "A template-internal subtotal. HKFRS statements do not print an 'exceptional items' caption, so this concept is derived and its aliases are intentionally minimal to prevent a spurious face match.",
+   "aliases": [
+    "Profit before exceptional items and tax"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Profit before exceptional items and tax"
+    ],
+    "zh": [
+     "非经常性项目及税前利润"
+    ]
+   },
+   "exclude": [
+    "'Profit before tax', which is struck AFTER exceptional items and is a different amount.",
+    "Operating profit."
+   ],
+   "confusable_with": [
+    "pl_profit_before_tax",
+    "pl_operating_profit_ebit"
+   ],
+   "exclude_hints": [
+    "^profit before tax",
+    "^除税前"
    ]
   },
   {
@@ -5318,6 +5357,50 @@
    ]
   },
   {
+   "canonical_key": "pl_exceptional_items__gains_on_asset_disposal",
+   "label": "Gains/(losses) on disposal",
+   "inherits": "pl_s4_exceptional_items",
+   "match_priority": 68,
+   "definition": "Net gain or loss on disposal of subsidiaries, associates, joint ventures, investment properties and other non-current assets. Retains the reported sign.",
+   "aliases": [
+    "Gains on asset disposal",
+    "Gain on disposal of subsidiaries, net",
+    "Loss on disposal of investment properties, net",
+    "Gain on disposal of investment properties",
+    "Net gain on disposal of assets"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Gains on asset disposal",
+     "Gain on disposal of subsidiaries, net",
+     "Loss on disposal of investment properties, net",
+     "Gain on disposal of investment properties",
+     "Net gain on disposal of assets"
+    ],
+    "zh": [
+     "资产处置收益",
+     "出售附属公司的收益净额",
+     "出售投资物业亏损净额",
+     "出售投资物业收益",
+     "处置资产净收益"
+    ]
+   },
+   "exclude": [
+    "The cash PROCEEDS from the disposal, which are an investing cash flow.",
+    "The cash-flow add-back reversal of the gain or loss."
+   ],
+   "confusable_with": [
+    "cf_cash_flow_from_investing_activities__proceeds_from_sale_of_investments",
+    "cf_cash_flow_from_investing_activities__disposal_of_subsidiaries_net_of_cash_disposed",
+    "cf_cash_flow_from_operating_activities__loss_gain_on_disposal_of_property_plant_and_equipment"
+   ],
+   "exclude_hints": [
+    "proceeds",
+    "所得款项",
+    "net of cash"
+   ]
+  },
+  {
    "canonical_key": "pl_exceptional_items__credit_impairment_losses",
    "label": "Impairment losses on financial assets",
    "inherits": "pl_s4_exceptional_items",
@@ -5410,50 +5493,6 @@
    ]
   },
   {
-   "canonical_key": "pl_exceptional_items__gains_on_asset_disposal",
-   "label": "Gains/(losses) on disposal",
-   "inherits": "pl_s4_exceptional_items",
-   "match_priority": 68,
-   "definition": "Net gain or loss on disposal of subsidiaries, associates, joint ventures, investment properties and other non-current assets. Retains the reported sign.",
-   "aliases": [
-    "Gains on asset disposal",
-    "Gain on disposal of subsidiaries, net",
-    "Loss on disposal of investment properties, net",
-    "Gain on disposal of investment properties",
-    "Net gain on disposal of assets"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Gains on asset disposal",
-     "Gain on disposal of subsidiaries, net",
-     "Loss on disposal of investment properties, net",
-     "Gain on disposal of investment properties",
-     "Net gain on disposal of assets"
-    ],
-    "zh": [
-     "资产处置收益",
-     "出售附属公司的收益净额",
-     "出售投资物业亏损净额",
-     "出售投资物业收益",
-     "处置资产净收益"
-    ]
-   },
-   "exclude": [
-    "The cash PROCEEDS from the disposal, which are an investing cash flow.",
-    "The cash-flow add-back reversal of the gain or loss."
-   ],
-   "confusable_with": [
-    "cf_cash_flow_from_investing_activities__proceeds_from_sale_of_investments",
-    "cf_cash_flow_from_investing_activities__disposal_of_subsidiaries_net_of_cash_disposed",
-    "cf_cash_flow_from_operating_activities__loss_gain_on_disposal_of_property_plant_and_equipment"
-   ],
-   "exclude_hints": [
-    "proceeds",
-    "所得款项",
-    "net of cash"
-   ]
-  },
-  {
    "canonical_key": "pl_exceptional_items__others",
    "label": "Other exceptional lines (face, unmapped)",
    "inherits": "pl_s4_exceptional_items",
@@ -5510,6 +5549,50 @@
      "非经常性项目总额"
     ]
    }
+  },
+  {
+   "canonical_key": "pl_profit_before_tax",
+   "label": "Profit/(loss) before tax",
+   "inherits": "pl_top_level",
+   "match_priority": 78,
+   "definition": "The result of the period before income tax expense, as printed on the face of the statement of profit or loss.",
+   "aliases": [
+    "Profit before tax",
+    "Profit/(loss) before tax",
+    "Loss before tax",
+    "Profit before taxation",
+    "Loss before taxation",
+    "Profit before income tax"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Profit before tax",
+     "Profit/(loss) before tax",
+     "Loss before tax",
+     "Profit before taxation",
+     "Loss before taxation",
+     "Profit before income tax"
+    ],
+    "zh": [
+     "税前利润",
+     "除税前溢利",
+     "除税前溢利/（亏损）",
+     "除税前亏损",
+     "除所得税前溢利",
+     "税前亏损"
+    ]
+   },
+   "exclude": [
+    "The 'Profit before tax' starting line of the cash-flow reconciliation, which is the same amount on a DIFFERENT statement and binds to its own concept.",
+    "'Profit before exceptional items and tax'.",
+    "Profit for the year."
+   ],
+   "confusable_with": [
+    "cf_cash_flow_from_operating_activities__profit_before_tax",
+    "pl_profit_before_exceptional_items_and_tax",
+    "pl_profit_for_the_year"
+   ],
+   "section_disambiguation": "Same wording and same amount as the cash-flow starting line. Statement resolution, not wording, decides. Identity cf_pbt_agreement cross-checks that both loaded the same number."
   },
   {
    "canonical_key": "pl_tax_expense__current_tax",
@@ -5664,6 +5747,178 @@
    "decomposition_rule": "An unresolved tax-note difference remains an unallocated_gap. It must not sweep into Other expenses or Current tax."
   },
   {
+   "canonical_key": "pl_profit_for_the_year",
+   "label": "Profit/(loss) for the year",
+   "inherits": "pl_top_level",
+   "match_priority": 80,
+   "definition": "The PROFIT-OR-LOSS bottom line for the period — result after tax and before any item of other comprehensive income. It stops at the profit-or-loss subtotal and is therefore NOT the same figure as total comprehensive income for the year.",
+   "include": [
+    "The post-tax profit-or-loss result for the period, before other comprehensive income.",
+    "A combined 'profit and total comprehensive income for the year' caption used where there is no other comprehensive income at all."
+   ],
+   "exclude": [
+    "'TOTAL COMPREHENSIVE income/(loss) for the year' / 年内全面亏损总额, which adds OCI — on a bilingual HKEX statement its wrapped caption reaches the matcher as the bare fragment 'LOSS FOR THE YEAR', and that row's amount belongs to the total-comprehensive concept, not here.",
+    "'Other comprehensive income/(loss) for the year'.",
+    "The attribution lines 'attributable to owners of the parent' and 'attributable to non-controlling interests', which are components of this figure.",
+    "Retained earnings on the balance sheet."
+   ],
+   "aliases": [
+    "Profit for the year",
+    "Loss for the year",
+    "Profit/(loss) for the year",
+    "(Loss)/profit for the year",
+    "Profit for the period",
+    "Loss for the period",
+    "Net profit for the year",
+    "Profit and total comprehensive income for the year"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Profit for the year",
+     "Loss for the year",
+     "Profit/(loss) for the year",
+     "(Loss)/profit for the year",
+     "Profit for the period",
+     "Loss for the period",
+     "Net profit for the year",
+     "Profit and total comprehensive income for the year"
+    ],
+    "zh": [
+     "年度利润",
+     "年内亏损",
+     "年内溢利",
+     "年内溢利/（亏损）",
+     "本年度亏损",
+     "年度亏损",
+     "期内亏损"
+    ]
+   },
+   "confusable_with": [
+    "pl_total_comprehensive_income_for_the_year",
+    "pl_other_comprehensive_income_for_the_year",
+    "pl_profit_attributable_to__owners_of_the_parent",
+    "pl_profit_attributable_to__non_controlling_interests",
+    "bs_equity__retained_earnings"
+   ],
+   "regex_hints": [
+    "^(profit|loss).{0,15}for the (year|period)$",
+    "^年内(溢利|亏损)$"
+   ],
+   "exclude_hints": [
+    "total comprehensive",
+    "other comprehensive",
+    "全面",
+    "attributable",
+    "应占"
+   ]
+  },
+  {
+   "canonical_key": "pl_profit_attributable_to__owners_of_the_parent",
+   "label": "Profit attributable to owners of the parent",
+   "inherits": "pl_s6_profit_attributable_to",
+   "match_priority": 78,
+   "definition": "The share of the period's consolidated profit or loss belonging to the equity holders of the parent (HKAS 1.81B(a)). An ATTRIBUTION of profit for the year, not a further component of it.",
+   "include": [
+    "The 'Owners of the parent' / 'Equity holders of the parent' line printed under a 'Profit/(loss) attributable to:' heading.",
+    "The equivalent 'attributable to shareholders of the Company' presentation."
+   ],
+   "exclude": [
+    "The non-controlling-interests share of the same profit or loss.",
+    "'Profit/(loss) for the year' itself, of which this is one of two components.",
+    "TOTAL COMPREHENSIVE income attributable to owners of the parent, which also carries their share of OCI.",
+    "Equity attributable to owners of the parent on the balance sheet, which is a balance."
+   ],
+   "aliases": [
+    "Owners of the parent",
+    "Profit/(loss) attributable to owners of the parent",
+    "Equity holders of the parent",
+    "Owners of the Company",
+    "Shareholders of the Company"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Owners of the parent",
+     "Profit/(loss) attributable to owners of the parent",
+     "Equity holders of the parent",
+     "Owners of the Company",
+     "Shareholders of the Company"
+    ],
+    "zh": [
+     "母公司拥有人",
+     "本公司拥有人",
+     "母公司权益持有人",
+     "本公司股东应占"
+    ]
+   },
+   "decomposition_rule": "Profit for the year = owners of the parent + non-controlling interests. The two attribution lines are components of that total and are never added to it.",
+   "confusable_with": [
+    "pl_profit_attributable_to__non_controlling_interests",
+    "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
+    "pl_profit_for_the_year"
+   ],
+   "exclude_hints": [
+    "total comprehensive",
+    "全面",
+    "non-controlling",
+    "非控股",
+    "少数"
+   ]
+  },
+  {
+   "canonical_key": "pl_profit_attributable_to__non_controlling_interests",
+   "label": "Profit attributable to non-controlling interests",
+   "inherits": "pl_s6_profit_attributable_to",
+   "match_priority": 78,
+   "definition": "The share of the period's consolidated profit or loss belonging to minority shareholders in subsidiaries (HKAS 1.81B(a) / HKFRS 10.B94). A FLOW for the period, distinct from the non-controlling-interests EQUITY BALANCE on the balance sheet.",
+   "include": [
+    "The 'Non-controlling interests' line printed under a 'Profit/(loss) attributable to:' heading."
+   ],
+   "exclude": [
+    "The non-controlling-interests balance within EQUITY — same wording, different concept: that is a closing balance, this is the period's result.",
+    "'Profit/(loss) for the year' itself, of which this is one of two components.",
+    "TOTAL COMPREHENSIVE income attributable to non-controlling interests.",
+    "Dividends paid to, capital contributed by, or interests acquired from non-controlling shareholders."
+   ],
+   "aliases": [
+    "Non-controlling interests",
+    "Profit/(loss) attributable to non-controlling interests",
+    "Non-controlling shareholders",
+    "Minority interests"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Non-controlling interests",
+     "Profit/(loss) attributable to non-controlling interests",
+     "Non-controlling shareholders",
+     "Minority interests"
+    ],
+    "zh": [
+     "非控股权益",
+     "非控制性权益应占",
+     "少数股东损益",
+     "非控股股东应占溢利"
+    ]
+   },
+   "decomposition_rule": "Profit for the year = owners of the parent + non-controlling interests.",
+   "confusable_with": [
+    "bs_equity__non_controlling_interests",
+    "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
+    "pl_profit_attributable_to__owners_of_the_parent",
+    "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests"
+   ],
+   "exclude_hints": [
+    "total comprehensive",
+    "全面",
+    "owners of the parent",
+    "母公司",
+    "dividend",
+    "股息",
+    "contribution",
+    "贡献",
+    "出资"
+   ]
+  },
+  {
    "canonical_key": "pl_oci__items_not_reclassified",
    "label": "Items that will not be reclassified to profit or loss",
    "definition": "The IAS 1.82A(a) category of other comprehensive income: items that will never be recycled through profit or loss. Where a filing itemises the category rather than printing its subtotal, the itemised lines belong to this concept and are summed into it.",
@@ -5795,380 +6050,6 @@
    }
   },
   {
-   "canonical_key": "pl_profit_attributable_to__owners_of_the_parent",
-   "label": "Profit attributable to owners of the parent",
-   "inherits": "pl_s6_profit_attributable_to",
-   "match_priority": 78,
-   "definition": "The share of the period's consolidated profit or loss belonging to the equity holders of the parent (HKAS 1.81B(a)). An ATTRIBUTION of profit for the year, not a further component of it.",
-   "include": [
-    "The 'Owners of the parent' / 'Equity holders of the parent' line printed under a 'Profit/(loss) attributable to:' heading.",
-    "The equivalent 'attributable to shareholders of the Company' presentation."
-   ],
-   "exclude": [
-    "The non-controlling-interests share of the same profit or loss.",
-    "'Profit/(loss) for the year' itself, of which this is one of two components.",
-    "TOTAL COMPREHENSIVE income attributable to owners of the parent, which also carries their share of OCI.",
-    "Equity attributable to owners of the parent on the balance sheet, which is a balance."
-   ],
-   "aliases": [
-    "Owners of the parent",
-    "Profit/(loss) attributable to owners of the parent",
-    "Equity holders of the parent",
-    "Owners of the Company",
-    "Shareholders of the Company"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Owners of the parent",
-     "Profit/(loss) attributable to owners of the parent",
-     "Equity holders of the parent",
-     "Owners of the Company",
-     "Shareholders of the Company"
-    ],
-    "zh": [
-     "母公司拥有人",
-     "本公司拥有人",
-     "母公司权益持有人",
-     "本公司股东应占"
-    ]
-   },
-   "decomposition_rule": "Profit for the year = owners of the parent + non-controlling interests. The two attribution lines are components of that total and are never added to it.",
-   "confusable_with": [
-    "pl_profit_attributable_to__non_controlling_interests",
-    "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
-    "pl_profit_for_the_year"
-   ],
-   "exclude_hints": [
-    "total comprehensive",
-    "全面",
-    "non-controlling",
-    "非控股",
-    "少数"
-   ]
-  },
-  {
-   "canonical_key": "pl_profit_attributable_to__non_controlling_interests",
-   "label": "Profit attributable to non-controlling interests",
-   "inherits": "pl_s6_profit_attributable_to",
-   "match_priority": 78,
-   "definition": "The share of the period's consolidated profit or loss belonging to minority shareholders in subsidiaries (HKAS 1.81B(a) / HKFRS 10.B94). A FLOW for the period, distinct from the non-controlling-interests EQUITY BALANCE on the balance sheet.",
-   "include": [
-    "The 'Non-controlling interests' line printed under a 'Profit/(loss) attributable to:' heading."
-   ],
-   "exclude": [
-    "The non-controlling-interests balance within EQUITY — same wording, different concept: that is a closing balance, this is the period's result.",
-    "'Profit/(loss) for the year' itself, of which this is one of two components.",
-    "TOTAL COMPREHENSIVE income attributable to non-controlling interests.",
-    "Dividends paid to, capital contributed by, or interests acquired from non-controlling shareholders."
-   ],
-   "aliases": [
-    "Non-controlling interests",
-    "Profit/(loss) attributable to non-controlling interests",
-    "Non-controlling shareholders",
-    "Minority interests"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Non-controlling interests",
-     "Profit/(loss) attributable to non-controlling interests",
-     "Non-controlling shareholders",
-     "Minority interests"
-    ],
-    "zh": [
-     "非控股权益",
-     "非控制性权益应占",
-     "少数股东损益",
-     "非控股股东应占溢利"
-    ]
-   },
-   "decomposition_rule": "Profit for the year = owners of the parent + non-controlling interests.",
-   "confusable_with": [
-    "bs_equity__non_controlling_interests",
-    "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
-    "pl_profit_attributable_to__owners_of_the_parent",
-    "cf_cash_flow_from_financing_activities__dividends_paid_to_non_controlling_interests"
-   ],
-   "exclude_hints": [
-    "total comprehensive",
-    "全面",
-    "owners of the parent",
-    "母公司",
-    "dividend",
-    "股息",
-    "contribution",
-    "贡献",
-    "出资"
-   ]
-  },
-  {
-   "canonical_key": "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
-   "label": "Total comprehensive income attributable to owners of the parent",
-   "inherits": "pl_s7_total_comprehensive_income_attributable_to",
-   "match_priority": 82,
-   "definition": "The share of the period's TOTAL COMPREHENSIVE income — profit or loss plus OCI — belonging to the equity holders of the parent (HKAS 1.81B(b)(ii)).",
-   "include": [
-    "The 'Owners of the parent' line printed under a 'Total comprehensive income/(loss) attributable to:' heading."
-   ],
-   "exclude": [
-    "The owners-of-the-parent share of PROFIT for the year, which excludes OCI and is a different amount printed further up the same statement.",
-    "The non-controlling-interests share of total comprehensive income.",
-    "'Total comprehensive income/(loss) for the year' itself.",
-    "Equity attributable to owners of the parent on the balance sheet."
-   ],
-   "aliases": [
-    "Total comprehensive income attributable to owners of the parent",
-    "Total comprehensive loss attributable to owners of the parent",
-    "Owners of the parent",
-    "Equity holders of the parent",
-    "Owners of the Company"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Total comprehensive income attributable to owners of the parent",
-     "Total comprehensive loss attributable to owners of the parent",
-     "Owners of the parent",
-     "Equity holders of the parent",
-     "Owners of the Company"
-    ],
-    "zh": [
-     "母公司拥有人应占全面收益总额",
-     "母公司拥有人应占全面亏损总额",
-     "本公司拥有人应占全面收益总额",
-     "母公司拥有人",
-     "本公司拥有人"
-    ]
-   },
-   "decomposition_rule": "Total comprehensive income for the year = owners of the parent + non-controlling interests.",
-   "confusable_with": [
-    "pl_profit_attributable_to__owners_of_the_parent",
-    "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
-    "pl_total_comprehensive_income_for_the_year"
-   ],
-   "section_disambiguation": "The bare caption 'Owners of the parent' / 母公司拥有人 appears under both the profit and the total-comprehensive attribution headings and carries different amounts. Section_scope (pl_s6 vs pl_s7) is the only reliable discriminator — never pick by which appears first.",
-   "exclude_hints": [
-    "non-controlling",
-    "非控股",
-    "少数"
-   ]
-  },
-  {
-   "canonical_key": "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
-   "label": "Total comprehensive income attributable to non-controlling interests",
-   "inherits": "pl_s7_total_comprehensive_income_attributable_to",
-   "match_priority": 82,
-   "definition": "The share of the period's TOTAL COMPREHENSIVE income belonging to minority shareholders in subsidiaries (HKAS 1.81B(b)(i)). A period flow, not the equity balance.",
-   "include": [
-    "The 'Non-controlling interests' line printed under a 'Total comprehensive income/(loss) attributable to:' heading."
-   ],
-   "exclude": [
-    "The non-controlling-interests share of PROFIT for the year, which excludes their share of OCI.",
-    "The non-controlling-interests balance within equity on the balance sheet.",
-    "'Total comprehensive income/(loss) for the year' itself."
-   ],
-   "aliases": [
-    "Total comprehensive income attributable to non-controlling interests",
-    "Total comprehensive loss attributable to non-controlling interests",
-    "Non-controlling interests",
-    "Non-controlling shareholders"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Total comprehensive income attributable to non-controlling interests",
-     "Total comprehensive loss attributable to non-controlling interests",
-     "Non-controlling interests",
-     "Non-controlling shareholders"
-    ],
-    "zh": [
-     "非控股权益应占全面收益总额",
-     "非控股权益应占全面亏损总额",
-     "少数股东应占全面收益总额",
-     "非控股权益"
-    ]
-   },
-   "decomposition_rule": "Total comprehensive income for the year = owners of the parent + non-controlling interests.",
-   "confusable_with": [
-    "pl_profit_attributable_to__non_controlling_interests",
-    "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
-    "bs_equity__non_controlling_interests",
-    "pl_total_comprehensive_income_for_the_year"
-   ],
-   "exclude_hints": [
-    "owners of the parent",
-    "母公司",
-    "equity holders"
-   ]
-  },
-  {
-   "canonical_key": "pl_gross_profit",
-   "label": "Gross profit",
-   "inherits": "pl_top_level",
-   "match_priority": 74,
-   "definition": "The face subtotal struck immediately after revenue and cost of sales — revenue less the cost of sales for the same period. Measures the margin on core selling and servicing activity BEFORE selling and marketing expenses, administrative expenses, other income and gains, finance costs and tax. A negative amount is a gross loss and is carried with its reported sign. Being a subtotal, it is derived from the separately mapped revenue and cost-of-sales lines and must not be double-counted with them.",
-   "include": [
-    "The face subtotal captioned 'Gross profit', 'Gross profit/(loss)' or 毛利 / 毛利润 presented directly below revenue and cost of sales.",
-    "A reported gross loss ('Gross loss' / 毛损), retained with its negative sign.",
-    "The consolidated figure where both consolidated and company-only columns are shown."
-   ],
-   "exclude": [
-    "Revenue and cost of sales themselves, which would double-count this subtotal.",
-    "Operating profit / EBIT, profit before tax and profit for the year.",
-    "Gross margin percentages, ratios or per-segment gross profit quoted in the MD&A or segment note rather than on the face."
-   ],
-   "aliases": [
-    "Gross profit",
-    "Gross profit/(loss)",
-    "Gross loss"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Gross profit",
-     "Gross profit/(loss)",
-     "Gross loss"
-    ],
-    "zh": [
-     "毛利",
-     "毛利润",
-     "毛利/（毛损）",
-     "毛损"
-    ]
-   },
-   "confusable_with": [
-    "pl_operating_profit_ebit",
-    "pl_income__total_income"
-   ],
-   "exclude_hints": [
-    "margin",
-    "率",
-    "%",
-    "segment",
-    "分部"
-   ]
-  },
-  {
-   "canonical_key": "pl_operating_profit_ebit",
-   "label": "Operating profit / EBIT",
-   "inherits": "pl_top_level",
-   "match_priority": 72,
-   "extraction_mode": "extract_or_derive",
-   "derivation": "pl_income__total_income + pl_expenses__total_operating_cost, under the negative-expense sign convention",
-   "definition": "Result of operating activities before finance costs and tax. HKFRS does not mandate this subtotal, so most HKEX filings do not print it; derivation is the normal path.",
-   "aliases": [
-    "Operating profit",
-    "Profit from operations",
-    "Operating profit / EBIT",
-    "EBIT",
-    "Results from operating activities"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Operating profit",
-     "Profit from operations",
-     "Operating profit / EBIT",
-     "EBIT",
-     "Results from operating activities"
-    ],
-    "zh": [
-     "营业利润",
-     "经营利润",
-     "营业利润/息税前利润",
-     "息税前利润",
-     "经营活动业绩"
-    ]
-   },
-   "exclude": [
-    "Gross profit.",
-    "Profit before tax, which is struck after finance costs.",
-    "EBITDA and other MD&A measures."
-   ],
-   "confusable_with": [
-    "pl_gross_profit",
-    "pl_profit_before_tax",
-    "pl_profit_before_exceptional_items_and_tax"
-   ],
-   "exclude_hints": [
-    "ebitda",
-    "before tax",
-    "除税前",
-    "税前"
-   ]
-  },
-  {
-   "canonical_key": "pl_profit_before_exceptional_items_and_tax",
-   "label": "Profit before exceptional items and tax",
-   "inherits": "pl_top_level",
-   "match_priority": 72,
-   "extraction_mode": "derive",
-   "derivation": "pl_income__total_income + pl_expenses__total_operating_cost + pl_non_operating_expenses__total_non_operating",
-   "definition": "A template-internal subtotal. HKFRS statements do not print an 'exceptional items' caption, so this concept is derived and its aliases are intentionally minimal to prevent a spurious face match.",
-   "aliases": [
-    "Profit before exceptional items and tax"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Profit before exceptional items and tax"
-    ],
-    "zh": [
-     "非经常性项目及税前利润"
-    ]
-   },
-   "exclude": [
-    "'Profit before tax', which is struck AFTER exceptional items and is a different amount.",
-    "Operating profit."
-   ],
-   "confusable_with": [
-    "pl_profit_before_tax",
-    "pl_operating_profit_ebit"
-   ],
-   "exclude_hints": [
-    "^profit before tax",
-    "^除税前"
-   ]
-  },
-  {
-   "canonical_key": "pl_profit_before_tax",
-   "label": "Profit/(loss) before tax",
-   "inherits": "pl_top_level",
-   "match_priority": 78,
-   "definition": "The result of the period before income tax expense, as printed on the face of the statement of profit or loss.",
-   "aliases": [
-    "Profit before tax",
-    "Profit/(loss) before tax",
-    "Loss before tax",
-    "Profit before taxation",
-    "Loss before taxation",
-    "Profit before income tax"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Profit before tax",
-     "Profit/(loss) before tax",
-     "Loss before tax",
-     "Profit before taxation",
-     "Loss before taxation",
-     "Profit before income tax"
-    ],
-    "zh": [
-     "税前利润",
-     "除税前溢利",
-     "除税前溢利/（亏损）",
-     "除税前亏损",
-     "除所得税前溢利",
-     "税前亏损"
-    ]
-   },
-   "exclude": [
-    "The 'Profit before tax' starting line of the cash-flow reconciliation, which is the same amount on a DIFFERENT statement and binds to its own concept.",
-    "'Profit before exceptional items and tax'.",
-    "Profit for the year."
-   ],
-   "confusable_with": [
-    "cf_cash_flow_from_operating_activities__profit_before_tax",
-    "pl_profit_before_exceptional_items_and_tax",
-    "pl_profit_for_the_year"
-   ],
-   "section_disambiguation": "Same wording and same amount as the cash-flow starting line. Statement resolution, not wording, decides. Identity cf_pbt_agreement cross-checks that both loaded the same number."
-  },
-  {
    "canonical_key": "pl_other_comprehensive_income_for_the_year",
    "label": "Other comprehensive income/(loss) for the year",
    "inherits": "pl_top_level",
@@ -6297,69 +6178,101 @@
    "decomposition_rule": "Unclassified OCI rows may enter the OCI residual only when itemised. A difference to total comprehensive income is an unallocated_gap."
   },
   {
-   "canonical_key": "pl_profit_for_the_year",
-   "label": "Profit/(loss) for the year",
-   "inherits": "pl_top_level",
-   "match_priority": 80,
-   "definition": "The PROFIT-OR-LOSS bottom line for the period — result after tax and before any item of other comprehensive income. It stops at the profit-or-loss subtotal and is therefore NOT the same figure as total comprehensive income for the year.",
+   "canonical_key": "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
+   "label": "Total comprehensive income attributable to owners of the parent",
+   "inherits": "pl_s7_total_comprehensive_income_attributable_to",
+   "match_priority": 82,
+   "definition": "The share of the period's TOTAL COMPREHENSIVE income — profit or loss plus OCI — belonging to the equity holders of the parent (HKAS 1.81B(b)(ii)).",
    "include": [
-    "The post-tax profit-or-loss result for the period, before other comprehensive income.",
-    "A combined 'profit and total comprehensive income for the year' caption used where there is no other comprehensive income at all."
+    "The 'Owners of the parent' line printed under a 'Total comprehensive income/(loss) attributable to:' heading."
    ],
    "exclude": [
-    "'TOTAL COMPREHENSIVE income/(loss) for the year' / 年内全面亏损总额, which adds OCI — on a bilingual HKEX statement its wrapped caption reaches the matcher as the bare fragment 'LOSS FOR THE YEAR', and that row's amount belongs to the total-comprehensive concept, not here.",
-    "'Other comprehensive income/(loss) for the year'.",
-    "The attribution lines 'attributable to owners of the parent' and 'attributable to non-controlling interests', which are components of this figure.",
-    "Retained earnings on the balance sheet."
+    "The owners-of-the-parent share of PROFIT for the year, which excludes OCI and is a different amount printed further up the same statement.",
+    "The non-controlling-interests share of total comprehensive income.",
+    "'Total comprehensive income/(loss) for the year' itself.",
+    "Equity attributable to owners of the parent on the balance sheet."
    ],
    "aliases": [
-    "Profit for the year",
-    "Loss for the year",
-    "Profit/(loss) for the year",
-    "(Loss)/profit for the year",
-    "Profit for the period",
-    "Loss for the period",
-    "Net profit for the year",
-    "Profit and total comprehensive income for the year"
+    "Total comprehensive income attributable to owners of the parent",
+    "Total comprehensive loss attributable to owners of the parent",
+    "Owners of the parent",
+    "Equity holders of the parent",
+    "Owners of the Company"
    ],
    "aliases_i18n": {
     "en": [
-     "Profit for the year",
-     "Loss for the year",
-     "Profit/(loss) for the year",
-     "(Loss)/profit for the year",
-     "Profit for the period",
-     "Loss for the period",
-     "Net profit for the year",
-     "Profit and total comprehensive income for the year"
+     "Total comprehensive income attributable to owners of the parent",
+     "Total comprehensive loss attributable to owners of the parent",
+     "Owners of the parent",
+     "Equity holders of the parent",
+     "Owners of the Company"
     ],
     "zh": [
-     "年度利润",
-     "年内亏损",
-     "年内溢利",
-     "年内溢利/（亏损）",
-     "本年度亏损",
-     "年度亏损",
-     "期内亏损"
+     "母公司拥有人应占全面收益总额",
+     "母公司拥有人应占全面亏损总额",
+     "本公司拥有人应占全面收益总额",
+     "母公司拥有人",
+     "本公司拥有人"
     ]
    },
+   "decomposition_rule": "Total comprehensive income for the year = owners of the parent + non-controlling interests.",
    "confusable_with": [
-    "pl_total_comprehensive_income_for_the_year",
-    "pl_other_comprehensive_income_for_the_year",
     "pl_profit_attributable_to__owners_of_the_parent",
-    "pl_profit_attributable_to__non_controlling_interests",
-    "bs_equity__retained_earnings"
+    "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
+    "pl_total_comprehensive_income_for_the_year"
    ],
-   "regex_hints": [
-    "^(profit|loss).{0,15}for the (year|period)$",
-    "^年内(溢利|亏损)$"
+   "section_disambiguation": "The bare caption 'Owners of the parent' / 母公司拥有人 appears under both the profit and the total-comprehensive attribution headings and carries different amounts. Section_scope (pl_s6 vs pl_s7) is the only reliable discriminator — never pick by which appears first.",
+   "exclude_hints": [
+    "non-controlling",
+    "非控股",
+    "少数"
+   ]
+  },
+  {
+   "canonical_key": "pl_total_comprehensive_income_attributable_to__non_controlling_interests",
+   "label": "Total comprehensive income attributable to non-controlling interests",
+   "inherits": "pl_s7_total_comprehensive_income_attributable_to",
+   "match_priority": 82,
+   "definition": "The share of the period's TOTAL COMPREHENSIVE income belonging to minority shareholders in subsidiaries (HKAS 1.81B(b)(i)). A period flow, not the equity balance.",
+   "include": [
+    "The 'Non-controlling interests' line printed under a 'Total comprehensive income/(loss) attributable to:' heading."
+   ],
+   "exclude": [
+    "The non-controlling-interests share of PROFIT for the year, which excludes their share of OCI.",
+    "The non-controlling-interests balance within equity on the balance sheet.",
+    "'Total comprehensive income/(loss) for the year' itself."
+   ],
+   "aliases": [
+    "Total comprehensive income attributable to non-controlling interests",
+    "Total comprehensive loss attributable to non-controlling interests",
+    "Non-controlling interests",
+    "Non-controlling shareholders"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Total comprehensive income attributable to non-controlling interests",
+     "Total comprehensive loss attributable to non-controlling interests",
+     "Non-controlling interests",
+     "Non-controlling shareholders"
+    ],
+    "zh": [
+     "非控股权益应占全面收益总额",
+     "非控股权益应占全面亏损总额",
+     "少数股东应占全面收益总额",
+     "非控股权益"
+    ]
+   },
+   "decomposition_rule": "Total comprehensive income for the year = owners of the parent + non-controlling interests.",
+   "confusable_with": [
+    "pl_profit_attributable_to__non_controlling_interests",
+    "pl_total_comprehensive_income_attributable_to__owners_of_the_parent",
+    "bs_equity__non_controlling_interests",
+    "pl_total_comprehensive_income_for_the_year"
    ],
    "exclude_hints": [
-    "total comprehensive",
-    "other comprehensive",
-    "全面",
-    "attributable",
-    "应占"
+    "owners of the parent",
+    "母公司",
+    "equity holders"
    ]
   },
   {
@@ -6993,46 +6906,6 @@
    ]
   },
   {
-   "canonical_key": "cf_cash_flow_from_operating_activities__others",
-   "label": "Other operating cash-flow lines (face, unmapped)",
-   "inherits": "cf_s1_operating",
-   "value_scope": "exclusive_residual",
-   "alias_matching": "disabled",
-   "match_priority": 0,
-   "definition": "Sweep bucket for value rows printed on the face of the statement of cash flows inside the operating section that no dedicated operating concept claimed. Governed entirely by residual_framework. Note that the template places this inside the 'Cash generated from operations' rollup, so it must not absorb rows printed below that subtotal.",
-   "residual_policy": {
-    "framework": "residual_framework",
-    "section_scope": "cf_s1_cash_flow_from_operating_activities",
-    "population": "sweep_only",
-    "cross_section": false,
-    "notes_as_source": false,
-    "plug": false,
-    "itemise": true
-   },
-   "never_sweep": [
-    "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
-    "cf_cash_flow_from_operating_activities__net_cash_from_operating_activities",
-    "cf_cash_flow_from_operating_activities__interest_received",
-    "cf_cash_flow_from_operating_activities__income_tax_paid",
-    "any row printed in the investing or financing sections",
-    "any row printed BELOW the cash-generated-from-operations subtotal, since the template includes this concept within that subtotal"
-   ],
-   "expected_components": [
-    "Gain on bargain purchase / negative goodwill",
-    "Gain on repurchase of senior notes",
-    "Increase in provision for major overhauls, net",
-    "Remeasurement of investments in joint ventures",
-    "Share-based payment expense",
-    "Net unrealised exchange differences",
-    "Movements in amounts due from or to related parties presented within operating"
-   ],
-   "aliases": [],
-   "aliases_i18n": {
-    "en": [],
-    "zh": []
-   }
-  },
-  {
    "canonical_key": "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
    "label": "Cash generated from operations",
    "inherits": "cf_s1_operating",
@@ -7172,6 +7045,46 @@
     "bs_current_liabilities__current_income_tax_liabilities"
    ],
    "aggregation_note": "Where corporate income tax and land appreciation tax paid are printed on separate rows, sum them here and retain both rows as evidence."
+  },
+  {
+   "canonical_key": "cf_cash_flow_from_operating_activities__others",
+   "label": "Other operating cash-flow lines (face, unmapped)",
+   "inherits": "cf_s1_operating",
+   "value_scope": "exclusive_residual",
+   "alias_matching": "disabled",
+   "match_priority": 0,
+   "definition": "Sweep bucket for value rows printed on the face of the statement of cash flows inside the operating section that no dedicated operating concept claimed. Governed entirely by residual_framework. Note that the template places this inside the 'Cash generated from operations' rollup, so it must not absorb rows printed below that subtotal.",
+   "residual_policy": {
+    "framework": "residual_framework",
+    "section_scope": "cf_s1_cash_flow_from_operating_activities",
+    "population": "sweep_only",
+    "cross_section": false,
+    "notes_as_source": false,
+    "plug": false,
+    "itemise": true
+   },
+   "never_sweep": [
+    "cf_cash_flow_from_operating_activities__cash_generated_from_operations",
+    "cf_cash_flow_from_operating_activities__net_cash_from_operating_activities",
+    "cf_cash_flow_from_operating_activities__interest_received",
+    "cf_cash_flow_from_operating_activities__income_tax_paid",
+    "any row printed in the investing or financing sections",
+    "any row printed BELOW the cash-generated-from-operations subtotal, since the template includes this concept within that subtotal"
+   ],
+   "expected_components": [
+    "Gain on bargain purchase / negative goodwill",
+    "Gain on repurchase of senior notes",
+    "Increase in provision for major overhauls, net",
+    "Remeasurement of investments in joint ventures",
+    "Share-based payment expense",
+    "Net unrealised exchange differences",
+    "Movements in amounts due from or to related parties presented within operating"
+   ],
+   "aliases": [],
+   "aliases_i18n": {
+    "en": [],
+    "zh": []
+   }
   },
   {
    "canonical_key": "cf_cash_flow_from_operating_activities__net_cash_from_operating_activities",
@@ -7777,77 +7690,6 @@
    ]
   },
   {
-   "canonical_key": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
-   "label": "Proceeds from issue of shares",
-   "inherits": "cf_s3_financing",
-   "match_priority": 66,
-   "sign_convention": "positive_expected",
-   "definition": "Cash received from issuing equity shares, net of issue costs where the filing presents it net.",
-   "aliases": [
-    "Proceeds from issue of shares",
-    "Proceeds from issue of new shares",
-    "Proceeds from placing of shares",
-    "Proceeds from exercise of share options"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Proceeds from issue of shares",
-     "Proceeds from issue of new shares",
-     "Proceeds from placing of shares",
-     "Proceeds from exercise of share options"
-    ],
-    "zh": [
-     "发行股份所得款项",
-     "发行新股所得款项",
-     "配售股份所得款项",
-     "行使股份期权所得款项"
-    ]
-   },
-   "confusable_with": [
-    "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests"
-   ]
-  },
-  {
-   "canonical_key": "cf_cash_flow_from_financing_activities__repurchase_of_shares",
-   "label": "Repurchase of shares",
-   "inherits": "cf_s3_financing",
-   "match_priority": 66,
-   "sign_convention": "negative_expected",
-   "definition": "Cash paid to buy back the group's own equity shares, including shares acquired for a share award scheme.",
-   "aliases": [
-    "Repurchase of shares",
-    "Buy-back of shares",
-    "Purchase of shares for share award scheme",
-    "Payment for repurchase of shares"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Repurchase of shares",
-     "Buy-back of shares",
-     "Purchase of shares for share award scheme",
-     "Payment for repurchase of shares"
-    ],
-    "zh": [
-     "购回股份",
-     "回购股份",
-     "为股份奖励计划购买股份",
-     "支付购回股份款项"
-    ]
-   },
-   "exclude": [
-    "Repurchase of senior notes, which is a debt redemption."
-   ],
-   "confusable_with": [
-    "cf_cash_flow_from_financing_activities__redemption_of_bonds_and_notes"
-   ],
-   "exclude_hints": [
-    "note",
-    "bond",
-    "票据",
-    "债券"
-   ]
-  },
-  {
    "canonical_key": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_bonds_and_notes",
    "label": "Proceeds from issue of bonds and notes",
    "inherits": "cf_s3_financing",
@@ -7951,6 +7793,180 @@
    ]
   },
   {
+   "canonical_key": "cf_cash_flow_from_financing_activities__interest_paid",
+   "label": "Interest paid",
+   "inherits": "cf_s3_financing",
+   "match_priority": 66,
+   "sign_convention": "negative_expected",
+   "definition": "Cash interest and other finance charges paid, including capitalised interest paid and the interest element of lease payments where presented here.",
+   "aliases": [
+    "Interest paid",
+    "Interest and other finance charges paid",
+    "Interest element of lease payments"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Interest paid",
+     "Interest and other finance charges paid",
+     "Interest element of lease payments"
+    ],
+    "zh": [
+     "已付利息",
+     "已付利息及其他财务费用",
+     "租赁付款的利息部分"
+    ]
+   },
+   "exclude": [
+    "The finance costs add-back in the operating section, which is a non-cash reversal of the profit-or-loss charge and usually a different amount.",
+    "The profit-or-loss finance costs line.",
+    "The principal element of lease payments."
+   ],
+   "confusable_with": [
+    "cf_cash_flow_from_operating_activities__finance_costs",
+    "pl_non_operating_expenses__interest_expense",
+    "cf_cash_flow_from_financing_activities__principal_elements_of_lease_payments"
+   ]
+  },
+  {
+   "canonical_key": "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
+   "label": "Proceeds from issue of shares",
+   "inherits": "cf_s3_financing",
+   "match_priority": 66,
+   "sign_convention": "positive_expected",
+   "definition": "Cash received from issuing equity shares, net of issue costs where the filing presents it net.",
+   "aliases": [
+    "Proceeds from issue of shares",
+    "Proceeds from issue of new shares",
+    "Proceeds from placing of shares",
+    "Proceeds from exercise of share options"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Proceeds from issue of shares",
+     "Proceeds from issue of new shares",
+     "Proceeds from placing of shares",
+     "Proceeds from exercise of share options"
+    ],
+    "zh": [
+     "发行股份所得款项",
+     "发行新股所得款项",
+     "配售股份所得款项",
+     "行使股份期权所得款项"
+    ]
+   },
+   "confusable_with": [
+    "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests"
+   ]
+  },
+  {
+   "canonical_key": "cf_cash_flow_from_financing_activities__repurchase_of_shares",
+   "label": "Repurchase of shares",
+   "inherits": "cf_s3_financing",
+   "match_priority": 66,
+   "sign_convention": "negative_expected",
+   "definition": "Cash paid to buy back the group's own equity shares, including shares acquired for a share award scheme.",
+   "aliases": [
+    "Repurchase of shares",
+    "Buy-back of shares",
+    "Purchase of shares for share award scheme",
+    "Payment for repurchase of shares"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Repurchase of shares",
+     "Buy-back of shares",
+     "Purchase of shares for share award scheme",
+     "Payment for repurchase of shares"
+    ],
+    "zh": [
+     "购回股份",
+     "回购股份",
+     "为股份奖励计划购买股份",
+     "支付购回股份款项"
+    ]
+   },
+   "exclude": [
+    "Repurchase of senior notes, which is a debt redemption."
+   ],
+   "confusable_with": [
+    "cf_cash_flow_from_financing_activities__redemption_of_bonds_and_notes"
+   ],
+   "exclude_hints": [
+    "note",
+    "bond",
+    "票据",
+    "债券"
+   ]
+  },
+  {
+   "canonical_key": "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests",
+   "label": "Capital contributions from non-controlling interests",
+   "inherits": "cf_s3_financing",
+   "match_priority": 72,
+   "sign_convention": "positive_expected",
+   "definition": "Cash injected into subsidiaries by their minority shareholders.",
+   "aliases": [
+    "Capital contributions from non-controlling interests",
+    "Capital contribution from non-controlling shareholders",
+    "Advances from non-controlling shareholders",
+    "Contributions from minority shareholders"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Capital contributions from non-controlling interests",
+     "Capital contribution from non-controlling shareholders",
+     "Advances from non-controlling shareholders",
+     "Contributions from minority shareholders"
+    ],
+    "zh": [
+     "非控股股东资本贡献",
+     "非控股股东出资",
+     "非控股股东垫款"
+    ]
+   },
+   "confusable_with": [
+    "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
+    "bs_equity__non_controlling_interests"
+   ]
+  },
+  {
+   "canonical_key": "cf_cash_flow_from_financing_activities__advances_from_related_parties",
+   "label": "Advances from related parties",
+   "definition": "Loans and advances received from related parties, and repayments made on them, presented as a financing cash flow.",
+   "inherits": "cf_s3_financing",
+   "match_priority": 66,
+   "value_scope": "exclusive_leaf",
+   "aliases": [
+    "Advances from related parties",
+    "Loans from related parties",
+    "Advances from a shareholder",
+    "Advances from the immediate holding company",
+    "Amounts advanced from related parties"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Advances from related parties",
+     "Loans from related parties",
+     "Advances from a shareholder",
+     "Advances from the immediate holding company",
+     "Amounts advanced from related parties"
+    ],
+    "zh": [
+     "关联方提供的款项",
+     "關聯方提供的款項",
+     "关联方垫款",
+     "应付关联方款项变动"
+    ]
+   },
+   "exclude": [
+    "Advances TO related parties, which are an investing cash flow and their own concept.",
+    "Trade balances with related parties, which are a working-capital movement."
+   ],
+   "confusable_with": [
+    "cf_cash_flow_from_investing_activities__advances_to_related_parties"
+   ]
+  },
+  {
    "canonical_key": "cf_cash_flow_from_financing_activities__dividends_paid",
    "label": "Dividends paid",
    "inherits": "cf_s3_financing",
@@ -8032,109 +8048,6 @@
    ]
   },
   {
-   "canonical_key": "cf_cash_flow_from_financing_activities__capital_contributions_from_non_controlling_interests",
-   "label": "Capital contributions from non-controlling interests",
-   "inherits": "cf_s3_financing",
-   "match_priority": 72,
-   "sign_convention": "positive_expected",
-   "definition": "Cash injected into subsidiaries by their minority shareholders.",
-   "aliases": [
-    "Capital contributions from non-controlling interests",
-    "Capital contribution from non-controlling shareholders",
-    "Advances from non-controlling shareholders",
-    "Contributions from minority shareholders"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Capital contributions from non-controlling interests",
-     "Capital contribution from non-controlling shareholders",
-     "Advances from non-controlling shareholders",
-     "Contributions from minority shareholders"
-    ],
-    "zh": [
-     "非控股股东资本贡献",
-     "非控股股东出资",
-     "非控股股东垫款"
-    ]
-   },
-   "confusable_with": [
-    "cf_cash_flow_from_financing_activities__proceeds_from_issue_of_shares",
-    "bs_equity__non_controlling_interests"
-   ]
-  },
-  {
-   "canonical_key": "cf_cash_flow_from_financing_activities__advances_from_related_parties",
-   "label": "Advances from related parties",
-   "definition": "Loans and advances received from related parties, and repayments made on them, presented as a financing cash flow.",
-   "inherits": "cf_s3_financing",
-   "match_priority": 66,
-   "value_scope": "exclusive_leaf",
-   "aliases": [
-    "Advances from related parties",
-    "Loans from related parties",
-    "Advances from a shareholder",
-    "Advances from the immediate holding company",
-    "Amounts advanced from related parties"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Advances from related parties",
-     "Loans from related parties",
-     "Advances from a shareholder",
-     "Advances from the immediate holding company",
-     "Amounts advanced from related parties"
-    ],
-    "zh": [
-     "关联方提供的款项",
-     "關聯方提供的款項",
-     "关联方垫款",
-     "应付关联方款项变动"
-    ]
-   },
-   "exclude": [
-    "Advances TO related parties, which are an investing cash flow and their own concept.",
-    "Trade balances with related parties, which are a working-capital movement."
-   ],
-   "confusable_with": [
-    "cf_cash_flow_from_investing_activities__advances_to_related_parties"
-   ]
-  },
-  {
-   "canonical_key": "cf_cash_flow_from_financing_activities__interest_paid",
-   "label": "Interest paid",
-   "inherits": "cf_s3_financing",
-   "match_priority": 66,
-   "sign_convention": "negative_expected",
-   "definition": "Cash interest and other finance charges paid, including capitalised interest paid and the interest element of lease payments where presented here.",
-   "aliases": [
-    "Interest paid",
-    "Interest and other finance charges paid",
-    "Interest element of lease payments"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Interest paid",
-     "Interest and other finance charges paid",
-     "Interest element of lease payments"
-    ],
-    "zh": [
-     "已付利息",
-     "已付利息及其他财务费用",
-     "租赁付款的利息部分"
-    ]
-   },
-   "exclude": [
-    "The finance costs add-back in the operating section, which is a non-cash reversal of the profit-or-loss charge and usually a different amount.",
-    "The profit-or-loss finance costs line.",
-    "The principal element of lease payments."
-   ],
-   "confusable_with": [
-    "cf_cash_flow_from_operating_activities__finance_costs",
-    "pl_non_operating_expenses__interest_expense",
-    "cf_cash_flow_from_financing_activities__principal_elements_of_lease_payments"
-   ]
-  },
-  {
    "canonical_key": "cf_cash_flow_from_financing_activities__others",
    "label": "Other financing cash-flow lines (face, unmapped)",
    "inherits": "cf_s3_financing",
@@ -8197,41 +8110,6 @@
      "融资活动所用现金流量净额"
     ]
    }
-  },
-  {
-   "canonical_key": "cf_effect_of_foreign_exchange_rate_changes",
-   "label": "Effect of foreign exchange rate changes",
-   "inherits": "cf_top_level",
-   "value_scope": "exclusive_leaf",
-   "unit_of_account": "flow",
-   "match_priority": 74,
-   "definition": "Effect of exchange-rate movements on cash and cash equivalents held in foreign currencies (HKAS 7.28). A reconciling item between the net movement and the closing balance.",
-   "aliases": [
-    "Effect of foreign exchange rate changes",
-    "Effect of foreign exchange rate changes, net",
-    "Effect of changes in foreign exchange rates",
-    "Exchange realignment"
-   ],
-   "aliases_i18n": {
-    "en": [
-     "Effect of foreign exchange rate changes",
-     "Effect of foreign exchange rate changes, net",
-     "Effect of changes in foreign exchange rates",
-     "Exchange realignment"
-    ],
-    "zh": [
-     "汇率变动的影响",
-     "汇率变动的影响净额",
-     "汇兑调整"
-    ]
-   },
-   "exclude": [
-    "Exchange differences on translating foreign operations, which are an OCI item.",
-    "Realised and unrealised exchange gains and losses in profit or loss."
-   ],
-   "confusable_with": [
-    "pl_other_comprehensive_income_for_the_year"
-   ]
   },
   {
    "canonical_key": "cf_net_increase_decrease_in_cash_and_cash_equivalents",
@@ -8303,6 +8181,41 @@
    ]
   },
   {
+   "canonical_key": "cf_effect_of_foreign_exchange_rate_changes",
+   "label": "Effect of foreign exchange rate changes",
+   "inherits": "cf_top_level",
+   "value_scope": "exclusive_leaf",
+   "unit_of_account": "flow",
+   "match_priority": 74,
+   "definition": "Effect of exchange-rate movements on cash and cash equivalents held in foreign currencies (HKAS 7.28). A reconciling item between the net movement and the closing balance.",
+   "aliases": [
+    "Effect of foreign exchange rate changes",
+    "Effect of foreign exchange rate changes, net",
+    "Effect of changes in foreign exchange rates",
+    "Exchange realignment"
+   ],
+   "aliases_i18n": {
+    "en": [
+     "Effect of foreign exchange rate changes",
+     "Effect of foreign exchange rate changes, net",
+     "Effect of changes in foreign exchange rates",
+     "Exchange realignment"
+    ],
+    "zh": [
+     "汇率变动的影响",
+     "汇率变动的影响净额",
+     "汇兑调整"
+    ]
+   },
+   "exclude": [
+    "Exchange differences on translating foreign operations, which are an OCI item.",
+    "Realised and unrealised exchange gains and losses in profit or loss."
+   ],
+   "confusable_with": [
+    "pl_other_comprehensive_income_for_the_year"
+   ]
+  },
+  {
    "canonical_key": "cf_closing_cash_and_cash_equivalents",
    "label": "Cash and cash equivalents at end of year",
    "inherits": "cf_top_level",
@@ -8346,6 +8259,6 @@
   "name": "HKFRS / IFRS Hong Kong-China Extraction Ontology",
   "framework": "HKFRS",
   "version": "1.0",
-  "concept_count": 185
+  "concept_count": 183
  }
 }

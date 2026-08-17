@@ -338,7 +338,7 @@ def test_a_per_share_row_is_ineligible_until_the_eligibility_list_stops_saying_s
     it is far too small for any rollup to notice."""
     def statement() -> DocumentModel:
         return _doc("profit_and_loss", [
-            _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+            _li(0, "Total operating cost", "pl_expenses__total_operating_cost", -100,
                 LineRole.SUBTOTAL),
             _li(1, "Basic earnings per share (HK cents)", None, 12),
         ])
@@ -365,7 +365,7 @@ def test_an_attribution_caption_is_not_merged_into_the_section_above_it(raw_onto
     to its own concept. Left eligible it resolves to the nearest section with a residual — the
     operating expenses — and a period flow lands inside another section's arithmetic."""
     doc = _doc("profit_and_loss", [
-        _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+        _li(0, "Total operating cost", "pl_expenses__total_operating_cost", -100,
             LineRole.SUBTOTAL),
         _li(1, "Attributable to non-controlling interests:", None, 40),
     ])
@@ -413,7 +413,7 @@ def test_a_row_printed_inside_another_section_is_ineligible_while_the_list_says_
     """
     def statement() -> DocumentModel:
         return _doc("profit_and_loss", [
-            _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+            _li(0, "Total operating cost", "pl_expenses__total_operating_cost", -100,
                 LineRole.SUBTOTAL),
             _li(1, "Profit attributable to owners of the parent",
                 "pl_profit_attributable_to__owners_of_the_parent", 300),
@@ -620,7 +620,7 @@ def test_a_component_a_dedicated_concept_was_vetoed_from_claiming_is_a_review_tr
     caption."""
     doc = _doc("profit_and_loss", [
         _li(0, "Accumulated depreciation", None, -20),
-        _li(1, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+        _li(1, "Total operating cost", "pl_expenses__total_operating_cost", -100,
             LineRole.SUBTOTAL),
     ])
     ctx = _run(doc, _ontology(raw_ontology))
@@ -669,7 +669,7 @@ def _expenses_doc_with_note() -> DocumentModel:
     """The expense section as HKEX filings print it: one face subtotal citing the expenses note,
     which splits it by nature — including an auditor's-remuneration line no concept covers."""
     doc = _doc("profit_and_loss", [
-        _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+        _li(0, "Total operating cost", "pl_expenses__total_operating_cost", -100,
             LineRole.SUBTOTAL, note="8"),
         _li(1, "Other expenses", "pl_expenses__other_expenses", -60, note="8"),
         _li(2, "Staff costs", "pl_expenses__employee_benefits_expense", -10, note="8"),
@@ -807,7 +807,7 @@ def test_the_bare_sub_captions_of_a_per_share_block_are_per_share_figures(raw_on
     Matched only under the heading. "Basic" on its own is far too generic a caption to veto a row on.
     """
     doc = _doc("profit_and_loss", [
-        _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+        _li(0, "Total operating cost", "pl_expenses__total_operating_cost", -100,
             LineRole.SUBTOTAL),
         _li(1, "LOSS PER SHARE", None, None, LineRole.HEADER),
         _li(2, "Basic", None, -12),
@@ -822,7 +822,7 @@ def test_the_bare_sub_captions_of_a_per_share_block_are_per_share_figures(raw_on
     # …and the same captions with no per-share heading above them are NOT vetoed by this rule: the
     # block ends at the first row that is neither the heading nor one of its sub-captions.
     plain = _doc("profit_and_loss", [
-        _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+        _li(0, "Total operating cost", "pl_expenses__total_operating_cost", -100,
             LineRole.SUBTOTAL),
         _li(1, "Basic", None, -12),
     ])
@@ -841,7 +841,7 @@ def test_a_bilingual_per_share_sub_caption_is_recognised_in_either_language(raw_
     the Chinese alone, so each half has to stand on its own.
     """
     captions = ["– Basic －基本", "– Diluted －攤薄", "基本", "－稀释", "Diluted (restated)"]
-    items = [_li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+    items = [_li(0, "Total operating cost", "pl_expenses__total_operating_cost", -100,
                  LineRole.SUBTOTAL),
              _li(1, "LOSS PER SHARE 每股虧損", None, None, LineRole.HEADER)]
     items += [_li(i + 2, caption, None, -12) for i, caption in enumerate(captions)]
@@ -855,7 +855,7 @@ def test_a_bilingual_per_share_sub_caption_is_recognised_in_either_language(raw_
     # A caption that merely CONTAINS one of those words is an ordinary row and is swept as one: the
     # pattern anchors on the whole caption, or "Basic salary" would go to review on every filing.
     ordinary = _doc("profit_and_loss", [
-        _li(0, "Total operating expenses", "pl_expenses__total_operating_expenses", -100,
+        _li(0, "Total operating cost", "pl_expenses__total_operating_cost", -100,
             LineRole.SUBTOTAL),
         _li(1, "LOSS PER SHARE 每股虧損", None, None, LineRole.HEADER),
         _li(2, "Basic salary of directors", None, -12),
@@ -942,3 +942,69 @@ def test_a_row_signed_against_its_section_goes_to_review_not_into_the_bucket(raw
         row.section_hint = "REVENUE"
     _run(doc, _ontology(raw_ontology))
     assert doc.line_items[1].canonical_key == "pl_income__others"
+
+
+# --- one section, one bucket ---------------------------------------------------------------------
+
+def _two_buckets_on_one_section(raw: dict, first: str) -> dict:
+    """``bs_current_liabilities__others`` re-scoped onto the non-current section, which already has
+    a bucket of its own — a single-scope concept each, so prohibition 5 has nothing to refuse, and
+    two buckets claim one section. ``first`` is the key placed EARLIER in the ``mappings`` array."""
+    out = copy.deepcopy(raw)
+    for m in out["mappings"]:
+        if m["canonical_key"] == "bs_current_liabilities__others":
+            m["inherits"] = "bs_s4_non_current_liabilities"
+            m["section_scope"] = ["bs_s4_non_current_liabilities"]
+            m["residual_policy"]["section_scope"] = "bs_s4_non_current_liabilities"
+    keys = [m["canonical_key"] for m in out["mappings"]]
+    a, b = keys.index("bs_current_liabilities__others"), keys.index(
+        "bs_non_current_liabilities__others")
+    lo, hi = min(a, b), max(a, b)
+    want_lo = first
+    if out["mappings"][lo]["canonical_key"] != want_lo:
+        out["mappings"][lo], out["mappings"][hi] = out["mappings"][hi], out["mappings"][lo]
+    return out
+
+
+@pytest.mark.parametrize("first", ["bs_current_liabilities__others",
+                                  "bs_non_current_liabilities__others"])
+def test_two_buckets_claiming_one_section_are_both_refused_whichever_is_listed_first(
+        raw_ontology, first):
+    """THE DEFECT THIS CLOSES: the order of the ``mappings`` array was load-bearing, and nothing said so.
+
+    ``by_section`` was built as ``{r.section: r for r in usable}``. Two residuals claiming one
+    section therefore resolved by POSITION IN THE FILE — the later one won, the earlier one vanished
+    with nothing logged — so re-ordering the array moved a whole section's unclaimed rows into a
+    different bucket, on a different statement, with both sections still tying afterwards. The array
+    order is presentation: the workbook's Concepts sheet is generated from it and a reviewer sorting
+    it into the order a statement reads must not be changing extraction.
+
+    Two buckets on one section is the contradiction prohibition 5 already forbids within a single
+    concept. Neither sweeps, both record who contested them, and — the assertion this test exists for
+    — the outcome is identical under both orderings.
+    """
+    doc = _doc("balance_sheet", [
+        _li(0, "Interest-bearing bank borrowings",
+            "bs_non_current_liabilities__non_current_borrowings", 100),
+        _li(1, "Other long-term obligations", None, 25),
+        _li(2, "Total non-current liabilities",
+            "bs_non_current_liabilities__total_non_current_liabilities", 125, LineRole.SUBTOTAL),
+    ])
+    ctx = _run(doc, _ontology(_two_buckets_on_one_section(raw_ontology, first)))
+
+    # No bucket sweeps the contested section, so the unclaimed row stays unclaimed and visible
+    # rather than being filed by whichever concept happened to be listed second.
+    assert doc.line_items[1].canonical_key is None
+    contested = [m for m in ctx.logs if "section_contested_by:" in m]
+    assert len(contested) == 2, ctx.logs
+    assert {"bs_current_liabilities__others", "bs_non_current_liabilities__others"} == {
+        m.split("residual:rulebook_conflict(")[1].split(")")[0] for m in contested}
+
+
+def test_one_bucket_per_section_is_untouched_by_the_contest_guard(raw_ontology):
+    """The other side, so the guard above is shown to cost nothing on a well-formed rulebook: the
+    shipped file gives each section exactly one bucket, and the sweep runs as it always did."""
+    doc = _current_liabilities("Other taxes payable")
+    ctx = _run(doc, _ontology(raw_ontology))
+    assert doc.line_items[1].canonical_key == "bs_current_liabilities__others"
+    assert not [m for m in ctx.logs if "section_contested_by:" in m]
