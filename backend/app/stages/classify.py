@@ -24,10 +24,12 @@ both fail an end-of-line anchor.
 """
 from __future__ import annotations
 
+import io
 import re
 from dataclasses import dataclass, field
 
 from app.core.models import DocumentModel, PageKind
+from app.core.models.enums import DocFormat
 from app.core.stage import PipelineContext
 
 # ---------------------------------------------------------------- lexicons ---
@@ -302,7 +304,12 @@ def _resolve_statement(cands: list[dict]) -> tuple[str | None, bool, str | None,
                 m = re.search(p, low) or re.search(p, t)
                 if m and (best is None or len(m.group(0)) > best[0]):
                     best = (len(m.group(0)), name)
-            if _anchored(t):
+            # ``anchored`` on the candidate itself, for text whose CONTEXT is the anchor. The
+            # English-anchor test exists because a page's prose says "cash flows" constantly, so a
+            # weak pattern alone would classify an auditor's paragraph; a worksheet TAB NAME is not
+            # prose but a deliberate label of what the sheet holds, and "Cash Flow" on a tab means
+            # exactly one thing. Page candidates never set it, so nothing about the page path moves.
+            if c.get("anchored") or _anchored(t):
                 for p in weak:
                     m = re.search(p, low) or re.search(p, t)
                     if m and (best is None or len(m.group(0)) > best[0]):
@@ -323,6 +330,55 @@ def _resolve_statement(cands: list[dict]) -> tuple[str | None, bool, str | None,
         name = "profit_and_loss"
     ambig = bool(_ZH_CI_AMBIG.search(title)) and not combined
     return name, combined, title, ambig
+
+
+# How many leading rows of a worksheet are read looking for its title, and how many text cells are
+# taken from them. A statement title sits at the top of the sheet, above the column headings; reading
+# further only offers the decode data rows to mistake for a heading.
+_SHEET_TITLE_ROWS = 15
+_SHEET_TITLE_CELLS = 12
+
+
+def statement_of_sheet(sheet_name: str, cell_texts: list[str]) -> tuple[str | None, str | None]:
+    """``(statement, matched_title)`` for one worksheet, or ``(None, None)``.
+
+    The title vocabulary is NOT restated here. A worksheet's title is the same phrase as a printed
+    page's — "Consolidated statement of financial position", 綜合財務狀況表 — so the candidates go
+    through ``_title_candidates`` and ``_resolve_statement`` exactly as a page's lines do, and every
+    rule they carry comes along: the strong/weak patterns per statement, the negative filter that
+    rejects note headings and contents lines, the two-line join, the OCI-combined collapse, and the
+    contents-page guard that refuses a sheet listing every statement at once.
+
+    The line dicts are synthesised the way ``_page_lines`` synthesises them for a page whose spans
+    cannot be read — ``y`` is an ordinal, not a coordinate — because ordering is all
+    ``_resolve_statement`` needs from it.
+
+    The SHEET NAME is offered first, at the topmost ordinal, so it wins a position tie against a
+    title inside the sheet. It is the more reliable statement of what a sheet IS: a tab called
+    "Balance Sheet" says so deliberately, whereas the first rows of a sheet may carry the entity name
+    or a prior statement's tail. A name that matches nothing contributes no candidate at all, so an
+    unhelpful "Sheet1" costs nothing.
+    """
+    lines: list[dict] = [{"text": (sheet_name or "").strip(), "y": -1.0, "size": 0.0,
+                          "bold": False, "anchored": True}]
+    for i, text in enumerate(cell_texts[:_SHEET_TITLE_CELLS]):
+        if text and text.strip():
+            lines.append({"text": text.strip(), "y": float(i), "size": 0.0, "bold": False})
+    lines = [line for line in lines if line["text"]]
+    if not lines:
+        return None, None
+    statement, _combined, matched, _ambig = _resolve_statement(_title_candidates(lines))
+    return (_STATEMENT_ALIAS.get(statement or "", statement), matched)
+
+
+def sheet_title_cells(sheet) -> list[str]:
+    """The text cells of a worksheet's leading rows, in reading order — the input above."""
+    out: list[str] = []
+    for row in sheet.iter_rows(min_row=1, max_row=_SHEET_TITLE_ROWS, values_only=True):
+        for value in row:
+            if isinstance(value, str) and value.strip():
+                out.append(value.strip())
+    return out
 
 
 def _scope_of(title: str | None, lines: list[dict], page_h: float,
@@ -540,9 +596,60 @@ def dump_review(doc: DocumentModel) -> str:
 class ClassifyStage:
     name = "classify"
 
+    @staticmethod
+    def _classify_workbook(doc: DocumentModel, data: bytes,
+                           ctx: PipelineContext) -> DocumentModel:
+        """Name each worksheet's statement, so a spreadsheet is scoped like a page.
+
+        THE DEFECT THIS CLOSES. This stage used to return early for anything that is not a PDF, so
+        every worksheet kept ``statement=None`` from ingest — and a statement is not decoration
+        downstream, it is a BOUNDARY. ``residual._section_of_row`` guards each of its structural
+        signals with ``if statement and statement_of(nxt) not in (None, statement)``, which is inert
+        when the statement is None: the walk then runs past the end of the sheet it started on and a
+        balance-sheet row can take its section from a cash-flow subtotal on a later sheet. The v1
+        router (``residual._route_by_template``) is keyed by statement type outright, so it placed no
+        Excel row at all. ``map_ontology.batch_groups`` likewise had no statement to batch by, so
+        every spreadsheet row was mapped with the whole ontology in front of it.
+
+        The classifier's own machinery decides it (``statement_of_sheet``); nothing about the
+        vocabulary is duplicated for spreadsheets.
+
+        A sheet whose title resolves is a FACE page. One whose title does not is left as ingest set
+        it rather than guessed at: ``kind`` gates ``doc.face_pages()``, and calling a cover sheet or a
+        list of assumptions a face would put its rows into the statement.
+        """
+        try:
+            import openpyxl
+        except ImportError:                      # pragma: no cover - openpyxl is a hard dependency
+            return doc
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        except Exception as exc:  # noqa: BLE001 — a workbook we cannot reopen is not a failure here
+            ctx.log(f"classify:xlsx_open_failed:{exc}")
+            return doc
+        try:
+            names = wb.sheetnames
+            for page in doc.pages:
+                if page.index >= len(names):
+                    continue
+                name = names[page.index]
+                statement, matched = statement_of_sheet(name, sheet_title_cells(wb[name]))
+                page.statement = statement
+                if statement:
+                    page.kind = PageKind.FACE
+                page.evidence = {"sheet": name, "matched_title": matched}
+                ctx.log(f"classify:sheet={name}:statement={statement or 'unresolved'}")
+        finally:
+            wb.close()
+        return doc
+
     def run(self, doc: DocumentModel, ctx: PipelineContext) -> DocumentModel:
         data = ctx.raw_bytes
-        if not data or doc.fmt.value != "pdf":
+        if not data:
+            return doc
+        if doc.fmt in (DocFormat.XLSX, DocFormat.XLS):
+            return self._classify_workbook(doc, data, ctx)
+        if doc.fmt.value != "pdf":
             return doc
         try:
             import fitz

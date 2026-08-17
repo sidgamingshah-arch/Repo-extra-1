@@ -384,20 +384,32 @@ class MapOntologyStage:
             return 0
         tol = Decimal(str(ctx.settings.extraction.recon_abs_tolerance))
         unfiled = 0
+        # Every pair is judged against the keys as MAPPED, snapshotted before this pass unfiles
+        # anything. Reading `doc.line_items` live makes the outcome depend on the order concepts
+        # happen to sit in the rulebook file: where a rulebook declares a chain (A contains B, B
+        # contains C) and the page prints all three, processing B first unfiles it, so A then sees
+        # no component present and is KEPT — leaving A and C both filed, which is precisely the
+        # double count this pass exists to prevent. Move B after A in the file and the answer
+        # changes. The snapshot makes a chain resolve the same way whichever order it is written in:
+        # A and B are both unfiled as evidence, C stands. The shipped rulebook declares no chain
+        # (tests/test_composite_caption_containment.py holds that), but an uploaded one may.
+        as_mapped = {id(li): li.canonical_key for li in doc.line_items}
+        printed = {k for k in as_mapped.values() if k}
         for aggregate, components, why in pairs:
-            filed = [li for li in doc.line_items if li.canonical_key == aggregate]
+            filed = [li for li in doc.line_items if as_mapped.get(id(li)) == aggregate]
             if not filed:
                 continue
-            present = [c for c in components
-                       if any(li.canonical_key == c for li in doc.line_items)]
+            present = [c for c in components if c in printed]
             if not present:
                 # The face printed only the aggregate — keep it. This arm is also
                 # ``global_rules.no_fabricated_split`` ("Where only a combined figure is reported,
                 # load the combined concept and leave the children empty") as the deterministic path
                 # honours it: nothing here invents a decomposition the page does not print.
                 continue
-            child_rows = [li for li in doc.line_items if li.canonical_key in present]
+            child_rows = [li for li in doc.line_items if as_mapped.get(id(li)) in present]
             for li in filed:
+                if li.canonical_key is None:
+                    continue          # an outer containment already unfiled it; do not count twice
                 li.canonical_key = None
                 if li.role is LineRole.LINE:
                     li.role = LineRole.SUBTOTAL

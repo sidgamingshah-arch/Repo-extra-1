@@ -120,6 +120,13 @@ class NoteItem(BaseModel):
     values: dict[str, ExtractedValue] = Field(default_factory=dict)
     ordinal: int = 0
     role: LineRole = LineRole.LINE
+    # The banner the row was printed under, carried over from the ``LineItem`` reconstruction
+    # produced. ``notes_extract`` calls ``build_line_items``, so the section was always computed —
+    # and, until this field existed, always discarded at the conversion. That mattered because
+    # ``residual._sweep_notes`` synthesises face rows FROM note items, and those rows then reached
+    # the sweep with no section, so the first of its three signals was unavailable for every figure
+    # sourced from a note.
+    section_hint: str | None = None
     provenance: Provenance | None = None
     confidence: ConfidenceVector = Field(default_factory=ConfidenceVector)
 

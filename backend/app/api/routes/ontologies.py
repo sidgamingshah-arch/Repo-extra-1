@@ -5,7 +5,7 @@ import copy
 import json
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -238,6 +238,57 @@ def download_ontology_skeleton(template_id: str, session: Session = Depends(db))
     fname = f"{_slug(row.template_key) or 'ontology'}_v{row.version}_ontology_skeleton.json"
     return Response(content=body, media_type="application/json",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.get("/{ontology_id}/xlsx", dependencies=[Depends(require(Permission.CONFIG_ONTOLOGY))])
+def download_ontology_xlsx(ontology_id: str, session: Session = Depends(db)) -> Response:
+    """The rulebook as an editable workbook — concepts, the section layer and the netting rules as
+    grids, the structural policy verbatim, and a README that says which is which.
+
+    The JSON download and the skeleton were the only ways out of here, and neither is a shape an
+    analyst can work in: 185 concepts of nested vocabulary is a spreadsheet job. Upload the edited
+    file to ``POST /ontologies/xlsx``; the round trip is lossless, which
+    ``tests/test_ontology_xlsx.py`` holds against this very rulebook rather than a fixture.
+
+    Admin-only, the same permission as every other ontology route: the file IS the rulebook, and a
+    download an analyst can fetch but not upload is an afternoon wasted.
+    """
+    from app.db.models import OntologyVersion
+    from app.services.ontology_xlsx import build_ontology_xlsx
+
+    row = session.get(OntologyVersion, ontology_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Ontology not found")
+    data = build_ontology_xlsx(row.definition or {}, filename_hint=row.ontology_key)
+    fname = f"{_slug(row.ontology_key) or 'ontology'}_v{row.version}_rulebook.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/xlsx", status_code=201,
+             dependencies=[Depends(require(Permission.CONFIG_ONTOLOGY))])
+async def create_ontology_from_xlsx(file: UploadFile = File(...),
+                                    target_template_key: str | None = None,
+                                    session: Session = Depends(db)) -> dict:
+    """An edited rulebook workbook, published as a NEW VERSION.
+
+    The workbook is NOT a looser door than the JSON upload: the parsed definition goes through the
+    same schema load, the same undeclared-key refusal, the same ``inherits`` resolution and the same
+    validation against the target template. A file that would publish a rulebook the pipeline then
+    rejects is refused here, with the sheet and row that caused it.
+    """
+    from app.services.ontology_xlsx import OntologySheetError, parse_ontology_xlsx
+
+    raw = await file.read()
+    try:
+        definition = parse_ontology_xlsx(raw)
+    except OntologySheetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # One publishing path, so the workbook cannot skip a check the JSON route applies.
+    return create_ontology(OntologyCreate(definition=definition,
+                                          target_template_key=target_template_key), session)
 
 
 @router.get("/{ontology_id}")

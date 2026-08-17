@@ -73,6 +73,7 @@ def extract_note_tables(words: list[Word], *, page_index: int, document_id: str 
         table = NotesTable(note_number=sec["no"], title=sec["title"], source_pages=[page_index])
         for li in items:
             ni = NoteItem(raw_label=li.source_label, ordinal=li.ordinal, role=li.role,
+                          section_hint=li.section_hint,
                           provenance=li.values and next(iter(li.values.values())).provenance or None)
             for ev in li.values.values():
                 ni.set_value(ev)
