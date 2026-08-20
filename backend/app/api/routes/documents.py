@@ -4765,6 +4765,108 @@ def get_document_note(document_id: str, note_no: int, locale: str = Query("en"),
     }
 
 
+# --- the eight analyst buckets -----------------------------------------------------------------
+# The segmentation itself is stored on the run (services/buckets.py) and holds MEMBERSHIP only: which
+# face rows, which notes, which pages. These two endpoints join it to ``rows`` and ``note_details``,
+# so a bucket's figures are served from the one place they are stored rather than from a copy.
+
+
+def _bucket_store(run) -> dict | None:
+    """The stored segmentation, or None for a run extracted before the segment stage existed.
+
+    None is served as an explicit ``segmented: false`` rather than as eight empty buckets: a filing
+    whose sections were never segmented and one whose sections are all empty are different answers,
+    and only the first is fixed by re-running the extraction.
+    """
+    if not run or not run.result:
+        return None
+    return run.result.get("buckets") or None
+
+
+@router.get("/{document_id}/buckets", dependencies=[Depends(authorized_document)])
+def get_document_buckets(document_id: str, session: Session = Depends(db)) -> dict:
+    """What each bucket holds, in the order a filing is read.
+
+    Counts and page ranges only — call the detail route for a bucket's own rows and notes. Every
+    face row is in exactly one bucket, so ``face_rows`` summed over the buckets equals the run's
+    face row count; ``unresolved_face_rows`` says how many of them reached Others because nothing
+    could place them, which is the number that measures coverage.
+    """
+    from app.services.buckets import BUCKETS
+
+    run = _latest_run(session, document_id)
+    store = _bucket_store(run)
+    if store is None:
+        return {"segmented": False, "buckets": [], "unresolved_face_rows": 0,
+                "unknown_sections": []}
+
+    by_key = {seg.get("bucket"): seg for seg in store.get("segments", [])}
+    buckets = []
+    for key, label in BUCKETS:
+        seg = by_key.get(key) or {}
+        buckets.append({
+            "bucket": key,
+            "label": label,
+            "face_rows": len(seg.get("face_item_ids") or []),
+            "notes": len(seg.get("note_numbers") or []),
+            "note_numbers": list(seg.get("note_numbers") or []),
+            "shared_notes": list(seg.get("shared_notes") or []),
+            # 1-based, as every page number this API serves is.
+            "face_pages": [p + 1 for p in (seg.get("face_pages") or [])],
+            "note_pages": [p + 1 for p in (seg.get("note_pages") or [])],
+            "sections": list(seg.get("sections") or []),
+        })
+    return {
+        "segmented": True,
+        "buckets": buckets,
+        "unresolved_face_rows": len(store.get("unresolved_face_item_ids") or []),
+        "unresolved_notes": list(store.get("unresolved_note_numbers") or []),
+        # A section of the filing this taxonomy has no bucket for. Its rows are in Others; naming
+        # it here is what stops a swallowed section reading like a covered one.
+        "unknown_sections": list(store.get("unknown_sections") or []),
+    }
+
+
+@router.get("/{document_id}/buckets/{bucket}", dependencies=[Depends(authorized_document)])
+def get_document_bucket(document_id: str, bucket: str,
+                        session: Session = Depends(db)) -> dict:
+    """One bucket's own source: its face rows and the notes filed under it.
+
+    ``shared_notes`` are notes a face row here cites that are FILED under another bucket — served as
+    pointers, not as content, because a note stored under two buckets would double every figure it
+    contains for a reader that adds the buckets up.
+    """
+    from app.services.buckets import BUCKET_LABELS
+
+    if bucket not in BUCKET_LABELS:
+        raise HTTPException(status_code=404, detail=f"Unknown bucket: {bucket}")
+    run = _latest_run(session, document_id)
+    store = _bucket_store(run)
+    if store is None:
+        return {"segmented": False, "bucket": bucket, "label": BUCKET_LABELS[bucket],
+                "rows": [], "notes": [], "shared_notes": []}
+
+    seg = next((x for x in store.get("segments", []) if x.get("bucket") == bucket), {})
+    wanted = set(seg.get("face_item_ids") or [])
+    unresolved = set(store.get("unresolved_face_item_ids") or [])
+    # Joined by id and served in the run's own row order, which is the order the rows were printed.
+    rows = [{**r, "unresolved": r.get("id") in unresolved}
+            for r in (run.result.get("rows") or []) if r.get("id") in wanted]
+    numbers = {str(n) for n in (seg.get("note_numbers") or [])}
+    notes = [n for n in (run.result.get("note_details") or []) if str(n.get("no")) in numbers]
+    return {
+        "segmented": True,
+        "bucket": bucket,
+        "label": BUCKET_LABELS[bucket],
+        "sections": list(seg.get("sections") or []),
+        "face_pages": [p + 1 for p in (seg.get("face_pages") or [])],
+        "note_pages": [p + 1 for p in (seg.get("note_pages") or [])],
+        "rows": rows,
+        "notes": notes,
+        "shared_notes": list(seg.get("shared_notes") or []),
+    }
+
+
 @router.get("/{document_id}", dependencies=[Depends(authorized_document)])
 def get_document(document_id: str, session: Session = Depends(db)) -> dict:
     from app.db.models import Document

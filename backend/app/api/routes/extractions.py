@@ -338,6 +338,11 @@ def _serialize_rows(doc_model) -> list[dict]:
                 },
             })
         rows.append({
+            # The row's id, so the bucket segmentation written by the same run can name which rows
+            # belong to which bucket without a second copy of the figures (services/buckets.py).
+            # Per-run and not stable across re-runs — anything that has to survive a re-run keys on
+            # the canonical key or the label geometry instead, see ``_prov_dict``.
+            "id": str(li.id),
             "source_label": li.source_label,
             "canonical_key": li.canonical_key,
             "note": li.note_number,
@@ -597,6 +602,11 @@ def _run_extraction_task(run_id: str, object_key: str, filename: str, options: d
             # Leftover lines a model placed in a section's Others to reconcile a printed subtotal
             # with its components — kept so the routing is inspectable, not silent.
             "gap_routings": list(doc_model.gap_routings or []),
+            # Which of the eight analyst buckets each face row and each note belongs to. Membership
+            # only — the figures live once, on ``rows`` and ``note_details``, and the buckets
+            # endpoints join to them at serve time (services/buckets.py).
+            "buckets": (doc_model.buckets.model_dump(mode="json")
+                        if doc_model.buckets else None),
             "units": (doc_model.unit_context.model_dump(mode="json")
                       if doc_model.unit_context else None),
             # How mapping ran. Surfaced (not just logged) so a deterministic-only run — the

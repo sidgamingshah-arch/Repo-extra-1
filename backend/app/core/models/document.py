@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
 from .enums import DocFormat, PageKind, PageSourceKind
+from .buckets import BucketedSource
 from .integrity import IntegrityReport
 from .line_item import FaceNoteLink, LineItem, NotesTable, UnitContext
 from .reports import ReconciliationReport, StructuralReport
@@ -62,6 +63,9 @@ class DocumentModel(BaseModel):
     links: list[FaceNoteLink] = Field(default_factory=list)
     reconciliation: ReconciliationReport | None = None
     structural: StructuralReport | None = None   # template rollup/identity validation
+    # Which of the eight analyst buckets each face row and each note belongs to. Membership only —
+    # the figures stay on ``line_items``/``notes``; see ``core.models.buckets``.
+    buckets: BucketedSource | None = None
     # Confirmed gap-closing decisions: leftover lines a model placed in a section's Others to
     # reconcile a printed subtotal with its components (see stages.gap_closing). Kept so the
     # routing is visible and auditable rather than an unexplained change of mapping.
