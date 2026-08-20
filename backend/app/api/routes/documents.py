@@ -4791,6 +4791,11 @@ def get_document_buckets(document_id: str, session: Session = Depends(db)) -> di
     face row is in exactly one bucket, so ``face_rows`` summed over the buckets equals the run's
     face row count; ``unresolved_face_rows`` says how many of them reached Others because nothing
     could place them, which is the number that measures coverage.
+
+    NOTES DO NOT SUM THE SAME WAY. A note cited from two buckets is filed in both, so ``notes``
+    summed over the buckets exceeds the filing's note count by the overlap. ``distinct_notes`` is
+    the filing-level answer and each bucket's ``shared_notes`` names its duplicated members, so a
+    caller needing a total can compute it rather than being handed a figure that double counts.
     """
     from app.services.buckets import BUCKETS
 
@@ -4819,6 +4824,9 @@ def get_document_buckets(document_id: str, session: Session = Depends(db)) -> di
     return {
         "segmented": True,
         "buckets": buckets,
+        # Distinct across the whole filing, because the per-bucket counts above deliberately
+        # double-count a shared note and adding them up is therefore the wrong total.
+        "distinct_notes": len({n for b in buckets for n in b["note_numbers"]}),
         "unresolved_face_rows": len(store.get("unresolved_face_item_ids") or []),
         "unresolved_notes": list(store.get("unresolved_note_numbers") or []),
         # A section of the filing this taxonomy has no bucket for. Its rows are in Others; naming
@@ -4832,9 +4840,11 @@ def get_document_bucket(document_id: str, bucket: str,
                         session: Session = Depends(db)) -> dict:
     """One bucket's own source: its face rows and the notes filed under it.
 
-    ``shared_notes`` are notes a face row here cites that are FILED under another bucket — served as
-    pointers, not as content, because a note stored under two buckets would double every figure it
-    contains for a reader that adds the buckets up.
+    A note cited from two buckets is filed in both and its content is served in both, because an
+    analyst reading current liabilities needs the borrowings note in front of them and so does one
+    reading non-current liabilities. ``shared_notes`` names which of the notes below are also filed
+    elsewhere — the figures of those notes appear more than once across the buckets, so a caller
+    adding the buckets up has to subtract the overlap.
     """
     from app.services.buckets import BUCKET_LABELS
 

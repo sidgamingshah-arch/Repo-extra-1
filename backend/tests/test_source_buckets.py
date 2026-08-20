@@ -219,10 +219,15 @@ def test_a_note_is_filed_under_the_bucket_whose_face_row_cites_it(ontology):
     assert store.segment("current_liabilities").note_pages == [4]
 
 
-def test_a_note_two_buckets_cite_is_stored_once_and_pointed_at_from_the_other(ontology):
-    """Borrowings split across current and non-current routinely share one note. Storing it under
-    both would double every figure in it for a reader that adds the buckets up, so it is filed under
-    the bucket that cites it most and the other gets a pointer."""
+def test_a_note_two_buckets_cite_is_filed_in_both_and_marked_shared(ontology):
+    """Borrowings split across current and non-current routinely share one note, and BOTH sections
+    need it: an analyst reading current liabilities cannot be sent to another bucket to find the
+    breakdown of a figure printed in front of them.
+
+    The cost is that the note's figures now appear twice across the store, so ``shared_notes`` marks
+    it in every bucket holding it — a caller adding the buckets up can subtract the overlap, and the
+    duplication is a stated fact rather than a silent one.
+    """
     items = [
         _li(0, "Bank borrowings (non-current)",
             "bs_non_current_liabilities__non_current_borrowings", 2000, page=0, notes=["25"]),
@@ -235,12 +240,27 @@ def test_a_note_two_buckets_cite_is_stored_once_and_pointed_at_from_the_other(on
                [_note("25", "Interest-bearing bank borrowings", 1, [None])])
     store = segment_source(doc, ontology)
 
-    # Two current-liability rows cite it against one non-current row, so it is filed there.
+    # In both, however lopsided the citation count is — two current rows against one non-current.
     assert store.segment("current_liabilities").note_numbers == ["25"]
-    assert store.segment("non_current_liabilities").note_numbers == []
+    assert store.segment("non_current_liabilities").note_numbers == ["25"]
+    # …and marked in both, which is what makes the overlap subtractable.
+    assert store.segment("current_liabilities").shared_notes == ["25"]
     assert store.segment("non_current_liabilities").shared_notes == ["25"]
-    # Exactly one bucket holds it.
-    assert sum(len(s.note_numbers) for s in store.segments) == 1
+    # The note's page reaches both buckets too, so either one can open it.
+    assert store.segment("current_liabilities").note_pages == [1]
+    assert store.segment("non_current_liabilities").note_pages == [1]
+    # Two filings of one note: the notes side is deliberately NOT a partition.
+    assert sum(len(s.note_numbers) for s in store.segments) == 2
+
+
+def test_a_note_only_one_bucket_cites_is_not_marked_shared(ontology):
+    """The other side, so ``shared_notes`` means something: a note with one citing bucket carries no
+    overlap to subtract, and marking it would make every note look duplicated."""
+    store = segment_source(_mixed_filing(), ontology)
+
+    assert store.segment("non_current_assets").note_numbers == ["14"]
+    assert store.segment("non_current_assets").shared_notes == []
+    assert store.segment("current_liabilities").shared_notes == []
 
 
 def test_a_note_no_face_row_cites_is_placed_from_its_own_rows(ontology):
@@ -401,6 +421,50 @@ def test_the_detail_marks_a_row_that_reached_others_by_failing_to_place(client, 
 
     marked = {r["source_label"]: r["unresolved"] for r in body["rows"]}
     assert marked == {"Total assets": False, "A caption nothing placed": True}
+
+
+def _shared_note_result(ontology) -> dict:
+    """A borrowings note cited from both the current and non-current liability rows."""
+    items = [
+        _li(0, "Bank borrowings (non-current)",
+            "bs_non_current_liabilities__non_current_borrowings", 2000, page=0, notes=["25"]),
+        _li(1, "Bank borrowings (current)",
+            "bs_current_liabilities__current_borrowings", 500, page=0, notes=["25"]),
+    ]
+    doc = _doc(items, {0: ("balance_sheet", PageKind.FACE), 1: (None, PageKind.NOTES)},
+               [_note("25", "Interest-bearing bank borrowings", 1, [None])])
+    store = segment_source(doc, ontology)
+    rows = [{"id": str(li.id), "source_label": li.source_label,
+             "canonical_key": li.canonical_key, "role": li.role.value, "values": []}
+            for li in doc.line_items]
+    notes = [{"no": "25", "title": "Interest-bearing bank borrowings", "page": 2,
+              "rows": [{"label": "Bank loans", "values": []}]}]
+    return {"rows": rows, "note_details": notes, "buckets": store.model_dump(mode="json")}
+
+
+def test_both_buckets_serve_the_shared_notes_own_content(client, ontology):
+    """The point of filing it in both: each bucket serves the note's rows, not a pointer. An analyst
+    on either section reads the breakdown without leaving the section."""
+    doc_id = _seed_run(_shared_note_result(ontology), "shared-note.pdf")
+
+    for bucket in ("current_liabilities", "non_current_liabilities"):
+        body = client.get(f"/api/v1/documents/{doc_id}/buckets/{bucket}").json()
+        assert [n["no"] for n in body["notes"]] == ["25"], bucket
+        assert body["notes"][0]["rows"] == [{"label": "Bank loans", "values": []}], bucket
+        assert body["shared_notes"] == ["25"], bucket
+
+
+def test_the_index_reconciles_the_duplicated_note_with_a_distinct_count(client, ontology):
+    """Adding the per-bucket note counts is the WRONG total once a note is filed twice, so the index
+    serves the filing-level answer beside them. Without it a screen showing "2 notes" for a filing
+    with one note has no way to be right."""
+    doc_id = _seed_run(_shared_note_result(ontology), "shared-note-count.pdf")
+    body = client.get(f"/api/v1/documents/{doc_id}/buckets").json()
+
+    assert sum(b["notes"] for b in body["buckets"]) == 2      # the duplicated filing
+    assert body["distinct_notes"] == 1                        # what the filing actually has
+    assert {b["bucket"] for b in body["buckets"] if b["shared_notes"]} == {
+        "current_liabilities", "non_current_liabilities"}
 
 
 def test_an_unknown_bucket_is_a_404_not_an_empty_bucket(client, ontology):

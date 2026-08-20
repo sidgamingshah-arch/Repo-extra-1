@@ -191,20 +191,26 @@ def segment_source(doc: DocumentModel, ontology=None) -> BucketedSource:
     for note in doc.notes:
         citing = cited_by.get(note.note_number) or {}
         if citing:
-            # Most-citing bucket wins; ties break on the presentation order so the answer does not
-            # depend on which face row happened to be read first.
-            best = max(citing.items(), key=lambda kv: (kv[1], -BUCKET_KEYS.index(kv[0])))[0]
+            # EVERY citing bucket gets the note, in presentation order. A note on borrowings split
+            # across current and non-current belongs to both sections, and an analyst reading either
+            # one needs it in front of them — so it is filed in both rather than in the bucket that
+            # cites it more, with the other holding a pointer.
+            placed = sorted(citing, key=BUCKET_KEYS.index)
             reason = "cited_from_face"
         else:
-            best, reason = _bucket_from_note_content(note, section_by_key)
-        seg = segments[best]
-        seg.note_numbers.append(note.note_number)
-        for p in note.source_pages:
-            if p not in seg.note_pages:
-                seg.note_pages.append(p)
-        for other in citing:
-            if other != best and note.note_number not in segments[other].shared_notes:
-                segments[other].shared_notes.append(note.note_number)
+            one, reason = _bucket_from_note_content(note, section_by_key)
+            placed = [one]
+        for bucket in placed:
+            seg = segments[bucket]
+            seg.note_numbers.append(note.note_number)
+            for page in note.source_pages:
+                if page not in seg.note_pages:
+                    seg.note_pages.append(page)
+            # Marked in every bucket holding it, so a reader that ADDS the buckets up can subtract
+            # the overlap. The note's figures genuinely appear more than once in this store; what
+            # stops that becoming a silent double count is that each copy says so.
+            if len(placed) > 1 and note.note_number not in seg.shared_notes:
+                seg.shared_notes.append(note.note_number)
         if reason == "unresolved":
             out.unresolved_note_numbers.append(note.note_number)
 
