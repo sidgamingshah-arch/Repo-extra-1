@@ -864,12 +864,22 @@ class OntologyMatcher:
         like this here", so it has to hold across every tier. Applying it only inside the rule
         tier meant an excluded caption could still arrive via fuzzy or an alias — an editor
         would add the exclusion, see nothing change, and have no way to fix a mis-mapping.
+
+        MATCHED CASE-INSENSITIVELY, and that is not cosmetic. ``text`` is lowercased here while the
+        pattern comes verbatim from the rulebook, so a hint typed in the case a human naturally uses
+        — "Finance Cost", "Non-current Assets", "Trade payables" — could never match anything. Every
+        one of the 415 hints shipped in the rulebook happens to be lowercase, so nothing was broken;
+        the trap was waiting for the next editor, and a reviewer adding thirteen hints through the
+        workbook hit all thirteen. ``re.IGNORECASE`` rather than lowercasing the pattern, because
+        lowercasing would silently invert the meaning of ``\S``, ``\B``, ``\W`` and ``\D``.
+
+        ``regex_hints`` is matched the same way in :meth:`_rule` for the same reason.
         """
         m = self._by_key.get(canonical_key)
         if m is None or not m.exclude_hints:
             return False
         text = caption.lower()
-        return any(re.search(ex, text) for ex in m.exclude_hints)
+        return any(re.search(ex, text, re.IGNORECASE) for ex in m.exclude_hints)
 
     def _rule(self, raw: str, keys: set[str] | None = None) -> Candidate | None:
         """The rule tier of ``binding.order`` step 4: regex / keyword hints, in DESCENDING
@@ -893,10 +903,10 @@ class OntologyMatcher:
                 continue
             if keys is not None and m.canonical_key not in keys:
                 continue
-            if any(re.search(ex, text) for ex in m.exclude_hints):
+            if any(re.search(ex, text, re.IGNORECASE) for ex in m.exclude_hints):
                 continue
             hit = False
-            if any(re.search(rx, text) for rx in m.regex_hints):
+            if any(re.search(rx, text, re.IGNORECASE) for rx in m.regex_hints):
                 hit = True
             elif m.keyword_hints and all(kw.lower() in text for kw in m.keyword_hints):
                 hit = True

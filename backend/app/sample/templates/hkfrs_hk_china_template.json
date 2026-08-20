@@ -1120,23 +1120,6 @@
                 "en": "Purchases of Stock-in-trade",
                 "zh": "存货采购"
               }
-            },
-            {
-              "node_id": "pl_expenses__total_cost_of_sales",
-              "canonical_key": "pl_expenses__total_cost_of_sales",
-              "label": "Total cost of sales",
-              "role": "subtotal",
-              "label_i18n": {
-                "en": "Total cost of sales",
-                "zh": "销售成本总额"
-              },
-              "rollup": {
-                "op": "sum",
-                "children": [
-                  "pl_expenses__cost_of_goods_sold",
-                  "pl_expenses__purchases_of_stock_in_trade"
-                ]
-              }
             }
           ]
         },
@@ -1153,7 +1136,8 @@
             "op": "sum",
             "children": [
               "pl_income__revenue_from_operations",
-              "pl_expenses__total_cost_of_sales"
+              "pl_expenses__cost_of_goods_sold",
+              "pl_expenses__purchases_of_stock_in_trade"
             ]
           }
         },
@@ -1256,30 +1240,6 @@
                 "en": "Other expense items",
                 "zh": "其他费用项目"
               }
-            },
-            {
-              "node_id": "pl_expenses__total_operating_expenses",
-              "canonical_key": "pl_expenses__total_operating_expenses",
-              "label": "Total operating expenses",
-              "role": "subtotal",
-              "label_i18n": {
-                "en": "Total operating expenses",
-                "zh": "营业费用总额"
-              },
-              "rollup": {
-                "op": "sum",
-                "children": [
-                  "pl_expenses__taxes_and_surcharges",
-                  "pl_expenses__selling_and_marketing_expenses",
-                  "pl_expenses__general_and_administrative_expenses",
-                  "pl_expenses__research_and_development_expenses",
-                  "pl_expenses__employee_benefits_expense",
-                  "pl_expenses__depreciation_and_amortisation_expense",
-                  "pl_expenses__other_operating_costs",
-                  "pl_expenses__other_expenses",
-                  "pl_expenses__others"
-                ]
-              }
             }
           ]
         },
@@ -1295,8 +1255,17 @@
           "rollup": {
             "op": "sum",
             "children": [
-              "pl_expenses__total_cost_of_sales",
-              "pl_expenses__total_operating_expenses"
+              "pl_expenses__cost_of_goods_sold",
+              "pl_expenses__purchases_of_stock_in_trade",
+              "pl_expenses__taxes_and_surcharges",
+              "pl_expenses__selling_and_marketing_expenses",
+              "pl_expenses__general_and_administrative_expenses",
+              "pl_expenses__research_and_development_expenses",
+              "pl_expenses__employee_benefits_expense",
+              "pl_expenses__depreciation_and_amortisation_expense",
+              "pl_expenses__other_operating_costs",
+              "pl_expenses__other_expenses",
+              "pl_expenses__others"
             ]
           }
         },
