@@ -608,3 +608,54 @@ def test_a_caller_pinning_a_rulebook_still_gets_the_one_it_asked_for(client):
 
     served = client.get(f"/api/v1/extractions/{run_id}").json()["result"]
     assert served["rulebook"]["ontology_version_id"] == pinned
+
+
+# --- the duplication is confined to the bucket store -------------------------------------------
+
+def test_a_shared_note_is_still_stored_once_outside_the_buckets(client, ontology):
+    """THE AUDIT, as an assertion. Filing a note in two buckets duplicates it in the bucket store
+    and nowhere else, and that is what keeps every other consumer correct.
+
+    ``note_details`` is the flat list the run stores and the one every note consumer reads — the
+    export's note sheet, the ``/notes`` index, the ``/notes/{no}`` detail, the §20 reconciliation.
+    They all key by note number, so a note filed in two buckets must still appear ONCE here. If the
+    duplication ever leaked into this list, an exported workbook would print the borrowings note
+    twice and the notes count would overstate the filing, with nothing on either saying why.
+    """
+    result = _shared_note_result(ontology)
+    doc_id = _seed_run(result, "shared-note-isolation.pdf")
+
+    numbers = [n["no"] for n in result["note_details"]]
+    assert numbers == ["25"], "the flat note list must not carry the bucket store's duplication"
+
+    # Both buckets serve it…
+    for bucket in ("current_liabilities", "non_current_liabilities"):
+        served = client.get(f"/api/v1/documents/{doc_id}/buckets/{bucket}").json()
+        assert [n["no"] for n in served["notes"]] == ["25"]
+    # …while the filing-level index still reports one note.
+    assert client.get(f"/api/v1/documents/{doc_id}/notes").json()["count"] == 1
+
+
+def test_the_export_prints_a_shared_note_once(client, ontology):
+    """The consumer that matters most, because the workbook is what leaves the building. The export
+    reads ``note_details`` and never the bucket store, so a note two sections share is written as
+    one block — asserted here rather than argued, since a double-printed note in a deliverable is
+    not something a reader can be expected to spot.
+    """
+    import io
+
+    from openpyxl import load_workbook
+
+    from app.services.export import build_rows_xlsx  # noqa: F401  (import guard: openpyxl present)
+    from app.services.export import build_statement_workbook
+
+    result = _shared_note_result(ontology)
+    template = json.loads((_SAMPLES / "hkfrs_hk_china_template.json").read_text())
+    data = build_statement_workbook(result["rows"], template, filename="shared-note",
+                                    note_details=result["note_details"])
+    wb = load_workbook(io.BytesIO(data))
+    headings = [c.value for sheet in wb.worksheets for row in sheet.iter_rows()
+                for c in row
+                if isinstance(c.value, str) and c.value.startswith("Note 25")]
+
+    assert len(headings) == 1, f"the shared note was written {len(headings)} times: {headings}"
