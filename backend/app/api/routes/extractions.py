@@ -421,6 +421,44 @@ class ExtractionOptions(BaseModel):
     entity: str | None = None
 
 
+def resolve_rulebook_id(session: Session, pinned_ontology_id: str | None,
+                        pinned_template_id: str | None) -> str | None:
+    """Which rulebook this run reads the filing against, when the caller pinned none.
+
+    A run that names no rulebook used to map against NOTHING: ``_run_extraction_task`` left
+    ``ontology = None``, so no caption resolved to a concept, no concept carried a section, and the
+    spread came back as unmapped rows — while the comment beside the pin said "a run naming no
+    rulebook is read by the shipped default". It was not. Every plain extraction — which is what the
+    upload screen sends — produced a filing with nothing recognised in it.
+
+    So the rulebook IN FORCE is resolved here and PINNED ON THE RUN, which is the part that makes
+    this a defensible default rather than the substitution this codebase removed elsewhere: nothing
+    is guessed at read time. ``_template_for_run`` deliberately has no fallback because findings
+    attributed to a template the analyst never chose are worse than absent ones — nothing on the
+    screen says where they came from. Here the run stores the id, ``rulebook_record`` reports the key
+    and version, and the Workspace names it, so the analyst can see exactly which rulebook produced
+    the figures and pin a different one.
+
+    A caller's own pin always wins, including the legitimate case of reproducing an earlier spread
+    with a superseded rulebook. Only the absence of a pin is filled in.
+    """
+    from app.db.models import TemplateVersion
+    from app.sample.reference import shipped_template_key
+
+    if pinned_ontology_id:
+        return pinned_ontology_id
+    # The template the run is laid out on decides which rulebook is in force for it, so the pair
+    # cannot disagree — the ``pin_mismatch`` check below then holds by construction.
+    template_key = ""
+    if pinned_template_id:
+        tpl = session.get(TemplateVersion, pinned_template_id)
+        template_key = tpl.template_key if tpl is not None else ""
+    if not template_key:
+        template_key = shipped_template_key()
+    chosen = _in_force_for_template(session, template_key) if template_key else None
+    return chosen.id if chosen is not None else None
+
+
 def _in_force_for_template(session: Session, template_key: str):
     """The rulebook in force for a template — the extractor's own choice, never a second copy
     of that rule (see ``services.ontology_select``)."""
@@ -691,7 +729,9 @@ def start_extraction(
     # Settle which rulebook this run reads the filing against BEFORE it starts, and keep it on the
     # run. The caller may legitimately pin a superseded rulebook (reproducing an earlier spread),
     # and the run says so rather than letting the screen decide afterwards what it must have used.
-    rulebook = rulebook_record(session, body.ontology_version_id)
+    ontology_version_id = resolve_rulebook_id(session, body.ontology_version_id,
+                                              body.template_version_id)
+    rulebook = rulebook_record(session, ontology_version_id)
 
     # A pinned rulebook and a pinned template have to be about the SAME template, and nothing
     # downstream would ever notice that they were not: the rulebook decides which concept each
@@ -739,16 +779,27 @@ def start_extraction(
     # millisecond later — the elapsed time a screen shows must be measured from the same moment the
     # run says it began.
     started_at = datetime.now(timezone.utc)
+    # ONE options dict, stored on the run AND handed to the worker. The worker used to be given
+    # ``body.model_dump()`` while the row stored something else, so anything settled here — the
+    # rulebook resolved above, above all — was recorded on the run and then not used to produce its
+    # figures. A run that says which rulebook it read the filing against and did not read it is
+    # worse than one that says nothing.
+    run_options = {**body.model_dump(),
+                   "ontology_version_id": ontology_version_id,
+                   "rulebook": rulebook,
+                   "stages": pipeline_stage_names()}
     run = ExtractionRun(
         id=run_id, document_id=doc.id,
         template_version_id=body.template_version_id,
-        ontology_version_id=body.ontology_version_id,
+        # The RESOLVED id, not the request's: a run must be able to say which rulebook produced
+        # its figures, and "whatever was in force at the time" is not an answer a later reader can
+        # reconstruct — the rulebook in force changes every time one is published.
+        ontology_version_id=ontology_version_id,
         # The stage list THIS run will walk, recorded at the moment it is queued. Serving the
         # live pipeline's list instead would make an old run disagree with itself the next time
         # a stage is added: its frozen `stage_count`/`stages_done` would be measured against a
         # longer list, and a screen ticking stages off would show a finished run as incomplete.
-        status="running", options={**body.model_dump(), "rulebook": rulebook,
-                                   "stages": pipeline_stage_names()},
+        status="running", options=run_options,
         created_at=started_at,
         # The full progress shape from the first poll, not a two-key stub: a screen that reads
         # `stage_count` to draw its stage list must be able to draw it before the first stage
@@ -761,7 +812,7 @@ def start_extraction(
     session.commit()
 
     background.add_task(_run_extraction_task, run_id, doc.object_key, doc.filename or "",
-                        body.model_dump(), entity, settings.llm.provider, settings.llm.model,
+                        run_options, entity, settings.llm.provider, settings.llm.model,
                         doc.page_scope, started_at.isoformat())
     # The URL of the mechanism that ACTUALLY reports progress — the endpoint the client polls.
     # This field used to name `/extractions/{run_id}/stream`, a WebSocket route that exists

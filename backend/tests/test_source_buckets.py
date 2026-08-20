@@ -488,21 +488,59 @@ def test_a_real_extraction_reaches_the_buckets_endpoint_with_its_rows_in_the_rig
     assert "Total assets" in labels("others")
 
 
-def test_an_extraction_with_no_rulebook_reports_every_row_unplaced_rather_than_distributed(client):
-    """The same filing with no rulebook applied — which is what a plain extraction does today.
+def test_an_extraction_that_pins_no_rulebook_still_uses_the_one_in_force(client):
+    """The reason the buckets fill at all on a plain run, and it was not true until now.
 
-    Sections come from the rulebook, so without one there is nothing to separate a balance sheet's
-    five buckets, and the honest answer is that every row is unplaced. The failure this rules out is
-    the tempting one: guessing a bucket from the caption would fill the screen with confident,
-    unfounded placements, and an analyst has no way to tell those from real ones.
+    A run naming no rulebook used to map against NOTHING — the worker left ``ontology = None``, so no
+    caption resolved to a concept, no concept carried a section, and every row landed unplaced. The
+    upload screen sends exactly that request, so in practice every extraction produced a filing with
+    nothing recognised in it while the comment beside the pin claimed "a run naming no rulebook is
+    read by the shipped default".
+
+    The rulebook in force is resolved when the run is created and PINNED on it, which is what makes
+    this a default rather than the silent substitution this codebase removed for templates: the run
+    stores the id, so a later reader is told which rulebook produced the figures instead of having to
+    reconstruct "whatever was in force at the time".
     """
-    doc_id, run_id = _extract(client, "buckets-no-rulebook.pdf")
+    doc_id, run_id = _extract(client, "buckets-default-rulebook.pdf")
 
     served = client.get(f"/api/v1/extractions/{run_id}").json()["result"]
-    assert served["rulebook"]["applied"] is False
+    assert served["rulebook"]["applied"] is True
+    assert served["rulebook"]["ontology_key"] == "hkfrs_hk_china"
+    assert served["rulebook"]["ontology_version_id"], "the run must name the rulebook it used"
+
     index = client.get(f"/api/v1/documents/{doc_id}/buckets").json()
     counts = {b["bucket"]: b["face_rows"] for b in index["buckets"]}
+    assert counts["current_assets"] == 2 and counts["non_current_assets"] == 1
+    assert index["unresolved_face_rows"] == 0
 
-    assert counts["others"] == len(served["rows"]) and counts["current_assets"] == 0
-    # …and every one of them is reported as unplaced, not quietly filed under Others.
-    assert index["unresolved_face_rows"] == len(served["rows"])
+
+def test_the_worker_reads_the_options_the_run_stores(client):
+    """The defect behind the one above, and the more general one: the worker was handed
+    ``body.model_dump()`` while the row stored a different dict, so anything settled at run creation
+    was recorded on the run and then not used to produce its figures. A run that says which rulebook
+    it read the filing against and did not read it is worse than one that says nothing.
+    """
+    from app.db.base import SessionLocal
+    from app.db.models import ExtractionRun
+
+    _doc_id, run_id = _extract(client, "buckets-one-options-dict.pdf")
+    with SessionLocal() as session:
+        run = session.get(ExtractionRun, run_id)
+        stored = run.options.get("ontology_version_id")
+        assert stored, "the run did not pin a rulebook"
+        # The row's column and its options agree, and the figures were produced by that rulebook.
+        assert run.ontology_version_id == stored
+        assert run.result["rulebook"]["ontology_version_id"] == stored
+        assert run.result["rulebook"]["applied"] is True
+
+
+def test_a_caller_pinning_a_rulebook_still_gets_the_one_it_asked_for(client):
+    """The default fills in an ABSENT pin and never overrides a present one — reproducing an earlier
+    spread against a superseded rulebook is a legitimate request, and this is the assertion that
+    stops the fallback quietly taking it over."""
+    pinned = _shipped_rulebook(client)
+    _doc_id, run_id = _extract(client, "buckets-pinned.pdf", pinned)
+
+    served = client.get(f"/api/v1/extractions/{run_id}").json()["result"]
+    assert served["rulebook"]["ontology_version_id"] == pinned
