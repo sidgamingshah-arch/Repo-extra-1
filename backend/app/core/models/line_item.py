@@ -94,7 +94,32 @@ class LineItem(BaseModel):
     values: dict[str, ExtractedValue] = Field(default_factory=dict)  # keyed by ValueKey json
     sign_convention: SignConvention = SignConvention.NATURAL
     note_refs: list[NoteRef] = Field(default_factory=list)
-    note_number: str | None = None        # set when this item lives inside a note
+    # THE NOTE THIS ROW IS TIED TO — the one it cites, or the one its figure was read from. NOT a
+    # statement that the row lives inside a note; the rows printed inside a note are ``NoteItem``s
+    # on a ``NotesTable``, never ``LineItem``s, so no value of this field can mean that.
+    #
+    # The old comment here said "set when this item lives inside a note", and it cost real work
+    # before anyone checked it: a reader that trusted it dropped every face row carrying a note
+    # reference — which on a filing that prints a note column is nearly all of them — and a
+    # four-row balance sheet published one row. The four writers say what it actually holds:
+    #
+    #   * ``row_reconstruct`` and ``excel_extract`` set it from the note reference PRINTED beside
+    #     the row ("Trade receivables … 15"), alongside the same value in ``note_refs``. A citation
+    #     by the face, and the common case.
+    #   * ``residual._sweep_notes`` sets it on a face row it SYNTHESISES from a note item, naming
+    #     where the figure came from. Still a pointer at a note, from the other direction.
+    #   * ``map_ontology`` copies the parent's value onto a sole-component row split off it, so the
+    #     derived row cites what the row it came from cited.
+    #
+    # Every reader is consistent with that and none needs the membership reading: ``link_notes`` and
+    # ``residual`` fall back to it for a row with no parsed ``note_refs``, ``map_ontology`` and
+    # ``prune_notes`` build "notes the face cites" from it (which is what decides that a note is
+    # published at all), and the API serves it as the row's note chip.
+    #
+    # WHETHER A ROW IS FACE OR NOTE IS THE PAGE'S CLASSIFICATION, not this field — ``extract_pdf``
+    # reads face and notes pages into one ``line_items`` list, so the page kind is the only thing
+    # that separates them (see ``services.buckets``).
+    note_number: str | None = None
     reconciliation_role: ReconciliationRole = ReconciliationRole.NONE
 
     formula: dict | None = None

@@ -39,6 +39,32 @@ def test_single_line_row_splits_label_note_and_values():
     assert prior is not None and int(prior.value) == 2900
 
 
+def test_a_note_reference_is_recorded_as_a_citation_on_both_fields():
+    """``note_number`` and ``note_refs`` are the SAME fact — the note this row points at.
+
+    Pinned because the field's own comment used to say it was "set when this item lives inside a
+    note", and a reader that believed it discarded every face row printing a note reference. There
+    is no membership meaning available to it: the rows printed inside a note are ``NoteItem``s on a
+    ``NotesTable``, and this row is a face row with a figure of its own. Whether a row is face or
+    note is the PAGE's classification, never this.
+    """
+    items = _build([
+        _w("Trade", 0.10, 0.20, 0.16, 0.22),
+        _w("receivables", 0.17, 0.20, 0.28, 0.22),
+        _w("15", 0.56, 0.20, 0.58, 0.22),
+        _w("3,410", 0.72, 0.20, 0.80, 0.22),
+    ])
+    li = items[0]
+
+    assert li.note_number == "15"
+    assert [r.numbers for r in li.note_refs] == [["15"]], (
+        "the two fields must carry one answer; a reader treating them as different facts is how "
+        "the citation got read as membership")
+    # The row is still a row of the statement, with its own figure.
+    assert li.source_label == "Trade receivables"
+    assert int(li.get_value(Basis.CONSOLIDATED, period_label="current").value) == 3410
+
+
 def test_wrapped_label_is_merged_into_the_valued_line():
     """A label that wraps across two tight, left-aligned lines is stitched back together
     rather than truncated to the fragment on the valued line."""
