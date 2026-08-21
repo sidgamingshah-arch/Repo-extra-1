@@ -7,14 +7,21 @@ results are available (`app/core/pipeline.py::Pipeline.run`).
 
 ## Stages
 
-**Fourteen stages, assembled by `app/core/pipeline.py::default_pipeline()`.** That
+**Fifteen stages, assembled by `app/core/pipeline.py::default_pipeline()`.** That
 function is the only place the order is stated; `api/routes/extractions.py::pipeline_stage_names`
 reads the list off it rather than keeping a copy, and the run row records the list it was
 queued with. Do not add a third copy — the list below names each stage and its file, and
 its order is `default_pipeline()`'s:
 
 `ingest · integrity · language_detect · classify · extract · map_ontology · residual ·
-normalize · link_notes · reconcile · prune_notes · confidence · gap_closing · structural`
+normalize · link_notes · reconcile · prune_notes · confidence · gap_closing · structural ·
+segment`
+
+**Two passes over the first four.** `services/documents.py::analyze_document` runs
+`ingest · integrity · language_detect · classify` alone at upload, synchronously, so the
+integrity gate and the page scope exist before an extraction is started. The run then goes
+through `default_pipeline()` from the beginning, re-reading the stored bytes — so a run
+depends on nothing computed at upload and is reproducible from the file alone.
 
 1. **Ingest & route** (`stages/ingest.py`) — MIME/magic detection (not extension).
    Excel → openpyxl (one "page" per sheet); PDF → **per-page** native-vs-scanned detection
@@ -110,6 +117,24 @@ normalize · link_notes · reconcile · prune_notes · confidence · gap_closing
     relation produces a row **including the ones that could not be run**, each skip
     carrying a classifiable `reason` (`services/coverage.py`), so partial coverage is
     visible rather than implied. A failure flags the participating line items and values.
+
+15. **Segment** (`stages/segment.py` + `services/buckets.py`) — files every face row and
+    every note into the eight buckets an analyst reads a filing in: non-current assets,
+    current assets, non-current liabilities, current liabilities, equity, P&L, cash flow,
+    Others. **Last by necessity, not by convention**: a balance sheet prints four of these
+    plus equity on a single page, so page classification can never separate them — only a
+    row's resolved `section_scope` can, which does not exist until `map_ontology` and
+    `residual` have run. The section → bucket edge is *derived* from the section id's own
+    phrase against `mapping.HEADING_ROW_SECTIONS`, so the rulebook and this layer cannot
+    drift into two ideas of what "current assets" is; a balance-sheet section with no
+    bucket is reported in `unknown_sections` rather than counted as Others.
+    Membership only — the figures stay on `line_items` / `notes` and the
+    `/documents/{id}/buckets` endpoints join to them at serve time. Every face row lands in
+    exactly ONE bucket (so that side is summable, and `unresolved_face_item_ids` separates
+    "belongs in Others" from "nothing could place it"); a note cited from two buckets is
+    filed in BOTH, because each section needs it in front of the reader — so the notes side
+    is deliberately not a partition, `shared_notes` marks the overlap in every bucket
+    holding it, and the index serves a distinct-note count.
 
 **Where a design intent diverged.** Earlier revisions of this document described a
 separate `stages/reconstruct.py` converging native and OCR pages on the `Table` / `Cell`
