@@ -1304,6 +1304,23 @@ export default function WorkspaceScreen() {
       {superseded?.superseded && (
         <SupersededBanner info={superseded} documentId={activeDocumentId ?? undefined} t={t} />
       )}
+      {/* The figures below are the only basis this filing labelled, answering a request for the
+          other one. Said out loud, in the same strip: an empty grid used to be shown here instead,
+          and the fix must not trade it for the Company's figures captioned Consolidated. */}
+      {d.basis_substituted && (
+        <div
+          role="status"
+          style={{
+            margin: "0 0 10px", padding: "9px 13px", borderRadius: 4,
+            background: color.amberBg, color: color.amberFg,
+            border: `1px solid ${color.amberFg}22`, fontSize: 12.5,
+          }}
+        >
+          {t("ws.basis.substituted")
+            .replace("{served}", t(`ws.${d.basis}`))
+            .replace("{asked}", t(`ws.${d.basis_requested ?? "consolidated"}`))}
+        </div>
+      )}
 
       {/* ---------------- BODY ---------------- */}
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>

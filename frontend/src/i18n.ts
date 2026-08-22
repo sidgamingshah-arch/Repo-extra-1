@@ -60,6 +60,8 @@ const core: LocaleDicts = {
     "tb.pages": "pages",
     "ws.consolidated": "Consolidated",
     "ws.standalone": "Standalone",
+    "ws.basis.substituted":
+      "This filing labelled only one basis. Showing its {served} figures - you asked for {asked}.",
     "ws.currency": "Currency",
     "ws.units": "Units",
     "ws.stmt.balance_sheet": "Balance sheet",
@@ -148,6 +150,8 @@ const core: LocaleDicts = {
     "tb.pages": "页",
     "ws.consolidated": "合并",
     "ws.standalone": "单体",
+    "ws.basis.substituted":
+      "本文件仅标明一种编制基础。现显示其{served}数据，您请求的是{asked}。",
     "ws.currency": "币种",
     "ws.units": "单位",
     "ws.stmt.balance_sheet": "资产负债表",
@@ -232,6 +236,8 @@ const core: LocaleDicts = {
     "tb.pages": "صفحة",
     "ws.consolidated": "موحّد",
     "ws.standalone": "منفصل",
+    "ws.basis.substituted":
+      "لم يحدد هذا الملف سوى أساس واحد. تُعرض أرقامه {served} - وقد طلبت {asked}.",
     "ws.currency": "العملة",
     "ws.units": "الوحدات",
     "ws.stmt.balance_sheet": "الميزانية العمومية",
@@ -316,6 +322,8 @@ const core: LocaleDicts = {
     "tb.pages": "pages",
     "ws.consolidated": "Consolidé",
     "ws.standalone": "Individuel",
+    "ws.basis.substituted":
+      "Ce document ne libelle qu'une seule base. Affichage des chiffres {served} - vous avez demandé {asked}.",
     "ws.currency": "Devise",
     "ws.units": "Unités",
     "ws.stmt.balance_sheet": "Bilan",

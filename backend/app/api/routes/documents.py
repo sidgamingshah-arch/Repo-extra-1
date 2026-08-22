@@ -18,7 +18,8 @@ from app.services.documents import analyze_document, content_hash
 from app.services import review_lines
 from app.services.page_scope import normalise_kind, scope_counts
 from app.services.periods import (
-    basis_values as _basis_values_of, concept_value as _concept_value, edited_for as _edited_for,
+    basis_values as _basis_values_of, concept_value as _concept_value,
+    edited_for as _edited_for, effective_basis,
     names_a_component, period_displays, slot_for, split_current_prior)
 from app.services.reconcile import tie_status
 
@@ -4131,21 +4132,47 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
     carry a value for the requested `basis` (consolidated / standalone) are shown. Labels are
     resolved in the output `locale` from the template's label_i18n (input=output parity)."""
     prefix = _stmt_prefix(template_def, statement_type)
+    # WHICH BASIS THIS VIEW CAN ACTUALLY SHOW. Asking for a basis the document never labelled used
+    # to return nothing, so a filing extracted as company-only rendered an empty Consolidated tab —
+    # the default one — with its figures a tab away, and an empty grid reads exactly like a statement
+    # the filing does not contain. A document that labelled only ONE basis drew no distinction to
+    # filter on, so that basis answers either request; a document that printed Group and Company side
+    # by side genuinely has two answers and the request stands. See `services.periods.effective_basis`.
+    #
+    # Scoped to THIS statement's rows, because the question is per statement: a filing can label its
+    # balance sheet on both bases and its income statement on one. Falls back to every row for a view
+    # with no canonical-key prefix of its own (the KPIs), which would otherwise never resolve.
+    requested_basis = basis
+    _scoped = [r for r in rows if (r.get("canonical_key") or "").startswith(f"{prefix}_")]
+    basis, basis_why = effective_basis(_scoped or rows, basis)
+
+    def _stamp(spread: dict) -> dict:
+        """Say which basis the figures ARE, next to the one that was asked for.
+
+        Never silent: serving the Company's figures under a tab captioned Consolidated without
+        saying so would mislabel a real number, which is worse than the empty grid this replaces.
+        """
+        spread["basis_requested"] = requested_basis
+        spread["basis"] = basis
+        spread["basis_substituted"] = basis != requested_basis
+        spread["basis_reason"] = basis_why
+        return spread
+
     # A statement of changes in equity is not a two-column comparative — its columns are equity
     # COMPONENTS (issued capital, each reserve, retained profits, non-controlling interests,
     # total equity) and its rows are movements through the year. Forcing it into current/prior
     # columns files a component under a period that does not exist, so it gets its own shape.
     if statement_type in _MATRIX_STATEMENTS:
-        return _build_matrix_statement(
+        return _stamp(_build_matrix_statement(
             rows, statement_type, filename, basis=basis, locale=locale, units_ctx=units_ctx,
             company=company, doc_format=doc_format, page_count=page_count,
-            template_def=template_def)
+            template_def=template_def))
     # Two views that are not statements the document prints, but which the document's figures
     # determine: the KPIs computed off them, and everything extracted that reaches no face.
     if statement_type == "kpi":
-        return _build_kpi_statement(
+        return _stamp(_build_kpi_statement(
             rows, filename, basis=basis, locale=locale, company=company,
-            doc_format=doc_format, page_count=page_count, template_def=template_def)
+            doc_format=doc_format, page_count=page_count, template_def=template_def))
     # Several printed lines legitimately share one concept: three depreciation lines roll into
     # "Depreciation and amortisation", two tax payments into "Income tax paid", and an "Others"
     # bucket exists precisely to absorb a handful. Keeping only the first row would drop the
@@ -4491,7 +4518,7 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                               "note": f"{note} {_t('Raw', locale)}: {raw}."}
 
     basis_label = _BASIS_LABEL_I18N.get(basis, {}).get(locale, basis.title())
-    return {
+    return _stamp({
         "statement": statement_type,
         "label": _stmt_label(template_def, statement_type, locale),
         "basis": basis, "periods": _period_labels(rows, basis, locale),
@@ -4512,7 +4539,7 @@ def _build_statement(rows: list[dict], template_def: dict | None, statement_type
                           "ensemble. Open the extraction view for click-to-source provenance.",
                           locale) if refused is None else refused["message"],
         },
-    }
+    })
 
 
 @router.get("/{document_id}/statement", dependencies=[Depends(authorized_document)])

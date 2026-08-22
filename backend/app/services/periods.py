@@ -49,6 +49,50 @@ def basis_values(row: dict, basis: str) -> list[dict]:
             if (v.get("basis") or "consolidated") == basis]
 
 
+def bases_present(rows: list[dict]) -> list[str]:
+    """Every basis these rows actually carry a value under, sorted. A value with no basis counts
+    as consolidated, the same reading :func:`basis_values` uses."""
+    return sorted({(v.get("basis") or "consolidated")
+                   for r in rows for v in (r.get("values") or [])})
+
+
+def effective_basis(rows: list[dict], requested: str) -> tuple[str, str]:
+    """``(basis to read, why)`` — the basis a view should actually show.
+
+    THE DEFECT THIS CLOSES. A statement whose rows all carry ONE basis returned nothing when the
+    other was asked for, and the Workspace opens on Consolidated. So a filing the extractor labelled
+    company-only — one ``company_only_markers`` hit is enough to label a whole page — rendered an
+    empty default tab with its figures one tab away, and the analyst has no reason to go looking.
+
+    A DOCUMENT THAT LABELLED ONE BASIS DREW NO DISTINCTION. It printed one set of figures and the
+    extractor described the only column there was; that is not a division of the statement into two.
+    Asked for the consolidated view, the one set of figures is the answer.
+
+    ONLY TOWARDS CONSOLIDATED, and the asymmetry is the point. Consolidated is the default view and
+    the reading a filing gets when nothing says otherwise (``row_reconstruct._basis_for`` returns it
+    when no basis band is found at all). Standalone is never a default: clicking it asks for the
+    COMPANY's figures specifically, and answering with the Group's would be a wrong number. That
+    request keeps its existing named refusal — ``basis_not_extracted``, which the grid states rather
+    than showing a blank — and this function must not take it away.
+
+    A filing that prints Group and Company side by side is untouched either way: both bases satisfy
+    their own request and return on the first test.
+    """
+    if any(basis_values(r, requested) for r in rows):
+        return requested, "requested"
+    if requested != "consolidated":
+        # An explicit request for a specific entity's figures. Refused, and told why, upstream.
+        return requested, "requested"
+    present = bases_present(rows)
+    if len(present) == 1:
+        # Past the first test the consolidated view holds nothing, so at most one other basis can
+        # exist today and the count can only be 0 or 1. Requiring exactly one is what keeps the
+        # substitution unambiguous if the vocabulary ever grows a third: two bases nobody asked for
+        # have no single answer, and an arbitrary pick would put unattributable figures on the face.
+        return present[0], "only_basis_in_document"
+    return requested, "requested"
+
+
 def split_current_prior(vals: list[dict]) -> tuple[dict | None, dict | None]:
     """``(current, prior)`` for one row's values (already filtered to a single basis).
 

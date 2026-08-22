@@ -330,7 +330,19 @@ export interface ViewerMeta {
 export interface StatementResponse {
   statement: StatementKey;
   label: string;
+  /** The basis these figures ACTUALLY are — not necessarily the one that was asked for. A statement
+   *  whose rows carry only one basis is served for either request, because a filing that labelled
+   *  one basis drew no distinction to filter on and the alternative was an empty grid. */
   basis: Basis;
+  /** The basis the request asked for. Absent on responses stored before the field existed. */
+  basis_requested?: Basis;
+  /** True when `basis` is not `basis_requested` — the figures are the only ones the document has,
+   *  served in answer to a different question. Surfaced rather than swallowed: showing the
+   *  Company's figures under a tab captioned Consolidated without saying so mislabels a real
+   *  number, which is worse than the empty grid this replaces. */
+  basis_substituted?: boolean;
+  /** Why: "requested" (no substitution) or "only_basis_in_document". */
+  basis_reason?: string;
   /** Shape of the statement. "matrix" means the columns are NAMED (equity components, not
    *  periods) and every row carries `cells` instead of v1/v2. Absent means the two-column
    *  comparative default. */
