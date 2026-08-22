@@ -515,6 +515,15 @@ export interface ExtractionProgress {
   started_at: string;
   elapsed_ms: number;
 }
+/** One statement a template declares. `key` is a `StatementKey`; the LABEL is deliberately not
+ *  taken from `title` — `ws.stmt.*` is translated in every shipped locale and the server's title is
+ *  English, so `title` is only a last resort for a key this build has no translation for. */
+export interface TemplateStatement {
+  key: StatementKey;
+  title: string;
+  sections: number;
+}
+
 export interface ExtractionRunResponse {
   run_id: string;
   status: string;
@@ -529,6 +538,12 @@ export interface ExtractionRunResponse {
   stages?: string[];
   /** The tail of the run log, flushed as stages complete rather than only at the end. */
   log_tail?: string;
+  /** The statements THIS RUN's template declares, in the template's own order — what the Workspace
+   *  builds its statement tabs from. Read off the template the run was pinned to, so publishing a
+   *  new template cannot change the tabs above an existing spread. Absent or empty means the run
+   *  cannot say (no template pinned, or a run stored before this field existed) and the caller
+   *  falls back to the built-in set — it does NOT mean the template declares no statements. */
+  statements?: TemplateStatement[];
   result: ExtractionResult;
 }
 /** Whether a document has an extraction IN FLIGHT, and how far it has got.

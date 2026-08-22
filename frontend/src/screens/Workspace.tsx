@@ -17,7 +17,7 @@ import { color, confStyle, font, layout, radius, shadow, fmtIN, fmtPlain, parseA
 import { DERIVED_STATEMENTS } from "../types";
 import type { Basis, FxRateResolution, StatementColumn, StatementKey, StatementResponse, StatementRow, SupersededTemplate } from "../types";
 import { ApiError, refusalText } from "../lib/api";
-import { activeTemplate, ontologyInForce, useDocumentRunStatus, useDocumentStatement, useEditDocumentLineItem, useFxRateResolution, useOntologies, useReextract, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded, useTemplates } from "../lib/queries";
+import { activeTemplate, ontologyInForce, useDocumentRun, useDocumentRunStatus, useDocumentStatement, useEditDocumentLineItem, useFxRateResolution, useOntologies, useReextract, useRevertDocumentLineItem, useStatement, useEditLineItem, useProjectLoaded, useTemplates } from "../lib/queries";
 import { useCan } from "../lib/rbac";
 import { useUI } from "../store";
 import { useT } from "../i18n";
@@ -958,7 +958,29 @@ export default function WorkspaceScreen() {
   // data behind them, so the demo workspace falls back to the balance sheet rather than asking
   // for a view the demo endpoint cannot serve.
   const derived = DERIVED_STATEMENTS.includes(statement);
-  const effectiveStatement: StatementKey = !usingReal && derived ? "balance_sheet" : statement;
+  // THE TABS ARE THE TEMPLATE'S, not a list held here. A template that declares no cash flow used
+  // to get a Cash flow tab that could only ever render an empty grid, and one that declares changes
+  // in equity got no tab at all — the entry point was suppressed on the grounds that the statement
+  // "is not part of the reviewed set", which is a judgement the template is the right place to make.
+  // Read off the RUN's template (`ExtractionRunResponse.statements`), so publishing a new template
+  // cannot re-tab a spread that already exists.
+  const runQ = useDocumentRun(activeDocumentId ?? undefined);
+  const templateStatements = usingReal ? (runQ.data?.statements ?? []) : [];
+  // The fallback set, used for the demo workspace and for a run that cannot say which template it
+  // used (none pinned, or stored before the field existed). Not a default the template overrides —
+  // a substitute for an answer that is missing.
+  const offeredStatements: StatementKey[] = (
+    templateStatements.length > 0
+      ? templateStatements.map((st) => st.key)
+      : (["balance_sheet", "profit_and_loss", "cash_flow"] as StatementKey[])
+  ).concat(usingReal ? DERIVED_STATEMENTS : []);
+  // A stored or deep-linked statement the offered set does not contain would render an empty grid
+  // with no way to tell that from a statement the filing omits, so fall back to the first offered.
+  const inOffered = offeredStatements.includes(statement);
+  const effectiveStatement: StatementKey =
+    !usingReal && derived ? "balance_sheet"
+    : inOffered ? statement
+    : (offeredStatements[0] ?? "balance_sheet");
   const realQ = useDocumentStatement(activeDocumentId ?? undefined, effectiveStatement, dataset,
                                      locale);
   const demoQ = useStatement(effectiveStatement, dataset, locale, !usingReal);
@@ -1178,20 +1200,17 @@ export default function WorkspaceScreen() {
           onChange={setDataset}
         />
         <Segmented<StatementKey>
-          options={[
-            { value: "balance_sheet", label: t("ws.stmt.balance_sheet") },
-            { value: "profit_and_loss", label: t("ws.stmt.profit_and_loss") },
-            { value: "cash_flow", label: t("ws.stmt.cash_flow") },
-            // Changes in equity is not offered. The matrix parses, but the statement is not part
-            // of the reviewed set, so a tab for it invited an analyst to sign off a spread nobody
-            // had specified. A stored or deep-linked value still renders — this hides the entry
-            // point, it does not remove the view.
-            // Additional items is gone entirely, front and back: see _build_statement.
-            // KPIs are derived from the extraction, so offered only when there IS one.
-            ...(usingReal
-              ? [{ value: "kpi" as StatementKey, label: t("ws.stmt.kpi") }]
-              : []),
-          ]}
+          // One entry per statement the run's template declares, in the template's own order, plus
+          // the derived views (KPIs) which are computed off the extraction rather than declared by
+          // a template. Labels come from `ws.stmt.*` — translated in every shipped locale — and fall
+          // back to the server's English title only for a key this build has no translation for.
+          // Additional items is gone entirely, front and back: see _build_statement.
+          options={offeredStatements.map((key) => ({
+            value: key,
+            label: t(`ws.stmt.${key}`)
+              || templateStatements.find((st) => st.key === key)?.title
+              || key,
+          }))}
           value={effectiveStatement}
           onChange={setStatement}
         />

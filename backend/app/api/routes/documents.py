@@ -2424,8 +2424,17 @@ def get_document_run(document_id: str, session: Session = Depends(db)) -> dict:
     # ``routes.extractions.rulebook_record``). Reported, never re-derived: a reader deciding after
     # the fact which rulebook "must" have been in force is how a superseded one got labelled as
     # the current one.
+    # WHICH STATEMENTS THIS SPREAD HAS, so the Workspace's tabs are the template's rather than a
+    # hardcoded three. Read off the template the RUN was pinned to, never the newest one stored:
+    # a template published later must not change the tabs above an existing spread, which is the
+    # same rule ``_template_for_run`` exists to hold. A run with no template gets an empty list and
+    # the client falls back — an empty list means "this run cannot say", not "this run has none".
+    from app.services.statements import declared_statements
+
     return {"run_id": run.id, "status": run.status,
-            "rulebook": (run.options or {}).get("rulebook"), "result": run.result}
+            "rulebook": (run.options or {}).get("rulebook"),
+            "statements": declared_statements(_template_for_run(session, run)),
+            "result": run.result}
 
 
 @router.get("/{document_id}/analysis", dependencies=[Depends(authorized_document)])
