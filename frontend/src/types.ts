@@ -550,6 +550,11 @@ export interface ExtractionRunResponse {
   stages?: string[];
   /** The tail of the run log, flushed as stages complete rather than only at the end. */
   log_tail?: string;
+  /** The bases this filing actually labelled, read off the run's own rows. The Workspace opens on
+   *  one of these rather than always on Consolidated: a filing that printed one column has one
+   *  answer, and offering a choice between two when only one exists invites a click on the empty
+   *  one. Absent or empty means the run cannot say, and the built-in pair is offered. */
+  bases?: Basis[];
   /** The statements THIS RUN's template declares, in the template's own order — what the Workspace
    *  builds its statement tabs from. Read off the template the run was pinned to, so publishing a
    *  new template cannot change the tabs above an existing spread. Absent or empty means the run

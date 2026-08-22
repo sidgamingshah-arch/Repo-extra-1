@@ -18,7 +18,7 @@ from app.services.documents import analyze_document, content_hash
 from app.services import review_lines
 from app.services.page_scope import normalise_kind, scope_counts
 from app.services.periods import (
-    basis_values as _basis_values_of, concept_value as _concept_value,
+    bases_present, basis_values as _basis_values_of, concept_value as _concept_value,
     edited_for as _edited_for, effective_basis,
     names_a_component, period_displays, slot_for, split_current_prior)
 from app.services.reconcile import tie_status
@@ -2432,9 +2432,17 @@ def get_document_run(document_id: str, session: Session = Depends(db)) -> dict:
     # the client falls back — an empty list means "this run cannot say", not "this run has none".
     from app.services.statements import declared_statements
 
+    # WHICH BASES THIS FILING ACTUALLY LABELLED, so the Workspace opens on one it has instead of
+    # always opening on Consolidated and then substituting. A filing that printed one column has one
+    # answer; offering a choice between two when only one exists invites the analyst to click the
+    # empty one, and the substitution notice then explains a situation the screen created.
+    #
+    # Read off the run's own rows — the same reading ``basis_values`` filters by, so the selector and
+    # the grid cannot disagree about which bases exist. Empty means nothing was extracted.
     return {"run_id": run.id, "status": run.status,
             "rulebook": (run.options or {}).get("rulebook"),
             "statements": declared_statements(_template_for_run(session, run)),
+            "bases": bases_present(run.result.get("rows") or []),
             "result": run.result}
 
 

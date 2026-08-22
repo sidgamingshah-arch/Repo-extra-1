@@ -166,3 +166,36 @@ def test_a_two_basis_document_keeps_its_two_answers(client):
     assert [r["v1"] for r in con["rows"] if r.get("v1") is not None] == [100.0]
     assert [r["v1"] for r in sep["rows"] if r.get("v1") is not None] == [70.0]
     assert con["basis_substituted"] is False and sep["basis_substituted"] is False
+
+
+# --- the run names the bases it has, so the screen opens on one -------------------------------
+
+def test_the_run_names_the_bases_the_filing_labelled(client):
+    """WHY THIS EXISTS. Serving the only basis a filing has (above) rescued the grid, but the
+    Workspace still opened on Consolidated and then explained the mismatch it had just created. With
+    the bases named, the screen offers what the filing contains and there is nothing to explain —
+    the substitution stays as the safety net for a deep link or a stored choice.
+
+    Read off the run's own rows, the same reading ``basis_values`` filters by, so the selector and
+    the grid cannot disagree about which bases exist."""
+    doc_id = _seed([_row("bs_current_assets__inventories", "standalone")])
+    assert client.get(f"/api/v1/documents/{doc_id}/run").json()["bases"] == ["standalone"]
+
+
+def test_a_two_basis_filing_names_both(client):
+    doc_id = _seed([{"id": "r", "source_label": "Inventories",
+                     "canonical_key": "bs_current_assets__inventories", "role": "line",
+                     "values": [
+                         {"basis": "consolidated", "period_label": "current", "value": "100",
+                          "provenance": None, "confidence": {}},
+                         {"basis": "standalone", "period_label": "current", "value": "70",
+                          "provenance": None, "confidence": {}}]}])
+    assert client.get(f"/api/v1/documents/{doc_id}/run").json()["bases"] == [
+        "consolidated", "standalone"]
+
+
+def test_a_run_with_nothing_extracted_names_no_basis(client):
+    """An empty list is the client's signal to offer its built-in pair. It must not read as "this
+    filing has no basis", which would leave the selector with nothing to show at all."""
+    doc_id = _seed([])
+    assert client.get(f"/api/v1/documents/{doc_id}/run").json()["bases"] == []

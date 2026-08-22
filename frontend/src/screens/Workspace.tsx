@@ -966,6 +966,18 @@ export default function WorkspaceScreen() {
   // cannot re-tab a spread that already exists.
   const runQ = useDocumentRun(activeDocumentId ?? undefined);
   const templateStatements = usingReal ? (runQ.data?.statements ?? []) : [];
+  // THE BASES THIS FILING LABELLED. Opening on Consolidated whatever the document contains meant a
+  // company-only filing showed its figures under a substitution notice explaining a mismatch the
+  // screen had introduced. A filing with one basis now offers one, so there is nothing to explain.
+  // Both are offered for the demo workspace and for a run that cannot say.
+  const runBases = usingReal ? (runQ.data?.bases ?? []) : [];
+  const offeredBases: Basis[] = runBases.length > 0
+    ? runBases
+    : (["consolidated", "standalone"] as Basis[]);
+  // A stored or deep-linked basis the filing does not have would land on the empty tab it used to.
+  const effectiveDataset: Basis = offeredBases.includes(dataset)
+    ? dataset
+    : (offeredBases[0] ?? "consolidated");
   // The fallback set, used for the demo workspace and for a run that cannot say which template it
   // used (none pinned, or stored before the field existed). Not a default the template overrides —
   // a substitute for an answer that is missing.
@@ -981,9 +993,10 @@ export default function WorkspaceScreen() {
     !usingReal && derived ? "balance_sheet"
     : inOffered ? statement
     : (offeredStatements[0] ?? "balance_sheet");
-  const realQ = useDocumentStatement(activeDocumentId ?? undefined, effectiveStatement, dataset,
+  const realQ = useDocumentStatement(activeDocumentId ?? undefined, effectiveStatement,
+                                     effectiveDataset,
                                      locale);
-  const demoQ = useStatement(effectiveStatement, dataset, locale, !usingReal);
+  const demoQ = useStatement(effectiveStatement, effectiveDataset, locale, !usingReal);
   const data = usingReal ? realQ.data : demoQ.data;
   const isPending = usingReal ? realQ.isPending : demoQ.isPending;
   const editMut = useEditLineItem();
@@ -995,7 +1008,7 @@ export default function WorkspaceScreen() {
   const [editError, setEditError] = useState<string | null>(null);
   // A highlight belongs to one statement/basis; clear it when either changes so the viewer
   // never keeps pointing at a page/cell from the statement the user just navigated away from.
-  useEffect(() => { setPicked(null); }, [statement, dataset]);
+  useEffect(() => { setPicked(null); }, [statement, effectiveDataset]);
   // The FX lookup is resolved here, above the loading/empty early-returns, because hooks
   // cannot be called conditionally. `converting` is false until a real target is picked, so
   // the query stays disabled and no request goes out in the default (no conversion) case.
@@ -1160,7 +1173,11 @@ export default function WorkspaceScreen() {
           : (selRowObj.comments?.[e.period]?.text ?? "");
         if (usingReal) {
           await realEditMut.mutateAsync({ key: selRowObj.id, value: e.value, formula,
-                                          basis: dataset, period: e.period, comment: note });
+                                          // The basis the grid is SHOWING, so an edit lands on
+                                          // the figure the analyst is looking at rather than on
+                                          // a basis the filing may not even have.
+                                          basis: effectiveDataset, period: e.period,
+                                          comment: note });
         } else if (e.period === "current") {
           await editMut.mutateAsync({ id: selRowObj.id, value: e.value, formula });
         } else {
@@ -1192,11 +1209,8 @@ export default function WorkspaceScreen() {
         }}
       >
         <Segmented<Basis>
-          options={[
-            { value: "consolidated", label: t("ws.consolidated") },
-            { value: "standalone", label: t("ws.standalone") },
-          ]}
-          value={dataset}
+          options={offeredBases.map((b) => ({ value: b, label: t(`ws.${b}`) }))}
+          value={effectiveDataset}
           onChange={setDataset}
         />
         <Segmented<StatementKey>
